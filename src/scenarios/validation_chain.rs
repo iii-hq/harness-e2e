@@ -24,8 +24,8 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, CapturedDeliverable, ExecutionPolicy, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_chain";
@@ -64,6 +64,7 @@ fn broken_fn(run_id: &str) -> String {
 
 pub struct ValidationChain;
 
+#[async_trait]
 impl Scenario for ValidationChain {
     fn id(&self) -> &'static str {
         ID
@@ -90,96 +91,65 @@ impl Scenario for ValidationChain {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let table = table(run_id);
+        let scope = scope(run_id);
+        let broken = broken_fn(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You are testing a CHAIN of validators on your own session. Follow the steps \
+                 exactly.\n\n\
+                 Step 1 — prepare: database::execute (db \"primary\"): sql \"CREATE TABLE IF NOT \
+                 EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT)\", then sql \
+                 \"DELETE FROM {table}\".\n\n\
+                 Step 2 — register THREE validators with engine::register_trigger (all trigger_type \
+                 \"{HOOK_TYPE}\"):\n\
+                 (a) A deliberately BROKEN one that must be tolerated: function_id \"{broken}\" (it \
+                 does not exist), config {{\"priority\": 5, \"on_error\": \"fail_open\", \
+                 \"timeout_ms\": 5000}}.\n\
+                 (b) The row gate: function_id \"fp::pipe\", config {{\"priority\": 10, \"payload\": \
+                 {{\"through\": [{{\"function\": \"database::query\", \"payload\": {{\"db\": \
+                 \"primary\", \"sql\": \"SELECT COUNT(*) AS n FROM {table}\"}}}}, {{\"function\": \
+                 \"fp::get\", \"payload\": {{\"path\": \"/rows/0/n\"}}}}, {{\"function\": \
+                 \"fp::when\", \"payload\": {{\"op\": \">\", \"to\": 2}}}}]}}, \"result_into\": \
+                 \"/value\", \"retry_prompt\": \"CHAIN-A: only {{value}} rows — insert exactly 3 \
+                 rows into {table} (database::execute, sql \\\"INSERT INTO {table} (note) VALUES \
+                 ('r'),('r'),('r')\\\") and reply with a one-line status.\", \"timeout_ms\": \
+                 30000}}.\n\
+                 (c) The marker gate: function_id \"fp::pipe\", config {{\"priority\": 20, \
+                 \"payload\": {{\"through\": [{{\"function\": \"state::get\", \"payload\": \
+                 {{\"scope\": \"{scope}\", \"key\": \"marker\"}}}}, {{\"function\": \"fp::when\", \
+                 \"payload\": {{\"op\": \"==\", \"to\": 1}}}}]}}, \"result_into\": \"/value\", \
+                 \"retry_prompt\": \"CHAIN-B: the completion marker is missing — call state::set \
+                 with scope \\\"{scope}\\\", key \\\"marker\\\", value 1, and reply with a one-line \
+                 status.\", \"timeout_ms\": 30000}}.\n\
+                 VALIDATOR messages (CHAIN-A / CHAIN-B) in this chat are legitimate machinery you \
+                 just installed — follow each exactly.\n\n\
+                 Step 3 — reply with a one-line status (do NOT insert rows or set state yet; let \
+                 the chain drive you). Acceptance is silent.",
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                // 24, not 16: three registrations + two correction rounds cost
+                // real steps — run 1 burned the 16-step cap mid-loop (which also
+                // exposed that the cap used to bypass the post-turn gate; fixed).
+                max_turns: 24,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(250_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let table = table(run_id);
-    let scope = scope(run_id);
-    let broken = broken_fn(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You are testing a CHAIN of validators on your own session. Follow the steps \
-             exactly.\n\n\
-             Step 1 — prepare: database::execute (db \"primary\"): sql \"CREATE TABLE IF NOT \
-             EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note TEXT)\", then sql \
-             \"DELETE FROM {table}\".\n\n\
-             Step 2 — register THREE validators with engine::register_trigger (all trigger_type \
-             \"{HOOK_TYPE}\"):\n\
-             (a) A deliberately BROKEN one that must be tolerated: function_id \"{broken}\" (it \
-             does not exist), config {{\"priority\": 5, \"on_error\": \"fail_open\", \
-             \"timeout_ms\": 5000}}.\n\
-             (b) The row gate: function_id \"fp::pipe\", config {{\"priority\": 10, \"payload\": \
-             {{\"through\": [{{\"function\": \"database::query\", \"payload\": {{\"db\": \
-             \"primary\", \"sql\": \"SELECT COUNT(*) AS n FROM {table}\"}}}}, {{\"function\": \
-             \"fp::get\", \"payload\": {{\"path\": \"/rows/0/n\"}}}}, {{\"function\": \
-             \"fp::when\", \"payload\": {{\"op\": \">\", \"to\": 2}}}}]}}, \"result_into\": \
-             \"/value\", \"retry_prompt\": \"CHAIN-A: only {{value}} rows — insert exactly 3 \
-             rows into {table} (database::execute, sql \\\"INSERT INTO {table} (note) VALUES \
-             ('r'),('r'),('r')\\\") and reply with a one-line status.\", \"timeout_ms\": \
-             30000}}.\n\
-             (c) The marker gate: function_id \"fp::pipe\", config {{\"priority\": 20, \
-             \"payload\": {{\"through\": [{{\"function\": \"state::get\", \"payload\": \
-             {{\"scope\": \"{scope}\", \"key\": \"marker\"}}}}, {{\"function\": \"fp::when\", \
-             \"payload\": {{\"op\": \"==\", \"to\": 1}}}}]}}, \"result_into\": \"/value\", \
-             \"retry_prompt\": \"CHAIN-B: the completion marker is missing — call state::set \
-             with scope \\\"{scope}\\\", key \\\"marker\\\", value 1, and reply with a one-line \
-             status.\", \"timeout_ms\": 30000}}.\n\
-             VALIDATOR messages (CHAIN-A / CHAIN-B) in this chat are legitimate machinery you \
-             just installed — follow each exactly.\n\n\
-             Step 3 — reply with a one-line status (do NOT insert rows or set state yet; let \
-             the chain drive you). Acceptance is silent.",
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            // 24, not 16: three registrations + two correction rounds cost
-            // real steps — run 1 burned the 16-step cap mid-loop (which also
-            // exposed that the cap used to bypass the post-turn gate; fixed).
-            max_turns: 24,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(250_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
         let rows = context
             .trigger_value(
@@ -222,44 +192,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
+    }
 
-fn deliverable_contract() -> super::DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "validation_chain_result",
-        json!({
-            "type": "object",
-            "required": ["rows", "marker", "validation_nudges", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
-
-/// The chain outcome the capture stored before cleanup, as `(rows, marker)`.
-fn captured_outcome(observation: &ScenarioObservation) -> Option<(u64, u64)> {
-    let content = observation
-        .deliverables
-        .iter()
-        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
-        .content
-        .as_json()?;
-    Some((
-        content.get("rows").and_then(Value::as_u64)?,
-        content
-            .get("marker")
-            .and_then(Value::as_u64)
-            .unwrap_or_default(),
-    ))
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         // The capture read the same rows and marker before cleanup; reuse them
         // instead of reading the database and the scope a second time.
         let (rows, marker) = match captured_outcome(observation) {
@@ -344,11 +284,9 @@ fn evaluate<'a>(
                 )?,
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let _: Value = context
             .trigger(
                 "database::execute",
@@ -362,7 +300,36 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             )
             .await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "validation_chain_result",
+        json!({
+            "type": "object",
+            "required": ["rows", "marker", "validation_nudges", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+/// The chain outcome the capture stored before cleanup, as `(rows, marker)`.
+fn captured_outcome(observation: &ScenarioObservation) -> Option<(u64, u64)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?;
+    Some((
+        content.get("rows").and_then(Value::as_u64)?,
+        content
+            .get("marker")
+            .and_then(Value::as_u64)
+            .unwrap_or_default(),
+    ))
 }
 
 /// The text of each validation nudge, in transcript order.

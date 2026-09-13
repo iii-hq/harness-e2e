@@ -18,10 +18,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "research_pipeline";
@@ -265,32 +264,9 @@ fn fetch_function_id(run_id: &str) -> String {
     format!("e2etest::research_fetch_{}", suffix(run_id))
 }
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        context.client().register_function(
-            search_function_id(run_id),
-            RegisterFunction::new_async(move |request: SearchRequest| async move {
-                Ok::<SearchResponse, iii_sdk::errors::Error>(search_corpus(&request.query))
-            })
-            .description(
-                "Search the frozen E2E release-safety corpus. Results are metadata and snippets; fetch a source before citing it.",
-            ),
-        );
-        context.client().register_function(
-            fetch_function_id(run_id),
-            RegisterFunction::new_async(move |request: FetchRequest| async move {
-                Ok::<FetchResponse, iii_sdk::errors::Error>(fetch_document(&request.source_id))
-            })
-            .description(
-                "Fetch one frozen E2E corpus document by source_id, including immutable digest, authority, status, and full content.",
-            ),
-        );
-        Ok(())
-    })
-}
-
 pub struct ResearchPipeline;
 
+#[async_trait]
 impl Scenario for ResearchPipeline {
     fn id(&self) -> &'static str {
         ID
@@ -350,37 +326,238 @@ impl Scenario for ResearchPipeline {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 32,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(600_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &["web::*", "scrapling::*", "http::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        context.client().register_function(
+            search_function_id(run_id),
+            RegisterFunction::new_async(move |request: SearchRequest| async move {
+                Ok::<SearchResponse, iii_sdk::errors::Error>(search_corpus(&request.query))
+            })
+            .description(
+                "Search the frozen E2E release-safety corpus. Results are metadata and snippets; fetch a source before citing it.",
+            ),
+        );
+        context.client().register_function(
+            fetch_function_id(run_id),
+            RegisterFunction::new_async(move |request: FetchRequest| async move {
+                Ok::<FetchResponse, iii_sdk::errors::Error>(fetch_document(&request.source_id))
+            })
+            .description(
+                "Fetch one frozen E2E corpus document by source_id, including immutable digest, authority, status, and full content.",
+            ),
+        );
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let evidence = get_state(context, &names.scope, EVIDENCE_KEY).await?;
+        let conflicts = get_state(context, &names.scope, CONFLICTS_KEY).await?;
+        let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
+        let grounded = valid_evidence(&evidence) && valid_conflicts(&conflicts);
+        let sources_fetched = required_sources_fetched(&audit);
+        let brief_grounded = response_grounded(&observation.response, &evidence, &conflicts);
+        Ok(vec![
+            CapturedDeliverable {
+                id: ANALYSIS_DELIVERABLE_ID.to_string(),
+                kind: "research_analysis".to_string(),
+                content: json!({
+                    "evidence": evidence,
+                    "conflicts": conflicts,
+                    "fetched_sources": {
+                        "evidence_analyst": audit.evidence_fetches,
+                        "conflict_analyst": audit.conflict_fetches,
+                    }
+                })
+                .into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "fetched_source_provenance".to_string(),
+                        passed: sources_fetched,
+                        reason: "required source ids were independently observed in analyst fetch calls"
+                            .to_string(),
+                    },
+                    CapturedInvariant {
+                        id: "grounded_claims_and_conflicts".to_string(),
+                        passed: grounded,
+                        reason: "claim mappings, immutable digests, conflict precedence, and injection handling matched the oracle"
+                            .to_string(),
+                    },
+                ],
+                provenance: corpus()
+                    .into_iter()
+                    .filter(|document| document.source_id != "office-cache-distractor")
+                    .map(|document| ProvenanceEvidence {
+                        kind: "frozen_corpus".to_string(),
+                        source_id: format!(
+                            "{}#{}",
+                            document.source_id,
+                            document_digest(document.content)
+                        ),
+                        relation: "fetched_and_assessed".to_string(),
+                    })
+                    .collect(),
+            },
+            CapturedDeliverable {
+                id: BRIEF_DELIVERABLE_ID.to_string(),
+                kind: "markdown_report".to_string(),
+                content: json!({ "content": observation.response }).into(),
+                invariants: vec![CapturedInvariant {
+                    id: "traceable_synthesis".to_string(),
+                    passed: brief_grounded,
+                    reason: "brief contains every required claim/source/digest and the resolved conflict"
+                        .to_string(),
+                }],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: names.root_session,
+                    relation: "merged_after_barrier".to_string(),
+                }],
+            },
+        ])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let names = Names::new(run_id);
+        let (evidence, conflicts) = captured_analysis(observation)?;
+        let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
+        let root_calls = common::function_calls(&observation.transcript);
+        let barrier_registration = root_calls
+            .iter()
+            .position(|call| is_completion_watch(call, &names));
+        let deadline_registration = root_calls.iter().position(is_deadline_watch);
+        let spawns = root_calls
+            .iter()
+            .enumerate()
+            .filter(|(_, call)| call.function_id == "harness::spawn")
+            .collect::<Vec<_>>();
+        let armed_before_spawns = spawns.len() == 2
+            && barrier_registration
+                .is_some_and(|position| spawns.iter().all(|(spawn, _)| position < *spawn))
+            && deadline_registration
+                .is_some_and(|position| spawns.iter().all(|(spawn, _)| position < *spawn));
+        let direct_parallel = audit.direct_sessions == 2
+            && observation.metrics.totals.sessions == 3
+            && max_parallel_spawns(&observation.transcript) == 2;
+        let discovery_complete = required_sources_fetched(&audit);
+        let analysis_valid = valid_evidence(&evidence) && valid_conflicts(&conflicts);
+        let writes_valid = audit.evidence_write_exact && audit.conflicts_write_exact;
+        let records = common::trigger_fired_records(&observation.transcript);
+        let barrier_records = records
+            .iter()
+            .filter(|record| {
+                record.get("label").and_then(Value::as_str) == Some(names.complete_label.as_str())
+            })
+            .collect::<Vec<_>>();
+        let barrier_retired = barrier_records.len() == 3
+            && barrier_records
+                .iter()
+                .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
+                .count()
+                == 1;
+        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+        let report_grounded = response_grounded(&observation.response, &evidence, &conflicts);
+
+        Ok(assessment::build_evaluation(
+            if report_grounded {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+            CORPUS_DISCOVERY.full_or_zero(
+                discovery_complete,
+                format!(
+                    "evidence_fetches={:?}, conflict_fetches={:?}",
+                    audit.evidence_fetches, audit.conflict_fetches
+                ),
+            ),
+            PARALLEL_ANALYSIS.full_or_zero(
+                armed_before_spawns && direct_parallel && audit.disciplined,
+                format!(
+                    "armed_before_spawns={armed_before_spawns}, direct_sessions={}, parallel_batch={direct_parallel}, disciplined={}",
+                    audit.direct_sessions, audit.disciplined
+                ),
+            ),
+            GROUNDED_ANALYSIS.full_or_zero(
+                analysis_valid && writes_valid,
+                format!(
+                    "evidence_valid={}, conflicts_valid={}, writes_exact={writes_valid}",
+                    valid_evidence(&evidence),
+                    valid_conflicts(&conflicts)
+                ),
+            ),
+            BARRIER_SYNTHESIS.full_or_zero(
+                barrier_retired
+                    && report_grounded
+                    && active_bindings == 0
+                    && observation.metrics.totals.function_call_errors == 0,
+                format!(
+                    "barrier_retired={barrier_retired}, report_grounded={report_grounded}, active_bindings={active_bindings}, function_errors={}",
+                    observation.metrics.totals.function_call_errors
+                ),
+            ),
+            ],
+        ))
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        for key in [EVIDENCE_KEY, CONFLICTS_KEY] {
+            let _: Value = context
+                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
+                .await?;
+        }
+        Ok(())
     }
 }
 
@@ -413,24 +590,6 @@ pub fn allowed_functions(run_id: &str) -> Vec<String> {
     functions.sort();
     functions.dedup();
     functions
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 32,
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(600_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &["web::*", "scrapling::*", "http::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
 }
 
 fn prompt(names: &Names) -> String {
@@ -677,170 +836,6 @@ fn captured_analysis(observation: &ScenarioObservation) -> anyhow::Result<(Value
     Ok((value(EVIDENCE_KEY)?, value(CONFLICTS_KEY)?))
 }
 
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let (evidence, conflicts) = captured_analysis(observation)?;
-        let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
-        let root_calls = common::function_calls(&observation.transcript);
-        let barrier_registration = root_calls
-            .iter()
-            .position(|call| is_completion_watch(call, &names));
-        let deadline_registration = root_calls.iter().position(is_deadline_watch);
-        let spawns = root_calls
-            .iter()
-            .enumerate()
-            .filter(|(_, call)| call.function_id == "harness::spawn")
-            .collect::<Vec<_>>();
-        let armed_before_spawns = spawns.len() == 2
-            && barrier_registration
-                .is_some_and(|position| spawns.iter().all(|(spawn, _)| position < *spawn))
-            && deadline_registration
-                .is_some_and(|position| spawns.iter().all(|(spawn, _)| position < *spawn));
-        let direct_parallel = audit.direct_sessions == 2
-            && observation.metrics.totals.sessions == 3
-            && max_parallel_spawns(&observation.transcript) == 2;
-        let discovery_complete = required_sources_fetched(&audit);
-        let analysis_valid = valid_evidence(&evidence) && valid_conflicts(&conflicts);
-        let writes_valid = audit.evidence_write_exact && audit.conflicts_write_exact;
-        let records = common::trigger_fired_records(&observation.transcript);
-        let barrier_records = records
-            .iter()
-            .filter(|record| {
-                record.get("label").and_then(Value::as_str) == Some(names.complete_label.as_str())
-            })
-            .collect::<Vec<_>>();
-        let barrier_retired = barrier_records.len() == 3
-            && barrier_records
-                .iter()
-                .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
-                .count()
-                == 1;
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let report_grounded = response_grounded(&observation.response, &evidence, &conflicts);
-
-        Ok(assessment::build_evaluation(
-            if report_grounded {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-            CORPUS_DISCOVERY.full_or_zero(
-                discovery_complete,
-                format!(
-                    "evidence_fetches={:?}, conflict_fetches={:?}",
-                    audit.evidence_fetches, audit.conflict_fetches
-                ),
-            ),
-            PARALLEL_ANALYSIS.full_or_zero(
-                armed_before_spawns && direct_parallel && audit.disciplined,
-                format!(
-                    "armed_before_spawns={armed_before_spawns}, direct_sessions={}, parallel_batch={direct_parallel}, disciplined={}",
-                    audit.direct_sessions, audit.disciplined
-                ),
-            ),
-            GROUNDED_ANALYSIS.full_or_zero(
-                analysis_valid && writes_valid,
-                format!(
-                    "evidence_valid={}, conflicts_valid={}, writes_exact={writes_valid}",
-                    valid_evidence(&evidence),
-                    valid_conflicts(&conflicts)
-                ),
-            ),
-            BARRIER_SYNTHESIS.full_or_zero(
-                barrier_retired
-                    && report_grounded
-                    && active_bindings == 0
-                    && observation.metrics.totals.function_call_errors == 0,
-                format!(
-                    "barrier_retired={barrier_retired}, report_grounded={report_grounded}, active_bindings={active_bindings}, function_errors={}",
-                    observation.metrics.totals.function_call_errors
-                ),
-            ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let evidence = get_state(context, &names.scope, EVIDENCE_KEY).await?;
-        let conflicts = get_state(context, &names.scope, CONFLICTS_KEY).await?;
-        let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
-        let grounded = valid_evidence(&evidence) && valid_conflicts(&conflicts);
-        let sources_fetched = required_sources_fetched(&audit);
-        let brief_grounded = response_grounded(&observation.response, &evidence, &conflicts);
-        Ok(vec![
-            CapturedDeliverable {
-                id: ANALYSIS_DELIVERABLE_ID.to_string(),
-                kind: "research_analysis".to_string(),
-                content: json!({
-                    "evidence": evidence,
-                    "conflicts": conflicts,
-                    "fetched_sources": {
-                        "evidence_analyst": audit.evidence_fetches,
-                        "conflict_analyst": audit.conflict_fetches,
-                    }
-                })
-                .into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "fetched_source_provenance".to_string(),
-                        passed: sources_fetched,
-                        reason: "required source ids were independently observed in analyst fetch calls"
-                            .to_string(),
-                    },
-                    CapturedInvariant {
-                        id: "grounded_claims_and_conflicts".to_string(),
-                        passed: grounded,
-                        reason: "claim mappings, immutable digests, conflict precedence, and injection handling matched the oracle"
-                            .to_string(),
-                    },
-                ],
-                provenance: corpus()
-                    .into_iter()
-                    .filter(|document| document.source_id != "office-cache-distractor")
-                    .map(|document| ProvenanceEvidence {
-                        kind: "frozen_corpus".to_string(),
-                        source_id: format!(
-                            "{}#{}",
-                            document.source_id,
-                            document_digest(document.content)
-                        ),
-                        relation: "fetched_and_assessed".to_string(),
-                    })
-                    .collect(),
-            },
-            CapturedDeliverable {
-                id: BRIEF_DELIVERABLE_ID.to_string(),
-                kind: "markdown_report".to_string(),
-                content: json!({ "content": observation.response }).into(),
-                invariants: vec![CapturedInvariant {
-                    id: "traceable_synthesis".to_string(),
-                    passed: brief_grounded,
-                    reason: "brief contains every required claim/source/digest and the resolved conflict"
-                        .to_string(),
-                }],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: names.root_session,
-                    relation: "merged_after_barrier".to_string(),
-                }],
-            },
-        ])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![
@@ -896,41 +891,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        for key in [EVIDENCE_KEY, CONFLICTS_KEY] {
-            let _: Value = context
-                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
-                .await?;
-        }
-        Ok(())
-    })
 }
 
 async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {

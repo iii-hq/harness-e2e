@@ -36,9 +36,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "typescript_chat_service";
@@ -169,6 +169,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 pub struct TypescriptChatService;
 
+#[async_trait]
 impl Scenario for TypescriptChatService {
     fn id(&self) -> &'static str {
         ID
@@ -217,55 +218,11 @@ impl Scenario for TypescriptChatService {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-pub fn allowed_functions(_run_id: &str) -> Vec<String> {
-    vec![
-        "engine::functions::list".into(),
-        "engine::functions::info".into(),
-        "coder::*".into(),
-        "shell::*".into(),
-    ]
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = workspace_root(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Build a streaming chat service in TypeScript inside the isolated workspace `{root}`.
+        let root = workspace_root(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Build a streaming chat service in TypeScript inside the isolated workspace `{root}`.
 
 `{TASK_PATH}` lists fourteen numbered goals (G1-G14) and `{PROTOCOL_PATH}` is the frozen wire
 contract for the service API, the OpenAI-compatible provider API, and the two tools. Both files
@@ -289,19 +246,181 @@ deliver.
 Phase 3 - report. Finish with one line per goal in the form `G<number>: <met|not met> - <evidence>`,
 then the exact token `{FINAL_TOKEN}` on its own last line if and only if every goal is met and you
 observed it. If any goal is unmet, report `INCOMPLETE` instead and name the goals."#,
-            root = root.display(),
-        ),
-        filesystem_root: Some(root),
-        execution: ExecutionPolicy {
-            max_turns: 80,
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(1_500_000),
-            stuck_timeout_seconds: 1_200,
-            max_validation_retries: None,
-        },
-        denied_functions: &["web::*", "scrapling::*", "http::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
+                root = root.display(),
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                max_turns: 80,
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(1_500_000),
+                stuck_timeout_seconds: 1_200,
+                max_validation_retries: None,
+            },
+            denied_functions: &["web::*", "scrapling::*", "http::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
+
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        let root = workspace_root(run_id);
+        reset_workspace(&root)?;
+        // The skeleton must execute as TypeScript under this Node build, and it
+        // must fail loudly: the runtime check doubles as a red baseline.
+        let boot = run_node(&root, &[SERVER_PATH], BOOT_TIMEOUT, "skeleton boot").await?;
+        if boot.success {
+            bail!("the typescript chat skeleton unexpectedly starts successfully");
+        }
+        if !boot.stderr.contains("not implemented") {
+            bail!(
+                "node cannot execute the TypeScript skeleton directly (type stripping requires Node >= 22.6): {}",
+                tail(&boot.stderr)
+            );
+        }
+        let public = run_public_suite(&root).await?;
+        if public.success {
+            bail!("the typescript chat skeleton unexpectedly passes its public suite");
+        }
+        let (probe, output) = run_hidden_probe(run_id).await?;
+        if probe.passed {
+            bail!("the typescript chat skeleton unexpectedly passes the hidden probe: {output}");
+        }
+        if !probe
+            .checks
+            .get("harness_completed")
+            .copied()
+            .unwrap_or(false)
+        {
+            bail!("the hidden verification probe did not complete on this host: {output}");
+        }
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let audit = audit(run_id).await?;
+        let behavior = audit.probe.passed;
+        let scope = audit.scope_valid();
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "application_audit".to_string(),
+            content: json!({
+                "entrypoint": SERVER_PATH,
+                "source": audit.server_source,
+                "public_tests_passed": audit.public_tests_passed,
+                "hidden": {
+                    "passed": audit.probe.passed,
+                    "checks": audit.probe.checks,
+                },
+                "scope": {
+                    "implementation_present": audit.implementation_present,
+                    "protected_files_exact": audit.protected_files_exact,
+                    "readme_present": audit.readme_present,
+                    "unexpected_paths": audit.unexpected_paths,
+                },
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "public_suite_green".to_string(),
+                    passed: audit.public_tests_passed,
+                    reason: "the runner independently executed `node --test` in the workspace"
+                        .to_string(),
+                },
+                CapturedInvariant {
+                    id: "application_behavior_verified".to_string(),
+                    passed: behavior,
+                    reason: format!(
+                        "the runner started the application against its own scripted provider; failed checks: {:?}",
+                        audit.probe.failed()
+                    ),
+                },
+                CapturedInvariant {
+                    id: "workspace_scope_exact".to_string(),
+                    passed: scope,
+                    reason: "protected fixture files, dependency policy, and workspace topology were audited"
+                        .to_string(),
+                },
+            ],
+            provenance: vec![ProvenanceEvidence {
+                kind: "filesystem_path".to_string(),
+                source_id: workspace_root(run_id).join(SERVER_PATH).display().to_string(),
+                relation: "independently_executed_before_cleanup".to_string(),
+            }],
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let audit = audit(run_id).await?;
+        let failed = audit.probe.failed();
+        Ok(assessment::build_evaluation(
+            if audit.implementation_present {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                SERVICE_CONTRACT.full_or_zero(
+                    audit.probe.group(SERVICE_CONTRACT_CHECKS),
+                    format!("checks={SERVICE_CONTRACT_CHECKS:?}, failed={failed:?}"),
+                ),
+                STREAMING_FIDELITY.full_or_zero(
+                    audit.probe.group(STREAMING_CHECKS),
+                    format!("checks={STREAMING_CHECKS:?}, failed={failed:?}"),
+                ),
+                CONVERSATION_STATE.full_or_zero(
+                    audit.probe.group(STATE_CHECKS),
+                    format!("checks={STATE_CHECKS:?}, failed={failed:?}"),
+                ),
+                TOOLS_AND_STRUCTURED_OUTPUT.full_or_zero(
+                    audit.probe.group(TOOL_CHECKS),
+                    format!("checks={TOOL_CHECKS:?}, failed={failed:?}"),
+                ),
+                BUDGET_AND_RESILIENCE.full_or_zero(
+                    audit.probe.group(RESILIENCE_CHECKS),
+                    format!("checks={RESILIENCE_CHECKS:?}, failed={failed:?}"),
+                ),
+                SUITE_AND_SCOPE.full_or_zero(
+                    audit.scope_valid(),
+                    format!(
+                        "public_tests_passed={}, protected_files_exact={}, readme_present={}, unexpected_paths={:?}, shape_failed={:?}; public_output={:?}; probe_output={:?}",
+                        audit.public_tests_passed,
+                        audit.protected_files_exact,
+                        audit.readme_present,
+                        audit.unexpected_paths,
+                        SHAPE_CHECKS
+                            .iter()
+                            .filter(|name| !audit.probe.checks.get(**name).copied().unwrap_or(false))
+                            .collect::<Vec<_>>(),
+                        audit.public_output,
+                        audit.probe_output
+                    ),
+                ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        remove_root(&verify_root(run_id))?;
+        remove_root(&workspace_root(run_id))
+    }
+}
+
+pub fn allowed_functions(_run_id: &str) -> Vec<String> {
+    vec![
+        "engine::functions::list".into(),
+        "engine::functions::info".into(),
+        "coder::*".into(),
+        "shell::*".into(),
+    ]
 }
 
 // --- workspace ---------------------------------------------------------------
@@ -529,42 +648,6 @@ fn tail(value: &str) -> String {
 
 // --- setup -------------------------------------------------------------------
 
-fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let root = workspace_root(run_id);
-        reset_workspace(&root)?;
-        // The skeleton must execute as TypeScript under this Node build, and it
-        // must fail loudly: the runtime check doubles as a red baseline.
-        let boot = run_node(&root, &[SERVER_PATH], BOOT_TIMEOUT, "skeleton boot").await?;
-        if boot.success {
-            bail!("the typescript chat skeleton unexpectedly starts successfully");
-        }
-        if !boot.stderr.contains("not implemented") {
-            bail!(
-                "node cannot execute the TypeScript skeleton directly (type stripping requires Node >= 22.6): {}",
-                tail(&boot.stderr)
-            );
-        }
-        let public = run_public_suite(&root).await?;
-        if public.success {
-            bail!("the typescript chat skeleton unexpectedly passes its public suite");
-        }
-        let (probe, output) = run_hidden_probe(run_id).await?;
-        if probe.passed {
-            bail!("the typescript chat skeleton unexpectedly passes the hidden probe: {output}");
-        }
-        if !probe
-            .checks
-            .get("harness_completed")
-            .copied()
-            .unwrap_or(false)
-        {
-            bail!("the hidden verification probe did not complete on this host: {output}");
-        }
-        Ok(())
-    })
-}
-
 // --- audit -------------------------------------------------------------------
 
 #[derive(Debug)]
@@ -625,121 +708,6 @@ async fn audit(run_id: &str) -> Result<ServiceAudit> {
     })
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let audit = audit(run_id).await?;
-        let failed = audit.probe.failed();
-        Ok(assessment::build_evaluation(
-            if audit.implementation_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                SERVICE_CONTRACT.full_or_zero(
-                    audit.probe.group(SERVICE_CONTRACT_CHECKS),
-                    format!("checks={SERVICE_CONTRACT_CHECKS:?}, failed={failed:?}"),
-                ),
-                STREAMING_FIDELITY.full_or_zero(
-                    audit.probe.group(STREAMING_CHECKS),
-                    format!("checks={STREAMING_CHECKS:?}, failed={failed:?}"),
-                ),
-                CONVERSATION_STATE.full_or_zero(
-                    audit.probe.group(STATE_CHECKS),
-                    format!("checks={STATE_CHECKS:?}, failed={failed:?}"),
-                ),
-                TOOLS_AND_STRUCTURED_OUTPUT.full_or_zero(
-                    audit.probe.group(TOOL_CHECKS),
-                    format!("checks={TOOL_CHECKS:?}, failed={failed:?}"),
-                ),
-                BUDGET_AND_RESILIENCE.full_or_zero(
-                    audit.probe.group(RESILIENCE_CHECKS),
-                    format!("checks={RESILIENCE_CHECKS:?}, failed={failed:?}"),
-                ),
-                SUITE_AND_SCOPE.full_or_zero(
-                    audit.scope_valid(),
-                    format!(
-                        "public_tests_passed={}, protected_files_exact={}, readme_present={}, unexpected_paths={:?}, shape_failed={:?}; public_output={:?}; probe_output={:?}",
-                        audit.public_tests_passed,
-                        audit.protected_files_exact,
-                        audit.readme_present,
-                        audit.unexpected_paths,
-                        SHAPE_CHECKS
-                            .iter()
-                            .filter(|name| !audit.probe.checks.get(**name).copied().unwrap_or(false))
-                            .collect::<Vec<_>>(),
-                        audit.public_output,
-                        audit.probe_output
-                    ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = audit(run_id).await?;
-        let behavior = audit.probe.passed;
-        let scope = audit.scope_valid();
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "application_audit".to_string(),
-            content: json!({
-                "entrypoint": SERVER_PATH,
-                "source": audit.server_source,
-                "public_tests_passed": audit.public_tests_passed,
-                "hidden": {
-                    "passed": audit.probe.passed,
-                    "checks": audit.probe.checks,
-                },
-                "scope": {
-                    "implementation_present": audit.implementation_present,
-                    "protected_files_exact": audit.protected_files_exact,
-                    "readme_present": audit.readme_present,
-                    "unexpected_paths": audit.unexpected_paths,
-                },
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "public_suite_green".to_string(),
-                    passed: audit.public_tests_passed,
-                    reason: "the runner independently executed `node --test` in the workspace"
-                        .to_string(),
-                },
-                CapturedInvariant {
-                    id: "application_behavior_verified".to_string(),
-                    passed: behavior,
-                    reason: format!(
-                        "the runner started the application against its own scripted provider; failed checks: {:?}",
-                        audit.probe.failed()
-                    ),
-                },
-                CapturedInvariant {
-                    id: "workspace_scope_exact".to_string(),
-                    passed: scope,
-                    reason: "protected fixture files, dependency policy, and workspace topology were audited"
-                        .to_string(),
-                },
-            ],
-            provenance: vec![ProvenanceEvidence {
-                kind: "filesystem_path".to_string(),
-                source_id: workspace_root(run_id).join(SERVER_PATH).display().to_string(),
-                relation: "independently_executed_before_cleanup".to_string(),
-            }],
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -781,13 +749,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        remove_root(&verify_root(run_id))?;
-        remove_root(&workspace_root(run_id))
-    })
 }
 
 #[cfg(test)]

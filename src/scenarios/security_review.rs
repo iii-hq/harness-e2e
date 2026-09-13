@@ -5,15 +5,16 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    Capability, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, Scenario,
-    ScenarioCase, ScenarioCharacterization, ScenarioExecutionKind, ScenarioObservation,
-    ScenarioSpec,
+    async_trait, Capability, CriterionSpec, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, Scenario, ScenarioCase, ScenarioCharacterization, ScenarioExecutionKind,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "security_review";
 
 pub struct SecurityReview;
 
+#[async_trait]
 impl Scenario for SecurityReview {
     fn id(&self) -> &'static str {
         ID
@@ -84,24 +85,14 @@ impl Scenario for SecurityReview {
         }
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        composite_only_evaluator(context, observation, run_id)
-    }
-}
-
-fn composite_only_evaluator<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    _run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
         bail!("security_review must be executed through the registered CompositeFlow driver")
-    })
+    }
 }
 
 #[cfg(test)]

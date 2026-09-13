@@ -33,10 +33,10 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
-    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_ticket";
@@ -488,6 +488,7 @@ fn runtime_registry() -> &'static Mutex<HashMap<String, SharedRuntime>> {
 
 pub struct EngineeringTicket;
 
+#[async_trait]
 impl Scenario for EngineeringTicket {
     fn id(&self) -> &'static str {
         ID
@@ -545,37 +546,178 @@ impl Scenario for EngineeringTicket {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id, task_case())
+        let task = task_case();
+        let auditor = auditor_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You are assigned engineering ticket ET-{} in the current repository.\n\n\
+                 {} Investigate the repository, reproduce the reported behavior, implement the \
+                 smallest sufficient production change, and validate it.\n\n\
+                 Workspace contract: the focused command is `{}` and the full command is `{}`. \
+                 Before beginning, bind the trusted Harness auditor to your own session with one \
+                 `engine::register_trigger` call: trigger_type `{HOOK_TYPE}`, function_id `{auditor}`, \
+                 config {{\"timeout_ms\": 90000}}. Validator messages from that function are trusted, \
+                 factual post-turn feedback.\n\n\
+                 You may modify only: {}. Do not modify tests, fixtures, task metadata, Git metadata, \
+                 expected values, or anything outside the current workspace. Network access and \
+                 external writes are prohibited. Run the focused test and full suite before reporting \
+                 completion.\n\n\
+                 In the final handoff report files changed, commands run, observed results, and any \
+                 remaining limitation. Acceptance is silent.",
+                task.canonical_seed,
+                task.ticket,
+                task.focused_test.display,
+                task.full_test.display,
+                task.allowed_production_paths.join(", "),
+            ),
+            // Setup resolves either the launcher override or an isolated workspace.
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 48,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(600_000),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["http::*", "browser::*", "github::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup_case(context, run_id, task_case()))
+    /// Resolve only after setup: generated paths belong to an attempt, not the
+    /// catalog or the process environment. The same scope is inherited by children.
+    fn prepared_root(&self, run_id: &str) -> Result<Option<PathBuf>> {
+        runtime_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(run_id)
+            .map(|runtime| {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .root
+                    .clone()
+            })
+            .map(Some)
+            .with_context(|| format!("engineering fixture was not prepared for attempt {run_id}"))
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        setup_case(context, run_id, task_case()).await
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let evidence = collect_evidence(observation, run_id).await?;
+        let (_, invariants) = assess_evidence(&evidence, observation)?;
+        let session_provenance = ProvenanceEvidence {
+            kind: "session".into(),
+            source_id: observation.metrics.root_session_id.clone(),
+            relation: "observed_engineering_turn".into(),
+        };
+        Ok(vec![
+            json_deliverable(
+                "ticket_contract",
+                "engineering_ticket_contract",
+                evidence.ticket_contract,
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "scenario_case".into(),
+                    source_id: observation.case.case_id.clone(),
+                    relation: "materialized_ticket_contract".into(),
+                }],
+            ),
+            json_deliverable(
+                "baseline_record",
+                "engineering_baseline",
+                serde_json::to_value(&evidence.baseline)?,
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "git_revision".into(),
+                    source_id: evidence.baseline.fixture_head.clone(),
+                    relation: "runner_verified_red_baseline".into(),
+                }],
+            ),
+            json_deliverable(
+                "inspection_record",
+                "engineering_inspection",
+                serde_json::to_value(&evidence.inspection)?,
+                vec![],
+                vec![session_provenance.clone()],
+            ),
+            CapturedDeliverable {
+                id: "candidate_patch".into(),
+                kind: "code_patch".into(),
+                content: CapturedDeliverableContent::TextUtf8(evidence.patch.clone()),
+                invariants: vec![],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "git_diff".into(),
+                    source_id: evidence.baseline.fixture_head.clone(),
+                    relation: "candidate_against_fixture_revision".into(),
+                }],
+            },
+            json_deliverable(
+                "change_manifest",
+                "change_manifest",
+                serde_json::to_value(&evidence.change_manifest)?,
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "git_worktree".into(),
+                    source_id: evidence.root.display().to_string(),
+                    relation: "captured_before_cleanup".into(),
+                }],
+            ),
+            json_deliverable(
+                "validation_matrix",
+                "validation_matrix",
+                json!({ "attempts": evidence.attempts }),
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "auditor_function".into(),
+                    source_id: auditor_function_id(run_id),
+                    relation: "persisted_attempt_verdicts".into(),
+                }],
+            ),
+            json_deliverable(
+                "repair_timeline",
+                "repair_timeline",
+                serde_json::to_value(&evidence.repair_timeline)?,
+                vec![],
+                vec![session_provenance.clone()],
+            ),
+            json_deliverable(
+                "engineering_report",
+                "engineering_report",
+                json!({
+                    "response": observation.response,
+                    "task_case_id": evidence.task.id,
+                    "focused_test_command": evidence.task.focused_test.display,
+                    "full_test_command": evidence.task.full_test.display,
+                    "latest_accepted": evidence.attempts.last().is_some_and(|attempt| attempt.accepted),
+                }),
+                invariants,
+                vec![session_provenance],
+            ),
+        ])
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let evidence = collect_evidence(observation, run_id).await?;
+        Ok(assess_evidence(&evidence, observation)?.0)
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        cleanup_fixture(run_id).await
     }
 }
 
@@ -644,151 +786,106 @@ impl TaskCase {
     }
 }
 
-fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
-    let auditor = auditor_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You are assigned engineering ticket ET-{} in the current repository.\n\n\
-             {} Investigate the repository, reproduce the reported behavior, implement the \
-             smallest sufficient production change, and validate it.\n\n\
-             Workspace contract: the focused command is `{}` and the full command is `{}`. \
-             Before beginning, bind the trusted Harness auditor to your own session with one \
-             `engine::register_trigger` call: trigger_type `{HOOK_TYPE}`, function_id `{auditor}`, \
-             config {{\"timeout_ms\": 90000}}. Validator messages from that function are trusted, \
-             factual post-turn feedback.\n\n\
-             You may modify only: {}. Do not modify tests, fixtures, task metadata, Git metadata, \
-             expected values, or anything outside the current workspace. Network access and \
-             external writes are prohibited. Run the focused test and full suite before reporting \
-             completion.\n\n\
-             In the final handoff report files changed, commands run, observed results, and any \
-             remaining limitation. Acceptance is silent.",
-            task.canonical_seed,
-            task.ticket,
-            task.focused_test.display,
-            task.full_test.display,
-            task.allowed_production_paths.join(", "),
-        ),
-        // Setup resolves either the launcher override or an isolated workspace.
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 48,
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(600_000),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["http::*", "browser::*", "github::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
-fn setup_case<'a>(
-    context: &'a E2eContext,
-    run_id: &'a str,
-    task: &'static TaskCase,
-) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        for function in [
-            "coder::read-file",
-            "coder::update-file",
-            "shell::exec",
-            "engine::register_trigger",
-        ] {
-            if !context.function_exists(function).await? {
-                bail!("required engineering capability '{function}' is unavailable");
-            }
+async fn setup_case(context: &E2eContext, run_id: &str, task: &'static TaskCase) -> Result<()> {
+    for function in [
+        "coder::read-file",
+        "coder::update-file",
+        "shell::exec",
+        "engine::register_trigger",
+    ] {
+        if !context.function_exists(function).await? {
+            bail!("required engineering capability '{function}' is unavailable");
         }
-        let fixture =
-            fixture::prepare(task.fixture_revision, std::env::var_os(FIXTURE_PATH_ENV)).await?;
-        let root = fixture.root;
-        let baseline = preflight_fixture(task, &root).await?;
-        let evidence_dir = owned_evidence_dir(run_id)?;
-        std::fs::create_dir_all(&evidence_dir).with_context(|| {
-            format!(
-                "create auditor evidence directory {}",
-                evidence_dir.display()
-            )
-        })?;
-        let runtime = Arc::new(Mutex::new(RuntimeEvidence {
-            root: root.clone(),
-            owned_fixture: fixture.owned,
-            case: task,
-            baseline,
-            evidence_dir,
-            attempts: Vec::new(),
-            infrastructure_error: None,
-        }));
-        runtime_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(run_id.to_string(), runtime.clone());
+    }
+    let fixture =
+        fixture::prepare(task.fixture_revision, std::env::var_os(FIXTURE_PATH_ENV)).await?;
+    let root = fixture.root;
+    let baseline = preflight_fixture(task, &root).await?;
+    let evidence_dir = owned_evidence_dir(run_id)?;
+    std::fs::create_dir_all(&evidence_dir).with_context(|| {
+        format!(
+            "create auditor evidence directory {}",
+            evidence_dir.display()
+        )
+    })?;
+    let runtime = Arc::new(Mutex::new(RuntimeEvidence {
+        root: root.clone(),
+        owned_fixture: fixture.owned,
+        case: task,
+        baseline,
+        evidence_dir,
+        attempts: Vec::new(),
+        infrastructure_error: None,
+    }));
+    runtime_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(run_id.to_string(), runtime.clone());
 
-        context.client().register_function(
-            auditor_function_id(run_id),
-            RegisterFunction::new_async(move |_envelope: HookEnvelope| {
-                let runtime = runtime.clone();
-                async move {
-                    let (root, task, attempt, evidence_dir) = {
-                        let evidence = runtime
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        (
-                            evidence.root.clone(),
-                            evidence.case,
-                            evidence.attempts.len() as u32 + 1,
-                            evidence.evidence_dir.clone(),
-                        )
-                    };
-                    let mut record = match audit_attempt(task, &root, attempt).await {
-                        Ok(record) => record,
-                        Err(error) => {
-                            runtime
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .infrastructure_error = Some(format!("auditor failed: {error:#}"));
-                            return Ok::<HookVerdict, iii_sdk::errors::Error>(HookVerdict {
-                                decision: "continue".into(),
-                                reason: None,
-                            });
-                        }
-                    };
-                    if let Err(error) = persist_attempt(&evidence_dir, &record) {
+    context.client().register_function(
+        auditor_function_id(run_id),
+        RegisterFunction::new_async(move |_envelope: HookEnvelope| {
+            let runtime = runtime.clone();
+            async move {
+                let (root, task, attempt, evidence_dir) = {
+                    let evidence = runtime
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    (
+                        evidence.root.clone(),
+                        evidence.case,
+                        evidence.attempts.len() as u32 + 1,
+                        evidence.evidence_dir.clone(),
+                    )
+                };
+                let mut record = match audit_attempt(task, &root, attempt).await {
+                    Ok(record) => record,
+                    Err(error) => {
                         runtime
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
-                            .infrastructure_error = Some(format!("persist auditor attempt: {error:#}"));
+                            .infrastructure_error = Some(format!("auditor failed: {error:#}"));
                         return Ok::<HookVerdict, iii_sdk::errors::Error>(HookVerdict {
                             decision: "continue".into(),
                             reason: None,
                         });
                     }
-                    record.persisted_before_verdict = true;
-                    let verdict = if record.accepted {
-                        HookVerdict {
-                            decision: "continue".into(),
-                            reason: None,
-                        }
-                    } else {
-                        HookVerdict {
-                            decision: "deny".into(),
-                            reason: record.feedback.clone(),
-                        }
-                    };
+                };
+                if let Err(error) = persist_attempt(&evidence_dir, &record) {
                     runtime
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner())
-                        .attempts
-                        .push(record);
-                    Ok::<HookVerdict, iii_sdk::errors::Error>(verdict)
+                        .infrastructure_error = Some(format!("persist auditor attempt: {error:#}"));
+                    return Ok::<HookVerdict, iii_sdk::errors::Error>(HookVerdict {
+                        decision: "continue".into(),
+                        reason: None,
+                    });
                 }
-            })
-            .description(
-                "Attempt-owned engineering acceptance auditor. Reports bounded factual failures; hidden probe source is never returned.",
-            ),
-        );
-        Ok(())
-    })
+                record.persisted_before_verdict = true;
+                let verdict = if record.accepted {
+                    HookVerdict {
+                        decision: "continue".into(),
+                        reason: None,
+                    }
+                } else {
+                    HookVerdict {
+                        decision: "deny".into(),
+                        reason: record.feedback.clone(),
+                    }
+                };
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .attempts
+                    .push(record);
+                Ok::<HookVerdict, iii_sdk::errors::Error>(verdict)
+            }
+        })
+        .description(
+            "Attempt-owned engineering acceptance auditor. Reports bounded factual failures; hidden probe source is never returned.",
+        ),
+    );
+    Ok(())
 }
 
 async fn preflight_fixture(task: &'static TaskCase, root: &Path) -> Result<BaselineRecord> {
@@ -1114,106 +1211,6 @@ fn bounded_observation(value: &str) -> String {
     value.chars().take(512).collect()
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let evidence = collect_evidence(observation, run_id).await?;
-        let (_, invariants) = assess_evidence(&evidence, observation)?;
-        let session_provenance = ProvenanceEvidence {
-            kind: "session".into(),
-            source_id: observation.metrics.root_session_id.clone(),
-            relation: "observed_engineering_turn".into(),
-        };
-        Ok(vec![
-            json_deliverable(
-                "ticket_contract",
-                "engineering_ticket_contract",
-                evidence.ticket_contract,
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "scenario_case".into(),
-                    source_id: observation.case.case_id.clone(),
-                    relation: "materialized_ticket_contract".into(),
-                }],
-            ),
-            json_deliverable(
-                "baseline_record",
-                "engineering_baseline",
-                serde_json::to_value(&evidence.baseline)?,
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "git_revision".into(),
-                    source_id: evidence.baseline.fixture_head.clone(),
-                    relation: "runner_verified_red_baseline".into(),
-                }],
-            ),
-            json_deliverable(
-                "inspection_record",
-                "engineering_inspection",
-                serde_json::to_value(&evidence.inspection)?,
-                vec![],
-                vec![session_provenance.clone()],
-            ),
-            CapturedDeliverable {
-                id: "candidate_patch".into(),
-                kind: "code_patch".into(),
-                content: CapturedDeliverableContent::TextUtf8(evidence.patch.clone()),
-                invariants: vec![],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "git_diff".into(),
-                    source_id: evidence.baseline.fixture_head.clone(),
-                    relation: "candidate_against_fixture_revision".into(),
-                }],
-            },
-            json_deliverable(
-                "change_manifest",
-                "change_manifest",
-                serde_json::to_value(&evidence.change_manifest)?,
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "git_worktree".into(),
-                    source_id: evidence.root.display().to_string(),
-                    relation: "captured_before_cleanup".into(),
-                }],
-            ),
-            json_deliverable(
-                "validation_matrix",
-                "validation_matrix",
-                json!({ "attempts": evidence.attempts }),
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "auditor_function".into(),
-                    source_id: auditor_function_id(run_id),
-                    relation: "persisted_attempt_verdicts".into(),
-                }],
-            ),
-            json_deliverable(
-                "repair_timeline",
-                "repair_timeline",
-                serde_json::to_value(&evidence.repair_timeline)?,
-                vec![],
-                vec![session_provenance.clone()],
-            ),
-            json_deliverable(
-                "engineering_report",
-                "engineering_report",
-                json!({
-                    "response": observation.response,
-                    "task_case_id": evidence.task.id,
-                    "focused_test_command": evidence.task.focused_test.display,
-                    "full_test_command": evidence.task.full_test.display,
-                    "latest_accepted": evidence.attempts.last().is_some_and(|attempt| attempt.accepted),
-                }),
-                invariants,
-                vec![session_provenance],
-            ),
-        ])
-    })
-}
-
 fn json_deliverable(
     id: &str,
     kind: &str,
@@ -1408,28 +1405,10 @@ async fn collect_evidence(
     })
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let evidence = collect_evidence(observation, run_id).await?;
-        evaluate_evidence(&evidence, observation)
-    })
-}
-
-fn evaluate_evidence(
-    evidence: &EngineeringEvidence,
-    observation: &ScenarioObservation,
-) -> Result<super::ObjectiveEvaluation> {
-    Ok(assess_evidence(evidence, observation)?.0)
-}
-
 fn assess_evidence(
     evidence: &EngineeringEvidence,
     observation: &ScenarioObservation,
-) -> Result<(super::ObjectiveEvaluation, Vec<CapturedInvariant>)> {
+) -> Result<(ObjectiveEvaluation, Vec<CapturedInvariant>)> {
     let inspection = &evidence.inspection;
     let first_edit = inspection.first_edit_call;
     let relevant_source_before_edit = before(inspection.relevant_source_read_call, first_edit);
@@ -1845,65 +1824,59 @@ fn artifact_expectation(id: &str, kind: &str, schema: Value) -> ArtifactExpectat
     }
 }
 
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    cleanup_fixture(run_id)
-}
-
-fn cleanup_fixture(run_id: &str) -> CleanupFuture<'_> {
-    Box::pin(async move {
-        let runtime = runtime_registry()
+async fn cleanup_fixture(run_id: &str) -> Result<()> {
+    let runtime = runtime_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(run_id);
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
+    let (root, baseline, evidence_dir, owned_fixture) = {
+        let mut evidence = runtime
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(run_id);
-        let Some(runtime) = runtime else {
-            return Ok(());
-        };
-        let (root, baseline, evidence_dir, owned_fixture) = {
-            let mut evidence = runtime
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            (
-                evidence.root.clone(),
-                evidence.baseline.clone(),
-                evidence.evidence_dir.clone(),
-                evidence.owned_fixture.take(),
-            )
-        };
-        validate_fixture_root(&root)?;
-        if let Some(reference) = baseline.initial_symbolic_ref.as_deref() {
-            git(&root, &["update-ref", reference, &baseline.fixture_head]).await?;
-            git(&root, &["symbolic-ref", "HEAD", reference]).await?;
-        } else {
-            git(
-                &root,
-                &["checkout", "--detach", "-f", &baseline.fixture_head],
-            )
-            .await?;
-        }
-        git(&root, &["reset", "--hard", &baseline.fixture_head]).await?;
-        restore_refs(&root, &baseline.initial_ref_sha256).await?;
-        git(&root, &["clean", "-fd"]).await?;
-        let status = git(
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            evidence.root.clone(),
+            evidence.baseline.clone(),
+            evidence.evidence_dir.clone(),
+            evidence.owned_fixture.take(),
+        )
+    };
+    validate_fixture_root(&root)?;
+    if let Some(reference) = baseline.initial_symbolic_ref.as_deref() {
+        git(&root, &["update-ref", reference, &baseline.fixture_head]).await?;
+        git(&root, &["symbolic-ref", "HEAD", reference]).await?;
+    } else {
+        git(
             &root,
-            &["status", "--porcelain=v1", "--untracked-files=all"],
+            &["checkout", "--detach", "-f", &baseline.fixture_head],
         )
         .await?;
-        let head = git(&root, &["rev-parse", "HEAD"]).await?;
-        if !status.is_empty() || head != baseline.fixture_head {
-            bail!("engineering fixture cleanup did not restore exact clean HEAD");
-        }
-        validate_owned_evidence_dir(&evidence_dir)?;
-        if evidence_dir.exists() {
-            std::fs::remove_dir_all(&evidence_dir)
-                .with_context(|| format!("remove owned evidence {}", evidence_dir.display()))?;
-        }
-        if let Some(owned) = owned_fixture {
-            owned
-                .close()
-                .context("remove automatic engineering fixture")?;
-        }
-        Ok(())
-    })
+    }
+    git(&root, &["reset", "--hard", &baseline.fixture_head]).await?;
+    restore_refs(&root, &baseline.initial_ref_sha256).await?;
+    git(&root, &["clean", "-fd"]).await?;
+    let status = git(
+        &root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .await?;
+    let head = git(&root, &["rev-parse", "HEAD"]).await?;
+    if !status.is_empty() || head != baseline.fixture_head {
+        bail!("engineering fixture cleanup did not restore exact clean HEAD");
+    }
+    validate_owned_evidence_dir(&evidence_dir)?;
+    if evidence_dir.exists() {
+        std::fs::remove_dir_all(&evidence_dir)
+            .with_context(|| format!("remove owned evidence {}", evidence_dir.display()))?;
+    }
+    if let Some(owned) = owned_fixture {
+        owned
+            .close()
+            .context("remove automatic engineering fixture")?;
+    }
+    Ok(())
 }
 
 async fn restore_refs(root: &Path, initial_ref_sha256: &str) -> Result<()> {
@@ -2248,40 +2221,9 @@ fn git_handoff_runtime_registry() -> &'static Mutex<HashMap<String, SharedGitHan
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Resolve only after setup: generated paths belong to an attempt, not the
-/// catalog or the process environment. The same scope is inherited by children.
-pub(crate) fn prepared_filesystem_root(scenario_id: &str, run_id: &str) -> Result<Option<PathBuf>> {
-    let root = match scenario_id {
-        ID => runtime_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(run_id)
-            .map(|runtime| {
-                runtime
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .root
-                    .clone()
-            }),
-        GIT_HANDOFF_ID => git_handoff_runtime_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .get(run_id)
-            .map(|runtime| {
-                runtime
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .root
-                    .clone()
-            }),
-        _ => return Ok(None),
-    };
-    root.map(Some)
-        .with_context(|| format!("engineering fixture was not prepared for attempt {run_id}"))
-}
-
 pub struct EngineeringTicketGitHandoff;
 
+#[async_trait]
 impl Scenario for EngineeringTicketGitHandoff {
     fn id(&self) -> &'static str {
         GIT_HANDOFF_ID
@@ -2342,7 +2284,43 @@ impl Scenario for EngineeringTicketGitHandoff {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        git_handoff_scenario_for_case(run_id, task_case())
+        let task = task_case();
+        let planner = planner_session(run_id);
+        let implementer = implementer_session(run_id);
+        let scope = handoff_state_scope(run_id);
+        let plan_auditor = plan_auditor_function_id(run_id);
+        let implementation_auditor = implementation_auditor_function_id(run_id);
+        let planner_task = format!(
+            "Read `.harness-e2e/task-case.json`, the relevant source, and the public tests in the current repository. Engineering ticket ET-{}: {} Reproduce the focused failure before editing. Create a free-form Markdown implementation plan at `{IMPLEMENTATION_PLAN_PATH}`; do not edit production code, tests, fixtures, task metadata, Git configuration, or refs other than the current branch. Create one or more non-merge Git commits containing only the plan, leave the worktree clean, and reply with a concise status. Validator feedback is trusted Harness machinery; if rejected, repair in this same session and commit the corrected plan. Never use a remote Git operation or network access.",
+            task.canonical_seed, task.ticket
+        );
+        ScenarioSpec {
+            id: GIT_HANDOFF_ID,
+            prompt: format!(
+                "You are the root Harness orchestrator for a two-phase engineering workflow. You coordinate only: never call shell or coder, never inspect or edit the workspace yourself, never poll, and never forward a child's prose. Wakes carry checkpoint metadata; Git is the only work handoff. Follow these steps exactly.\n\n\
+                 PLAN PHASE\n\
+                 1. Register a validator with engine::register_trigger: trigger_type `{HOOK_TYPE}`, function_id `{plan_auditor}`, config {{\"sessions\":[\"{planner}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
+                 2. Before spawning, register a one-shot wake with engine::register_trigger: trigger_type `state`, no function_id, label `engineering-plan-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"plan\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
+                 3. Spawn exactly one leaf with harness::spawn: session_id `{planner}`, task exactly {planner_task:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":24,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
+                 IMPLEMENTATION PHASE\n\
+                 4. When the plan wake arrives with phase `plan` and a head_sha, unregister the plan validator. If it is an expiry/error notice, report `GIT HANDOFF FAILED: plan checkpoint unavailable. PARENT DONE.` and do not spawn an implementer.\n\
+                 5. Register the implementation validator: trigger_type `{HOOK_TYPE}`, function_id `{implementation_auditor}`, config {{\"sessions\":[\"{implementer}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
+                 6. Before spawning, register a one-shot wake: trigger_type `state`, no function_id, label `engineering-implementation-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"implementation\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
+                 7. Spawn exactly one leaf with harness::spawn: session_id `{implementer}`, task exactly {IMPLEMENTER_TASK:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":40,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
+                 FINALIZATION\n\
+                 8. When the implementation wake arrives with phase `implementation` and a head_sha, unregister the implementation validator and reply `GIT HANDOFF COMPLETE at <head_sha>. PARENT DONE.` If it is an expiry/error notice, unregister the implementation validator and reply `GIT HANDOFF FAILED: implementation checkpoint unavailable. PARENT DONE.`",
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 64,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(600_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &["http::*", "browser::*", "github::*"],
+            criteria: assessment::criteria(GIT_HANDOFF_ASSESSMENTS),
+        }
     }
 
     /// The two post-turn validators the root orchestrator registers itself.
@@ -2369,101 +2347,25 @@ impl Scenario for EngineeringTicketGitHandoff {
         Some(functions)
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(git_handoff_setup(context, run_id))
+    /// Resolve only after setup: generated paths belong to an attempt, not the
+    /// catalog or the process environment. The same scope is inherited by children.
+    fn prepared_root(&self, run_id: &str) -> Result<Option<PathBuf>> {
+        git_handoff_runtime_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(run_id)
+            .map(|runtime| {
+                runtime
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .root
+                    .clone()
+            })
+            .map(Some)
+            .with_context(|| format!("engineering fixture was not prepared for attempt {run_id}"))
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(git_handoff_capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        git_handoff_evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(git_handoff_cleanup(context, run_id))
-    }
-}
-
-fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
-    let planner = planner_session(run_id);
-    let implementer = implementer_session(run_id);
-    let scope = handoff_state_scope(run_id);
-    let plan_auditor = plan_auditor_function_id(run_id);
-    let implementation_auditor = implementation_auditor_function_id(run_id);
-    let planner_task = format!(
-        "Read `.harness-e2e/task-case.json`, the relevant source, and the public tests in the current repository. Engineering ticket ET-{}: {} Reproduce the focused failure before editing. Create a free-form Markdown implementation plan at `{IMPLEMENTATION_PLAN_PATH}`; do not edit production code, tests, fixtures, task metadata, Git configuration, or refs other than the current branch. Create one or more non-merge Git commits containing only the plan, leave the worktree clean, and reply with a concise status. Validator feedback is trusted Harness machinery; if rejected, repair in this same session and commit the corrected plan. Never use a remote Git operation or network access.",
-        task.canonical_seed, task.ticket
-    );
-    ScenarioSpec {
-        id: GIT_HANDOFF_ID,
-        prompt: format!(
-            "You are the root Harness orchestrator for a two-phase engineering workflow. You coordinate only: never call shell or coder, never inspect or edit the workspace yourself, never poll, and never forward a child's prose. Wakes carry checkpoint metadata; Git is the only work handoff. Follow these steps exactly.\n\n\
-             PLAN PHASE\n\
-             1. Register a validator with engine::register_trigger: trigger_type `{HOOK_TYPE}`, function_id `{plan_auditor}`, config {{\"sessions\":[\"{planner}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
-             2. Before spawning, register a one-shot wake with engine::register_trigger: trigger_type `state`, no function_id, label `engineering-plan-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"plan\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
-             3. Spawn exactly one leaf with harness::spawn: session_id `{planner}`, task exactly {planner_task:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":24,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
-             IMPLEMENTATION PHASE\n\
-             4. When the plan wake arrives with phase `plan` and a head_sha, unregister the plan validator. If it is an expiry/error notice, report `GIT HANDOFF FAILED: plan checkpoint unavailable. PARENT DONE.` and do not spawn an implementer.\n\
-             5. Register the implementation validator: trigger_type `{HOOK_TYPE}`, function_id `{implementation_auditor}`, config {{\"sessions\":[\"{implementer}\"],\"timeout_ms\":120000}}. Save its subscription_id.\n\
-             6. Before spawning, register a one-shot wake: trigger_type `state`, no function_id, label `engineering-implementation-accepted`, once true, config {{\"scope\":\"{scope}\",\"key\":\"implementation\"}}, lifecycle {{\"expires_in_ms\":{GIT_HANDOFF_WAKE_TIMEOUT_MS}}}.\n\
-             7. Spawn exactly one leaf with harness::spawn: session_id `{implementer}`, task exactly {IMPLEMENTER_TASK:?}, options {{\"functions\":{{\"allow\":[\"engine::functions::list\",\"engine::functions::info\",\"coder::*\",\"shell::exec\"]}},\"max_turns\":40,\"max_validation_retries\":2}}. Omit filesystem_root, model, and provider. End your turn.\n\n\
-             FINALIZATION\n\
-             8. When the implementation wake arrives with phase `implementation` and a head_sha, unregister the implementation validator and reply `GIT HANDOFF COMPLETE at <head_sha>. PARENT DONE.` If it is an expiry/error notice, unregister the implementation validator and reply `GIT HANDOFF FAILED: implementation checkpoint unavailable. PARENT DONE.`",
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 64,
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(600_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &["http::*", "browser::*", "github::*"],
-        criteria: assessment::criteria(GIT_HANDOFF_ASSESSMENTS),
-    }
-}
-
-fn planner_session(run_id: &str) -> String {
-    format!("e2e_{run_id}-planner")
-}
-
-fn implementer_session(run_id: &str) -> String {
-    format!("e2e_{run_id}-implementer")
-}
-
-fn handoff_state_scope(run_id: &str) -> String {
-    format!("engineering-git-handoff-{}", suffix(run_id))
-}
-
-fn plan_auditor_function_id(run_id: &str) -> String {
-    format!("e2etest::engineering_plan_audit_{}", suffix(run_id))
-}
-
-fn implementation_auditor_function_id(run_id: &str) -> String {
-    format!(
-        "e2etest::engineering_implementation_audit_{}",
-        suffix(run_id)
-    )
-}
-
-fn git_handoff_setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
         for function in [
             "coder::read-file",
             "coder::update-file",
@@ -2560,7 +2462,294 @@ fn git_handoff_setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFut
             ),
         );
         Ok(())
-    })
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
+        let (_, invariants) = assess_git_handoff_evidence(&evidence, observation).await?;
+        let root_provenance = ProvenanceEvidence {
+            kind: "session".into(),
+            source_id: observation.metrics.root_session_id.clone(),
+            relation: "orchestrated_git_handoff".into(),
+        };
+        let planner_provenance = ProvenanceEvidence {
+            kind: "session".into(),
+            source_id: planner_session(run_id),
+            relation: "planned_and_committed".into(),
+        };
+        let implementer_provenance = ProvenanceEvidence {
+            kind: "session".into(),
+            source_id: implementer_session(run_id),
+            relation: "implemented_and_committed".into(),
+        };
+        let initial_refs_sha256 = artifact::sha256_bytes(evidence.baseline_refs.as_bytes());
+        let final_refs_sha256 = artifact::sha256_bytes(evidence.final_refs.as_bytes());
+        let plan_refs = final_refs_for_head(
+            &evidence.baseline_refs,
+            evidence.baseline.initial_symbolic_ref.as_deref(),
+            &evidence.plan_head,
+        );
+        let plan_refs_sha256 = artifact::sha256_bytes(plan_refs.as_bytes());
+        let implementation_attempts = evidence
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.phase == HandoffPhase::Implementation)
+            .count();
+        let plan_attempts = evidence
+            .attempts
+            .len()
+            .saturating_sub(implementation_attempts);
+        Ok(vec![
+            json_deliverable(
+                "ticket_contract",
+                "engineering_ticket_contract",
+                evidence.ticket_contract,
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "scenario_case".into(),
+                    source_id: observation.case.case_id.clone(),
+                    relation: "materialized_ticket_contract".into(),
+                }],
+            ),
+            json_deliverable(
+                "baseline_record",
+                "engineering_baseline",
+                serde_json::to_value(&evidence.baseline)?,
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "git_revision".into(),
+                    source_id: evidence.baseline.fixture_head.clone(),
+                    relation: "runner_verified_red_baseline".into(),
+                }],
+            ),
+            json_deliverable(
+                "inspection_record",
+                "engineering_inspection",
+                json!({
+                    "planner": evidence.planner_inspection,
+                    "implementer": evidence.implementer_inspection,
+                }),
+                vec![],
+                vec![planner_provenance.clone(), implementer_provenance.clone()],
+            ),
+            CapturedDeliverable {
+                id: "implementation_plan".into(),
+                kind: "implementation_plan".into(),
+                content: CapturedDeliverableContent::TextUtf8(evidence.plan.clone()),
+                invariants: vec![],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "git_blob".into(),
+                    source_id: evidence.plan_sha256.clone(),
+                    relation: "committed_at_plan_checkpoint".into(),
+                }],
+            },
+            json_deliverable(
+                "git_checkpoints",
+                "git_checkpoints",
+                json!({
+                    "c0": evidence.baseline.fixture_head,
+                    "cplan": evidence.plan_checkpoint,
+                    "cfinal": evidence.implementation_checkpoint,
+                    "branch": evidence.baseline.initial_symbolic_ref,
+                    "ranges": {
+                        "plan": format!("{}..{}", evidence.baseline.fixture_head, evidence.plan_head),
+                        "implementation": format!("{}..{}", evidence.plan_head, evidence.final_head),
+                    },
+                    "refs": {
+                        "c0": evidence.baseline_refs,
+                        "cplan": plan_refs,
+                        "cfinal": evidence.final_refs,
+                        "c0_sha256": initial_refs_sha256,
+                        "cplan_sha256": plan_refs_sha256,
+                        "cfinal_sha256": final_refs_sha256,
+                    },
+                }),
+                vec![],
+                vec![planner_provenance.clone(), implementer_provenance.clone()],
+            ),
+            CapturedDeliverable {
+                id: "candidate_patch".into(),
+                kind: "code_patch".into(),
+                content: CapturedDeliverableContent::TextUtf8(evidence.patch.clone()),
+                invariants: vec![],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "git_diff".into(),
+                    source_id: format!("{}..{}", evidence.plan_head, evidence.final_head),
+                    relation: "committed_implementation_patch".into(),
+                }],
+            },
+            json_deliverable(
+                "change_manifest",
+                "change_manifest",
+                json!({
+                    "initial_revision": evidence.baseline.fixture_head,
+                    "plan_revision": evidence.plan_head,
+                    "final_revision": evidence.final_head,
+                    "plan_sha256": evidence.plan_sha256,
+                    "patch_sha256": artifact::sha256_bytes(evidence.patch.as_bytes()),
+                    "final_status": evidence.final_status,
+                    "original_symbolic_ref": evidence.baseline.initial_symbolic_ref,
+                    "initial_refs_sha256": initial_refs_sha256,
+                    "final_refs_sha256": final_refs_sha256,
+                }),
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "git_worktree".into(),
+                    source_id: evidence.root.display().to_string(),
+                    relation: "captured_before_cleanup".into(),
+                }],
+            ),
+            json_deliverable(
+                "validation_matrix",
+                "validation_matrix",
+                json!({ "attempts": evidence.attempts }),
+                vec![],
+                vec![ProvenanceEvidence {
+                    kind: "auditor_function".into(),
+                    source_id: format!(
+                        "{},{}",
+                        plan_auditor_function_id(run_id),
+                        implementation_auditor_function_id(run_id)
+                    ),
+                    relation: "persisted_phase_verdicts".into(),
+                }],
+            ),
+            json_deliverable(
+                "repair_timeline",
+                "repair_timeline",
+                json!({
+                    "plan": { "attempts": plan_attempts, "nudges": evidence.planner_nudges, "session_id": planner_session(run_id) },
+                    "implementation": { "attempts": implementation_attempts, "nudges": evidence.implementer_nudges, "session_id": implementer_session(run_id) },
+                }),
+                vec![],
+                vec![planner_provenance.clone(), implementer_provenance.clone()],
+            ),
+            json_deliverable(
+                "engineering_report",
+                "engineering_report",
+                json!({
+                    "response": observation.response,
+                    "task_case_id": evidence.task.id,
+                    "root_session_id": observation.metrics.root_session_id,
+                    "planner_session_id": planner_session(run_id),
+                    "implementer_session_id": implementer_session(run_id),
+                    "topology": {
+                        "nodes": [
+                            { "session_id": observation.metrics.root_session_id, "role": "root_orchestrator" },
+                            { "session_id": planner_session(run_id), "role": "planner_leaf" },
+                            { "session_id": implementer_session(run_id), "role": "implementer_leaf" },
+                        ],
+                        "edges": [
+                            { "from": observation.metrics.root_session_id, "to": planner_session(run_id), "handoff": "ticket_and_repository" },
+                            { "from": planner_session(run_id), "to": implementer_session(run_id), "handoff": "git_checkpoint_only" },
+                        ],
+                        "phase_order": ["plan", "implementation"],
+                    },
+                    "session_tree_exact": evidence.session_tree_exact,
+                    "orchestration_ordered": evidence.orchestration_ordered,
+                    "wakes_valid": evidence.wakes_valid,
+                    "plan_wake_before_implementer": evidence.plan_wake_before_implementer,
+                    "git_only_handoff": evidence.git_only_handoff,
+                    "planner_transcript_observed": !evidence.planner_transcript.is_null(),
+                    "implementer_transcript_observed": !evidence.implementer_transcript.is_null(),
+                }),
+                invariants,
+                vec![root_provenance, planner_provenance, implementer_provenance],
+            ),
+        ])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let incomplete_reason =
+            git_handoff_runtime_registry()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .get(run_id)
+                .cloned()
+                .and_then(|runtime| {
+                    let evidence = runtime
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if !evidence.infrastructure_errors.is_empty() {
+                        None
+                    } else if evidence.plan_head.is_none() {
+                        Some("the subject stopped before an accepted plan checkpoint")
+                    } else if !evidence.attempts.iter().any(|record| {
+                        record.phase == HandoffPhase::Implementation && record.accepted
+                    }) {
+                        Some("the subject stopped before an accepted implementation checkpoint")
+                    } else {
+                        None
+                    }
+                });
+        if let Some(reason) = incomplete_reason {
+            return Ok(assessment::task_incomplete(
+                GIT_HANDOFF_ASSESSMENTS,
+                "terminal_checkpoint_present",
+                reason,
+            ));
+        }
+        let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
+        Ok(assess_git_handoff_evidence(&evidence, observation).await?.0)
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        let mut state_cleanup_errors = Vec::new();
+        for key in [
+            HandoffPhase::Plan.as_str(),
+            HandoffPhase::Implementation.as_str(),
+        ] {
+            let deletion: Result<Value> = context
+                .trigger(
+                    "state::delete",
+                    json!({ "scope": handoff_state_scope(run_id), "key": key }),
+                )
+                .await;
+            if let Err(error) = deletion {
+                state_cleanup_errors.push(format!("delete handoff state key {key}: {error:#}"));
+            }
+        }
+        if let Err(error) = git_handoff_cleanup_fixture(run_id).await {
+            state_cleanup_errors.push(format!("restore Git handoff fixture: {error:#}"));
+        }
+        if !state_cleanup_errors.is_empty() {
+            bail!("{}", state_cleanup_errors.join("; "));
+        }
+        Ok(())
+    }
+}
+
+fn planner_session(run_id: &str) -> String {
+    format!("e2e_{run_id}-planner")
+}
+
+fn implementer_session(run_id: &str) -> String {
+    format!("e2e_{run_id}-implementer")
+}
+
+fn handoff_state_scope(run_id: &str) -> String {
+    format!("engineering-git-handoff-{}", suffix(run_id))
+}
+
+fn plan_auditor_function_id(run_id: &str) -> String {
+    format!("e2etest::engineering_plan_audit_{}", suffix(run_id))
+}
+
+fn implementation_auditor_function_id(run_id: &str) -> String {
+    format!(
+        "e2etest::engineering_implementation_audit_{}",
+        suffix(run_id)
+    )
 }
 
 async fn run_handoff_auditor(
@@ -3566,57 +3755,10 @@ fn spawn_task_text(arguments: &Value) -> Option<&str> {
         .or_else(|| arguments.pointer("/task/text").and_then(Value::as_str))
 }
 
-fn git_handoff_evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let incomplete_reason =
-            git_handoff_runtime_registry()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .get(run_id)
-                .cloned()
-                .and_then(|runtime| {
-                    let evidence = runtime
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if !evidence.infrastructure_errors.is_empty() {
-                        None
-                    } else if evidence.plan_head.is_none() {
-                        Some("the subject stopped before an accepted plan checkpoint")
-                    } else if !evidence.attempts.iter().any(|record| {
-                        record.phase == HandoffPhase::Implementation && record.accepted
-                    }) {
-                        Some("the subject stopped before an accepted implementation checkpoint")
-                    } else {
-                        None
-                    }
-                });
-        if let Some(reason) = incomplete_reason {
-            return Ok(assessment::task_incomplete(
-                GIT_HANDOFF_ASSESSMENTS,
-                "terminal_checkpoint_present",
-                reason,
-            ));
-        }
-        let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
-        evaluate_git_handoff_evidence(&evidence, observation).await
-    })
-}
-
-async fn evaluate_git_handoff_evidence(
-    evidence: &GitHandoffEvidence,
-    observation: &ScenarioObservation,
-) -> Result<super::ObjectiveEvaluation> {
-    Ok(assess_git_handoff_evidence(evidence, observation).await?.0)
-}
-
 async fn assess_git_handoff_evidence(
     evidence: &GitHandoffEvidence,
     _observation: &ScenarioObservation,
-) -> Result<(super::ObjectiveEvaluation, Vec<CapturedInvariant>)> {
+) -> Result<(ObjectiveEvaluation, Vec<CapturedInvariant>)> {
     let accepted_plan = evidence
         .attempts
         .iter()
@@ -3989,207 +4131,6 @@ fn apply_handoff_efficiency_to_run(run: &mut E2eRunReport, outcome: HandoffEffic
     run.refresh_dimensions(!run.deliverables.is_empty());
 }
 
-fn git_handoff_capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let evidence = collect_git_handoff_evidence(context, observation, run_id).await?;
-        let (_, invariants) = assess_git_handoff_evidence(&evidence, observation).await?;
-        let root_provenance = ProvenanceEvidence {
-            kind: "session".into(),
-            source_id: observation.metrics.root_session_id.clone(),
-            relation: "orchestrated_git_handoff".into(),
-        };
-        let planner_provenance = ProvenanceEvidence {
-            kind: "session".into(),
-            source_id: planner_session(run_id),
-            relation: "planned_and_committed".into(),
-        };
-        let implementer_provenance = ProvenanceEvidence {
-            kind: "session".into(),
-            source_id: implementer_session(run_id),
-            relation: "implemented_and_committed".into(),
-        };
-        let initial_refs_sha256 = artifact::sha256_bytes(evidence.baseline_refs.as_bytes());
-        let final_refs_sha256 = artifact::sha256_bytes(evidence.final_refs.as_bytes());
-        let plan_refs = final_refs_for_head(
-            &evidence.baseline_refs,
-            evidence.baseline.initial_symbolic_ref.as_deref(),
-            &evidence.plan_head,
-        );
-        let plan_refs_sha256 = artifact::sha256_bytes(plan_refs.as_bytes());
-        let implementation_attempts = evidence
-            .attempts
-            .iter()
-            .filter(|attempt| attempt.phase == HandoffPhase::Implementation)
-            .count();
-        let plan_attempts = evidence
-            .attempts
-            .len()
-            .saturating_sub(implementation_attempts);
-        Ok(vec![
-            json_deliverable(
-                "ticket_contract",
-                "engineering_ticket_contract",
-                evidence.ticket_contract,
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "scenario_case".into(),
-                    source_id: observation.case.case_id.clone(),
-                    relation: "materialized_ticket_contract".into(),
-                }],
-            ),
-            json_deliverable(
-                "baseline_record",
-                "engineering_baseline",
-                serde_json::to_value(&evidence.baseline)?,
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "git_revision".into(),
-                    source_id: evidence.baseline.fixture_head.clone(),
-                    relation: "runner_verified_red_baseline".into(),
-                }],
-            ),
-            json_deliverable(
-                "inspection_record",
-                "engineering_inspection",
-                json!({
-                    "planner": evidence.planner_inspection,
-                    "implementer": evidence.implementer_inspection,
-                }),
-                vec![],
-                vec![planner_provenance.clone(), implementer_provenance.clone()],
-            ),
-            CapturedDeliverable {
-                id: "implementation_plan".into(),
-                kind: "implementation_plan".into(),
-                content: CapturedDeliverableContent::TextUtf8(evidence.plan.clone()),
-                invariants: vec![],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "git_blob".into(),
-                    source_id: evidence.plan_sha256.clone(),
-                    relation: "committed_at_plan_checkpoint".into(),
-                }],
-            },
-            json_deliverable(
-                "git_checkpoints",
-                "git_checkpoints",
-                json!({
-                    "c0": evidence.baseline.fixture_head,
-                    "cplan": evidence.plan_checkpoint,
-                    "cfinal": evidence.implementation_checkpoint,
-                    "branch": evidence.baseline.initial_symbolic_ref,
-                    "ranges": {
-                        "plan": format!("{}..{}", evidence.baseline.fixture_head, evidence.plan_head),
-                        "implementation": format!("{}..{}", evidence.plan_head, evidence.final_head),
-                    },
-                    "refs": {
-                        "c0": evidence.baseline_refs,
-                        "cplan": plan_refs,
-                        "cfinal": evidence.final_refs,
-                        "c0_sha256": initial_refs_sha256,
-                        "cplan_sha256": plan_refs_sha256,
-                        "cfinal_sha256": final_refs_sha256,
-                    },
-                }),
-                vec![],
-                vec![planner_provenance.clone(), implementer_provenance.clone()],
-            ),
-            CapturedDeliverable {
-                id: "candidate_patch".into(),
-                kind: "code_patch".into(),
-                content: CapturedDeliverableContent::TextUtf8(evidence.patch.clone()),
-                invariants: vec![],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "git_diff".into(),
-                    source_id: format!("{}..{}", evidence.plan_head, evidence.final_head),
-                    relation: "committed_implementation_patch".into(),
-                }],
-            },
-            json_deliverable(
-                "change_manifest",
-                "change_manifest",
-                json!({
-                    "initial_revision": evidence.baseline.fixture_head,
-                    "plan_revision": evidence.plan_head,
-                    "final_revision": evidence.final_head,
-                    "plan_sha256": evidence.plan_sha256,
-                    "patch_sha256": artifact::sha256_bytes(evidence.patch.as_bytes()),
-                    "final_status": evidence.final_status,
-                    "original_symbolic_ref": evidence.baseline.initial_symbolic_ref,
-                    "initial_refs_sha256": initial_refs_sha256,
-                    "final_refs_sha256": final_refs_sha256,
-                }),
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "git_worktree".into(),
-                    source_id: evidence.root.display().to_string(),
-                    relation: "captured_before_cleanup".into(),
-                }],
-            ),
-            json_deliverable(
-                "validation_matrix",
-                "validation_matrix",
-                json!({ "attempts": evidence.attempts }),
-                vec![],
-                vec![ProvenanceEvidence {
-                    kind: "auditor_function".into(),
-                    source_id: format!(
-                        "{},{}",
-                        plan_auditor_function_id(run_id),
-                        implementation_auditor_function_id(run_id)
-                    ),
-                    relation: "persisted_phase_verdicts".into(),
-                }],
-            ),
-            json_deliverable(
-                "repair_timeline",
-                "repair_timeline",
-                json!({
-                    "plan": { "attempts": plan_attempts, "nudges": evidence.planner_nudges, "session_id": planner_session(run_id) },
-                    "implementation": { "attempts": implementation_attempts, "nudges": evidence.implementer_nudges, "session_id": implementer_session(run_id) },
-                }),
-                vec![],
-                vec![planner_provenance.clone(), implementer_provenance.clone()],
-            ),
-            json_deliverable(
-                "engineering_report",
-                "engineering_report",
-                json!({
-                    "response": observation.response,
-                    "task_case_id": evidence.task.id,
-                    "root_session_id": observation.metrics.root_session_id,
-                    "planner_session_id": planner_session(run_id),
-                    "implementer_session_id": implementer_session(run_id),
-                    "topology": {
-                        "nodes": [
-                            { "session_id": observation.metrics.root_session_id, "role": "root_orchestrator" },
-                            { "session_id": planner_session(run_id), "role": "planner_leaf" },
-                            { "session_id": implementer_session(run_id), "role": "implementer_leaf" },
-                        ],
-                        "edges": [
-                            { "from": observation.metrics.root_session_id, "to": planner_session(run_id), "handoff": "ticket_and_repository" },
-                            { "from": planner_session(run_id), "to": implementer_session(run_id), "handoff": "git_checkpoint_only" },
-                        ],
-                        "phase_order": ["plan", "implementation"],
-                    },
-                    "session_tree_exact": evidence.session_tree_exact,
-                    "orchestration_ordered": evidence.orchestration_ordered,
-                    "wakes_valid": evidence.wakes_valid,
-                    "plan_wake_before_implementer": evidence.plan_wake_before_implementer,
-                    "git_only_handoff": evidence.git_only_handoff,
-                    "planner_transcript_observed": !evidence.planner_transcript.is_null(),
-                    "implementer_transcript_observed": !evidence.implementer_transcript.is_null(),
-                }),
-                invariants,
-                vec![root_provenance, planner_provenance, implementer_provenance],
-            ),
-        ])
-    })
-}
-
 fn git_handoff_deliverable_contract() -> DeliverableContract {
     let object_schema = json!({ "type": "object", "additionalProperties": true });
     DeliverableContract {
@@ -4245,98 +4186,68 @@ fn git_handoff_deliverable_contract() -> DeliverableContract {
     }
 }
 
-fn git_handoff_cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let mut state_cleanup_errors = Vec::new();
-        for key in [
-            HandoffPhase::Plan.as_str(),
-            HandoffPhase::Implementation.as_str(),
-        ] {
-            let deletion: Result<Value> = context
-                .trigger(
-                    "state::delete",
-                    json!({ "scope": handoff_state_scope(run_id), "key": key }),
-                )
-                .await;
-            if let Err(error) = deletion {
-                state_cleanup_errors.push(format!("delete handoff state key {key}: {error:#}"));
-            }
-        }
-        if let Err(error) = git_handoff_cleanup_fixture(run_id).await {
-            state_cleanup_errors.push(format!("restore Git handoff fixture: {error:#}"));
-        }
-        if !state_cleanup_errors.is_empty() {
-            bail!("{}", state_cleanup_errors.join("; "));
-        }
-        Ok(())
-    })
-}
-
-fn git_handoff_cleanup_fixture(run_id: &str) -> CleanupFuture<'_> {
-    Box::pin(async move {
-        let runtime = git_handoff_runtime_registry()
+async fn git_handoff_cleanup_fixture(run_id: &str) -> Result<()> {
+    let runtime = git_handoff_runtime_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(run_id);
+    let Some(runtime) = runtime else {
+        return Ok(());
+    };
+    let (root, baseline, baseline_refs, evidence_dir, owned_fixture) = {
+        let mut evidence = runtime
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(run_id);
-        let Some(runtime) = runtime else {
-            return Ok(());
-        };
-        let (root, baseline, baseline_refs, evidence_dir, owned_fixture) = {
-            let mut evidence = runtime
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            (
-                evidence.root.clone(),
-                evidence.baseline.clone(),
-                evidence.baseline_refs.clone(),
-                evidence.evidence_dir.clone(),
-                evidence.owned_fixture.take(),
-            )
-        };
-        validate_fixture_root(&root)?;
-        if let Some(reference) = baseline.initial_symbolic_ref.as_deref() {
-            git(&root, &["update-ref", reference, &baseline.fixture_head]).await?;
-            git(&root, &["symbolic-ref", "HEAD", reference]).await?;
-        } else {
-            git(
-                &root,
-                &["checkout", "--detach", "-f", &baseline.fixture_head],
-            )
-            .await?;
-        }
-        git(&root, &["reset", "--hard", &baseline.fixture_head]).await?;
-        git(&root, &["clean", "-fd"]).await?;
-        restore_exact_refs(&root, &baseline_refs).await?;
-        let status = git(
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        (
+            evidence.root.clone(),
+            evidence.baseline.clone(),
+            evidence.baseline_refs.clone(),
+            evidence.evidence_dir.clone(),
+            evidence.owned_fixture.take(),
+        )
+    };
+    validate_fixture_root(&root)?;
+    if let Some(reference) = baseline.initial_symbolic_ref.as_deref() {
+        git(&root, &["update-ref", reference, &baseline.fixture_head]).await?;
+        git(&root, &["symbolic-ref", "HEAD", reference]).await?;
+    } else {
+        git(
             &root,
-            &["status", "--porcelain=v1", "--untracked-files=all"],
+            &["checkout", "--detach", "-f", &baseline.fixture_head],
         )
         .await?;
-        let head = git(&root, &["rev-parse", "HEAD"]).await?;
-        let refs = refs_snapshot(&root).await?;
-        let symbolic_ref = git_optional(&root, &["symbolic-ref", "-q", "HEAD"]).await?;
-        if !status.is_empty()
-            || head != baseline.fixture_head
-            || refs != baseline_refs
-            || symbolic_ref != baseline.initial_symbolic_ref
-        {
-            bail!(
-                "engineering Git handoff cleanup did not restore exact HEAD, branch, refs, and status"
-            );
-        }
-        validate_git_handoff_evidence_dir(&evidence_dir)?;
-        if evidence_dir.exists() {
-            std::fs::remove_dir_all(&evidence_dir).with_context(|| {
-                format!("remove Git handoff evidence {}", evidence_dir.display())
-            })?;
-        }
-        if let Some(owned) = owned_fixture {
-            owned
-                .close()
-                .context("remove automatic engineering fixture")?;
-        }
-        Ok(())
-    })
+    }
+    git(&root, &["reset", "--hard", &baseline.fixture_head]).await?;
+    git(&root, &["clean", "-fd"]).await?;
+    restore_exact_refs(&root, &baseline_refs).await?;
+    let status = git(
+        &root,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
+    )
+    .await?;
+    let head = git(&root, &["rev-parse", "HEAD"]).await?;
+    let refs = refs_snapshot(&root).await?;
+    let symbolic_ref = git_optional(&root, &["symbolic-ref", "-q", "HEAD"]).await?;
+    if !status.is_empty()
+        || head != baseline.fixture_head
+        || refs != baseline_refs
+        || symbolic_ref != baseline.initial_symbolic_ref
+    {
+        bail!(
+            "engineering Git handoff cleanup did not restore exact HEAD, branch, refs, and status"
+        );
+    }
+    validate_git_handoff_evidence_dir(&evidence_dir)?;
+    if evidence_dir.exists() {
+        std::fs::remove_dir_all(&evidence_dir)
+            .with_context(|| format!("remove Git handoff evidence {}", evidence_dir.display()))?;
+    }
+    if let Some(owned) = owned_fixture {
+        owned
+            .close()
+            .context("remove automatic engineering fixture")?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

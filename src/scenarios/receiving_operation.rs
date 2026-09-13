@@ -7,10 +7,9 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "receiving_operation";
@@ -67,6 +66,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 pub struct ReceivingOperation;
 
+#[async_trait]
 impl Scenario for ReceivingOperation {
     fn id(&self) -> &'static str {
         ID
@@ -95,105 +95,191 @@ impl Scenario for ReceivingOperation {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 48,
+                max_output_tokens: None,
+                max_total_tokens: Some(1_200_000),
+                stuck_timeout_seconds: 360,
+                max_validation_retries: None,
+            },
+            denied_functions: &["state::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let database_available = context.function_exists("database::query").await?
+            && available_databases(context).await?.contains(DATABASE);
+        let objects = if database_available {
+            database_objects(context, &names).await?
+        } else {
+            BTreeMap::new()
+        };
+        let shipments = if objects.contains_key(&names.shipments) {
+            shipment_rows(context, &names.shipments).await?
+        } else {
+            BTreeMap::new()
+        };
+        let ledger = if objects.contains_key(&names.ledger) {
+            ledger_rows(context, &names.ledger).await?
+        } else {
+            BTreeMap::new()
+        };
+        let couriers = if objects.contains_key(&names.couriers) {
+            courier_rows(context, &names.couriers).await?
+        } else {
+            BTreeMap::new()
+        };
+        let completion_rows = if objects.contains_key(&names.completion) {
+            count_rows(context, &names.completion).await?
+        } else {
+            0
+        };
+        let shipments_match = numeric_map_matches(&shipments, &expected_shipments());
+        let ledger_matches_expected = ledger_matches(&ledger, &expected_ledger());
+        let ledger_matches_source = ledger_from_shipments(&shipments)
+            .is_some_and(|direct| ledger_matches(&ledger, &direct));
+        let couriers_done = SUPPLIERS.iter().all(|supplier| {
+            couriers.get(*supplier).is_some_and(|status| {
+                matches!(
+                    status.to_ascii_lowercase().as_str(),
+                    "done" | "finished" | "complete" | "completed"
+                )
+            })
+        }) && couriers.len() == SUPPLIERS.len();
+
+        let sessions_in_tree = observation
+            .metrics
+            .by_session
+            .iter()
+            .map(|session| session.session_id.clone())
+            .collect::<BTreeSet<_>>();
+        let couriers_in_tree = names.courier_sessions.iter().all(|expected| {
+            observation.metrics.by_session.iter().any(|session| {
+                session.session_id == *expected
+                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
+                    && session.depth == 1
+            })
+        }) && observation.metrics.by_session.len() == SUPPLIERS.len() + 1;
+        let trigger_records = common::trigger_fired_records(&observation.transcript);
+        let completion_wakes = trigger_records
+            .iter()
+            .filter(|record| {
+                matches!(
+                    record.get("target").and_then(Value::as_str),
+                    Some("harness::send" | "notify")
+                )
+            })
+            .count();
+        let completion_notices = notification_entries(&observation.transcript)
+            .into_iter()
+            .filter(|(_, text)| text.contains(&names.completion))
+            .count();
+
+        Ok(vec![
+            CapturedDeliverable {
+                id: DATABASE_DELIVERABLE_ID.to_string(),
+                kind: "database_snapshot".to_string(),
+                content: json!({
+                    "shipments": shipment_values(&shipments),
+                    "ledger": ledger_values(&ledger),
+                    "couriers": courier_values(&couriers),
+                    "completion_rows": completion_rows,
+                })
+                .into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "shipments_exact".to_string(),
+                        passed: shipments_match,
+                        reason: format!("captured {} shipment row(s)", shipments.len()),
+                    },
+                    CapturedInvariant {
+                        id: "ledger_exact".to_string(),
+                        passed: ledger_matches_expected && ledger_matches_source,
+                        reason: format!(
+                            "expected={ledger_matches_expected}, source={ledger_matches_source}"
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "couriers_complete".to_string(),
+                        passed: couriers_done,
+                        reason: format!("captured {} courier row(s)", couriers.len()),
+                    },
+                    CapturedInvariant {
+                        id: "single_completion".to_string(),
+                        passed: completion_rows == 1,
+                        reason: format!("captured {completion_rows} completion row(s)"),
+                    },
+                ],
+                provenance: [
+                    names.shipments.as_str(),
+                    names.ledger.as_str(),
+                    names.couriers.as_str(),
+                    names.completion.as_str(),
+                ]
+                .into_iter()
+                .map(|relation| ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("{DATABASE}/{relation}"),
+                    relation: "captured_before_cleanup".to_string(),
+                })
+                .collect(),
+            },
+            CapturedDeliverable {
+                id: COORDINATION_DELIVERABLE_ID.to_string(),
+                kind: "session_tree_summary".to_string(),
+                content: json!({
+                    "root_session_id": names.root_session.clone(),
+                    "courier_sessions": names.courier_sessions.clone(),
+                    "sessions_in_tree": sessions_in_tree,
+                    "completion_wakes": completion_wakes,
+                    "completion_notices": completion_notices,
+                })
+                .into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "courier_tree_complete".to_string(),
+                        passed: couriers_in_tree,
+                        reason: format!(
+                            "expected {} courier children; observed {} total sessions",
+                            SUPPLIERS.len(),
+                            observation.metrics.by_session.len()
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "single_database_wake".to_string(),
+                        passed: completion_wakes == 1 && completion_notices == 1,
+                        reason: format!(
+                            "completion_wakes={completion_wakes}, completion_notices={completion_notices}"
+                        ),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session_tree".to_string(),
+                    source_id: names.root_session,
+                    relation: "coordinated_couriers".to_string(),
+                }],
+            },
+        ])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 48,
-            max_output_tokens: None,
-            max_total_tokens: Some(1_200_000),
-            stuck_timeout_seconds: 360,
-            max_validation_retries: None,
-        },
-        denied_functions: &["state::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
-fn prompt(names: &Names) -> String {
-    format!(
-        r#"You are running a small receiving operation on this stack. Everything below is a GOAL,
-not a recipe — design the mechanics yourself with the tools you have.
-
-Suppliers acme, globex and initech each send one courier. Each courier must record three shipments
-(supplier, seq 1-3, value — acme: 10.0, 5.0, 3.0; globex: 7.5, 2.5, 4.0;
-initech: 6.0, 8.0, 1.0) into database `primary`, then apply one correction (+1.0
-to its seq-2 shipment), then signal that it is finished.
-
-Requirements:
-
-- The ONLY shared medium in this run is database `primary` plus trigger machinery on top of it.
-  State functions are not granted. Do not use timers or cron.
-- Maintain a live ledger in database `primary` — per supplier: shipment count and total value —
-  kept current as data lands WITHOUT running a model turn for each change.
-- Delegate the courier work to sub-agents and keep them minimal-privilege.
-- Learn that the whole run is complete FROM THE DATABASE ITSELF, waking as few times as possible
-  — ideally exactly once — and never by polling.
-- When complete, verify the ledger matches the shipment data (expected: acme 3 / 19.0,
-  globex 3 / 15.0, initech 3 / 16.0), clean up any standing trigger machinery, and report
-  PASS or FAIL with the evidence.
-
-Use this run-isolated database contract so the result can be evaluated:
-
-- shipments: `{shipments}` (`supplier`, `seq`, `value`; primary key `supplier, seq`)
-- live ledger: `{ledger}` (`supplier`, `shipment_count`, `total_value`)
-- courier status: `{couriers}` (`supplier`, `status`)
-- completion signal: `{completion}` (exactly one row when the run is complete)
-- courier sessions: `{acme_session}`, `{globex_session}`, `{initech_session}`
-
-Namespace any additional database object, trigger label, or session with `{run_label}`. Keep the
-four result relations for verification; cleanup means retiring bindings and database triggers,
-not deleting the evidence tables. Finish in this root session only after its database wake."#,
-        shipments = names.shipments,
-        ledger = names.ledger,
-        couriers = names.couriers,
-        completion = names.completion,
-        acme_session = names.courier_sessions[0],
-        globex_session = names.courier_sessions[1],
-        initech_session = names.courier_sessions[2],
-        run_label = names.run_label,
-    )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !context.function_exists("database::query").await? {
             return Ok(missing_database());
         }
@@ -383,170 +469,84 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        if !context.function_exists("database::query").await? {
+            return Ok(());
+        }
+        if !available_databases(context).await?.contains(DATABASE) {
+            return Ok(());
+        }
+        let names = Names::new(run_id);
+        let objects = database_objects(context, &names).await?;
+        for kind in ["trigger", "view", "table"] {
+            for object in objects.values().filter(|object| object.kind == kind) {
+                if !sql_safe_name(&object.name) {
+                    continue;
+                }
+                let _: Value = context
+                    .trigger(
+                        "database::execute",
+                        json!({
+                            "db": DATABASE,
+                            "sql": format!(
+                                "DROP {} IF EXISTS \"{}\"",
+                                kind.to_ascii_uppercase(),
+                                object.name
+                            ),
+                        }),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let database_available = context.function_exists("database::query").await?
-            && available_databases(context).await?.contains(DATABASE);
-        let objects = if database_available {
-            database_objects(context, &names).await?
-        } else {
-            BTreeMap::new()
-        };
-        let shipments = if objects.contains_key(&names.shipments) {
-            shipment_rows(context, &names.shipments).await?
-        } else {
-            BTreeMap::new()
-        };
-        let ledger = if objects.contains_key(&names.ledger) {
-            ledger_rows(context, &names.ledger).await?
-        } else {
-            BTreeMap::new()
-        };
-        let couriers = if objects.contains_key(&names.couriers) {
-            courier_rows(context, &names.couriers).await?
-        } else {
-            BTreeMap::new()
-        };
-        let completion_rows = if objects.contains_key(&names.completion) {
-            count_rows(context, &names.completion).await?
-        } else {
-            0
-        };
-        let shipments_match = numeric_map_matches(&shipments, &expected_shipments());
-        let ledger_matches_expected = ledger_matches(&ledger, &expected_ledger());
-        let ledger_matches_source = ledger_from_shipments(&shipments)
-            .is_some_and(|direct| ledger_matches(&ledger, &direct));
-        let couriers_done = SUPPLIERS.iter().all(|supplier| {
-            couriers.get(*supplier).is_some_and(|status| {
-                matches!(
-                    status.to_ascii_lowercase().as_str(),
-                    "done" | "finished" | "complete" | "completed"
-                )
-            })
-        }) && couriers.len() == SUPPLIERS.len();
+fn prompt(names: &Names) -> String {
+    format!(
+        r#"You are running a small receiving operation on this stack. Everything below is a GOAL,
+not a recipe — design the mechanics yourself with the tools you have.
 
-        let sessions_in_tree = observation
-            .metrics
-            .by_session
-            .iter()
-            .map(|session| session.session_id.clone())
-            .collect::<BTreeSet<_>>();
-        let couriers_in_tree = names.courier_sessions.iter().all(|expected| {
-            observation.metrics.by_session.iter().any(|session| {
-                session.session_id == *expected
-                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
-                    && session.depth == 1
-            })
-        }) && observation.metrics.by_session.len() == SUPPLIERS.len() + 1;
-        let trigger_records = common::trigger_fired_records(&observation.transcript);
-        let completion_wakes = trigger_records
-            .iter()
-            .filter(|record| {
-                matches!(
-                    record.get("target").and_then(Value::as_str),
-                    Some("harness::send" | "notify")
-                )
-            })
-            .count();
-        let completion_notices = notification_entries(&observation.transcript)
-            .into_iter()
-            .filter(|(_, text)| text.contains(&names.completion))
-            .count();
+Suppliers acme, globex and initech each send one courier. Each courier must record three shipments
+(supplier, seq 1-3, value — acme: 10.0, 5.0, 3.0; globex: 7.5, 2.5, 4.0;
+initech: 6.0, 8.0, 1.0) into database `primary`, then apply one correction (+1.0
+to its seq-2 shipment), then signal that it is finished.
 
-        Ok(vec![
-            CapturedDeliverable {
-                id: DATABASE_DELIVERABLE_ID.to_string(),
-                kind: "database_snapshot".to_string(),
-                content: json!({
-                    "shipments": shipment_values(&shipments),
-                    "ledger": ledger_values(&ledger),
-                    "couriers": courier_values(&couriers),
-                    "completion_rows": completion_rows,
-                })
-                .into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "shipments_exact".to_string(),
-                        passed: shipments_match,
-                        reason: format!("captured {} shipment row(s)", shipments.len()),
-                    },
-                    CapturedInvariant {
-                        id: "ledger_exact".to_string(),
-                        passed: ledger_matches_expected && ledger_matches_source,
-                        reason: format!(
-                            "expected={ledger_matches_expected}, source={ledger_matches_source}"
-                        ),
-                    },
-                    CapturedInvariant {
-                        id: "couriers_complete".to_string(),
-                        passed: couriers_done,
-                        reason: format!("captured {} courier row(s)", couriers.len()),
-                    },
-                    CapturedInvariant {
-                        id: "single_completion".to_string(),
-                        passed: completion_rows == 1,
-                        reason: format!("captured {completion_rows} completion row(s)"),
-                    },
-                ],
-                provenance: [
-                    names.shipments.as_str(),
-                    names.ledger.as_str(),
-                    names.couriers.as_str(),
-                    names.completion.as_str(),
-                ]
-                .into_iter()
-                .map(|relation| ProvenanceEvidence {
-                    kind: "database_relation".to_string(),
-                    source_id: format!("{DATABASE}/{relation}"),
-                    relation: "captured_before_cleanup".to_string(),
-                })
-                .collect(),
-            },
-            CapturedDeliverable {
-                id: COORDINATION_DELIVERABLE_ID.to_string(),
-                kind: "session_tree_summary".to_string(),
-                content: json!({
-                    "root_session_id": names.root_session.clone(),
-                    "courier_sessions": names.courier_sessions.clone(),
-                    "sessions_in_tree": sessions_in_tree,
-                    "completion_wakes": completion_wakes,
-                    "completion_notices": completion_notices,
-                })
-                .into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "courier_tree_complete".to_string(),
-                        passed: couriers_in_tree,
-                        reason: format!(
-                            "expected {} courier children; observed {} total sessions",
-                            SUPPLIERS.len(),
-                            observation.metrics.by_session.len()
-                        ),
-                    },
-                    CapturedInvariant {
-                        id: "single_database_wake".to_string(),
-                        passed: completion_wakes == 1 && completion_notices == 1,
-                        reason: format!(
-                            "completion_wakes={completion_wakes}, completion_notices={completion_notices}"
-                        ),
-                    },
-                ],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "session_tree".to_string(),
-                    source_id: names.root_session,
-                    relation: "coordinated_couriers".to_string(),
-                }],
-            },
-        ])
-    })
+Requirements:
+
+- The ONLY shared medium in this run is database `primary` plus trigger machinery on top of it.
+  State functions are not granted. Do not use timers or cron.
+- Maintain a live ledger in database `primary` — per supplier: shipment count and total value —
+  kept current as data lands WITHOUT running a model turn for each change.
+- Delegate the courier work to sub-agents and keep them minimal-privilege.
+- Learn that the whole run is complete FROM THE DATABASE ITSELF, waking as few times as possible
+  — ideally exactly once — and never by polling.
+- When complete, verify the ledger matches the shipment data (expected: acme 3 / 19.0,
+  globex 3 / 15.0, initech 3 / 16.0), clean up any standing trigger machinery, and report
+  PASS or FAIL with the evidence.
+
+Use this run-isolated database contract so the result can be evaluated:
+
+- shipments: `{shipments}` (`supplier`, `seq`, `value`; primary key `supplier, seq`)
+- live ledger: `{ledger}` (`supplier`, `shipment_count`, `total_value`)
+- courier status: `{couriers}` (`supplier`, `status`)
+- completion signal: `{completion}` (exactly one row when the run is complete)
+- courier sessions: `{acme_session}`, `{globex_session}`, `{initech_session}`
+
+Namespace any additional database object, trigger label, or session with `{run_label}`. Keep the
+four result relations for verification; cleanup means retiring bindings and database triggers,
+not deleting the evidence tables. Finish in this root session only after its database wake."#,
+        shipments = names.shipments,
+        ledger = names.ledger,
+        couriers = names.couriers,
+        completion = names.completion,
+        acme_session = names.courier_sessions[0],
+        globex_session = names.courier_sessions[1],
+        initech_session = names.courier_sessions[2],
+        run_label = names.run_label,
+    )
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -633,40 +633,6 @@ fn missing_primary(databases: &BTreeSet<String>) -> ObjectiveEvaluation {
         databases.iter().cloned().collect::<Vec<_>>().join(", ")
     );
     assessment::prerequisite_failure(ASSESSMENTS, "primary_database_available", reason)
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        if !context.function_exists("database::query").await? {
-            return Ok(());
-        }
-        if !available_databases(context).await?.contains(DATABASE) {
-            return Ok(());
-        }
-        let names = Names::new(run_id);
-        let objects = database_objects(context, &names).await?;
-        for kind in ["trigger", "view", "table"] {
-            for object in objects.values().filter(|object| object.kind == kind) {
-                if !sql_safe_name(&object.name) {
-                    continue;
-                }
-                let _: Value = context
-                    .trigger(
-                        "database::execute",
-                        json!({
-                            "db": DATABASE,
-                            "sql": format!(
-                                "DROP {} IF EXISTS \"{}\"",
-                                kind.to_ascii_uppercase(),
-                                object.name
-                            ),
-                        }),
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
-    })
 }
 
 #[derive(Debug)]

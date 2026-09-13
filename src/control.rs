@@ -1445,14 +1445,12 @@ impl ControlPlane {
             )
             .await;
         let context = E2eContext::from_client(self.inner.iii.clone());
-        let cleanup = active
+        if let Err(error) = active
             .scenario_id
             .module()
-            .cleanup(&context, &active.attempt_id);
-        let Some(cleanup) = cleanup else {
-            return;
-        };
-        if let Err(error) = cleanup.await {
+            .cleanup(&context, &active.attempt_id)
+            .await
+        {
             tracing::warn!(
                 scenario = active.scenario_id.as_str(),
                 attempt_id = active.attempt_id,
@@ -3270,7 +3268,12 @@ mod tests {
     #[test]
     fn subject_policy_hides_control_functions() {
         let spec = ScenarioId::ContextPressure.spec("policy");
-        let policy = crate::suite::e2e_function_policy(&spec, "test-run");
+        let policy = crate::suite::e2e_function_policy(
+            &spec,
+            ScenarioId::ContextPressure
+                .module()
+                .allowed_functions("test-run"),
+        );
         assert!(policy.deny.contains(&"e2e::*".to_string()));
     }
 

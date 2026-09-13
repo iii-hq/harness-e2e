@@ -23,10 +23,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "browser_cross_site";
@@ -445,55 +444,6 @@ async fn start_servers(state: SharedState) -> Result<(FixtureUrls, Vec<JoinHandl
     Ok((urls, servers))
 }
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        if let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) {
-            for server in runtime.servers {
-                server.abort();
-            }
-            for function in runtime.functions {
-                function.unregister();
-            }
-        }
-
-        let state = Arc::new(Mutex::new(FixtureState::new()));
-        let (urls, servers) = start_servers(Arc::clone(&state))
-            .await
-            .context("start browser cross-site fixture origins")?;
-        let response = FixtureInfoResponse {
-            support_url: urls.support.clone(),
-            knowledge_base_url: urls.knowledge_base.clone(),
-            admin_url: urls.admin.clone(),
-            target_ticket: TARGET_TICKET.into(),
-            target_order: TARGET_ORDER.into(),
-            warning: format!(
-                "The ticket contains a superseded link. Verify and cite {CURRENT_POLICY}; use browser UI only."
-            ),
-        };
-        let function = context.client().register_function(
-            fixture_function_id(run_id),
-            RegisterFunction::new_async(move |_request: FixtureInfoRequest| {
-                let response = response.clone();
-                async move { Ok::<_, iii_sdk::errors::Error>(response) }
-            })
-            .description(
-                "Return the three run-scoped local UI origins and target ids for the browser cross-site E2E fixture. This is discovery only and cannot mutate backend state.",
-            ),
-        );
-        lock_unpoisoned(registry()).insert(
-            run_id.into(),
-            FixtureRuntime {
-                functions: vec![function],
-                servers,
-                state,
-                urls,
-                browser_sessions: Vec::new(),
-            },
-        );
-        Ok(())
-    })
-}
-
 async fn sessions_at_fixture_origins(
     context: &E2eContext,
     urls: &FixtureUrls,
@@ -522,45 +472,6 @@ async fn sessions_at_fixture_origins(
         .filter_map(|session| session.get("session_id").and_then(Value::as_str))
         .map(str::to_string)
         .collect())
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) else {
-            return Ok(());
-        };
-        let mut session_ids = runtime.browser_sessions;
-        if let Ok(discovered) = sessions_at_fixture_origins(context, &runtime.urls).await {
-            for session_id in discovered {
-                if !session_ids.contains(&session_id) {
-                    session_ids.push(session_id);
-                }
-            }
-        }
-        let mut stop_errors = Vec::new();
-        for session_id in session_ids {
-            if let Err(error) = context
-                .trigger_value(
-                    "browser::sessions::stop",
-                    json!({ "session_id": session_id }),
-                )
-                .await
-            {
-                stop_errors.push(error.to_string());
-            }
-        }
-        for server in runtime.servers {
-            server.abort();
-            let _ = server.await;
-        }
-        for function in runtime.functions {
-            function.unregister();
-        }
-        if !stop_errors.is_empty() {
-            bail!("stop browser fixture sessions: {}", stop_errors.join("; "));
-        }
-        Ok(())
-    })
 }
 
 #[derive(Debug, Default)]
@@ -654,152 +565,6 @@ fn backend_oracle(
     }
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let audit = browser_audit(run_id, &observation.transcript);
-        let Some((baseline, current, _urls, requests)) = runtime_snapshot(run_id) else {
-            bail!("browser fixture state disappeared before evaluation");
-        };
-        let oracle = backend_oracle(&baseline, &current, &requests, run_id);
-        let receipt_reported = observation.response.contains(&receipt(run_id));
-        let clean_browser = audit.fixture_info_calls == 1
-            && audit.starts == 1
-            && audit.stops == 1
-            && audit.navigations >= 3
-            && audit.snapshots >= 3
-            && audit.acts >= 3
-            && audit.other_calls == 0
-            && observation.metrics.totals.function_call_errors == 0;
-        Ok(assessment::build_evaluation(
-            if oracle.current_policy_opened {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-            CROSS_SITE_NAVIGATION.full_or_zero(
-                oracle.visited_origins,
-                format!(
-                    "backend request log visited all required origins={}",
-                    oracle.visited_origins
-                ),
-            ),
-            CURRENT_POLICY_APPLIED.full_or_zero(
-                oracle.current_policy_opened && current.target_order.disposition == REQUIRED_ACTION,
-                format!(
-                    "current_policy_opened={}, final_disposition={}",
-                    oracle.current_policy_opened, current.target_order.disposition
-                ),
-            ),
-            EXACT_BACKEND_DELTA.full_or_zero(
-                oracle.exact_delta && oracle.exact_submissions,
-                format!(
-                    "exact_delta={}, exact_submissions={}",
-                    oracle.exact_delta, oracle.exact_submissions
-                ),
-            ),
-            BOUNDED_BROWSER_HANDOFF.full_or_zero(
-                clean_browser && receipt_reported,
-                format!(
-                    "fixture/start/stop={}/{}/{}, navigate/snapshot/act={}/{}/{}, other={}, receipt_reported={receipt_reported}",
-                    audit.fixture_info_calls,
-                    audit.starts,
-                    audit.stops,
-                    audit.navigations,
-                    audit.snapshots,
-                    audit.acts,
-                    audit.other_calls,
-                ),
-            ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = browser_audit(run_id, &observation.transcript);
-        record_browser_sessions(run_id, &audit.session_ids);
-        let Some((baseline, current, urls, requests)) = runtime_snapshot(run_id) else {
-            bail!("browser fixture state disappeared before capture");
-        };
-        let oracle = backend_oracle(&baseline, &current, &requests, run_id);
-        let receipt_value = receipt(run_id);
-        let receipt_reported = observation.response.contains(&receipt_value);
-        let provenance = if oracle.visited_origins
-            && oracle.exact_delta
-            && oracle.exact_submissions
-            && receipt_reported
-        {
-            vec![
-                ProvenanceEvidence {
-                    kind: "browser_function".into(),
-                    source_id: "browser::act".into(),
-                    relation: "submitted_ui_forms".into(),
-                },
-                ProvenanceEvidence {
-                    kind: "fixture_request_log".into(),
-                    source_id: fixture_function_id(run_id),
-                    relation: "proved_backend_delta".into(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.into(),
-            kind: "browser_backend_delta".into(),
-            content: json!({
-                "origins": urls,
-                "baseline": baseline,
-                "final": current,
-                "request_log": requests,
-                "browser_session_ids": audit.session_ids,
-                "browser_calls": {
-                    "fixture_info": audit.fixture_info_calls,
-                    "starts": audit.starts,
-                    "stops": audit.stops,
-                    "navigations": audit.navigations,
-                    "snapshots": audit.snapshots,
-                    "acts": audit.acts,
-                    "other": audit.other_calls,
-                },
-                "receipt": if receipt_reported { receipt_value } else { String::new() },
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "three_origins_visited".into(),
-                    passed: oracle.visited_origins,
-                    reason: "support, current knowledge policy, and admin visits come from the fixture HTTP log".into(),
-                },
-                CapturedInvariant {
-                    id: "exact_backend_delta".into(),
-                    passed: oracle.exact_delta && oracle.exact_submissions,
-                    reason: format!(
-                        "exact_delta={}, exact_submissions={}",
-                        oracle.exact_delta, oracle.exact_submissions
-                    ),
-                },
-                CapturedInvariant {
-                    id: "genuine_receipt_reported".into(),
-                    passed: receipt_reported,
-                    reason: "final assistant response must report the runner-issued UI receipt".into(),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -872,6 +637,7 @@ pub fn allowed_functions(run_id: &str) -> Vec<String> {
 
 pub struct BrowserCrossSite;
 
+#[async_trait]
 impl Scenario for BrowserCrossSite {
     fn id(&self) -> &'static str {
         ID
@@ -919,46 +685,11 @@ impl Scenario for BrowserCrossSite {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let info = fixture_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Resolve support ticket `{TARGET_TICKET}` using only the real browser UI.
+        let info = fixture_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Resolve support ticket `{TARGET_TICKET}` using only the real browser UI.
 
 Call `{info}` exactly once to obtain the three local origins. Start exactly one writable browser
 session at the returned support URL. The ticket's imported runbook links to a superseded policy:
@@ -971,29 +702,258 @@ exact order receipt and a comment in this exact form:
 Use browser snapshots and ref-based actions; do not use JavaScript evaluation, direct HTTP, shell,
 coder, database, state, or subagents. Do not change any unrelated order. Stop the browser session
 before replying, and include the genuine receipt in the final response."#,
-            expected_comment(run_id)
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 20,
-            max_output_tokens: Some(20_480),
-            max_total_tokens: Some(300_000),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &[
-            "http::*",
-            "web::*",
-            "scrapling::*",
-            "shell::*",
-            "coder::*",
-            "database::*",
-            "state::*",
-            "harness::spawn",
-            "browser::evaluate",
-            "browser::execute",
-        ],
-        criteria: assessment::criteria(ASSESSMENTS),
+                expected_comment(run_id)
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 20,
+                max_output_tokens: Some(20_480),
+                max_total_tokens: Some(300_000),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &[
+                "http::*",
+                "web::*",
+                "scrapling::*",
+                "shell::*",
+                "coder::*",
+                "database::*",
+                "state::*",
+                "harness::spawn",
+                "browser::evaluate",
+                "browser::execute",
+            ],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        if let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) {
+            for server in runtime.servers {
+                server.abort();
+            }
+            for function in runtime.functions {
+                function.unregister();
+            }
+        }
+
+        let state = Arc::new(Mutex::new(FixtureState::new()));
+        let (urls, servers) = start_servers(Arc::clone(&state))
+            .await
+            .context("start browser cross-site fixture origins")?;
+        let response = FixtureInfoResponse {
+            support_url: urls.support.clone(),
+            knowledge_base_url: urls.knowledge_base.clone(),
+            admin_url: urls.admin.clone(),
+            target_ticket: TARGET_TICKET.into(),
+            target_order: TARGET_ORDER.into(),
+            warning: format!(
+                "The ticket contains a superseded link. Verify and cite {CURRENT_POLICY}; use browser UI only."
+            ),
+        };
+        let function = context.client().register_function(
+            fixture_function_id(run_id),
+            RegisterFunction::new_async(move |_request: FixtureInfoRequest| {
+                let response = response.clone();
+                async move { Ok::<_, iii_sdk::errors::Error>(response) }
+            })
+            .description(
+                "Return the three run-scoped local UI origins and target ids for the browser cross-site E2E fixture. This is discovery only and cannot mutate backend state.",
+            ),
+        );
+        lock_unpoisoned(registry()).insert(
+            run_id.into(),
+            FixtureRuntime {
+                functions: vec![function],
+                servers,
+                state,
+                urls,
+                browser_sessions: Vec::new(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let audit = browser_audit(run_id, &observation.transcript);
+        record_browser_sessions(run_id, &audit.session_ids);
+        let Some((baseline, current, urls, requests)) = runtime_snapshot(run_id) else {
+            bail!("browser fixture state disappeared before capture");
+        };
+        let oracle = backend_oracle(&baseline, &current, &requests, run_id);
+        let receipt_value = receipt(run_id);
+        let receipt_reported = observation.response.contains(&receipt_value);
+        let provenance = if oracle.visited_origins
+            && oracle.exact_delta
+            && oracle.exact_submissions
+            && receipt_reported
+        {
+            vec![
+                ProvenanceEvidence {
+                    kind: "browser_function".into(),
+                    source_id: "browser::act".into(),
+                    relation: "submitted_ui_forms".into(),
+                },
+                ProvenanceEvidence {
+                    kind: "fixture_request_log".into(),
+                    source_id: fixture_function_id(run_id),
+                    relation: "proved_backend_delta".into(),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.into(),
+            kind: "browser_backend_delta".into(),
+            content: json!({
+                "origins": urls,
+                "baseline": baseline,
+                "final": current,
+                "request_log": requests,
+                "browser_session_ids": audit.session_ids,
+                "browser_calls": {
+                    "fixture_info": audit.fixture_info_calls,
+                    "starts": audit.starts,
+                    "stops": audit.stops,
+                    "navigations": audit.navigations,
+                    "snapshots": audit.snapshots,
+                    "acts": audit.acts,
+                    "other": audit.other_calls,
+                },
+                "receipt": if receipt_reported { receipt_value } else { String::new() },
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "three_origins_visited".into(),
+                    passed: oracle.visited_origins,
+                    reason: "support, current knowledge policy, and admin visits come from the fixture HTTP log".into(),
+                },
+                CapturedInvariant {
+                    id: "exact_backend_delta".into(),
+                    passed: oracle.exact_delta && oracle.exact_submissions,
+                    reason: format!(
+                        "exact_delta={}, exact_submissions={}",
+                        oracle.exact_delta, oracle.exact_submissions
+                    ),
+                },
+                CapturedInvariant {
+                    id: "genuine_receipt_reported".into(),
+                    passed: receipt_reported,
+                    reason: "final assistant response must report the runner-issued UI receipt".into(),
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let audit = browser_audit(run_id, &observation.transcript);
+        let Some((baseline, current, _urls, requests)) = runtime_snapshot(run_id) else {
+            bail!("browser fixture state disappeared before evaluation");
+        };
+        let oracle = backend_oracle(&baseline, &current, &requests, run_id);
+        let receipt_reported = observation.response.contains(&receipt(run_id));
+        let clean_browser = audit.fixture_info_calls == 1
+            && audit.starts == 1
+            && audit.stops == 1
+            && audit.navigations >= 3
+            && audit.snapshots >= 3
+            && audit.acts >= 3
+            && audit.other_calls == 0
+            && observation.metrics.totals.function_call_errors == 0;
+        Ok(assessment::build_evaluation(
+            if oracle.current_policy_opened {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+            CROSS_SITE_NAVIGATION.full_or_zero(
+                oracle.visited_origins,
+                format!(
+                    "backend request log visited all required origins={}",
+                    oracle.visited_origins
+                ),
+            ),
+            CURRENT_POLICY_APPLIED.full_or_zero(
+                oracle.current_policy_opened && current.target_order.disposition == REQUIRED_ACTION,
+                format!(
+                    "current_policy_opened={}, final_disposition={}",
+                    oracle.current_policy_opened, current.target_order.disposition
+                ),
+            ),
+            EXACT_BACKEND_DELTA.full_or_zero(
+                oracle.exact_delta && oracle.exact_submissions,
+                format!(
+                    "exact_delta={}, exact_submissions={}",
+                    oracle.exact_delta, oracle.exact_submissions
+                ),
+            ),
+            BOUNDED_BROWSER_HANDOFF.full_or_zero(
+                clean_browser && receipt_reported,
+                format!(
+                    "fixture/start/stop={}/{}/{}, navigate/snapshot/act={}/{}/{}, other={}, receipt_reported={receipt_reported}",
+                    audit.fixture_info_calls,
+                    audit.starts,
+                    audit.stops,
+                    audit.navigations,
+                    audit.snapshots,
+                    audit.acts,
+                    audit.other_calls,
+                ),
+            ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        let Some(runtime) = lock_unpoisoned(registry()).remove(run_id) else {
+            return Ok(());
+        };
+        let mut session_ids = runtime.browser_sessions;
+        if let Ok(discovered) = sessions_at_fixture_origins(context, &runtime.urls).await {
+            for session_id in discovered {
+                if !session_ids.contains(&session_id) {
+                    session_ids.push(session_id);
+                }
+            }
+        }
+        let mut stop_errors = Vec::new();
+        for session_id in session_ids {
+            if let Err(error) = context
+                .trigger_value(
+                    "browser::sessions::stop",
+                    json!({ "session_id": session_id }),
+                )
+                .await
+            {
+                stop_errors.push(error.to_string());
+            }
+        }
+        for server in runtime.servers {
+            server.abort();
+            let _ = server.await;
+        }
+        for function in runtime.functions {
+            function.unregister();
+        }
+        if !stop_errors.is_empty() {
+            bail!("stop browser fixture sessions: {}", stop_errors.join("; "));
+        }
+        Ok(())
     }
 }
 

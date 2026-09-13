@@ -31,10 +31,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_play_ladder";
@@ -271,45 +270,44 @@ fn step(game: &mut ChessGame, uci: &str, depth: u32) -> ChessMoveReply {
 /// run-scoped move channel. The opponent `depth` is baked in here — the only
 /// per-rung value the setup hook needs — and stored in the game so the handler
 /// can read it back.
-fn setup_game<'a>(context: &'a E2eContext, run_id: &'a str, depth: u32) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let game = Arc::new(Mutex::new(ChessGame {
-            fen: chess_engine::STARTPOS.to_string(),
-            moves: Vec::new(),
-            illegal_attempts: 0,
-            result: None,
-            finished: false,
-            depth,
-        }));
-        game_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(run_id.to_string(), game.clone());
+async fn setup_game(context: &E2eContext, run_id: &str, depth: u32) -> anyhow::Result<()> {
+    let game = Arc::new(Mutex::new(ChessGame {
+        fen: chess_engine::STARTPOS.to_string(),
+        moves: Vec::new(),
+        illegal_attempts: 0,
+        result: None,
+        finished: false,
+        depth,
+    }));
+    game_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(run_id.to_string(), game.clone());
 
-        context.client().register_function(
-            move_function_id(run_id),
-            RegisterFunction::new_async(move |input: ChessMoveInput| {
-                let game = game.clone();
-                async move {
-                    let reply = {
-                        let mut game = game.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let depth = game.depth;
-                        step(&mut game, &input.uci, depth)
-                    };
-                    Ok::<ChessMoveReply, iii_sdk::errors::Error>(reply)
-                }
-            })
-            .description(
-                "E2E chess move channel: validates the subject's move from the current FEN, plays \
-                 the deterministic negamax opponent reply, and returns the new position.",
-            ),
-        );
-        Ok(())
-    })
+    context.client().register_function(
+        move_function_id(run_id),
+        RegisterFunction::new_async(move |input: ChessMoveInput| {
+            let game = game.clone();
+            async move {
+                let reply = {
+                    let mut game = game.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let depth = game.depth;
+                    step(&mut game, &input.uci, depth)
+                };
+                Ok::<ChessMoveReply, iii_sdk::errors::Error>(reply)
+            }
+        })
+        .description(
+            "E2E chess move channel: validates the subject's move from the current FEN, plays \
+             the deterministic negamax opponent reply, and returns the new position.",
+        ),
+    );
+    Ok(())
 }
 
 pub struct ChessPlayLadder;
 
+#[async_trait]
 impl Scenario for ChessPlayLadder {
     fn id(&self) -> &'static str {
         ID
@@ -342,62 +340,119 @@ impl Scenario for ChessPlayLadder {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id, RUNG)
+        let move_function = move_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&move_function, RUNG.depth),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                // One live turn per subject move, plus slack for discovery, the
+                // occasional illegal-move retry, and the final report. This exceeds
+                // the other scenarios' turn counts on purpose; `ExecutionPolicy`
+                // only rejects zero and total < output, so a long game is allowed.
+                max_turns: 8 + MOVE_CAP,
+                max_output_tokens: Some(8_192),
+                // Unbounded on purpose: this is a measurement ladder — capping the
+                // shared token budget would distort the strength signal the ladder
+                // exists to observe. Spend surfaces in the Efficiency dimension.
+                max_total_tokens: None,
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["state::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup_game(context, run_id, RUNG.depth))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        setup_game(context, run_id, RUNG.depth).await
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let function_errors = observation.metrics.totals.function_call_errors;
+        // Depth comes from the authoritative case inputs (always 1..=3), so the
+        // record stays schema-valid even on the defensive missing-game path.
+        let depth = case_depth(&observation.case);
+        let (moves, result, illegal_attempts, finished, plies) = match read_game(run_id) {
+            Some(snapshot) => {
+                let plies = snapshot.moves.len() as u32;
+                (
+                    snapshot.moves,
+                    snapshot.result,
+                    snapshot.illegal_attempts,
+                    snapshot.finished,
+                    plies,
+                )
+            }
+            None => (Vec::new(), None, 0u32, false, 0u32),
+        };
+        let within_cap = plies <= MOVE_CAP;
+        let completed = finished && result.is_some() && within_cap;
+        let zero_illegal = illegal_attempts == 0 && function_errors == 0;
+        // Provenance links the record to the move channel that actually played
+        // the game, but only when the game both completed and stayed clean.
+        let provenance = if completed && zero_illegal {
+            vec![ProvenanceEvidence {
+                kind: "function".to_string(),
+                source_id: move_function_id(run_id),
+                relation: "played_opponent".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: GAME_RECORD_ID.to_string(),
+            kind: "game_record".to_string(),
+            content: json!({
+                "moves": moves,
+                "result": result.clone().unwrap_or_default(),
+                "illegal_attempts": illegal_attempts,
+                "opponent_depth": depth,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "game_completed".to_string(),
+                    passed: completed,
+                    reason: format!(
+                        "finished={finished}, result={result:?}, plies={plies} (cap {MOVE_CAP})"
+                    ),
+                },
+                CapturedInvariant {
+                    id: "zero_illegal_moves".to_string(),
+                    passed: zero_illegal,
+                    reason: format!(
+                        "illegal_attempts={illegal_attempts}, function_call_errors={function_errors}"
+                    ),
+                },
+            ],
+            provenance,
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_game(observation, run_id)
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
-    let move_function = move_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&move_function, rung.depth),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            // One live turn per subject move, plus slack for discovery, the
-            // occasional illegal-move retry, and the final report. This exceeds
-            // the other scenarios' turn counts on purpose; `ExecutionPolicy`
-            // only rejects zero and total < output, so a long game is allowed.
-            max_turns: 8 + MOVE_CAP,
-            max_output_tokens: Some(8_192),
-            // Unbounded on purpose: this is a measurement ladder — capping the
-            // shared token budget would distort the strength signal the ladder
-            // exists to observe. Spend surfaces in the Efficiency dimension.
-            max_total_tokens: None,
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["state::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
+    /// Nothing scenario-owned outlives the process except the registered function
+    /// (registered on the suite's own engine connection, so it needs no
+    /// unregister). Drop the run's live game from the registry.
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        game_registry()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(run_id);
+        Ok(())
     }
 }
 
@@ -418,14 +473,6 @@ When the game ends, finish with a single line matching the final status — exac
         start = chess_engine::STARTPOS,
         marker = RESULT_MARKER,
     )
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_game(observation, run_id) })
 }
 
 fn evaluate_game(
@@ -504,74 +551,6 @@ fn case_depth(case: &ScenarioCase) -> u32 {
         .unwrap_or(1)
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let function_errors = observation.metrics.totals.function_call_errors;
-        // Depth comes from the authoritative case inputs (always 1..=3), so the
-        // record stays schema-valid even on the defensive missing-game path.
-        let depth = case_depth(&observation.case);
-        let (moves, result, illegal_attempts, finished, plies) = match read_game(run_id) {
-            Some(snapshot) => {
-                let plies = snapshot.moves.len() as u32;
-                (
-                    snapshot.moves,
-                    snapshot.result,
-                    snapshot.illegal_attempts,
-                    snapshot.finished,
-                    plies,
-                )
-            }
-            None => (Vec::new(), None, 0u32, false, 0u32),
-        };
-        let within_cap = plies <= MOVE_CAP;
-        let completed = finished && result.is_some() && within_cap;
-        let zero_illegal = illegal_attempts == 0 && function_errors == 0;
-        // Provenance links the record to the move channel that actually played
-        // the game, but only when the game both completed and stayed clean.
-        let provenance = if completed && zero_illegal {
-            vec![ProvenanceEvidence {
-                kind: "function".to_string(),
-                source_id: move_function_id(run_id),
-                relation: "played_opponent".to_string(),
-            }]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: GAME_RECORD_ID.to_string(),
-            kind: "game_record".to_string(),
-            content: json!({
-                "moves": moves,
-                "result": result.clone().unwrap_or_default(),
-                "illegal_attempts": illegal_attempts,
-                "opponent_depth": depth,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "game_completed".to_string(),
-                    passed: completed,
-                    reason: format!(
-                        "finished={finished}, result={result:?}, plies={plies} (cap {MOVE_CAP})"
-                    ),
-                },
-                CapturedInvariant {
-                    id: "zero_illegal_moves".to_string(),
-                    passed: zero_illegal,
-                    reason: format!(
-                        "illegal_attempts={illegal_attempts}, function_call_errors={function_errors}"
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -611,19 +590,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-/// Nothing scenario-owned outlives the process except the registered function
-/// (registered on the suite's own engine connection, so it needs no
-/// unregister). Drop the run's live game from the registry.
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        game_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(run_id);
-        Ok(())
-    })
 }
 
 #[cfg(test)]

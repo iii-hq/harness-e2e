@@ -14,8 +14,8 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    Capability, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    ExecutionRealism, HumanHorizon, Scenario, ScenarioCase, ScenarioCharacterization,
+    async_trait, Capability, CriterionSpec, DeliverableContract, ExecutionPolicy, ExecutionRealism,
+    HumanHorizon, ObjectiveEvaluation, Scenario, ScenarioCase, ScenarioCharacterization,
     ScenarioExecutionKind, ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
@@ -162,6 +162,7 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 
 pub struct IncidentResponse;
 
+#[async_trait]
 impl Scenario for IncidentResponse {
     fn id(&self) -> &'static str {
         ID
@@ -217,13 +218,13 @@ impl Scenario for IncidentResponse {
         }
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        composite_only_evaluator(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        bail!("incident_response must be executed through the registered AdaptiveFlow driver")
     }
 }
 
@@ -282,16 +283,6 @@ fn materialized_inputs() -> anyhow::Result<Value> {
             "technical_retries": 0,
         },
     }))
-}
-
-fn composite_only_evaluator<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    _run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        bail!("incident_response must be executed through the registered AdaptiveFlow driver")
-    })
 }
 
 #[cfg(test)]

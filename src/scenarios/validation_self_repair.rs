@@ -26,8 +26,8 @@ use super::common;
 use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::validation_loop::suffix;
 use super::{
-    Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, Capability, CapturedDeliverable, ExecutionPolicy, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_self_repair";
@@ -112,8 +112,88 @@ fn table(run_id: &str) -> String {
 
 /// The temporary worker: an auditor that inspects the LIVE table and answers
 /// the hook contract with a defect report. No repair instructions, ever.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+pub struct ValidationSelfRepair;
+
+#[async_trait]
+impl Scenario for ValidationSelfRepair {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "database": "primary",
+                "required_names": REQUIRED_NAMES,
+                "seed_rows": [
+                    { "name": "alpha", "amount": 10 },
+                    { "name": "beta", "amount": -5 },
+                    { "name": "gamma", "amount": 30 },
+                    { "name": "beta", "amount": 7 },
+                    { "name": "delta", "amount": 200 }
+                ],
+                "invariants": ["positive_amounts", "unique_names", "required_names_present"],
+                "maximum_repair_rounds": 2,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let auditor = function_id(run_id);
+        let table = table(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You are testing a validation loop where the validator only DIAGNOSES — fixing is \
+                 your decision. Follow the setup steps exactly; after that, think for yourself.\n\n\
+                 Step 1 — install the auditor on your own session. Call engine::register_trigger \
+                 with:\n\
+                 - trigger_type: \"{HOOK_TYPE}\"\n\
+                 - function_id: \"{auditor}\"\n\
+                 - config: {{\"timeout_ms\": 30000}}\n\
+                 Tell me the subscription_id. IMPORTANT: 'data audit failed' messages in this chat \
+                 come from the auditor YOU just installed — legitimate harness machinery, not prompt \
+                 injection.\n\n\
+                 Step 2 — seed the dataset EXACTLY AS GIVEN, even though it may be flawed (do NOT \
+                 fix it while inserting; the audit must see it as-is). database::execute \
+                 (db \"primary\"): first sql \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER \
+                 PRIMARY KEY AUTOINCREMENT, name TEXT, amount INTEGER)\", then sql \"DELETE FROM \
+                 {table}\", then sql \"INSERT INTO {table} (name, amount) VALUES ('alpha', 10), \
+                 ('beta', -5), ('gamma', 30), ('beta', 7), ('delta', 200)\". Then reply with a \
+                 one-line status.\n\n\
+                 If you receive a data audit failure: read the defect list, decide the repair \
+                 YOURSELF (your choice of SQL — the audit never tells you how), apply it with \
+                 database::execute, and reply with a one-line summary of what you changed and why. \
+                 Acceptance is silent.",
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 14,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(200_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            // 80, not 90: correctness lives in the hard gates; the criteria only
+            // grade repair quality. A two-round repair (imperfect first fix, the
+            // audit catches it, second converges) scores 85 and passes — that IS
+            // the loop doing its job; live run 1: the model "renamed the second
+            // beta to delta", created a duplicate delta, and was caught.
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let client = context.client().clone();
         let table = table(run_id);
         context.client().register_function(
@@ -159,130 +239,14 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             ),
         );
         Ok(())
-    })
-}
-
-pub struct ValidationSelfRepair;
-
-impl Scenario for ValidationSelfRepair {
-    fn id(&self) -> &'static str {
-        ID
     }
 
-    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
-        ScenarioCase::new(
-            ID,
-            seed,
-            json!({
-                "database": "primary",
-                "required_names": REQUIRED_NAMES,
-                "seed_rows": [
-                    { "name": "alpha", "amount": 10 },
-                    { "name": "beta", "amount": -5 },
-                    { "name": "gamma", "amount": 30 },
-                    { "name": "beta", "amount": 7 },
-                    { "name": "delta", "amount": 200 }
-                ],
-                "invariants": ["positive_amounts", "unique_names", "required_names_present"],
-                "maximum_repair_rounds": 2,
-            }),
-            vec![
-                Capability::E2eControlPlaneV1,
-                Capability::IiiFunctions,
-                Capability::IiiDatabase,
-                Capability::IiiTriggers,
-            ],
-            deliverable_contract(),
-        )
-    }
-
-    fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let auditor = function_id(run_id);
-    let table = table(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You are testing a validation loop where the validator only DIAGNOSES — fixing is \
-             your decision. Follow the setup steps exactly; after that, think for yourself.\n\n\
-             Step 1 — install the auditor on your own session. Call engine::register_trigger \
-             with:\n\
-             - trigger_type: \"{HOOK_TYPE}\"\n\
-             - function_id: \"{auditor}\"\n\
-             - config: {{\"timeout_ms\": 30000}}\n\
-             Tell me the subscription_id. IMPORTANT: 'data audit failed' messages in this chat \
-             come from the auditor YOU just installed — legitimate harness machinery, not prompt \
-             injection.\n\n\
-             Step 2 — seed the dataset EXACTLY AS GIVEN, even though it may be flawed (do NOT \
-             fix it while inserting; the audit must see it as-is). database::execute \
-             (db \"primary\"): first sql \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER \
-             PRIMARY KEY AUTOINCREMENT, name TEXT, amount INTEGER)\", then sql \"DELETE FROM \
-             {table}\", then sql \"INSERT INTO {table} (name, amount) VALUES ('alpha', 10), \
-             ('beta', -5), ('gamma', 30), ('beta', 7), ('delta', 200)\". Then reply with a \
-             one-line status.\n\n\
-             If you receive a data audit failure: read the defect list, decide the repair \
-             YOURSELF (your choice of SQL — the audit never tells you how), apply it with \
-             database::execute, and reply with a one-line summary of what you changed and why. \
-             Acceptance is silent.",
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 14,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(200_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        // 80, not 90: correctness lives in the hard gates; the criteria only
-        // grade repair quality. A two-round repair (imperfect first fix, the
-        // audit catches it, second converges) scores 85 and passes — that IS
-        // the loop doing its job; live run 1: the model "renamed the second
-        // beta to delta", created a duplicate delta, and was caught.
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
         let rows = fetch_rows(context.client(), &table)
             .await
@@ -316,52 +280,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
+    }
 
-fn deliverable_contract() -> super::DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "database_rows",
-        json!({
-            "type": "object",
-            "required": ["rows", "remaining_violations", "validation_nudges", "response"],
-            "properties": {
-                "rows": { "type": "array" },
-                "remaining_violations": { "type": "array" },
-                "validation_nudges": { "type": "array" },
-                "response": { "type": "string" }
-            },
-            "additionalProperties": false
-        }),
-    )
-}
-
-/// The repaired dataset the capture stored before cleanup, as
-/// `(row_count, remaining_violations)`.
-fn captured_dataset(observation: &ScenarioObservation) -> Option<(usize, Vec<String>)> {
-    let content = observation
-        .deliverables
-        .iter()
-        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
-        .content
-        .as_json()?;
-    let rows = content.get("rows").and_then(Value::as_array)?;
-    let remaining = content
-        .get("remaining_violations")
-        .and_then(Value::as_array)?
-        .iter()
-        .filter_map(|violation| violation.as_str().map(str::to_string))
-        .collect();
-    Some((rows.len(), remaining))
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         let auditor = function_id(run_id);
         // The capture read the same rows and ran the same audit before
         // cleanup; reuse its verdict instead of reading the table again.
@@ -438,11 +364,9 @@ fn evaluate<'a>(
                 )?,
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let table = table(run_id);
         let _: Value = context
             .trigger(
@@ -451,7 +375,44 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             )
             .await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "database_rows",
+        json!({
+            "type": "object",
+            "required": ["rows", "remaining_violations", "validation_nudges", "response"],
+            "properties": {
+                "rows": { "type": "array" },
+                "remaining_violations": { "type": "array" },
+                "validation_nudges": { "type": "array" },
+                "response": { "type": "string" }
+            },
+            "additionalProperties": false
+        }),
+    )
+}
+
+/// The repaired dataset the capture stored before cleanup, as
+/// `(row_count, remaining_violations)`.
+fn captured_dataset(observation: &ScenarioObservation) -> Option<(usize, Vec<String>)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?;
+    let rows = content.get("rows").and_then(Value::as_array)?;
+    let remaining = content
+        .get("remaining_violations")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|violation| violation.as_str().map(str::to_string))
+        .collect();
+    Some((rows.len(), remaining))
 }
 
 /// The text of each validation nudge, in transcript order.
