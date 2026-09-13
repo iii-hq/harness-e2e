@@ -136,14 +136,19 @@ pub trait Scenario: Send + Sync {
         Ok(())
     }
     /// Captures the deliverables the case declares, before cleanup. The suite
-    /// calls it only when the deliverable contract declares artifacts.
+    /// calls it only when the deliverable contract declares artifacts, so a
+    /// scenario that declares artifacts must override it: the default is the
+    /// incoherent case and fails the attempt instead of capturing nothing.
     async fn capture(
         &self,
         _context: &E2eContext,
         _observation: &ScenarioObservation,
         _run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
-        Ok(Vec::new())
+        bail!(
+            "scenario '{}' declares deliverable artifacts but has no capture hook",
+            self.id()
+        )
     }
     async fn evaluate(
         &self,
@@ -596,6 +601,59 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    /// A scenario that declares artifacts without overriding `capture`.
+    struct ArtifactsWithoutCapture;
+
+    #[async_trait]
+    impl Scenario for ArtifactsWithoutCapture {
+        fn id(&self) -> &'static str {
+            "artifacts_without_capture"
+        }
+
+        fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+            unreachable!("the default capture test never materializes")
+        }
+
+        fn spec(&self, _run_id: &str) -> ScenarioSpec {
+            unreachable!("the default capture test never builds the spec")
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> Result<ObjectiveEvaluation> {
+            unreachable!("the default capture test never evaluates")
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_capture_refuses_to_capture_nothing() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let materialized = ScenarioId::MinimalPath.materialize("probe", 7).unwrap();
+        let observation = ScenarioObservation {
+            case: materialized.case,
+            metrics: SessionMetricsResponse::from_normalized(crate::wire::SessionMetricsPayload {
+                root_session_id: "probe".into(),
+                complete: true,
+                totals: Default::default(),
+                by_session: Vec::new(),
+                traces: None,
+            }),
+            transcript: Value::Null,
+            response: String::new(),
+            deliverables: Vec::new(),
+        };
+        let error = ArtifactsWithoutCapture
+            .capture(&context, &observation, "probe")
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("declares deliverable artifacts but has no capture hook"));
+    }
 
     #[test]
     fn registry_contains_sixty_eight_unique_valid_scenarios() {
