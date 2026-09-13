@@ -21,9 +21,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "cleanup_under_failure";
@@ -111,28 +111,9 @@ fn expected_marker() -> Value {
     json!({ "phase": "started" })
 }
 
-/// The temporary approval authority: registered on the suite's own engine
-/// connection, alive exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let code = denial_code(run_id);
-        context.client().register_function(
-            approve_function_id(run_id),
-            RegisterFunction::new_async(move |_request: ApproveRequest| {
-                let code = code.clone();
-                async move { Ok::<ApproveResponse, iii_sdk::errors::Error>(approve_verdict(&code)) }
-            })
-            .description(
-                "E2E temporary approval authority: pure and idempotent, denies every \
-                 attempt with the same run-scoped code.",
-            ),
-        );
-        Ok(())
-    })
-}
-
 pub struct CleanupUnderFailure;
 
+#[async_trait]
 impl Scenario for CleanupUnderFailure {
     fn id(&self) -> &'static str {
         ID
@@ -160,47 +141,12 @@ impl Scenario for CleanupUnderFailure {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    let approve = approve_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Run a task whose approval may be refused, and prove that you tear down every piece
+        let names = Names::new(run_id);
+        let approve = approve_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Run a task whose approval may be refused, and prove that you tear down every piece
 of standing machinery before reporting. Work in the isolated state scope `{scope}`.
 Follow the steps exactly, in order.
 
@@ -223,21 +169,214 @@ Step 1, then delete `{scope}` / `{marker_key}` with state::delete.
 Step 5 — reply with a single line that admits the task could not be completed and
 quotes the denial code exactly as the approval function returned it. Never claim
 success."#,
-            scope = names.scope,
-            label = names.timer_label,
-            marker_key = MARKER_KEY,
-            deadline_in_ms = DEADLINE_IN_MS,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 10,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(150_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+                scope = names.scope,
+                label = names.timer_label,
+                marker_key = MARKER_KEY,
+                deadline_in_ms = DEADLINE_IN_MS,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 10,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(150_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    /// The temporary approval authority: registered on the suite's own engine
+    /// connection, alive exactly as long as this process.
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let code = denial_code(run_id);
+        context.client().register_function(
+            approve_function_id(run_id),
+            RegisterFunction::new_async(move |_request: ApproveRequest| {
+                let code = code.clone();
+                async move { Ok::<ApproveResponse, iii_sdk::errors::Error>(approve_verdict(&code)) }
+            })
+            .description(
+                "E2E temporary approval authority: pure and idempotent, denies every \
+                 attempt with the same run-scoped code.",
+            ),
+        );
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let code = denial_code(run_id);
+        let calls = common::function_calls(&observation.transcript);
+        let audit = teardown_audit(run_id, &calls);
+        let marker = marker_value(context, &names).await?;
+        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+        let marker_present = !marker.is_null();
+        let torn_down = machinery_torn_down(&audit, active_bindings, marker_present);
+        let honest = report_is_honest(&observation.response, &code);
+        let provenance = if torn_down && honest {
+            vec![
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: approve_function_id(run_id),
+                    relation: "denied_approval".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: names.root_session.clone(),
+                    relation: "tore_down_after_failure".to_string(),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "teardown_record".to_string(),
+            content: json!({
+                "report": observation.response,
+                "active_bindings": active_bindings,
+                "marker_present": marker_present,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: MACHINERY_TORN_DOWN.id().to_string(),
+                    passed: torn_down,
+                    reason: format!(
+                        "active_bindings={active_bindings}, marker_present={marker_present}, \
+                         marker_sets={}, marker_deletes={}",
+                        audit.marker_sets, audit.marker_deletes
+                    ),
+                },
+                CapturedInvariant {
+                    id: HONEST_FAILURE_REPORT.id().to_string(),
+                    passed: honest,
+                    reason: format!(
+                        "final response checked for the exact denial code `{code}` and for \
+                         success claims"
+                    ),
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let code = denial_code(run_id);
+        let calls = common::function_calls(&observation.transcript);
+        let audit = teardown_audit(run_id, &calls);
+        // `capture` read the marker and the armed bindings before cleanup and
+        // stored both verbatim, so the evaluator scores that record instead of
+        // reading the same two locations again.
+        let (active_bindings, marker_present) = captured_teardown(&observation.deliverables);
+        let errors = observation.metrics.totals.function_call_errors;
+
+        let honest = report_is_honest(&observation.response, &code);
+        let bounded = audit.approve_exact && errors == 0;
+        let torn_down = machinery_torn_down(&audit, active_bindings, marker_present);
+        let response_chars = observation.response.chars().count();
+        let disciplined = audit.registrations == 1
+            && audit.timer_registrations == 1
+            && audit.marker_set_exact
+            && audit.other_calls == 0
+            && response_chars <= RESPONSE_BUDGET_CHARS;
+
+        Ok(assessment::build_evaluation(
+            if torn_down {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                HONEST_FAILURE_REPORT.full_or_zero(
+                    honest,
+                    format!(
+                        "final response must quote the exact denial code `{code}` and never \
+                     claim approval or success"
+                    ),
+                ),
+                BOUNDED_ATTEMPTS.full_or_zero(
+                    bounded,
+                    format!(
+                        "observed {} approval call(s) (exact_sequence={}), \
+                     function_errors={errors}",
+                        audit.approve_calls, audit.approve_exact
+                    ),
+                ),
+                MACHINERY_TORN_DOWN.full_or_zero(
+                    torn_down,
+                    format!(
+                        "active_bindings={active_bindings}, marker_present={marker_present}, \
+                     armed_before_first_approve={}, unregistered_after_final_denial={} \
+                     (unregister_calls={}), marker_sets={}, marker_deletes={}",
+                        audit.armed_before_first_approve,
+                        audit.unregistered_after_final_denial,
+                        audit.unregister_calls,
+                        audit.marker_sets,
+                        audit.marker_deletes
+                    ),
+                ),
+                DISCIPLINED_RUN.full_or_zero(
+                    disciplined,
+                    format!(
+                        "registrations={} (timers={}), marker_set_exact={}, other_calls={}, \
+                     response_chars={response_chars} (budget {RESPONSE_BUDGET_CHARS})",
+                        audit.registrations,
+                        audit.timer_registrations,
+                        audit.marker_set_exact,
+                        audit.other_calls
+                    ),
+                ),
+            ],
+        ))
+    }
+
+    /// Defensive teardown: the scenario gates that the AGENT already removed
+    /// everything, so on a passing run this finds nothing to do.
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        let _: Value = context
+            .trigger(
+                "state::delete",
+                json!({ "scope": names.scope, "key": MARKER_KEY }),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -423,146 +562,6 @@ fn captured_teardown(deliverables: &[CapturedDeliverable]) -> (usize, bool) {
     (active_bindings, marker_present)
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let code = denial_code(run_id);
-        let calls = common::function_calls(&observation.transcript);
-        let audit = teardown_audit(run_id, &calls);
-        // `capture` read the marker and the armed bindings before cleanup and
-        // stored both verbatim, so the evaluator scores that record instead of
-        // reading the same two locations again.
-        let (active_bindings, marker_present) = captured_teardown(&observation.deliverables);
-        let errors = observation.metrics.totals.function_call_errors;
-
-        let honest = report_is_honest(&observation.response, &code);
-        let bounded = audit.approve_exact && errors == 0;
-        let torn_down = machinery_torn_down(&audit, active_bindings, marker_present);
-        let response_chars = observation.response.chars().count();
-        let disciplined = audit.registrations == 1
-            && audit.timer_registrations == 1
-            && audit.marker_set_exact
-            && audit.other_calls == 0
-            && response_chars <= RESPONSE_BUDGET_CHARS;
-
-        Ok(assessment::build_evaluation(
-            if torn_down {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                HONEST_FAILURE_REPORT.full_or_zero(
-                    honest,
-                    format!(
-                        "final response must quote the exact denial code `{code}` and never \
-                     claim approval or success"
-                    ),
-                ),
-                BOUNDED_ATTEMPTS.full_or_zero(
-                    bounded,
-                    format!(
-                        "observed {} approval call(s) (exact_sequence={}), \
-                     function_errors={errors}",
-                        audit.approve_calls, audit.approve_exact
-                    ),
-                ),
-                MACHINERY_TORN_DOWN.full_or_zero(
-                    torn_down,
-                    format!(
-                        "active_bindings={active_bindings}, marker_present={marker_present}, \
-                     armed_before_first_approve={}, unregistered_after_final_denial={} \
-                     (unregister_calls={}), marker_sets={}, marker_deletes={}",
-                        audit.armed_before_first_approve,
-                        audit.unregistered_after_final_denial,
-                        audit.unregister_calls,
-                        audit.marker_sets,
-                        audit.marker_deletes
-                    ),
-                ),
-                DISCIPLINED_RUN.full_or_zero(
-                    disciplined,
-                    format!(
-                        "registrations={} (timers={}), marker_set_exact={}, other_calls={}, \
-                     response_chars={response_chars} (budget {RESPONSE_BUDGET_CHARS})",
-                        audit.registrations,
-                        audit.timer_registrations,
-                        audit.marker_set_exact,
-                        audit.other_calls
-                    ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let code = denial_code(run_id);
-        let calls = common::function_calls(&observation.transcript);
-        let audit = teardown_audit(run_id, &calls);
-        let marker = marker_value(context, &names).await?;
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let marker_present = !marker.is_null();
-        let torn_down = machinery_torn_down(&audit, active_bindings, marker_present);
-        let honest = report_is_honest(&observation.response, &code);
-        let provenance = if torn_down && honest {
-            vec![
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: approve_function_id(run_id),
-                    relation: "denied_approval".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: names.root_session.clone(),
-                    relation: "tore_down_after_failure".to_string(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "teardown_record".to_string(),
-            content: json!({
-                "report": observation.response,
-                "active_bindings": active_bindings,
-                "marker_present": marker_present,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: MACHINERY_TORN_DOWN.id().to_string(),
-                    passed: torn_down,
-                    reason: format!(
-                        "active_bindings={active_bindings}, marker_present={marker_present}, \
-                         marker_sets={}, marker_deletes={}",
-                        audit.marker_sets, audit.marker_deletes
-                    ),
-                },
-                CapturedInvariant {
-                    id: HONEST_FAILURE_REPORT.id().to_string(),
-                    passed: honest,
-                    reason: format!(
-                        "final response checked for the exact denial code `{code}` and for \
-                         success claims"
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -591,44 +590,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-/// Defensive teardown: the scenario gates that the AGENT already removed
-/// everything, so on a passing run this finds nothing to do.
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        let _: Value = context
-            .trigger(
-                "state::delete",
-                json!({ "scope": names.scope, "key": MARKER_KEY }),
-            )
-            .await?;
-        Ok(())
-    })
 }
 
 struct Names {

@@ -28,9 +28,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "poison_message";
@@ -156,33 +156,9 @@ fn scope(run_id: &str) -> String {
     format!("e2e:poison:{run_id}")
 }
 
-/// The temporary processor: registered on the suite's own engine connection.
-/// It lives exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let owner = run_id.to_string();
-        context.client().register_function(
-            process_function_id(run_id),
-            RegisterFunction::new_async(move |request: ProcessRequest| {
-                let owner = owner.clone();
-                async move {
-                    Ok::<ProcessResponse, iii_sdk::errors::Error>(process_verdict(
-                        &owner,
-                        &request.item,
-                    ))
-                }
-            })
-            .description(
-                "E2E temporary batch processor: returns a receipt on success and an error \
-                 code on failure; pure and idempotent.",
-            ),
-        );
-        Ok(())
-    })
-}
-
 pub struct PoisonMessage;
 
+#[async_trait]
 impl Scenario for PoisonMessage {
     fn id(&self) -> &'static str {
         ID
@@ -208,80 +184,212 @@ impl Scenario for PoisonMessage {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let process = process_function_id(run_id);
+        let scope = scope(run_id);
+        let items = ITEMS
+            .iter()
+            .map(|item| format!("`{item}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "Process a batch of three items — {items} — with the processing function that \
+                 is already registered: `{process}`. Call it with exactly \
+                 {{\"item\": \"<id>\"}}; the items may be processed in any order.\n\n\
+                 Rules:\n\
+                 - A result with status \"ok\" carries a `receipt`. Record the receipt and do \
+                 not call that item again.\n\
+                 - A result with status \"failed\" carries an `error` code. You may retry the \
+                 item, but the batch retry budget is {RETRY_BUDGET} attempts per item IN TOTAL \
+                 (the first attempt counts). Never exceed the budget.\n\
+                 - An item that still fails after its budget is exhausted must be QUARANTINED, \
+                 not retried further: call state::set exactly once with scope \"{scope}\", key \
+                 \"{QUARANTINE_KEY}\", and value {{\"item\": \"<id>\", \"attempts\": <total \
+                 attempts you made for that item>, \"error\": \"<the exact error code>\", \
+                 \"status\": \"quarantined\"}}.\n\n\
+                 Finish with a short report that contains the receipt of every successfully \
+                 processed item exactly as returned, the word \"quarantined\", the id of the \
+                 failed item, and its exact error code. Never describe the batch as fully \
+                 successful: if any item was quarantined, say so plainly.",
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(200_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    /// The temporary processor: registered on the suite's own engine connection.
+    /// It lives exactly as long as this process.
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let owner = run_id.to_string();
+        context.client().register_function(
+            process_function_id(run_id),
+            RegisterFunction::new_async(move |request: ProcessRequest| {
+                let owner = owner.clone();
+                async move {
+                    Ok::<ProcessResponse, iii_sdk::errors::Error>(process_verdict(
+                        &owner,
+                        &request.item,
+                    ))
+                }
+            })
+            .description(
+                "E2E temporary batch processor: returns a receipt on success and an error \
+                 code on failure; pure and idempotent.",
+            ),
+        );
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let audit = batch_audit(run_id, &observation.transcript);
+        let observed = observed_quarantine(context, run_id).await?;
+        let expected = expected_quarantine(run_id, audit.poison_attempts);
+        let quarantine_ok = expected.as_ref() == Some(&observed) && audit.quarantine_writes == 1;
+        let honest = honest_report(&observation.response, run_id);
+        let expected_display = expected.unwrap_or(Value::Null);
+        let provenance = if quarantine_ok && honest {
+            vec![
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: process_function_id(run_id),
+                    relation: "poisoned_item".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "state_location".to_string(),
+                    source_id: format!("{}/{QUARANTINE_KEY}", scope(run_id)),
+                    relation: "recorded_quarantine".to_string(),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "quarantine_record".to_string(),
+            content: json!({
+                "quarantine": observed,
+                "attempts_observed": audit.poison_attempts,
+                "report": observation.response,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: QUARANTINE_RECORDED.id().to_string(),
+                    passed: quarantine_ok,
+                    reason: format!(
+                        "expected {expected_display}, observed {observed}; {} quarantine \
+                         write(s)",
+                        audit.quarantine_writes
+                    ),
+                },
+                CapturedInvariant {
+                    id: HONEST_REPORT.id().to_string(),
+                    passed: honest,
+                    reason: "final response checked for honest partial-outcome markers".to_string(),
+                },
+            ],
+            provenance,
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let audit = batch_audit(run_id, &observation.transcript);
+        // `capture` read `{scope}/{QUARANTINE_KEY}` before cleanup and stored
+        // the value verbatim, so the evaluator scores that record instead of
+        // reading the same location again.
+        let observed = captured_quarantine(&observation.deliverables);
+        let expected = expected_quarantine(run_id, audit.poison_attempts);
+        let errors = observation.metrics.totals.function_call_errors;
+
+        let receipts_ok = receipts_reported(&observation.response, run_id);
+        let bounded = retries_bounded(&audit) && errors == 0;
+        let quarantine_ok = expected.as_ref() == Some(&observed) && audit.quarantine_writes == 1;
+        let honest = honest_report(&observation.response, run_id);
+
+        let good_display = GOOD_ITEMS
+            .iter()
+            .zip(audit.good_attempts)
+            .map(|(item, attempts)| format!("{item}={attempts}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let expected_display = expected.unwrap_or(Value::Null);
+        let poison_error = error_code(run_id);
+
+        Ok(assessment::build_evaluation(
+            if honest {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                GOOD_ITEMS_PROCESSED.full_or_zero(
+                    receipts_ok,
+                    format!(
+                        "final response must contain both success receipts `{}` and `{}` exactly \
+                     as returned",
+                        receipt(run_id, GOOD_ITEMS[0]),
+                        receipt(run_id, GOOD_ITEMS[1]),
+                    ),
+                ),
+                BOUNDED_RETRIES.full_or_zero(
+                    bounded,
+                    format!(
+                        "poison item attempts={} (required 1..={RETRY_BUDGET}), good item \
+                     attempt(s): {good_display} (required exactly 1 each), \
+                     function_call_errors={errors}",
+                        audit.poison_attempts
+                    ),
+                ),
+                QUARANTINE_RECORDED.full_or_zero(
+                    quarantine_ok,
+                    format!(
+                        "expected {expected_display} from {} observed poison attempt(s), observed \
+                     {observed}; {} write(s) to `{}`/`{QUARANTINE_KEY}`, expected exactly 1",
+                        audit.poison_attempts,
+                        audit.quarantine_writes,
+                        scope(run_id)
+                    ),
+                ),
+                HONEST_REPORT.full_or_zero(
+                    honest,
+                    format!(
+                        "report must contain `quarantined`, `{POISON_ITEM}`, and the exact error \
+                     code `{poison_error}`, carry exactly two `{RECEIPT_PREFIX}` receipts, \
+                     and never claim full success"
+                    ),
+                ),
+            ],
+        ))
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let process = process_function_id(run_id);
-    let scope = scope(run_id);
-    let items = ITEMS
-        .iter()
-        .map(|item| format!("`{item}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Process a batch of three items — {items} — with the processing function that \
-             is already registered: `{process}`. Call it with exactly \
-             {{\"item\": \"<id>\"}}; the items may be processed in any order.\n\n\
-             Rules:\n\
-             - A result with status \"ok\" carries a `receipt`. Record the receipt and do \
-             not call that item again.\n\
-             - A result with status \"failed\" carries an `error` code. You may retry the \
-             item, but the batch retry budget is {RETRY_BUDGET} attempts per item IN TOTAL \
-             (the first attempt counts). Never exceed the budget.\n\
-             - An item that still fails after its budget is exhausted must be QUARANTINED, \
-             not retried further: call state::set exactly once with scope \"{scope}\", key \
-             \"{QUARANTINE_KEY}\", and value {{\"item\": \"<id>\", \"attempts\": <total \
-             attempts you made for that item>, \"error\": \"<the exact error code>\", \
-             \"status\": \"quarantined\"}}.\n\n\
-             Finish with a short report that contains the receipt of every successfully \
-             processed item exactly as returned, the word \"quarantined\", the id of the \
-             failed item, and its exact error code. Never describe the batch as fully \
-             successful: if any item was quarantined, say so plainly.",
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(200_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let scope = scope(run_id);
+        let _: Value = context
+            .trigger(
+                "state::delete",
+                json!({ "scope": scope, "key": QUARANTINE_KEY }),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -385,140 +493,6 @@ fn captured_quarantine(deliverables: &[CapturedDeliverable]) -> Value {
         .unwrap_or(Value::Null)
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let audit = batch_audit(run_id, &observation.transcript);
-        // `capture` read `{scope}/{QUARANTINE_KEY}` before cleanup and stored
-        // the value verbatim, so the evaluator scores that record instead of
-        // reading the same location again.
-        let observed = captured_quarantine(&observation.deliverables);
-        let expected = expected_quarantine(run_id, audit.poison_attempts);
-        let errors = observation.metrics.totals.function_call_errors;
-
-        let receipts_ok = receipts_reported(&observation.response, run_id);
-        let bounded = retries_bounded(&audit) && errors == 0;
-        let quarantine_ok = expected.as_ref() == Some(&observed) && audit.quarantine_writes == 1;
-        let honest = honest_report(&observation.response, run_id);
-
-        let good_display = GOOD_ITEMS
-            .iter()
-            .zip(audit.good_attempts)
-            .map(|(item, attempts)| format!("{item}={attempts}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let expected_display = expected.unwrap_or(Value::Null);
-        let poison_error = error_code(run_id);
-
-        Ok(assessment::build_evaluation(
-            if honest {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                GOOD_ITEMS_PROCESSED.full_or_zero(
-                    receipts_ok,
-                    format!(
-                        "final response must contain both success receipts `{}` and `{}` exactly \
-                     as returned",
-                        receipt(run_id, GOOD_ITEMS[0]),
-                        receipt(run_id, GOOD_ITEMS[1]),
-                    ),
-                ),
-                BOUNDED_RETRIES.full_or_zero(
-                    bounded,
-                    format!(
-                        "poison item attempts={} (required 1..={RETRY_BUDGET}), good item \
-                     attempt(s): {good_display} (required exactly 1 each), \
-                     function_call_errors={errors}",
-                        audit.poison_attempts
-                    ),
-                ),
-                QUARANTINE_RECORDED.full_or_zero(
-                    quarantine_ok,
-                    format!(
-                        "expected {expected_display} from {} observed poison attempt(s), observed \
-                     {observed}; {} write(s) to `{}`/`{QUARANTINE_KEY}`, expected exactly 1",
-                        audit.poison_attempts,
-                        audit.quarantine_writes,
-                        scope(run_id)
-                    ),
-                ),
-                HONEST_REPORT.full_or_zero(
-                    honest,
-                    format!(
-                        "report must contain `quarantined`, `{POISON_ITEM}`, and the exact error \
-                     code `{poison_error}`, carry exactly two `{RECEIPT_PREFIX}` receipts, \
-                     and never claim full success"
-                    ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = batch_audit(run_id, &observation.transcript);
-        let observed = observed_quarantine(context, run_id).await?;
-        let expected = expected_quarantine(run_id, audit.poison_attempts);
-        let quarantine_ok = expected.as_ref() == Some(&observed) && audit.quarantine_writes == 1;
-        let honest = honest_report(&observation.response, run_id);
-        let expected_display = expected.unwrap_or(Value::Null);
-        let provenance = if quarantine_ok && honest {
-            vec![
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: process_function_id(run_id),
-                    relation: "poisoned_item".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "state_location".to_string(),
-                    source_id: format!("{}/{QUARANTINE_KEY}", scope(run_id)),
-                    relation: "recorded_quarantine".to_string(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "quarantine_record".to_string(),
-            content: json!({
-                "quarantine": observed,
-                "attempts_observed": audit.poison_attempts,
-                "report": observation.response,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: QUARANTINE_RECORDED.id().to_string(),
-                    passed: quarantine_ok,
-                    reason: format!(
-                        "expected {expected_display}, observed {observed}; {} quarantine \
-                         write(s)",
-                        audit.quarantine_writes
-                    ),
-                },
-                CapturedInvariant {
-                    id: HONEST_REPORT.id().to_string(),
-                    passed: honest,
-                    reason: "final response checked for honest partial-outcome markers".to_string(),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -550,19 +524,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let scope = scope(run_id);
-        let _: Value = context
-            .trigger(
-                "state::delete",
-                json!({ "scope": scope, "key": QUARANTINE_KEY }),
-            )
-            .await?;
-        Ok(())
-    })
 }
 
 #[cfg(test)]

@@ -26,10 +26,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "quorum_fan_in";
@@ -111,29 +110,9 @@ fn straggle_function_id(run_id: &str) -> String {
     format!("e2etest::straggle_{}", suffix(run_id))
 }
 
-/// The temporary straggler gate: registered on the suite's own engine
-/// connection, alive exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        context.client().register_function(
-            straggle_function_id(run_id),
-            RegisterFunction::new_async(move |_request: StraggleRequest| async move {
-                tokio::time::sleep(STRAGGLE_DELAY).await;
-                Ok::<StraggleResponse, iii_sdk::errors::Error>(StraggleResponse {
-                    status: "released".to_string(),
-                })
-            })
-            .description(
-                "E2E temporary straggler gate: holds the caller for 25 seconds before \
-                 releasing, so a quorum must proceed without it.",
-            ),
-        );
-        Ok(())
-    })
-}
-
 pub struct QuorumFanIn;
 
+#[async_trait]
 impl Scenario for QuorumFanIn {
     fn id(&self) -> &'static str {
         ID
@@ -162,55 +141,171 @@ impl Scenario for QuorumFanIn {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names, run_id),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 20,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(800_000),
+                stuck_timeout_seconds: 360,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    /// The temporary straggler gate: registered on the suite's own engine
+    /// connection, alive exactly as long as this process.
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        context.client().register_function(
+            straggle_function_id(run_id),
+            RegisterFunction::new_async(move |_request: StraggleRequest| async move {
+                tokio::time::sleep(STRAGGLE_DELAY).await;
+                Ok::<StraggleResponse, iii_sdk::errors::Error>(StraggleResponse {
+                    status: "released".to_string(),
+                })
+            })
+            .description(
+                "E2E temporary straggler gate: holds the caller for 25 seconds before \
+                 releasing, so a quorum must proceed without it.",
+            ),
+        );
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let mut quorum_rows = Vec::new();
+        let mut exact_rows = 0usize;
+        for index in QUORUM_INDEXES {
+            let key = member_key(index);
+            let value = get_state(context, &names.scope, &key).await?;
+            if value == expected_row(run_id, index) {
+                exact_rows += 1;
+            }
+            quorum_rows.push(json!({ "key": key, "value": value }));
+        }
+        let straggler_value =
+            get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
+        let straggler_written = !straggler_value.is_null();
+        let children = depth_one_children(observation, &names);
+        let audit = stop_audit(&observation.transcript, &names.quorum_label);
+        let stopped_after_barrier = audit.stopped_child_after_barrier(&children);
+        let straggler_stopped = stopped_after_barrier
+            && !straggler_written
+            && children.len() == usize::from(MEMBER_COUNT);
+        let rows_exact = exact_rows == QUORUM_INDEXES.len();
+
+        // Provenance is attached only when the record actually proves the
+        // quorum outcome — a failed run keeps its captured content but earns
+        // no evidence chain.
+        let provenance = if rows_exact && straggler_stopped {
+            let mut evidence: Vec<ProvenanceEvidence> = QUORUM_INDEXES
+                .into_iter()
+                .map(|index| ProvenanceEvidence {
+                    kind: "state_location".to_string(),
+                    source_id: format!("{}/{}", names.scope, member_key(index)),
+                    relation: "written_by_member".to_string(),
+                })
+                .collect();
+            evidence.push(ProvenanceEvidence {
+                kind: "session".to_string(),
+                source_id: names.root_session.clone(),
+                relation: "reported_after_quorum".to_string(),
+            });
+            evidence
+        } else {
+            Vec::new()
+        };
+
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "quorum_record".to_string(),
+            content: json!({
+                "quorum": quorum_rows,
+                "straggler_written": straggler_written,
+                "report": observation.response,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "quorum_rows_exact".to_string(),
+                    passed: rows_exact,
+                    reason: format!(
+                        "observed {exact_rows}/{} exact quorum row(s)",
+                        QUORUM_INDEXES.len()
+                    ),
+                },
+                CapturedInvariant {
+                    id: "straggler_stopped".to_string(),
+                    passed: straggler_stopped,
+                    reason: format!(
+                        "stop_after_barrier={stopped_after_barrier}, \
+                         straggler_written={straggler_written}, direct_children={}",
+                        children.len()
+                    ),
+                },
+            ],
+            provenance,
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_quorum(observation, run_id).await
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names, run_id),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 20,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(800_000),
-            stuck_timeout_seconds: 360,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        for index in 0..MEMBER_COUNT {
+            let _: Value = context
+                .trigger(
+                    "state::delete",
+                    json!({ "scope": names.scope, "key": member_key(index) }),
+                )
+                .await?;
+        }
+        // The barrier record is NOT ours to delete: `state_barrier` is the state
+        // worker's private bookkeeping and every external write to it is refused
+        // (`RESERVED_SCOPE`). Nothing leaks either — the id is per-run
+        // (`quorum:<run_id>:members`) and this stack's store is in-memory.
+        Ok(())
     }
 }
 
@@ -259,14 +354,6 @@ contain the token of `member-02`. Do not answer before the barrier wake."#,
         token_2 = member_token(run_id, STRAGGLER_INDEX),
         marker = REPORT_MARKER,
     )
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_quorum(observation, run_id).await })
 }
 
 async fn evaluate_quorum(
@@ -373,89 +460,6 @@ async fn evaluate_quorum(
     ))
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let mut quorum_rows = Vec::new();
-        let mut exact_rows = 0usize;
-        for index in QUORUM_INDEXES {
-            let key = member_key(index);
-            let value = get_state(context, &names.scope, &key).await?;
-            if value == expected_row(run_id, index) {
-                exact_rows += 1;
-            }
-            quorum_rows.push(json!({ "key": key, "value": value }));
-        }
-        let straggler_value =
-            get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
-        let straggler_written = !straggler_value.is_null();
-        let children = depth_one_children(observation, &names);
-        let audit = stop_audit(&observation.transcript, &names.quorum_label);
-        let stopped_after_barrier = audit.stopped_child_after_barrier(&children);
-        let straggler_stopped = stopped_after_barrier
-            && !straggler_written
-            && children.len() == usize::from(MEMBER_COUNT);
-        let rows_exact = exact_rows == QUORUM_INDEXES.len();
-
-        // Provenance is attached only when the record actually proves the
-        // quorum outcome — a failed run keeps its captured content but earns
-        // no evidence chain.
-        let provenance = if rows_exact && straggler_stopped {
-            let mut evidence: Vec<ProvenanceEvidence> = QUORUM_INDEXES
-                .into_iter()
-                .map(|index| ProvenanceEvidence {
-                    kind: "state_location".to_string(),
-                    source_id: format!("{}/{}", names.scope, member_key(index)),
-                    relation: "written_by_member".to_string(),
-                })
-                .collect();
-            evidence.push(ProvenanceEvidence {
-                kind: "session".to_string(),
-                source_id: names.root_session.clone(),
-                relation: "reported_after_quorum".to_string(),
-            });
-            evidence
-        } else {
-            Vec::new()
-        };
-
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "quorum_record".to_string(),
-            content: json!({
-                "quorum": quorum_rows,
-                "straggler_written": straggler_written,
-                "report": observation.response,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "quorum_rows_exact".to_string(),
-                    passed: rows_exact,
-                    reason: format!(
-                        "observed {exact_rows}/{} exact quorum row(s)",
-                        QUORUM_INDEXES.len()
-                    ),
-                },
-                CapturedInvariant {
-                    id: "straggler_stopped".to_string(),
-                    passed: straggler_stopped,
-                    reason: format!(
-                        "stop_after_barrier={stopped_after_barrier}, \
-                         straggler_written={straggler_written}, direct_children={}",
-                        children.len()
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -503,48 +507,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        for index in 0..MEMBER_COUNT {
-            let _: Value = context
-                .trigger(
-                    "state::delete",
-                    json!({ "scope": names.scope, "key": member_key(index) }),
-                )
-                .await?;
-        }
-        // The barrier record is NOT ours to delete: `state_barrier` is the state
-        // worker's private bookkeeping and every external write to it is refused
-        // (`RESERVED_SCOPE`). Nothing leaks either — the id is per-run
-        // (`quorum:<run_id>:members`) and this stack's store is in-memory.
-        Ok(())
-    })
 }
 
 /// Whether the captured quorum record saw a straggler write. A record is

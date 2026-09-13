@@ -20,10 +20,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "cross_app_transaction";
@@ -570,8 +569,94 @@ pub fn allowed_functions(run_id: &str) -> Vec<String> {
     allowed
 }
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+pub struct CrossAppTransaction;
+
+#[async_trait]
+impl Scenario for CrossAppTransaction {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "account_id": TARGET_ACCOUNT,
+                "ticket_id": TARGET_TICKET,
+                "from_team": INITIAL_TEAM,
+                "to_team": TARGET_TEAM,
+                "services": ["crm", "billing", "support"],
+                "injected_fault": "one billing version_conflict",
+                "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eRunScopedFixtures,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let ids = FunctionIds::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Move account `{TARGET_ACCOUNT}` from `{INITIAL_TEAM}` to `{TARGET_TEAM}` consistently across CRM and billing, then close support ticket `{TARGET_TICKET}`.
+
+Use only these run-scoped service functions (function discovery is allowed):
+- CRM read `{crm_get}` and transfer `{crm_transfer}`
+- billing read `{billing_get}` and transfer `{billing_transfer}`
+- support read `{support_get}` and close `{support_close}`
+
+Inspect each function contract before calling it. All mutations use optimistic `expected_version` and a stable, non-empty `idempotency_key`. A service may return `version_conflict`; on conflict, re-read that service, use the returned current version, and retry only the conflicted mutation. Never mutate `{sentinel_account}` or `{sentinel_ticket}`. Close the support ticket only after both account systems report `{TARGET_TEAM}`.
+
+Finish with a short PASS/FAIL report containing the exact receipt returned by each successful CRM, billing, and support mutation. Do not invent receipts."#,
+                crm_get = ids.crm_get,
+                crm_transfer = ids.crm_transfer,
+                billing_get = ids.billing_get,
+                billing_transfer = ids.billing_transfer,
+                support_get = ids.support_get,
+                support_close = ids.support_close,
+                sentinel_account = SENTINEL_ACCOUNT,
+                sentinel_ticket = SENTINEL_TICKET,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 18,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(300_000),
+                stuck_timeout_seconds: 360,
+                max_validation_retries: None,
+            },
+            denied_functions: &["state::*", "database::*", "http::*", "shell::*", "coder::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         release_fixture(run_id);
         let state = Arc::new(Mutex::new(CrossAppState::new(run_id)));
         let mut functions = Vec::with_capacity(6);
@@ -676,127 +761,136 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         ));
         lock_unpoisoned(fixtures()).insert(run_id.to_string(), FixtureRuntime { functions, state });
         Ok(())
-    })
-}
-
-pub struct CrossAppTransaction;
-
-impl Scenario for CrossAppTransaction {
-    fn id(&self) -> &'static str {
-        ID
     }
 
-    fn canonical_seed(&self) -> u64 {
-        CANONICAL_SEED
-    }
-
-    fn canonical_seed_only(&self) -> bool {
-        true
-    }
-
-    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
-        Ok(ScenarioCharacterization::realistic())
-    }
-
-    fn required_functions(&self, run_id: &str) -> Vec<String> {
-        required_functions(run_id)
-    }
-
-    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
-        Some(allowed_functions(run_id))
-    }
-
-    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
-        ScenarioCase::new(
-            ID,
-            CANONICAL_SEED,
-            json!({
-                "account_id": TARGET_ACCOUNT,
-                "ticket_id": TARGET_TICKET,
-                "from_team": INITIAL_TEAM,
-                "to_team": TARGET_TEAM,
-                "services": ["crm", "billing", "support"],
-                "injected_fault": "one billing version_conflict",
-                "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
-            }),
-            vec![
-                Capability::E2eControlPlaneV1,
-                Capability::IiiFunctions,
-                Capability::E2eRunScopedFixtures,
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let audit = fixture_audit(run_id);
+        let (available, state, entries) = match audit {
+            Some(audit) => (
+                true,
+                serde_json::to_value(audit.snapshot)?,
+                serde_json::to_value(audit.entries)?,
+            ),
+            None => (false, Value::Null, json!([])),
+        };
+        let final_exact = state
+            .as_object()
+            .and_then(|_| fixture_audit(run_id))
+            .is_some_and(|audit| final_state_exact(&audit.snapshot));
+        let sentinels_ok =
+            fixture_audit(run_id).is_some_and(|audit| sentinels_unchanged(&audit.snapshot));
+        let conflict_ok =
+            fixture_audit(run_id).is_some_and(|audit| conflict_recovered(&audit.entries));
+        let sequence_ok =
+            fixture_audit(run_id).is_some_and(|audit| exact_mutation_sequence(&audit.entries));
+        let receipts_ok = receipts_reported(&observation.response, run_id);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "cross_app_audit".to_string(),
+            content: json!({
+                "fixture_available": available,
+                "state": state,
+                "audit": entries,
+                "receipts": {
+                    "crm": receipt(run_id, "crm"),
+                    "billing": receipt(run_id, "billing"),
+                    "support": receipt(run_id, "support"),
+                },
+                "response": observation.response,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "consistent_final_state".to_string(),
+                    passed: final_exact && sequence_ok,
+                    reason: format!("final_exact={final_exact}, mutation_sequence={sequence_ok}"),
+                },
+                CapturedInvariant {
+                    id: "conflict_recovered".to_string(),
+                    passed: conflict_ok,
+                    reason: "exactly one billing conflict precedes its accepted retry".to_string(),
+                },
+                CapturedInvariant {
+                    id: "no_collateral_mutation".to_string(),
+                    passed: sentinels_ok && sequence_ok,
+                    reason: format!("sentinels_unchanged={sentinels_ok}"),
+                },
+                CapturedInvariant {
+                    id: "authentic_receipts".to_string(),
+                    passed: receipts_ok,
+                    reason: "response carries the three fixture-issued receipts".to_string(),
+                },
             ],
-            deliverable_contract(),
-        )
+            provenance: FunctionIds::new(run_id)
+                .all()
+                .into_iter()
+                .map(|source_id| ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: source_id.to_string(),
+                    relation: "captured_run_scoped_service_audit".to_string(),
+                })
+                .collect(),
+        }])
     }
 
-    fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let Some(audit) = fixture_audit(run_id) else {
+            return Ok(assessment::prerequisite_failure(
+                ASSESSMENTS,
+                "run_scoped_fixture_available",
+                "cross-app fixture is unavailable",
+            ));
+        };
+        let final_exact = final_state_exact(&audit.snapshot);
+        let conflict_ok = conflict_recovered(&audit.entries);
+        let sequence_ok = exact_mutation_sequence(&audit.entries);
+        let scoped = transcript_is_scoped(&observation.transcript, run_id);
+        let sentinels_ok = sentinels_unchanged(&audit.snapshot);
+        let receipts_ok = receipts_reported(&observation.response, run_id);
+        Ok(assessment::build_evaluation(
+            if final_exact {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+            CONSISTENT_FINAL_STATE.full_or_zero(
+                final_exact && sequence_ok,
+                format!(
+                    "final_exact={final_exact}, exact_three_mutations_with_support_last={sequence_ok}"
+                ),
+            ),
+            CONFLICT_RECOVERED.full_or_zero(
+                conflict_ok,
+                format!("billing conflict recovery observed={conflict_ok}"),
+            ),
+            NO_COLLATERAL_MUTATION.full_or_zero(
+                sentinels_ok && scoped && sequence_ok,
+                format!(
+                    "sentinels_unchanged={sentinels_ok}, scoped_calls={scoped}, exact_mutations={sequence_ok}"
+                ),
+            ),
+            AUTHENTIC_RECEIPTS.full_or_zero(
+                receipts_ok,
+                "final response must contain exactly the three run-derived service receipts",
+            ),
+            ],
+        ))
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let ids = FunctionIds::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Move account `{TARGET_ACCOUNT}` from `{INITIAL_TEAM}` to `{TARGET_TEAM}` consistently across CRM and billing, then close support ticket `{TARGET_TICKET}`.
-
-Use only these run-scoped service functions (function discovery is allowed):
-- CRM read `{crm_get}` and transfer `{crm_transfer}`
-- billing read `{billing_get}` and transfer `{billing_transfer}`
-- support read `{support_get}` and close `{support_close}`
-
-Inspect each function contract before calling it. All mutations use optimistic `expected_version` and a stable, non-empty `idempotency_key`. A service may return `version_conflict`; on conflict, re-read that service, use the returned current version, and retry only the conflicted mutation. Never mutate `{sentinel_account}` or `{sentinel_ticket}`. Close the support ticket only after both account systems report `{TARGET_TEAM}`.
-
-Finish with a short PASS/FAIL report containing the exact receipt returned by each successful CRM, billing, and support mutation. Do not invent receipts."#,
-            crm_get = ids.crm_get,
-            crm_transfer = ids.crm_transfer,
-            billing_get = ids.billing_get,
-            billing_transfer = ids.billing_transfer,
-            support_get = ids.support_get,
-            support_close = ids.support_close,
-            sentinel_account = SENTINEL_ACCOUNT,
-            sentinel_ticket = SENTINEL_TICKET,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 18,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(300_000),
-            stuck_timeout_seconds: 360,
-            max_validation_retries: None,
-        },
-        denied_functions: &["state::*", "database::*", "http::*", "shell::*", "coder::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        release_fixture(run_id);
+        Ok(())
     }
 }
 
@@ -911,133 +1005,6 @@ fn receipts_reported(response: &str, run_id: &str) -> bool {
         && response.matches("XAPP-").count() == 3
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let Some(audit) = fixture_audit(run_id) else {
-            return Ok(assessment::prerequisite_failure(
-                ASSESSMENTS,
-                "run_scoped_fixture_available",
-                "cross-app fixture is unavailable",
-            ));
-        };
-        let final_exact = final_state_exact(&audit.snapshot);
-        let conflict_ok = conflict_recovered(&audit.entries);
-        let sequence_ok = exact_mutation_sequence(&audit.entries);
-        let scoped = transcript_is_scoped(&observation.transcript, run_id);
-        let sentinels_ok = sentinels_unchanged(&audit.snapshot);
-        let receipts_ok = receipts_reported(&observation.response, run_id);
-        Ok(assessment::build_evaluation(
-            if final_exact {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-            CONSISTENT_FINAL_STATE.full_or_zero(
-                final_exact && sequence_ok,
-                format!(
-                    "final_exact={final_exact}, exact_three_mutations_with_support_last={sequence_ok}"
-                ),
-            ),
-            CONFLICT_RECOVERED.full_or_zero(
-                conflict_ok,
-                format!("billing conflict recovery observed={conflict_ok}"),
-            ),
-            NO_COLLATERAL_MUTATION.full_or_zero(
-                sentinels_ok && scoped && sequence_ok,
-                format!(
-                    "sentinels_unchanged={sentinels_ok}, scoped_calls={scoped}, exact_mutations={sequence_ok}"
-                ),
-            ),
-            AUTHENTIC_RECEIPTS.full_or_zero(
-                receipts_ok,
-                "final response must contain exactly the three run-derived service receipts",
-            ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = fixture_audit(run_id);
-        let (available, state, entries) = match audit {
-            Some(audit) => (
-                true,
-                serde_json::to_value(audit.snapshot)?,
-                serde_json::to_value(audit.entries)?,
-            ),
-            None => (false, Value::Null, json!([])),
-        };
-        let final_exact = state
-            .as_object()
-            .and_then(|_| fixture_audit(run_id))
-            .is_some_and(|audit| final_state_exact(&audit.snapshot));
-        let sentinels_ok =
-            fixture_audit(run_id).is_some_and(|audit| sentinels_unchanged(&audit.snapshot));
-        let conflict_ok =
-            fixture_audit(run_id).is_some_and(|audit| conflict_recovered(&audit.entries));
-        let sequence_ok =
-            fixture_audit(run_id).is_some_and(|audit| exact_mutation_sequence(&audit.entries));
-        let receipts_ok = receipts_reported(&observation.response, run_id);
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "cross_app_audit".to_string(),
-            content: json!({
-                "fixture_available": available,
-                "state": state,
-                "audit": entries,
-                "receipts": {
-                    "crm": receipt(run_id, "crm"),
-                    "billing": receipt(run_id, "billing"),
-                    "support": receipt(run_id, "support"),
-                },
-                "response": observation.response,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "consistent_final_state".to_string(),
-                    passed: final_exact && sequence_ok,
-                    reason: format!("final_exact={final_exact}, mutation_sequence={sequence_ok}"),
-                },
-                CapturedInvariant {
-                    id: "conflict_recovered".to_string(),
-                    passed: conflict_ok,
-                    reason: "exactly one billing conflict precedes its accepted retry".to_string(),
-                },
-                CapturedInvariant {
-                    id: "no_collateral_mutation".to_string(),
-                    passed: sentinels_ok && sequence_ok,
-                    reason: format!("sentinels_unchanged={sentinels_ok}"),
-                },
-                CapturedInvariant {
-                    id: "authentic_receipts".to_string(),
-                    passed: receipts_ok,
-                    reason: "response carries the three fixture-issued receipts".to_string(),
-                },
-            ],
-            provenance: FunctionIds::new(run_id)
-                .all()
-                .into_iter()
-                .map(|source_id| ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: source_id.to_string(),
-                    relation: "captured_run_scoped_service_audit".to_string(),
-                })
-                .collect(),
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -1068,13 +1035,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        release_fixture(run_id);
-        Ok(())
-    })
 }
 
 #[cfg(test)]

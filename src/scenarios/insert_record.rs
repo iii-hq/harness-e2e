@@ -10,9 +10,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "insert_record";
@@ -39,6 +39,7 @@ fn table(run_id: &str) -> String {
 
 pub struct InsertRecord;
 
+#[async_trait]
 impl Scenario for InsertRecord {
     fn id(&self) -> &'static str {
         ID
@@ -59,76 +60,55 @@ impl Scenario for InsertRecord {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let table = table(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "Use `database::execute` on the `{DATABASE}` database to add exactly one row to the \
+                 `{table}` table with the text value `{VALUE}`. Then respond with a short \
+                 confirmation."
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12,
+                max_output_tokens: Some(4_096),
+                max_total_tokens: Some(80_000),
+                stuck_timeout_seconds: 180,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn deliverable_contract() -> DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "database_record",
-        json!({
-            "type": "object",
-            "required": ["rows", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
-
-/// Rows of the owned table, or the function error when it is unreadable.
-async fn table_rows(context: &E2eContext, table: &str) -> Result<Vec<Value>, String> {
-    context
-        .trigger_value(
-            "database::query",
-            json!({ "db": DATABASE, "sql": format!("SELECT id, value FROM {table} ORDER BY id") }),
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let table = table(run_id);
+        execute(context, format!("DROP TABLE IF EXISTS {table}")).await?;
+        execute(
+            context,
+            format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)"),
         )
-        .await
-        .map(|response| {
-            response
-                .get("rows")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default()
-        })
-        .map_err(|error| format!("{error:#}"))
-}
+        .await?;
+        let count = context
+            .trigger_value(
+                "database::query",
+                json!({ "db": DATABASE, "sql": format!("SELECT COUNT(*) AS n FROM {table}") }),
+            )
+            .await?
+            .pointer("/rows/0/n")
+            .and_then(Value::as_u64);
+        if count != Some(0) {
+            bail!("insert_record table {table} was not prepared empty: count={count:?}");
+        }
+        Ok(())
+    }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
         let rows = match table_rows(context, &table).await {
             Ok(rows) => json!(rows),
@@ -152,92 +132,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let table = table(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Use `database::execute` on the `{DATABASE}` database to add exactly one row to the \
-             `{table}` table with the text value `{VALUE}`. Then respond with a short \
-             confirmation."
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12,
-            max_output_tokens: Some(4_096),
-            max_total_tokens: Some(80_000),
-            stuck_timeout_seconds: 180,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
     }
-}
 
-async fn execute(context: &E2eContext, sql: String) -> anyhow::Result<Value> {
-    context
-        .trigger_value("database::execute", json!({ "db": DATABASE, "sql": sql }))
-        .await
-}
-
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let table = table(run_id);
-        execute(context, format!("DROP TABLE IF EXISTS {table}")).await?;
-        execute(
-            context,
-            format!("CREATE TABLE {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT)"),
-        )
-        .await?;
-        let count = context
-            .trigger_value(
-                "database::query",
-                json!({ "db": DATABASE, "sql": format!("SELECT COUNT(*) AS n FROM {table}") }),
-            )
-            .await?
-            .pointer("/rows/0/n")
-            .and_then(Value::as_u64);
-        if count != Some(0) {
-            bail!("insert_record table {table} was not prepared empty: count={count:?}");
-        }
-        Ok(())
-    })
-}
-
-/// The rows the capture stored for this run, as `(rows, query_error)`.
-fn captured_rows(observation: &ScenarioObservation) -> Option<(Vec<Value>, Option<String>)> {
-    let content = observation
-        .deliverables
-        .iter()
-        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
-        .content
-        .as_json()?
-        .get("rows")?
-        .clone();
-    match content {
-        Value::Array(rows) => Some((rows, None)),
-        other => Some((
-            Vec::new(),
-            Some(
-                other
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("rows unavailable")
-                    .to_string(),
-            ),
-        )),
-    }
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !observation.metrics.complete {
             return Ok(assessment::prerequisite_failure(
                 ASSESSMENTS,
@@ -280,14 +182,73 @@ fn evaluate<'a>(
                     .full_or_zero(turns < MAX_TURNS_FOR_CREDIT, format!("turns={turns}")),
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         execute(context, format!("DROP TABLE IF EXISTS {}", table(run_id))).await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "database_record",
+        json!({
+            "type": "object",
+            "required": ["rows", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+/// Rows of the owned table, or the function error when it is unreadable.
+async fn table_rows(context: &E2eContext, table: &str) -> Result<Vec<Value>, String> {
+    context
+        .trigger_value(
+            "database::query",
+            json!({ "db": DATABASE, "sql": format!("SELECT id, value FROM {table} ORDER BY id") }),
+        )
+        .await
+        .map(|response| {
+            response
+                .get("rows")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        })
+        .map_err(|error| format!("{error:#}"))
+}
+
+async fn execute(context: &E2eContext, sql: String) -> anyhow::Result<Value> {
+    context
+        .trigger_value("database::execute", json!({ "db": DATABASE, "sql": sql }))
+        .await
+}
+
+/// The rows the capture stored for this run, as `(rows, query_error)`.
+fn captured_rows(observation: &ScenarioObservation) -> Option<(Vec<Value>, Option<String>)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("rows")?
+        .clone();
+    match content {
+        Value::Array(rows) => Some((rows, None)),
+        other => Some((
+            Vec::new(),
+            Some(
+                other
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("rows unavailable")
+                    .to_string(),
+            ),
+        )),
+    }
 }
 
 #[cfg(test)]

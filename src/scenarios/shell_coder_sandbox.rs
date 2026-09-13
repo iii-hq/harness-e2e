@@ -22,9 +22,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "shell_coder_sandbox";
@@ -224,6 +224,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 pub struct ShellCoderSandbox;
 
+#[async_trait]
 impl Scenario for ShellCoderSandbox {
     fn id(&self) -> &'static str {
         ID
@@ -266,46 +267,11 @@ impl Scenario for ShellCoderSandbox {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = workspace_root(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Repair the event reconciliation implementation in the isolated workspace `{root}`.
+        let root = workspace_root(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Repair the event reconciliation implementation in the isolated workspace `{root}`.
 
 The project is already assembled. Do not install workers or change its engine or Compose configuration.
 
@@ -322,24 +288,231 @@ Follow this evidence order:
 Do not modify `{tests}` or `{task}`, use the network, or write outside the workspace. Hidden
 runner-side probes cover additional cases. Finish with a short report containing the red
 baseline, green public suite, and host demo results."#,
-            root = root.display(),
-            source = SOURCE_PATH,
-            tests = PUBLIC_TEST_PATH,
-            task = TASK_PATH,
-            diagnosis_draft = DIAGNOSIS_DRAFT_PATH,
-            diagnosis = DIAGNOSIS_PATH,
-            host_stdout = HOST_DEMO_STDOUT,
-        ),
-        filesystem_root: Some(root),
-        execution: ExecutionPolicy {
-            max_turns: 56,
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(1_000_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &["web::*", "scrapling::*", "http::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
+                root = root.display(),
+                source = SOURCE_PATH,
+                tests = PUBLIC_TEST_PATH,
+                task = TASK_PATH,
+                diagnosis_draft = DIAGNOSIS_DRAFT_PATH,
+                diagnosis = DIAGNOSIS_PATH,
+                host_stdout = HOST_DEMO_STDOUT,
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                max_turns: 56,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(1_000_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &["web::*", "scrapling::*", "http::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        let assets = load_fixture_assets().await?;
+        let root = workspace_root(run_id);
+        reset_fixture(&root, &assets)?;
+        let public = run_public_tests(&root).await?;
+        if public.success {
+            bail!("shell/coder fixture baseline unexpectedly passes its public suite");
+        }
+        if run_hidden_probe(&root).await?.passed {
+            bail!("shell/coder fixture baseline unexpectedly passes hidden probes");
+        }
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let root = workspace_root(run_id);
+        let assets = load_fixture_assets().await?;
+        let fixture = audit_fixture(run_id, &assets).await?;
+        let workflow = workflow_audit(observation, &root);
+        let scope = fixture.scope_valid() && workflow.evidence_ordered;
+        Ok(vec![
+            CapturedDeliverable {
+                id: CODE_DELIVERABLE_ID.to_string(),
+                kind: "code_repair".to_string(),
+                content: json!({
+                    "path": SOURCE_PATH,
+                    "content": fixture.source,
+                    "public_tests_passed": fixture.public.success,
+                    "hidden": {"passed": fixture.hidden.passed, "checks": fixture.hidden.checks},
+                    "scope": {
+                        "protected_files_exact": fixture.protected_files_exact,
+                        "production_patch_present": fixture.production_patch_present,
+                        "diagnosis_present": fixture.diagnosis_present,
+                        "unexpected_paths": fixture.unexpected_paths,
+                    },
+                })
+                .into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "public_tests_green".to_string(),
+                        passed: fixture.public.success,
+                        reason: "runner independently executed the public suite".to_string(),
+                    },
+                    CapturedInvariant {
+                        id: "hidden_tests_green".to_string(),
+                        passed: fixture.hidden.passed,
+                        reason: format!("runner-owned checks: {:?}", fixture.hidden.checks),
+                    },
+                    CapturedInvariant {
+                        id: "repair_scope_exact".to_string(),
+                        passed: scope,
+                        reason: "protected fixture and topology were audited".to_string(),
+                    },
+                ],
+                provenance: vec![
+                    ProvenanceEvidence {
+                        kind: "filesystem_path".to_string(),
+                        source_id: root.join(SOURCE_PATH).display().to_string(),
+                        relation: "independently_probed_before_cleanup".to_string(),
+                    },
+                    ProvenanceEvidence {
+                        kind: "git_revision".to_string(),
+                        source_id: FIXTURE_REVISION.to_string(),
+                        relation: "derived_from_pinned_fixture".to_string(),
+                    },
+                ],
+            },
+            CapturedDeliverable {
+                id: EXECUTION_DELIVERABLE_ID.to_string(),
+                kind: "execution_result".to_string(),
+                content: json!({
+                    "host": {
+                        "success": fixture.demo.success,
+                        "stdout": fixture.demo.stdout.trim(),
+                        "stderr": fixture.demo.stderr.trim(),
+                    },
+                    "workflow": {
+                        "red_baseline": workflow.red_baseline,
+                        "green_public": workflow.green_public,
+                        "host_demo": workflow.host_demo,
+                        "evidence_ordered": workflow.evidence_ordered,
+                    },
+                })
+                .into(),
+                invariants: vec![CapturedInvariant {
+                    id: "host_demo_exact".to_string(),
+                    passed: fixture.demo.success && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT,
+                    reason: format!("expected exact host stdout `{HOST_DEMO_STDOUT}`"),
+                }],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "filesystem_path".to_string(),
+                    source_id: root.join(SOURCE_PATH).display().to_string(),
+                    relation: "exact_source_executed_by_runner".to_string(),
+                }],
+            },
+        ])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let root = workspace_root(run_id);
+        let assets = load_fixture_assets().await?;
+        let fixture = audit_fixture(run_id, &assets).await?;
+        let workflow = workflow_audit(observation, &root);
+        let shell_ready = context.function_exists("shell::exec").await?;
+        let coder_ready = context.function_exists("coder::update-file").await?;
+        let worker_setup = shell_ready && coder_ready;
+        let public_correctness =
+            workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
+        let host_execution = workflow.host_demo.is_some()
+            && fixture.demo.success
+            && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
+            && fixture.demo.stderr.trim().is_empty();
+        let scope = fixture.scope_valid() && workflow.evidence_ordered;
+        Ok(assessment::build_evaluation(
+            if fixture.production_patch_present {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                WORKER_SETUP.full_or_zero(
+                    worker_setup,
+                    format!("shell={shell_ready}, coder={coder_ready}"),
+                ),
+                INVESTIGATION.award(
+                    workflow.investigation_points(),
+                    format!(
+                        "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
+                        workflow.coder_info,
+                        workflow.source_read,
+                        workflow.tests_read,
+                        workflow.task_read,
+                        workflow.red_baseline,
+                        workflow.first_source_edit
+                    ),
+                )?,
+                DIAGNOSIS.award(
+                    if workflow.diagnosis_complete() && fixture.diagnosis_present {
+                        DIAGNOSIS.weight()
+                    } else {
+                        0
+                    },
+                    format!(
+                        "create={:?}, move={:?}, retained={}",
+                        workflow.diagnosis_create,
+                        workflow.diagnosis_move,
+                        fixture.diagnosis_present
+                    ),
+                )?,
+                PUBLIC_CORRECTNESS.full_or_zero(
+                    public_correctness,
+                    format!(
+                        "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
+                        workflow.red_baseline,
+                        workflow.green_public,
+                        fixture.public.success,
+                        fixture.public.stdout,
+                        fixture.public.stderr
+                    ),
+                ),
+                HIDDEN_CORRECTNESS.full_or_zero(
+                    fixture.hidden.passed,
+                    format!(
+                        "checks={:?}; output={:?}",
+                        fixture.hidden.checks, fixture.hidden_output
+                    ),
+                ),
+                HOST_EXECUTION.full_or_zero(
+                    host_execution,
+                    format!(
+                        "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
+                        workflow.host_demo,
+                        fixture.demo.success,
+                        fixture.demo.stdout,
+                        fixture.demo.stderr
+                    ),
+                ),
+                SCOPE_AND_LIFECYCLE.full_or_zero(
+                    scope,
+                    format!(
+                        "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
+                        fixture.protected_files_exact,
+                        fixture.production_patch_present,
+                        fixture.diagnosis_present,
+                        fixture.unexpected_paths,
+                        workflow.evidence_ordered
+                    ),
+                ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        remove_workspace(&workspace_root(run_id))
     }
 }
 
@@ -457,22 +630,6 @@ fn reset_fixture(root: &Path, assets: &FixtureAssets) -> Result<()> {
     ensure_safe_workspace(root)?;
     remove_workspace(root)?;
     write_fixture(root, assets)
-}
-
-fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let assets = load_fixture_assets().await?;
-        let root = workspace_root(run_id);
-        reset_fixture(&root, &assets)?;
-        let public = run_public_tests(&root).await?;
-        if public.success {
-            bail!("shell/coder fixture baseline unexpectedly passes its public suite");
-        }
-        if run_hidden_probe(&root).await?.passed {
-            bail!("shell/coder fixture baseline unexpectedly passes hidden probes");
-        }
-        Ok(())
-    })
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -655,196 +812,6 @@ fn workflow_audit(observation: &ScenarioObservation, root: &Path) -> WorkflowAud
         red_before_edit,
         evidence_ordered,
     }
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let root = workspace_root(run_id);
-        let assets = load_fixture_assets().await?;
-        let fixture = audit_fixture(run_id, &assets).await?;
-        let workflow = workflow_audit(observation, &root);
-        let shell_ready = context.function_exists("shell::exec").await?;
-        let coder_ready = context.function_exists("coder::update-file").await?;
-        let worker_setup = shell_ready && coder_ready;
-        let public_correctness =
-            workflow.red_before_edit && workflow.green_public.is_some() && fixture.public.success;
-        let host_execution = workflow.host_demo.is_some()
-            && fixture.demo.success
-            && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT
-            && fixture.demo.stderr.trim().is_empty();
-        let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(assessment::build_evaluation(
-            if fixture.production_patch_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                WORKER_SETUP.full_or_zero(
-                    worker_setup,
-                    format!("shell={shell_ready}, coder={coder_ready}"),
-                ),
-                INVESTIGATION.award(
-                    workflow.investigation_points(),
-                    format!(
-                        "info={:?}, source={:?}, tests={:?}, task={:?}, red={:?}, edit={:?}",
-                        workflow.coder_info,
-                        workflow.source_read,
-                        workflow.tests_read,
-                        workflow.task_read,
-                        workflow.red_baseline,
-                        workflow.first_source_edit
-                    ),
-                )?,
-                DIAGNOSIS.award(
-                    if workflow.diagnosis_complete() && fixture.diagnosis_present {
-                        DIAGNOSIS.weight()
-                    } else {
-                        0
-                    },
-                    format!(
-                        "create={:?}, move={:?}, retained={}",
-                        workflow.diagnosis_create,
-                        workflow.diagnosis_move,
-                        fixture.diagnosis_present
-                    ),
-                )?,
-                PUBLIC_CORRECTNESS.full_or_zero(
-                    public_correctness,
-                    format!(
-                        "subject red={:?}, green={:?}, runner green={}, stdout={:?}, stderr={:?}",
-                        workflow.red_baseline,
-                        workflow.green_public,
-                        fixture.public.success,
-                        fixture.public.stdout,
-                        fixture.public.stderr
-                    ),
-                ),
-                HIDDEN_CORRECTNESS.full_or_zero(
-                    fixture.hidden.passed,
-                    format!(
-                        "checks={:?}; output={:?}",
-                        fixture.hidden.checks, fixture.hidden_output
-                    ),
-                ),
-                HOST_EXECUTION.full_or_zero(
-                    host_execution,
-                    format!(
-                        "subject demo={:?}, runner success={}, stdout={:?}, stderr={:?}",
-                        workflow.host_demo,
-                        fixture.demo.success,
-                        fixture.demo.stdout,
-                        fixture.demo.stderr
-                    ),
-                ),
-                SCOPE_AND_LIFECYCLE.full_or_zero(
-                    scope,
-                    format!(
-                        "protected={}, patch={}, diagnosis={}, unexpected={:?}, ordered={}",
-                        fixture.protected_files_exact,
-                        fixture.production_patch_present,
-                        fixture.diagnosis_present,
-                        fixture.unexpected_paths,
-                        workflow.evidence_ordered
-                    ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let root = workspace_root(run_id);
-        let assets = load_fixture_assets().await?;
-        let fixture = audit_fixture(run_id, &assets).await?;
-        let workflow = workflow_audit(observation, &root);
-        let scope = fixture.scope_valid() && workflow.evidence_ordered;
-        Ok(vec![
-            CapturedDeliverable {
-                id: CODE_DELIVERABLE_ID.to_string(),
-                kind: "code_repair".to_string(),
-                content: json!({
-                    "path": SOURCE_PATH,
-                    "content": fixture.source,
-                    "public_tests_passed": fixture.public.success,
-                    "hidden": {"passed": fixture.hidden.passed, "checks": fixture.hidden.checks},
-                    "scope": {
-                        "protected_files_exact": fixture.protected_files_exact,
-                        "production_patch_present": fixture.production_patch_present,
-                        "diagnosis_present": fixture.diagnosis_present,
-                        "unexpected_paths": fixture.unexpected_paths,
-                    },
-                })
-                .into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "public_tests_green".to_string(),
-                        passed: fixture.public.success,
-                        reason: "runner independently executed the public suite".to_string(),
-                    },
-                    CapturedInvariant {
-                        id: "hidden_tests_green".to_string(),
-                        passed: fixture.hidden.passed,
-                        reason: format!("runner-owned checks: {:?}", fixture.hidden.checks),
-                    },
-                    CapturedInvariant {
-                        id: "repair_scope_exact".to_string(),
-                        passed: scope,
-                        reason: "protected fixture and topology were audited".to_string(),
-                    },
-                ],
-                provenance: vec![
-                    ProvenanceEvidence {
-                        kind: "filesystem_path".to_string(),
-                        source_id: root.join(SOURCE_PATH).display().to_string(),
-                        relation: "independently_probed_before_cleanup".to_string(),
-                    },
-                    ProvenanceEvidence {
-                        kind: "git_revision".to_string(),
-                        source_id: FIXTURE_REVISION.to_string(),
-                        relation: "derived_from_pinned_fixture".to_string(),
-                    },
-                ],
-            },
-            CapturedDeliverable {
-                id: EXECUTION_DELIVERABLE_ID.to_string(),
-                kind: "execution_result".to_string(),
-                content: json!({
-                    "host": {
-                        "success": fixture.demo.success,
-                        "stdout": fixture.demo.stdout.trim(),
-                        "stderr": fixture.demo.stderr.trim(),
-                    },
-                    "workflow": {
-                        "red_baseline": workflow.red_baseline,
-                        "green_public": workflow.green_public,
-                        "host_demo": workflow.host_demo,
-                        "evidence_ordered": workflow.evidence_ordered,
-                    },
-                })
-                .into(),
-                invariants: vec![CapturedInvariant {
-                    id: "host_demo_exact".to_string(),
-                    passed: fixture.demo.success && fixture.demo.stdout.trim() == HOST_DEMO_STDOUT,
-                    reason: format!("expected exact host stdout `{HOST_DEMO_STDOUT}`"),
-                }],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "filesystem_path".to_string(),
-                    source_id: root.join(SOURCE_PATH).display().to_string(),
-                    relation: "exact_source_executed_by_runner".to_string(),
-                }],
-            },
-        ])
-    })
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -1189,10 +1156,6 @@ fn collect_files(root: &Path) -> Result<Vec<String>> {
 
 fn is_ignored_python_artifact(path: &str) -> bool {
     path.split('/').any(|part| part == "__pycache__") || path.ends_with(".pyc")
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move { remove_workspace(&workspace_root(run_id)) })
 }
 
 fn remove_workspace(root: &Path) -> Result<()> {

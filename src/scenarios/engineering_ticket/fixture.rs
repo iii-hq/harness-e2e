@@ -135,12 +135,10 @@ mod tests {
 
     #[test]
     fn engineering_scope_fails_closed_without_successful_setup() {
-        for scenario_id in [ID, GIT_HANDOFF_ID] {
-            assert!(prepared_filesystem_root(scenario_id, "not-prepared").is_err());
-        }
-        assert!(prepared_filesystem_root("other-scenario", "not-prepared")
-            .unwrap()
-            .is_none());
+        assert!(EngineeringTicket.prepared_root("not-prepared").is_err());
+        assert!(EngineeringTicketGitHandoff
+            .prepared_root("not-prepared")
+            .is_err());
     }
 
     #[tokio::test]
@@ -214,14 +212,14 @@ mod tests {
             })),
         );
         assert_eq!(
-            prepared_filesystem_root(ID, &run_id).unwrap(),
+            EngineeringTicket.prepared_root(&run_id).unwrap(),
             Some(first_root.clone())
         );
         assert_eq!(
-            prepared_filesystem_root(GIT_HANDOFF_ID, &run_id).unwrap(),
+            EngineeringTicketGitHandoff.prepared_root(&run_id).unwrap(),
             Some(second_root.clone())
         );
-        assert!(prepared_filesystem_root(ID, "other-attempt").is_err());
+        assert!(EngineeringTicket.prepared_root("other-attempt").is_err());
         // Registered auditors retain Arcs after cleanup. They must not retain
         // ownership of temporary workspaces once the attempt is finished.
         let retained_auditor = runtime_registry().lock().unwrap()[&run_id].clone();
@@ -253,7 +251,7 @@ mod tests {
             preflight_fixture(task, &first_root).await.unwrap();
             preflight_fixture(task, &second_root).await.unwrap();
         }
-        assert!(prepared_filesystem_root(ID, &run_id).is_err());
-        assert!(prepared_filesystem_root(GIT_HANDOFF_ID, &run_id).is_err());
+        assert!(EngineeringTicket.prepared_root(&run_id).is_err());
+        assert!(EngineeringTicketGitHandoff.prepared_root(&run_id).is_err());
     }
 }

@@ -105,6 +105,7 @@ fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
 
 pub struct TrendingTopicsBuild;
 
+#[async_trait]
 impl Scenario for TrendingTopicsBuild {
     fn id(&self) -> &'static str {
         ID
@@ -177,34 +178,100 @@ impl Scenario for TrendingTopicsBuild {
         }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        let directory = assets(run_id);
+        write_assets(&directory)?;
+        checked(&mut lifecycle(run_id, "prepare")).await?;
+
+        let task_root = root(run_id);
+        let function = context.client().register_function(
+            function_id(run_id),
+            RegisterFunction::new_async(move |input: ExecInput| {
+                let directory = directory.clone();
+                let task_root = task_root.clone();
+                async move {
+                    if !(1..=120_000).contains(&input.timeout_ms) {
+                        return Err(iii_sdk::errors::Error::Handler(
+                            "timeout_ms must be 1..=120000".into(),
+                        ));
+                    }
+                    let mut command = Command::new("python3");
+                    command
+                        .arg(directory.join("lifecycle.py"))
+                        .args(["exec", "--root"])
+                        .arg(task_root)
+                        .args(["--assets"])
+                        .arg(&directory)
+                        .args(["--command", &input.command, "--timeout-ms"])
+                        .arg(input.timeout_ms.to_string());
+                    let value = checked(&mut command)
+                        .await
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))?;
+                    serde_json::from_value::<ExecOutput>(value)
+                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))
+                }
+            })
+            .description(
+                "Execute a bounded command in this attempt's private trending-topics workspace.",
+            ),
+        );
+        registrations()
+            .lock()
+            .unwrap()
+            .insert(function_id(run_id), function);
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let mut result = checked(&mut lifecycle(run_id, "finish")).await?;
+        let persisted = read_result(run_id)?;
+        if result != persisted {
+            bail!("finish output differs from persisted result.json");
+        }
+        let directory = root(run_id);
+        let evidence = portable_evidence(&directory, &mut result)?;
+        let content = json!({
+            "run_id": run_id,
+            "subject_complete": observation.metrics.complete,
+            "result": result,
+            "evidence": evidence,
+        });
+        if serde_json::to_vec(&content)?.len() as u64 > crate::asset::DEFAULT_MAX_CAPTURE_BYTES {
+            bail!("trending topics evidence exceeds the capture size limit");
+        }
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.into(),
+            kind: "application_audit".into(),
+            content: content.into(),
+            invariants: vec![],
+            provenance: vec![ProvenanceEvidence {
+                kind: "filesystem_path".into(),
+                source_id: "result.json".into(),
+                relation: "validated_before_cleanup".into(),
+            }],
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        objective_evaluation(observation.metrics.complete, &read_result(run_id)?)
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        registrations().lock().unwrap().remove(&function_id(run_id));
+        if root(run_id).exists() {
+            checked(&mut lifecycle(run_id, "cleanup")).await?;
+        }
+        Ok(())
     }
 }
 
@@ -251,52 +318,6 @@ fn write_assets(directory: &Path) -> Result<()> {
         std::fs::write(directory.join(name), bytes)?;
     }
     Ok(())
-}
-
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let directory = assets(run_id);
-        write_assets(&directory)?;
-        checked(&mut lifecycle(run_id, "prepare")).await?;
-
-        let task_root = root(run_id);
-        let function = context.client().register_function(
-            function_id(run_id),
-            RegisterFunction::new_async(move |input: ExecInput| {
-                let directory = directory.clone();
-                let task_root = task_root.clone();
-                async move {
-                    if !(1..=120_000).contains(&input.timeout_ms) {
-                        return Err(iii_sdk::errors::Error::Handler(
-                            "timeout_ms must be 1..=120000".into(),
-                        ));
-                    }
-                    let mut command = Command::new("python3");
-                    command
-                        .arg(directory.join("lifecycle.py"))
-                        .args(["exec", "--root"])
-                        .arg(task_root)
-                        .args(["--assets"])
-                        .arg(&directory)
-                        .args(["--command", &input.command, "--timeout-ms"])
-                        .arg(input.timeout_ms.to_string());
-                    let value = checked(&mut command)
-                        .await
-                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))?;
-                    serde_json::from_value::<ExecOutput>(value)
-                        .map_err(|error| iii_sdk::errors::Error::Handler(error.to_string()))
-                }
-            })
-            .description(
-                "Execute a bounded command in this attempt's private trending-topics workspace.",
-            ),
-        );
-        registrations()
-            .lock()
-            .unwrap()
-            .insert(function_id(run_id), function);
-        Ok(())
-    })
 }
 
 fn read_result(run_id: &str) -> Result<Value> {
@@ -712,52 +733,6 @@ fn objective_evaluation(subject_complete: bool, result: &Value) -> Result<Object
     })
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let mut result = checked(&mut lifecycle(run_id, "finish")).await?;
-        let persisted = read_result(run_id)?;
-        if result != persisted {
-            bail!("finish output differs from persisted result.json");
-        }
-        let directory = root(run_id);
-        let evidence = portable_evidence(&directory, &mut result)?;
-        let content = json!({
-            "run_id": run_id,
-            "subject_complete": observation.metrics.complete,
-            "result": result,
-            "evidence": evidence,
-        });
-        if serde_json::to_vec(&content)?.len() as u64 > crate::asset::DEFAULT_MAX_CAPTURE_BYTES {
-            bail!("trending topics evidence exceeds the capture size limit");
-        }
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.into(),
-            kind: "application_audit".into(),
-            content: content.into(),
-            invariants: vec![],
-            provenance: vec![ProvenanceEvidence {
-                kind: "filesystem_path".into(),
-                source_id: "result.json".into(),
-                relation: "validated_before_cleanup".into(),
-            }],
-        }])
-    })
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(
-        async move { objective_evaluation(observation.metrics.complete, &read_result(run_id)?) },
-    )
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -774,16 +749,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        registrations().lock().unwrap().remove(&function_id(run_id));
-        if root(run_id).exists() {
-            checked(&mut lifecycle(run_id, "cleanup")).await?;
-        }
-        Ok(())
-    })
 }
 
 #[cfg(test)]

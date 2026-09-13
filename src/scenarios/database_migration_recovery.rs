@@ -13,9 +13,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, common, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "database_migration_recovery";
@@ -163,6 +163,7 @@ impl Relations {
 
 pub struct DatabaseMigrationRecovery;
 
+#[async_trait]
 impl Scenario for DatabaseMigrationRecovery {
     fn id(&self) -> &'static str {
         ID
@@ -194,37 +195,240 @@ impl Scenario for DatabaseMigrationRecovery {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let relations = Relations::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "Recover the interrupted `{MIGRATION_ID}` migration in database `{DATABASE}`, then \
+                 prove it is idempotent by replaying the same migration once.\n\n\
+                 The run-scoped relations already exist:\n\n\
+                 - `{legacy}`: six immutable legacy rows with columns `id`, `customer`, \
+                 `total_text`, and `status`.\n\
+                 - `{target}`: columns `id`, `customer`, `amount_cents`, `status`, and \
+                 `source_legacy_id`; legacy row 101 is already copied.\n\
+                 - `{quarantine}`: columns `legacy_id`, `customer`, `raw_total`, `status`, and \
+                 `reason`; initially empty.\n\
+                 - `{journal}`: columns `migration_id`, `status`, `applied_rows`, \
+                 `quarantined_rows`, and `replay_count`; it contains an incomplete \
+                 `{MIGRATION_ID}` entry.\n\
+                 - `{compat}`: the required compatibility view, not created yet.\n\
+                 - `{sentinel}`: columns `key` and `value`; unrelated state that must remain \
+                 `control=do-not-touch`.\n\n\
+                 Inspect `database::transaction` before using it. Perform one idempotent migration \
+                 transaction that:\n\n\
+                 1. preserves target row 101 and inserts every other valid decimal total exactly \
+                 once, converting dollars to integer cents;\n\
+                 2. quarantines legacy id 103 exactly once with reason `invalid_total`;\n\
+                 3. creates the compatibility view over all six legacy rows with columns `id`, \
+                 `customer`, `total_text`, `status`, and `migration_status`, where id 103 is \
+                 `quarantined` and every other row is `migrated`;\n\
+                 4. sets the journal to `status=complete`, `applied_rows=5`, `quarantined_rows=1`, \
+                 and increments `replay_count` by one.\n\n\
+                 Then execute that exact logical migration transaction a second time. Both passes \
+                 must use `database::transaction`; do not use `database::execute` or \
+                 `database::executeBatch` for subject writes. Re-read all six owned relations. The \
+                 final state must contain five target rows, one quarantine row, six compatibility \
+                 rows, `replay_count=2`, the unchanged six-row legacy source, and the unchanged \
+                 sentinel. Use no relation outside prefix `{prefix}`.\n\n\
+                 Finish with exactly `{EXPECTED_REPORT}` only if every verification succeeds; \
+                 otherwise report `FAIL` and the discrepancy.",
+                legacy = relations.legacy,
+                target = relations.target,
+                quarantine = relations.quarantine,
+                journal = relations.journal,
+                compat = relations.compat,
+                sentinel = relations.sentinel,
+                prefix = relations.prefix,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 24,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(200_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let relations = Relations::new(run_id);
+        execute_batch(context, relations.setup_statements()).await?;
+        let legacy = count(context, &relations.legacy).await?;
+        let target = count(context, &relations.target).await?;
+        let journal = query_rows(
+            context,
+            format!(
+                "SELECT status, replay_count FROM {} WHERE migration_id = '{MIGRATION_ID}'",
+                relations.journal
+            ),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        let sentinel = query_rows(
+            context,
+            format!("SELECT key, value FROM {}", relations.sentinel),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        if legacy != 6
+            || target != 1
+            || journal != [json!({ "status": "backfill_in_progress", "replay_count": 0 })]
+            || sentinel != [json!({ "key": "control", "value": "do-not-touch" })]
+        {
+            bail!(
+                "database_migration_recovery prepared state mismatch: legacy={legacy}, target={target}, journal={journal:?}, sentinel={sentinel:?}"
+            );
+        }
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let relations = Relations::new(run_id);
+        let mut content = owned_relations(context, &relations).await;
+        content.insert("response".to_string(), json!(observation.response));
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_record".to_string(),
+            content: Value::Object(content).into(),
+            invariants: Vec::new(),
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_prefix".to_string(),
+                    source_id: format!("{DATABASE}/{}", relations.prefix),
+                    relation: "captured_owned_relations".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_subject_calls".to_string(),
+                },
+            ],
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        if !observation.metrics.complete {
+            return Ok(assessment::prerequisite_failure(
+                ASSESSMENTS,
+                "metrics_complete",
+                "subject metrics are incomplete",
+            ));
+        }
+        let relations = Relations::new(run_id);
+        // `capture` read every owned relation with these exact statements
+        // immediately before this evaluation, so the record is the read: a
+        // second round trip could only observe the same rows.
+        let captured = captured_relations(&observation.deliverables);
+        let mut notes = Vec::new();
+        let mut read = |label: &'static str| match relation_rows(&captured, label) {
+            Ok(rows) => rows,
+            Err(error) => {
+                notes.push(format!("{label} unreadable: {error}"));
+                Vec::new()
+            }
+        };
+        let target = read("target");
+        let quarantine = read("quarantine");
+        let compat = read("compat");
+        let journal = read("journal");
+        let legacy = read("legacy");
+        let sentinel = read("sentinel");
+
+        let target_ok = target_rows_exact(&target);
+        let quarantine_ok = quarantine_rows_exact(&quarantine);
+        let compat_ok = compat_rows_exact(&compat);
+        let journal_ok = journal_rows_exact(&journal);
+        let legacy_ok = legacy_rows_exact(&legacy);
+        let sentinel_ok = sentinel_rows_exact(&sentinel);
+
+        let calls: Vec<_> = common::function_outcomes(&observation.transcript)
+            .into_iter()
+            .filter(|call| !common::is_contract_discovery(&call.function_id))
+            .collect();
+        let writes: Vec<_> = calls
+            .iter()
+            .filter(|call| WRITE_FUNCTIONS.contains(&call.function_id.as_str()))
+            .collect();
+        let transactions = writes
+            .iter()
+            .filter(|call| call.function_id == "database::transaction")
+            .count();
+        let successful_transactions = writes
+            .iter()
+            .filter(|call| {
+                call.function_id == "database::transaction" && call.is_error == Some(false)
+            })
+            .count();
+        let non_transaction_writes = writes.len() - transactions;
+        let foreign: Vec<String> = writes
+            .iter()
+            .flat_map(|call| write_statements(&call.arguments))
+            .flat_map(|sql| foreign_relations(&sql, &relations.prefix))
+            .collect();
+        let reply = observation.response.trim();
+        let reported = reply == EXPECTED_REPORT;
+
+        let exact_migration = target_ok && quarantine_ok && compat_ok;
+        let idempotent = journal_ok && successful_transactions == 2 && target_ok && quarantine_ok;
+        let preserved = legacy_ok && sentinel_ok;
+        let disciplined = !writes.is_empty()
+            && non_transaction_writes == 0
+            && transactions == 2
+            && successful_transactions == 2
+            && foreign.is_empty()
+            && reported;
+
+        Ok(assessment::build_evaluation(
+            if journal_ok {
+                CompletionState::Completed
+            } else {
+                CompletionState::TaskIncomplete
+            },
+            [
+                EXACT_MIGRATION_RESULT.full_or_zero(
+                    exact_migration,
+                    format!(
+                        "target_rows={target_ok}, quarantine_row={quarantine_ok}, compat_rows={compat_ok}; {}",
+                        notes.join("; ")
+                    ),
+                ),
+                IDEMPOTENT_REPLAY.full_or_zero(
+                    idempotent,
+                    format!(
+                        "journal_complete_replay_2={journal_ok}, successful_transactions={successful_transactions}, target_rows={target_ok}, quarantine_row={quarantine_ok}"
+                    ),
+                ),
+                SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
+                    preserved,
+                    format!("legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"),
+                ),
+                TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
+                    disciplined,
+                    format!(
+                        "write_calls={}, transactions={transactions}, successful_transactions={successful_transactions}, non_transaction_writes={non_transaction_writes}, foreign_relations={foreign:?}, exact_report={reported}",
+                        writes.len()
+                    ),
+                ),
+            ],
+        ))
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        execute_batch(context, Relations::new(run_id).drop_statements()).await?;
+        Ok(())
     }
 }
 
@@ -296,95 +500,6 @@ async fn owned_relations(
     content
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let relations = Relations::new(run_id);
-        let mut content = owned_relations(context, &relations).await;
-        content.insert("response".to_string(), json!(observation.response));
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "database_record".to_string(),
-            content: Value::Object(content).into(),
-            invariants: Vec::new(),
-            provenance: vec![
-                ProvenanceEvidence {
-                    kind: "database_prefix".to_string(),
-                    source_id: format!("{DATABASE}/{}", relations.prefix),
-                    relation: "captured_owned_relations".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: observation.metrics.root_session_id.clone(),
-                    relation: "captured_subject_calls".to_string(),
-                },
-            ],
-        }])
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let relations = Relations::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Recover the interrupted `{MIGRATION_ID}` migration in database `{DATABASE}`, then \
-             prove it is idempotent by replaying the same migration once.\n\n\
-             The run-scoped relations already exist:\n\n\
-             - `{legacy}`: six immutable legacy rows with columns `id`, `customer`, \
-             `total_text`, and `status`.\n\
-             - `{target}`: columns `id`, `customer`, `amount_cents`, `status`, and \
-             `source_legacy_id`; legacy row 101 is already copied.\n\
-             - `{quarantine}`: columns `legacy_id`, `customer`, `raw_total`, `status`, and \
-             `reason`; initially empty.\n\
-             - `{journal}`: columns `migration_id`, `status`, `applied_rows`, \
-             `quarantined_rows`, and `replay_count`; it contains an incomplete \
-             `{MIGRATION_ID}` entry.\n\
-             - `{compat}`: the required compatibility view, not created yet.\n\
-             - `{sentinel}`: columns `key` and `value`; unrelated state that must remain \
-             `control=do-not-touch`.\n\n\
-             Inspect `database::transaction` before using it. Perform one idempotent migration \
-             transaction that:\n\n\
-             1. preserves target row 101 and inserts every other valid decimal total exactly \
-             once, converting dollars to integer cents;\n\
-             2. quarantines legacy id 103 exactly once with reason `invalid_total`;\n\
-             3. creates the compatibility view over all six legacy rows with columns `id`, \
-             `customer`, `total_text`, `status`, and `migration_status`, where id 103 is \
-             `quarantined` and every other row is `migrated`;\n\
-             4. sets the journal to `status=complete`, `applied_rows=5`, `quarantined_rows=1`, \
-             and increments `replay_count` by one.\n\n\
-             Then execute that exact logical migration transaction a second time. Both passes \
-             must use `database::transaction`; do not use `database::execute` or \
-             `database::executeBatch` for subject writes. Re-read all six owned relations. The \
-             final state must contain five target rows, one quarantine row, six compatibility \
-             rows, `replay_count=2`, the unchanged six-row legacy source, and the unchanged \
-             sentinel. Use no relation outside prefix `{prefix}`.\n\n\
-             Finish with exactly `{EXPECTED_REPORT}` only if every verification succeeds; \
-             otherwise report `FAIL` and the discrepancy.",
-            legacy = relations.legacy,
-            target = relations.target,
-            quarantine = relations.quarantine,
-            journal = relations.journal,
-            compat = relations.compat,
-            sentinel = relations.sentinel,
-            prefix = relations.prefix,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 24,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(200_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
 async fn execute_batch(context: &E2eContext, statements: Vec<String>) -> anyhow::Result<Value> {
     context
         .trigger_value(
@@ -421,40 +536,6 @@ async fn count(context: &E2eContext, table: &str) -> anyhow::Result<u64> {
         .pointer("/rows/0/n")
         .and_then(Value::as_u64)
         .unwrap_or(0))
-}
-
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let relations = Relations::new(run_id);
-        execute_batch(context, relations.setup_statements()).await?;
-        let legacy = count(context, &relations.legacy).await?;
-        let target = count(context, &relations.target).await?;
-        let journal = query_rows(
-            context,
-            format!(
-                "SELECT status, replay_count FROM {} WHERE migration_id = '{MIGRATION_ID}'",
-                relations.journal
-            ),
-        )
-        .await
-        .map_err(anyhow::Error::msg)?;
-        let sentinel = query_rows(
-            context,
-            format!("SELECT key, value FROM {}", relations.sentinel),
-        )
-        .await
-        .map_err(anyhow::Error::msg)?;
-        if legacy != 6
-            || target != 1
-            || journal != [json!({ "status": "backfill_in_progress", "replay_count": 0 })]
-            || sentinel != [json!({ "key": "control", "value": "do-not-touch" })]
-        {
-            bail!(
-                "database_migration_recovery prepared state mismatch: legacy={legacy}, target={target}, journal={journal:?}, sentinel={sentinel:?}"
-            );
-        }
-        Ok(())
-    })
 }
 
 fn text<'a>(row: &'a Value, column: &str) -> Option<&'a str> {
@@ -626,126 +707,6 @@ fn relation_rows(
             .to_string()),
         _ => Err("relation was not captured".to_string()),
     }
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        if !observation.metrics.complete {
-            return Ok(assessment::prerequisite_failure(
-                ASSESSMENTS,
-                "metrics_complete",
-                "subject metrics are incomplete",
-            ));
-        }
-        let relations = Relations::new(run_id);
-        // `capture` read every owned relation with these exact statements
-        // immediately before this evaluation, so the record is the read: a
-        // second round trip could only observe the same rows.
-        let captured = captured_relations(&observation.deliverables);
-        let mut notes = Vec::new();
-        let mut read = |label: &'static str| match relation_rows(&captured, label) {
-            Ok(rows) => rows,
-            Err(error) => {
-                notes.push(format!("{label} unreadable: {error}"));
-                Vec::new()
-            }
-        };
-        let target = read("target");
-        let quarantine = read("quarantine");
-        let compat = read("compat");
-        let journal = read("journal");
-        let legacy = read("legacy");
-        let sentinel = read("sentinel");
-
-        let target_ok = target_rows_exact(&target);
-        let quarantine_ok = quarantine_rows_exact(&quarantine);
-        let compat_ok = compat_rows_exact(&compat);
-        let journal_ok = journal_rows_exact(&journal);
-        let legacy_ok = legacy_rows_exact(&legacy);
-        let sentinel_ok = sentinel_rows_exact(&sentinel);
-
-        let calls: Vec<_> = common::function_outcomes(&observation.transcript)
-            .into_iter()
-            .filter(|call| !common::is_contract_discovery(&call.function_id))
-            .collect();
-        let writes: Vec<_> = calls
-            .iter()
-            .filter(|call| WRITE_FUNCTIONS.contains(&call.function_id.as_str()))
-            .collect();
-        let transactions = writes
-            .iter()
-            .filter(|call| call.function_id == "database::transaction")
-            .count();
-        let successful_transactions = writes
-            .iter()
-            .filter(|call| {
-                call.function_id == "database::transaction" && call.is_error == Some(false)
-            })
-            .count();
-        let non_transaction_writes = writes.len() - transactions;
-        let foreign: Vec<String> = writes
-            .iter()
-            .flat_map(|call| write_statements(&call.arguments))
-            .flat_map(|sql| foreign_relations(&sql, &relations.prefix))
-            .collect();
-        let reply = observation.response.trim();
-        let reported = reply == EXPECTED_REPORT;
-
-        let exact_migration = target_ok && quarantine_ok && compat_ok;
-        let idempotent = journal_ok && successful_transactions == 2 && target_ok && quarantine_ok;
-        let preserved = legacy_ok && sentinel_ok;
-        let disciplined = !writes.is_empty()
-            && non_transaction_writes == 0
-            && transactions == 2
-            && successful_transactions == 2
-            && foreign.is_empty()
-            && reported;
-
-        Ok(assessment::build_evaluation(
-            if journal_ok {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            [
-                EXACT_MIGRATION_RESULT.full_or_zero(
-                    exact_migration,
-                    format!(
-                        "target_rows={target_ok}, quarantine_row={quarantine_ok}, compat_rows={compat_ok}; {}",
-                        notes.join("; ")
-                    ),
-                ),
-                IDEMPOTENT_REPLAY.full_or_zero(
-                    idempotent,
-                    format!(
-                        "journal_complete_replay_2={journal_ok}, successful_transactions={successful_transactions}, target_rows={target_ok}, quarantine_row={quarantine_ok}"
-                    ),
-                ),
-                SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
-                    preserved,
-                    format!("legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"),
-                ),
-                TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
-                    disciplined,
-                    format!(
-                        "write_calls={}, transactions={transactions}, successful_transactions={successful_transactions}, non_transaction_writes={non_transaction_writes}, foreign_relations={foreign:?}, exact_report={reported}",
-                        writes.len()
-                    ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        execute_batch(context, Relations::new(run_id).drop_statements()).await?;
-        Ok(())
-    })
 }
 
 #[cfg(test)]

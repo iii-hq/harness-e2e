@@ -10,9 +10,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, common, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "minimal_path";
@@ -74,6 +74,7 @@ fn expected(seed: u64) -> Value {
 
 pub struct MinimalPath;
 
+#[async_trait]
 impl Scenario for MinimalPath {
     fn id(&self) -> &'static str {
         ID
@@ -106,55 +107,31 @@ impl Scenario for MinimalPath {
         scenario_for_case(run_id, case.seed)
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let scope = scope(run_id);
+        let _: Value = context
+            .trigger_value(
+                "state::set",
+                json!({ "scope": scope, "key": KEY, "value": baseline() }),
+            )
+            .await?;
+        let stored = common::state_value(
+            context
+                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
+                .await?,
+        );
+        if stored != baseline() {
+            bail!("minimal_path baseline was not established in {scope}/{KEY}: {stored}");
+        }
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn deliverable_contract() -> DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "state_record",
-        json!({
-            "type": "object",
-            "required": ["state", "task_calls", "turns", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let scope = scope(run_id);
         let state = common::state_value(
             context
@@ -190,72 +167,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
-
-fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
-    let scope = scope(run_id);
-    let expected = serde_json::to_string(&expected(seed)).expect("serialize expected value");
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Store exactly `{expected}` in scope `{scope}` under key `{KEY}` using a single \
-             `state::set` call. Then reply with one short confirmation line containing \
-             `{DONE_MARKER}`. Make no other function call except function discovery if it is \
-             necessary."
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 8,
-            max_output_tokens: Some(4_096),
-            max_total_tokens: Some(80_000),
-            stuck_timeout_seconds: 180,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
     }
-}
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let scope = scope(run_id);
-        let _: Value = context
-            .trigger_value(
-                "state::set",
-                json!({ "scope": scope, "key": KEY, "value": baseline() }),
-            )
-            .await?;
-        let stored = common::state_value(
-            context
-                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
-                .await?,
-        );
-        if stored != baseline() {
-            bail!("minimal_path baseline was not established in {scope}/{KEY}: {stored}");
-        }
-        Ok(())
-    })
-}
-
-/// The stored state the capture recorded for this run.
-fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
-    observation
-        .deliverables
-        .iter()
-        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
-        .content
-        .as_json()?
-        .get("state")
-        .cloned()
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !observation.metrics.complete {
             return Ok(assessment::prerequisite_failure(
                 ASSESSMENTS,
@@ -333,11 +252,9 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let _: Value = context
             .trigger_value(
                 "state::delete",
@@ -345,7 +262,55 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             )
             .await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "state_record",
+        json!({
+            "type": "object",
+            "required": ["state", "task_calls", "turns", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
+    let scope = scope(run_id);
+    let expected = serde_json::to_string(&expected(seed)).expect("serialize expected value");
+    ScenarioSpec {
+        id: ID,
+        prompt: format!(
+            "Store exactly `{expected}` in scope `{scope}` under key `{KEY}` using a single \
+             `state::set` call. Then reply with one short confirmation line containing \
+             `{DONE_MARKER}`. Make no other function call except function discovery if it is \
+             necessary."
+        ),
+        filesystem_root: None,
+        execution: ExecutionPolicy {
+            max_turns: 8,
+            max_output_tokens: Some(4_096),
+            max_total_tokens: Some(80_000),
+            stuck_timeout_seconds: 180,
+            max_validation_retries: None,
+        },
+        denied_functions: &[],
+        criteria: assessment::criteria(ASSESSMENTS),
+    }
+}
+
+/// The stored state the capture recorded for this run.
+fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("state")
+        .cloned()
 }
 
 #[cfg(test)]

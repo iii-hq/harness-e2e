@@ -39,10 +39,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
-    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_engine_build";
@@ -148,6 +147,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 pub struct ChessEngineBuild;
 
+#[async_trait]
 impl Scenario for ChessEngineBuild {
     fn id(&self) -> &'static str {
         ID
@@ -185,51 +185,16 @@ impl Scenario for ChessEngineBuild {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = workspace_root(run_id);
-    let engine = engine_path(&root);
-    let readme = root.join("README.md");
-    let protocol = root.join("PROTOCOL.md");
-    let public_perft = root.join("tests/public_perft.py");
-    let public_legalmoves = root.join("tests/public_legalmoves.py");
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"A pinned chess fixture repository has been copied into your workspace at `{root}`.
+        let root = workspace_root(run_id);
+        let engine = engine_path(&root);
+        let readme = root.join("README.md");
+        let protocol = root.join("PROTOCOL.md");
+        let public_perft = root.join("tests/public_perft.py");
+        let public_legalmoves = root.join("tests/public_legalmoves.py");
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"A pinned chess fixture repository has been copied into your workspace at `{root}`.
 
 Read `{readme}` and `{protocol}` first — they describe the repository layout and the exact CLI
 protocol you must preserve.
@@ -251,28 +216,140 @@ In both cases write only that line to stdout, leave stderr empty, and exit 0.
 You may self-check with `python3 {public_perft}` and `python3 {public_legalmoves}`. Do not edit the
 tests, the protocol, or the fixture metadata. When you are done, finish with a one-line note that
 the engine is implemented."#,
-            root = root.display(),
-            readme = readme.display(),
-            protocol = protocol.display(),
-            engine = engine.display(),
-            public_perft = public_perft.display(),
-            public_legalmoves = public_legalmoves.display(),
-        ),
-        filesystem_root: Some(root),
-        // Reasoning subjects spend their whole output budget thinking about
-        // move generation before the first edit: five daily runs ended at
-        // exactly 16 384 reasoning tokens with `stop_reason: end`, no text and
-        // no call, leaving the stubs untouched. The budget has to hold a full
-        // planning turn; the total-token and stuck bounds still cap the run.
-        execution: ExecutionPolicy {
-            max_turns: 48,
-            max_output_tokens: Some(65_536),
-            max_total_tokens: Some(1_000_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &["http::*", "browser::*", "github::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
+                root = root.display(),
+                readme = readme.display(),
+                protocol = protocol.display(),
+                engine = engine.display(),
+                public_perft = public_perft.display(),
+                public_legalmoves = public_legalmoves.display(),
+            ),
+            filesystem_root: Some(root),
+            // Reasoning subjects spend their whole output budget thinking about
+            // move generation before the first edit: five daily runs ended at
+            // exactly 16 384 reasoning tokens with `stop_reason: end`, no text and
+            // no call, leaving the stubs untouched. The budget has to hold a full
+            // planning turn; the total-token and stuck bounds still cap the run.
+            execution: ExecutionPolicy {
+                max_turns: 48,
+                max_output_tokens: Some(65_536),
+                max_total_tokens: Some(1_000_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &["http::*", "browser::*", "github::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        for function in ["coder::read-file", "coder::update-file", "shell::exec"] {
+            if !context.function_exists(function).await? {
+                bail!("required chess-engine build capability '{function}' is unavailable");
+            }
+        }
+
+        prepare_workspace(run_id).await
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let workspace = workspace_root(run_id);
+        let engine = engine_path(&workspace);
+        let source = read_engine_source(&engine);
+        let battery = run_full_battery(&engine).await.ok();
+        let perft_exact = battery.as_ref().is_some_and(BatteryReport::perft_exact);
+        let legal_correct = battery
+            .as_ref()
+            .is_some_and(BatteryReport::legal_moves_correct);
+
+        // Provenance is asserted only once both correctness gates pass.
+        let provenance = if perft_exact && legal_correct {
+            vec![ProvenanceEvidence {
+                kind: "file".to_string(),
+                source_id: ENGINE_RELPATH.to_string(),
+                relation: "authored_engine".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        Ok(vec![CapturedDeliverable {
+            id: ENGINE_SOURCE_ID.to_string(),
+            kind: ENGINE_SOURCE_KIND.to_string(),
+            content: CapturedDeliverableContent::TextUtf8(source),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "perft_exact".to_string(),
+                    passed: perft_exact,
+                    reason: match battery.as_ref() {
+                        Some(battery) => {
+                            reason_over("perft_exact", battery.perft.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
+                        None => "engine battery did not run".to_string(),
+                    },
+                },
+                CapturedInvariant {
+                    id: "legal_moves_correct".to_string(),
+                    passed: legal_correct,
+                    reason: match battery.as_ref() {
+                        Some(battery) => {
+                            reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
+                        None => "engine battery did not run".to_string(),
+                    },
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let engine = engine_path(&workspace_root(run_id));
+        let battery = run_full_battery(&engine).await?;
+        Ok(assessment::build_evaluation(
+            crate::report::CompletionState::Completed,
+            [
+                PERFT_EXACT.full_or_zero(
+                    battery.perft_exact(),
+                    reason_over("perft_exact", battery.perft.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                LEGAL_MOVES_CORRECT.full_or_zero(
+                    battery.legal_moves_correct(),
+                    reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                INTERFACE_CONTRACT.full_or_zero(
+                    battery.interface_contract(),
+                    reason_over("interface_contract", battery.all(), |report| {
+                        report.interface_ok
+                    }),
+                ),
+                BUILD_DISCIPLINE.full_or_zero(
+                    battery.build_discipline(),
+                    reason_over("build_discipline", battery.all(), |report| report.finished),
+                ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        remove_workspace(&workspace_root(run_id))
     }
 }
 
@@ -305,18 +382,6 @@ fn deliverable_contract() -> DeliverableContract {
 }
 
 // --- setup: verify capabilities, validate + copy the frozen fixture ----------
-
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        for function in ["coder::read-file", "coder::update-file", "shell::exec"] {
-            if !context.function_exists(function).await? {
-                bail!("required chess-engine build capability '{function}' is unavailable");
-            }
-        }
-
-        prepare_workspace(run_id).await
-    })
-}
 
 async fn prepare_workspace(run_id: &str) -> Result<()> {
     let fixture = super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
@@ -668,116 +733,13 @@ fn reason_over<'a>(
 
 // --- evaluate: runner-side battery vs kernel oracle --------------------------
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let engine = engine_path(&workspace_root(run_id));
-        let battery = run_full_battery(&engine).await?;
-        Ok(assessment::build_evaluation(
-            crate::report::CompletionState::Completed,
-            [
-                PERFT_EXACT.full_or_zero(
-                    battery.perft_exact(),
-                    reason_over("perft_exact", battery.perft.iter(), |report| {
-                        report.value_ok
-                    }),
-                ),
-                LEGAL_MOVES_CORRECT.full_or_zero(
-                    battery.legal_moves_correct(),
-                    reason_over("legal_moves_correct", battery.legal.iter(), |report| {
-                        report.value_ok
-                    }),
-                ),
-                INTERFACE_CONTRACT.full_or_zero(
-                    battery.interface_contract(),
-                    reason_over("interface_contract", battery.all(), |report| {
-                        report.interface_ok
-                    }),
-                ),
-                BUILD_DISCIPLINE.full_or_zero(
-                    battery.build_discipline(),
-                    reason_over("build_discipline", battery.all(), |report| report.finished),
-                ),
-            ],
-        ))
-    })
-}
-
 // --- capture: read the engine source before cleanup --------------------------
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let workspace = workspace_root(run_id);
-        let engine = engine_path(&workspace);
-        let source = read_engine_source(&engine);
-        let battery = run_full_battery(&engine).await.ok();
-        let perft_exact = battery.as_ref().is_some_and(BatteryReport::perft_exact);
-        let legal_correct = battery
-            .as_ref()
-            .is_some_and(BatteryReport::legal_moves_correct);
-
-        // Provenance is asserted only once both correctness gates pass.
-        let provenance = if perft_exact && legal_correct {
-            vec![ProvenanceEvidence {
-                kind: "file".to_string(),
-                source_id: ENGINE_RELPATH.to_string(),
-                relation: "authored_engine".to_string(),
-            }]
-        } else {
-            Vec::new()
-        };
-
-        Ok(vec![CapturedDeliverable {
-            id: ENGINE_SOURCE_ID.to_string(),
-            kind: ENGINE_SOURCE_KIND.to_string(),
-            content: CapturedDeliverableContent::TextUtf8(source),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "perft_exact".to_string(),
-                    passed: perft_exact,
-                    reason: match battery.as_ref() {
-                        Some(battery) => {
-                            reason_over("perft_exact", battery.perft.iter(), |report| {
-                                report.value_ok
-                            })
-                        }
-                        None => "engine battery did not run".to_string(),
-                    },
-                },
-                CapturedInvariant {
-                    id: "legal_moves_correct".to_string(),
-                    passed: legal_correct,
-                    reason: match battery.as_ref() {
-                        Some(battery) => {
-                            reason_over("legal_moves_correct", battery.legal.iter(), |report| {
-                                report.value_ok
-                            })
-                        }
-                        None => "engine battery did not run".to_string(),
-                    },
-                },
-            ],
-            provenance,
-        }])
-    })
-}
 
 fn read_engine_source(engine_path: &Path) -> String {
     fs::read_to_string(engine_path).unwrap_or_default()
 }
 
 // --- cleanup: guarded removal of the copied workspace ------------------------
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move { remove_workspace(&workspace_root(run_id)) })
-}
 
 fn workspace_root(run_id: &str) -> PathBuf {
     let base = std::env::var_os("HARNESS_E2E_RUN_DIR")

@@ -31,10 +31,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common::{self, ObservedFunctionCall};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "context_pressure";
@@ -163,8 +162,42 @@ fn report_header(segments: u32) -> String {
 
 /// The temporary document server: registered on the suite's own engine
 /// connection, alive exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+pub struct ContextPressure;
+
+#[async_trait]
+impl Scenario for ContextPressure {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "segments": RUNG.segments,
+                "segment_chars": SEGMENT_CHARS,
+                "report_header": report_header(RUNG.segments),
+                "token_derivation": "run-scoped",
+            }),
+            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, RUNG)
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let charter_body = charter(run_id);
         context.client().register_function(
             charter_function_id(run_id),
@@ -214,63 +247,76 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             ),
         );
         Ok(())
-    })
-}
-
-pub struct ContextPressure;
-
-impl Scenario for ContextPressure {
-    fn id(&self) -> &'static str {
-        ID
     }
 
-    fn canonical_seed(&self) -> u64 {
-        CANONICAL_SEED
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let segments = case_segments(&observation.case)?;
+        let calls = common::function_calls(&observation.transcript);
+        let ingestion = ingestion_audit(run_id, segments, &calls);
+        let report = report_audit(&observation.response, run_id, segments);
+        let provenance = if report.charter_preserved && report.needles_ordered {
+            vec![
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: charter_function_id(run_id),
+                    relation: "planted_charter".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: segment_function_id(run_id),
+                    relation: "served_segments".to_string(),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "context_report".to_string(),
+            content: json!({
+                "content": observation.response,
+                "segments": segments,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "charter_preserved".to_string(),
+                    passed: report.charter_preserved,
+                    reason: "planted charter facts compared verbatim with the report".to_string(),
+                },
+                CapturedInvariant {
+                    id: "needles_recovered".to_string(),
+                    passed: report.needles_ordered,
+                    reason: format!(
+                        "missing {} of {segments} needle(s), order checked",
+                        report.missing_needles
+                    ),
+                },
+                CapturedInvariant {
+                    id: "ingestion_complete".to_string(),
+                    passed: ingestion.charter_first && ingestion.segments_exact,
+                    reason: format!(
+                        "charter first={}, {}/{segments} exact segment call(s)",
+                        ingestion.charter_first, ingestion.segment_calls
+                    ),
+                },
+            ],
+            provenance,
+        }])
     }
 
-    fn canonical_seed_only(&self) -> bool {
-        true
-    }
-
-    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
-        ScenarioCase::new(
-            ID,
-            CANONICAL_SEED,
-            json!({
-                "segments": RUNG.segments,
-                "segment_chars": SEGMENT_CHARS,
-                "report_header": report_header(RUNG.segments),
-                "token_derivation": "run-scoped",
-            }),
-            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
-            deliverable_contract(),
-        )
-    }
-
-    fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id, RUNG)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_rung(observation, run_id)
     }
 }
 
@@ -420,14 +466,6 @@ fn report_budget_chars(segments: u32) -> usize {
     1_024 + 64 * segments as usize
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_rung(observation, run_id) })
-}
-
 fn evaluate_rung(
     observation: &ScenarioObservation,
     run_id: &str,
@@ -489,68 +527,6 @@ fn evaluate_rung(
             ),
         ],
     ))
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let segments = case_segments(&observation.case)?;
-        let calls = common::function_calls(&observation.transcript);
-        let ingestion = ingestion_audit(run_id, segments, &calls);
-        let report = report_audit(&observation.response, run_id, segments);
-        let provenance = if report.charter_preserved && report.needles_ordered {
-            vec![
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: charter_function_id(run_id),
-                    relation: "planted_charter".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: segment_function_id(run_id),
-                    relation: "served_segments".to_string(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "context_report".to_string(),
-            content: json!({
-                "content": observation.response,
-                "segments": segments,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "charter_preserved".to_string(),
-                    passed: report.charter_preserved,
-                    reason: "planted charter facts compared verbatim with the report".to_string(),
-                },
-                CapturedInvariant {
-                    id: "needles_recovered".to_string(),
-                    passed: report.needles_ordered,
-                    reason: format!(
-                        "missing {} of {segments} needle(s), order checked",
-                        report.missing_needles
-                    ),
-                },
-                CapturedInvariant {
-                    id: "ingestion_complete".to_string(),
-                    passed: ingestion.charter_first && ingestion.segments_exact,
-                    reason: format!(
-                        "charter first={}, {}/{segments} exact segment call(s)",
-                        ingestion.charter_first, ingestion.segment_calls
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
 }
 
 fn deliverable_contract() -> DeliverableContract {

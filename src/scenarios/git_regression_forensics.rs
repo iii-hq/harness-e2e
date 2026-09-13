@@ -23,10 +23,9 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "git_regression_forensics";
@@ -235,6 +234,7 @@ impl Snapshot {
 /// A bisect investigation over a frozen snapshot of a real public repository.
 pub struct GitRegressionForensics;
 
+#[async_trait]
 impl Scenario for GitRegressionForensics {
     fn id(&self) -> &'static str {
         ID
@@ -263,51 +263,16 @@ impl Scenario for GitRegressionForensics {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = workspace_root(run_id);
-    let bundle = root.join(BUNDLE_RELATIVE_PATH);
-    let probe = root.join(PROBE_RELATIVE_PATH);
-    let checkout = root.join(CHECKOUT_RELATIVE_PATH);
-    let trace = root.join(TRACE_RELATIVE_PATH);
-    let report = root.join(REPORT_RELATIVE_PATH);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Investigate a regression in the supplied immutable snapshot of the real repository
+        let root = workspace_root(run_id);
+        let bundle = root.join(BUNDLE_RELATIVE_PATH);
+        let probe = root.join(PROBE_RELATIVE_PATH);
+        let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+        let trace = root.join(TRACE_RELATIVE_PATH);
+        let report = root.join(REPORT_RELATIVE_PATH);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Investigate a regression in the supplied immutable snapshot of the real repository
 `coderefinery/git-bisect-exercise`.
 
 The exercise is network-independent: use only the local Git bundle `{bundle}`. The original
@@ -338,30 +303,162 @@ upstream URL in the public case manifest is provenance, not an instruction to co
 Do not claim that host networking was technically blocked; report only that the supplied fixture
 did not require upstream access. Finish only after the JSON report exists and the checkout is
 clean at the known-bad revision."#,
-            bundle = bundle.display(),
-            checkout = checkout.display(),
-            manifest = root.join(MANIFEST_RELATIVE_PATH).display(),
-            good = GOOD_SHA,
-            bad = BAD_SHA,
-            probe = probe.display(),
-            trace = trace.display(),
-            report = report.display(),
-        ),
-        filesystem_root: Some(root),
-        execution: ExecutionPolicy {
-            max_turns: 30,
-            max_output_tokens: Some(12_288),
-            max_total_tokens: Some(600_000),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+                bundle = bundle.display(),
+                checkout = checkout.display(),
+                manifest = root.join(MANIFEST_RELATIVE_PATH).display(),
+                good = GOOD_SHA,
+                bad = BAD_SHA,
+                probe = probe.display(),
+                trace = trace.display(),
+                report = report.display(),
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                max_turns: 30,
+                max_output_tokens: Some(12_288),
+                max_total_tokens: Some(600_000),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
-}
 
-fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move { prepare_workspace(&workspace_root(run_id)).await })
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        prepare_workspace(&workspace_root(run_id)).await
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let snapshot = collect_snapshot(&workspace_root(run_id), observation).await;
+        Ok(vec![
+            CapturedDeliverable {
+                id: ACQUISITION_ID.to_string(),
+                kind: "git_repository_acquisition".to_string(),
+                content: acquisition_content(&snapshot).into(),
+                invariants: vec![CapturedInvariant {
+                    id: "repository_bundle_and_clone_verified".to_string(),
+                    passed: snapshot.acquisition_passed(),
+                    reason: acquisition_reason(&snapshot),
+                }],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "git_repository".to_string(),
+                    source_id:
+                        "coderefinery/git-bisect-exercise@15c23f04e5a168ba347b495c166b63775cc63599"
+                            .to_string(),
+                    relation: "materialized_from_verified_bundle".to_string(),
+                }],
+            },
+            CapturedDeliverable {
+                id: TRACE_ID.to_string(),
+                kind: "git_probe_trace".to_string(),
+                content: trace_content(&snapshot).into(),
+                invariants: vec![CapturedInvariant {
+                    id: "good_and_bad_endpoints_reproduced".to_string(),
+                    passed: snapshot.endpoints_passed(),
+                    reason: endpoint_reason(&snapshot),
+                }],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "executed_revision_probes".to_string(),
+                }],
+            },
+            CapturedDeliverable {
+                id: REPORT_ID.to_string(),
+                kind: "git_forensics_report".to_string(),
+                content: report_content(&snapshot).into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "first_bad_boundary_verified".to_string(),
+                        passed: snapshot.culprit_passed(),
+                        reason: culprit_reason(&snapshot),
+                    },
+                    CapturedInvariant {
+                        id: "report_evidence_resolves".to_string(),
+                        passed: snapshot.evidence_passed(),
+                        reason: evidence_reason(&snapshot),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "git_commit".to_string(),
+                    source_id: snapshot
+                        .report
+                        .as_ref()
+                        .map(|report| report.culprit_sha.clone())
+                        .unwrap_or_else(|| "unresolved".to_string()),
+                    relation: "reported_as_first_bad".to_string(),
+                }],
+            },
+        ])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let snapshot = collect_snapshot(&workspace_root(run_id), observation).await;
+        let acquisition = snapshot.acquisition_passed();
+        let endpoints = snapshot.endpoints_passed();
+        let culprit = snapshot.culprit_passed();
+        let evidence = snapshot.evidence_passed();
+        let efficiency_points = efficiency_points(&snapshot, observation);
+        Ok(assessment::build_evaluation(
+            if evidence {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                REPOSITORY_ACQUIRED.full_or_zero(
+                    acquisition,
+                    criterion_reason(
+                        acquisition_observed(&snapshot),
+                        acquisition_scoring_reason(&snapshot),
+                    ),
+                ),
+                ENDPOINTS_REPRODUCED.full_or_zero(
+                    endpoints,
+                    criterion_reason(
+                        endpoints_observed(&snapshot),
+                        endpoints_scoring_reason(&snapshot),
+                    ),
+                ),
+                FIRST_BAD_IDENTIFIED.full_or_zero(
+                    culprit,
+                    criterion_reason(
+                        culprit_observed(&snapshot),
+                        culprit_scoring_reason(&snapshot),
+                    ),
+                ),
+                EVIDENCE_GROUNDED.full_or_zero(
+                    evidence,
+                    criterion_reason(
+                        evidence_observed(&snapshot),
+                        evidence_scoring_reason(&snapshot),
+                    ),
+                ),
+                SEARCH_EFFICIENCY.award(
+                    efficiency_points,
+                    criterion_reason(
+                        efficiency_observed(&snapshot, observation),
+                        efficiency_scoring_reason(&snapshot, observation, efficiency_points),
+                    ),
+                )?,
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        remove_directory(&workspace_root(run_id))
+    }
 }
 
 async fn prepare_workspace(root: &Path) -> Result<()> {
@@ -534,76 +631,6 @@ async fn validate_fixture(root: &Path, checkout: &Path) -> Result<()> {
     Ok(())
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let snapshot = collect_snapshot(&workspace_root(run_id), observation).await;
-        Ok(vec![
-            CapturedDeliverable {
-                id: ACQUISITION_ID.to_string(),
-                kind: "git_repository_acquisition".to_string(),
-                content: acquisition_content(&snapshot).into(),
-                invariants: vec![CapturedInvariant {
-                    id: "repository_bundle_and_clone_verified".to_string(),
-                    passed: snapshot.acquisition_passed(),
-                    reason: acquisition_reason(&snapshot),
-                }],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "git_repository".to_string(),
-                    source_id:
-                        "coderefinery/git-bisect-exercise@15c23f04e5a168ba347b495c166b63775cc63599"
-                            .to_string(),
-                    relation: "materialized_from_verified_bundle".to_string(),
-                }],
-            },
-            CapturedDeliverable {
-                id: TRACE_ID.to_string(),
-                kind: "git_probe_trace".to_string(),
-                content: trace_content(&snapshot).into(),
-                invariants: vec![CapturedInvariant {
-                    id: "good_and_bad_endpoints_reproduced".to_string(),
-                    passed: snapshot.endpoints_passed(),
-                    reason: endpoint_reason(&snapshot),
-                }],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: observation.metrics.root_session_id.clone(),
-                    relation: "executed_revision_probes".to_string(),
-                }],
-            },
-            CapturedDeliverable {
-                id: REPORT_ID.to_string(),
-                kind: "git_forensics_report".to_string(),
-                content: report_content(&snapshot).into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "first_bad_boundary_verified".to_string(),
-                        passed: snapshot.culprit_passed(),
-                        reason: culprit_reason(&snapshot),
-                    },
-                    CapturedInvariant {
-                        id: "report_evidence_resolves".to_string(),
-                        passed: snapshot.evidence_passed(),
-                        reason: evidence_reason(&snapshot),
-                    },
-                ],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "git_commit".to_string(),
-                    source_id: snapshot
-                        .report
-                        .as_ref()
-                        .map(|report| report.culprit_sha.clone())
-                        .unwrap_or_else(|| "unresolved".to_string()),
-                    relation: "reported_as_first_bad".to_string(),
-                }],
-            },
-        ])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![
@@ -683,69 +710,6 @@ fn deliverable_contract() -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let snapshot = collect_snapshot(&workspace_root(run_id), observation).await;
-        let acquisition = snapshot.acquisition_passed();
-        let endpoints = snapshot.endpoints_passed();
-        let culprit = snapshot.culprit_passed();
-        let evidence = snapshot.evidence_passed();
-        let efficiency_points = efficiency_points(&snapshot, observation);
-        Ok(assessment::build_evaluation(
-            if evidence {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                REPOSITORY_ACQUIRED.full_or_zero(
-                    acquisition,
-                    criterion_reason(
-                        acquisition_observed(&snapshot),
-                        acquisition_scoring_reason(&snapshot),
-                    ),
-                ),
-                ENDPOINTS_REPRODUCED.full_or_zero(
-                    endpoints,
-                    criterion_reason(
-                        endpoints_observed(&snapshot),
-                        endpoints_scoring_reason(&snapshot),
-                    ),
-                ),
-                FIRST_BAD_IDENTIFIED.full_or_zero(
-                    culprit,
-                    criterion_reason(
-                        culprit_observed(&snapshot),
-                        culprit_scoring_reason(&snapshot),
-                    ),
-                ),
-                EVIDENCE_GROUNDED.full_or_zero(
-                    evidence,
-                    criterion_reason(
-                        evidence_observed(&snapshot),
-                        evidence_scoring_reason(&snapshot),
-                    ),
-                ),
-                SEARCH_EFFICIENCY.award(
-                    efficiency_points,
-                    criterion_reason(
-                        efficiency_observed(&snapshot, observation),
-                        efficiency_scoring_reason(&snapshot, observation, efficiency_points),
-                    ),
-                )?,
-            ],
-        ))
-    })
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move { remove_directory(&workspace_root(run_id)) })
 }
 
 async fn collect_snapshot(root: &Path, observation: &ScenarioObservation) -> Snapshot {

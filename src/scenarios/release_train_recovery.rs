@@ -7,8 +7,8 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    Capability, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    ExecutionRealism, HumanHorizon, Scenario, ScenarioCase, ScenarioCharacterization,
+    async_trait, Capability, CriterionSpec, DeliverableContract, ExecutionPolicy, ExecutionRealism,
+    HumanHorizon, ObjectiveEvaluation, Scenario, ScenarioCase, ScenarioCharacterization,
     ScenarioExecutionKind, ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
@@ -56,6 +56,7 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 
 pub struct ReleaseTrainRecovery;
 
+#[async_trait]
 impl Scenario for ReleaseTrainRecovery {
     fn id(&self) -> &'static str {
         ID
@@ -143,24 +144,14 @@ impl Scenario for ReleaseTrainRecovery {
         }
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        adaptive_only_evaluator(context, observation, run_id)
-    }
-}
-
-fn adaptive_only_evaluator<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    _run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
         bail!("release_train_recovery must run through the registered AdaptiveFlow driver")
-    })
+    }
 }
 
 #[cfg(test)]

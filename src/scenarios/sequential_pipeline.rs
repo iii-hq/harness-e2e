@@ -14,9 +14,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, common, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "sequential_pipeline";
@@ -109,6 +109,7 @@ fn expected_results() -> [(&'static str, Value); 3] {
 
 pub struct SequentialPipeline;
 
+#[async_trait]
 impl Scenario for SequentialPipeline {
     fn id(&self) -> &'static str {
         ID
@@ -133,58 +134,67 @@ impl Scenario for SequentialPipeline {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
+        let scope = scope(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "Complete a strictly sequential three-stage pipeline in state scope `{scope}`. The \
+                 stage contracts are hidden from this session and must be read at runtime.\n\n\
+                 1. Read key `{STAGE_INGEST}` with `state::get`. Copy its `accepts` and `issues` \
+                 values into one `state::set` at key `{RESULT_INGEST}` with exact value \
+                 `{{\"stage\":\"ingest\",\"accepted\":\"<accepts>\",\"issued\":\"<issues>\"}}`.\n\
+                 2. Only after that write succeeds, read key `{STAGE_REFINE}`. Verify that its \
+                 `accepts` equals the `issued` value from the ingest result, then write key \
+                 `{RESULT_REFINE}` with exact value \
+                 `{{\"stage\":\"refine\",\"accepted\":\"<accepts>\",\"issued\":\"<issues>\"}}`.\n\
+                 3. Only after that write succeeds, read key `{STAGE_PUBLISH}`. Verify that its \
+                 `accepts` equals the `issued` value from the refine result, then write key \
+                 `{PIPELINE_RECEIPT}` with exact value \
+                 `{{\"stage\":\"publish\",\"accepted\":\"<accepts>\",\"receipt\":\"<receipt>\"}}`.\n\n\
+                 Call each stage read and result write exactly once, in this order. Make no other \
+                 state call and do not access another scope. Finish with one short line containing \
+                 the exact receipt read from the publish contract."
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(160_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
-        Some(setup(context, run_id))
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let scope = scope(run_id);
+        for (key, value) in contracts() {
+            let _: Value = context
+                .trigger_value(
+                    "state::set",
+                    json!({ "scope": scope, "key": key, "value": value }),
+                )
+                .await?;
+            let stored = common::state_value(
+                context
+                    .trigger_value("state::get", json!({ "scope": scope, "key": key }))
+                    .await?,
+            );
+            if stored != value {
+                bail!("sequential_pipeline contract {scope}/{key} was not established: {stored}");
+            }
+        }
+        Ok(())
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn deliverable_contract() -> DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "state_record",
-        json!({
-            "type": "object",
-            "required": ["contracts", "results", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let scope = scope(run_id);
         let mut contracts = serde_json::Map::new();
         for key in [STAGE_INGEST, STAGE_REFINE, STAGE_PUBLISH] {
@@ -217,108 +227,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let scope = scope(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Complete a strictly sequential three-stage pipeline in state scope `{scope}`. The \
-             stage contracts are hidden from this session and must be read at runtime.\n\n\
-             1. Read key `{STAGE_INGEST}` with `state::get`. Copy its `accepts` and `issues` \
-             values into one `state::set` at key `{RESULT_INGEST}` with exact value \
-             `{{\"stage\":\"ingest\",\"accepted\":\"<accepts>\",\"issued\":\"<issues>\"}}`.\n\
-             2. Only after that write succeeds, read key `{STAGE_REFINE}`. Verify that its \
-             `accepts` equals the `issued` value from the ingest result, then write key \
-             `{RESULT_REFINE}` with exact value \
-             `{{\"stage\":\"refine\",\"accepted\":\"<accepts>\",\"issued\":\"<issues>\"}}`.\n\
-             3. Only after that write succeeds, read key `{STAGE_PUBLISH}`. Verify that its \
-             `accepts` equals the `issued` value from the refine result, then write key \
-             `{PIPELINE_RECEIPT}` with exact value \
-             `{{\"stage\":\"publish\",\"accepted\":\"<accepts>\",\"receipt\":\"<receipt>\"}}`.\n\n\
-             Call each stage read and result write exactly once, in this order. Make no other \
-             state call and do not access another scope. Finish with one short line containing \
-             the exact receipt read from the publish contract."
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(160_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
     }
-}
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let scope = scope(run_id);
-        for (key, value) in contracts() {
-            let _: Value = context
-                .trigger_value(
-                    "state::set",
-                    json!({ "scope": scope, "key": key, "value": value }),
-                )
-                .await?;
-            let stored = common::state_value(
-                context
-                    .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-                    .await?,
-            );
-            if stored != value {
-                bail!("sequential_pipeline contract {scope}/{key} was not established: {stored}");
-            }
-        }
-        Ok(())
-    })
-}
-
-async fn read_key(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
-    Ok(common::state_value(
-        context
-            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
-            .await?,
-    ))
-}
-
-/// Every `SEQ-…` token in the response, trimmed of surrounding punctuation.
-fn sequence_tokens(text: &str) -> BTreeSet<String> {
-    text.split(|character: char| {
-        character.is_whitespace()
-            || matches!(
-                character,
-                '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '*'
-            )
-    })
-    .map(|token| token.trim_end_matches('.'))
-    .filter(|token| token.starts_with("SEQ-"))
-    .map(str::to_string)
-    .collect()
-}
-
-/// The pipeline result keys the capture stored for this run.
-fn captured_results(observation: &ScenarioObservation) -> Option<Value> {
-    observation
-        .deliverables
-        .iter()
-        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
-        .content
-        .as_json()?
-        .get("results")
-        .cloned()
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !observation.metrics.complete {
             return Ok(assessment::prerequisite_failure(
                 ASSESSMENTS,
@@ -420,11 +336,9 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let scope = scope(run_id);
         for key in ALL_KEYS {
             let _: Value = context
@@ -432,7 +346,54 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
                 .await?;
         }
         Ok(())
+    }
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "state_record",
+        json!({
+            "type": "object",
+            "required": ["contracts", "results", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+async fn read_key(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
+    Ok(common::state_value(
+        context
+            .trigger_value("state::get", json!({ "scope": scope, "key": key }))
+            .await?,
+    ))
+}
+
+/// Every `SEQ-…` token in the response, trimmed of surrounding punctuation.
+fn sequence_tokens(text: &str) -> BTreeSet<String> {
+    text.split(|character: char| {
+        character.is_whitespace()
+            || matches!(
+                character,
+                '`' | '"' | '\'' | ',' | ';' | ':' | '(' | ')' | '[' | ']' | '{' | '}' | '*'
+            )
     })
+    .map(|token| token.trim_end_matches('.'))
+    .filter(|token| token.starts_with("SEQ-"))
+    .map(str::to_string)
+    .collect()
+}
+
+/// The pipeline result keys the capture stored for this run.
+fn captured_results(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("results")
+        .cloned()
 }
 
 #[cfg(test)]

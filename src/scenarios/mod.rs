@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use anyhow::{bail, Result};
+pub use async_trait::async_trait;
 use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -78,16 +77,11 @@ pub use domain::{
     ScenarioCase, ScenarioCharacterization, ScenarioRealism, ShadowMode,
 };
 
-pub type EvaluationFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<ObjectiveEvaluation>> + Send + 'a>>;
-pub type DeliverableCaptureFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<CapturedDeliverable>>> + Send + 'a>>;
-pub type CleanupFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
-
 /// One registered E2E test. The registry below holds a `&'static dyn Scenario`
 /// per id; materialization, digest sealing and validation are generic, so a
 /// module only states what is its own: the case, the spec, and the hooks it
 /// actually uses.
+#[async_trait]
 pub trait Scenario: Send + Sync {
     /// The registered id, equal to the `ScenarioId` string.
     fn id(&self) -> &'static str;
@@ -132,35 +126,33 @@ pub trait Scenario: Send + Sync {
     fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
         Vec::new()
     }
+    /// The attempt-owned filesystem root that `setup` prepared for the
+    /// subject, when the scenario allocates one.
+    fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
     /// Runs before the prompt is sent; a failure aborts the run.
-    fn setup<'a>(
-        &'a self,
-        _context: &'a E2eContext,
-        _run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        None
+    async fn setup(&self, _context: &E2eContext, _run_id: &str) -> Result<()> {
+        Ok(())
     }
-    /// Captures the deliverables the contract declares, before cleanup.
-    fn capture<'a>(
-        &'a self,
-        _context: &'a E2eContext,
-        _observation: &'a ScenarioObservation,
-        _run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        None
+    /// Captures the deliverables the case declares, before cleanup. The suite
+    /// calls it only when the deliverable contract declares artifacts.
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        Ok(Vec::new())
     }
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a>;
-    fn cleanup<'a>(
-        &'a self,
-        _context: &'a E2eContext,
-        _run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        None
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation>;
+    async fn cleanup(&self, _context: &E2eContext, _run_id: &str) -> Result<()> {
+        Ok(())
     }
 }
 
@@ -537,29 +529,6 @@ impl ScenarioId {
     }
 }
 
-fn module_for(scenario_id: &str) -> Option<&'static dyn Scenario> {
-    scenario_id
-        .parse::<ScenarioId>()
-        .ok()
-        .map(ScenarioId::module)
-}
-
-pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
-    module_for(scenario_id)
-        .map(|module| module.required_functions(run_id))
-        .unwrap_or_default()
-}
-
-pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>> {
-    module_for(scenario_id).and_then(|module| module.allowed_functions(run_id))
-}
-
-pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
-    module_for(scenario_id)
-        .map(|module| module.dialogue_followups(run_id))
-        .unwrap_or_default()
-}
-
 impl std::fmt::Display for ScenarioId {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(self.as_str())
@@ -626,32 +595,8 @@ pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
 mod tests {
     use std::collections::HashSet;
 
-    use crate::wire::{SessionMetricsPayload, SessionMetricsResponse};
-
     use super::*;
 
-    /// Whether a module declares a deliverable capture hook; the hook is
-    /// asked for its future without running it.
-    fn captures_deliverables(module: &'static dyn Scenario, case: &ScenarioCase) -> bool {
-        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
-        let observation = ScenarioObservation {
-            case: case.clone(),
-            metrics: SessionMetricsResponse::from_normalized(SessionMetricsPayload {
-                root_session_id: "probe".into(),
-                complete: true,
-                totals: Default::default(),
-                by_session: Vec::new(),
-                traces: None,
-            }),
-            transcript: Value::Null,
-            response: String::new(),
-            deliverables: Vec::new(),
-        };
-        let capture = module.capture(&context, &observation, "probe");
-        let captures = capture.is_some();
-        drop(capture);
-        captures
-    }
     #[test]
     fn registry_contains_sixty_eight_unique_valid_scenarios() {
         let mut ids = HashSet::new();
@@ -737,7 +682,7 @@ mod tests {
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
             assert!(
-                captures_deliverables(first.module, &first.case),
+                !first.case.deliverable_contract.artifacts.is_empty(),
                 "{scenario:?}"
             );
             assert!(
@@ -759,7 +704,7 @@ mod tests {
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
             assert!(
-                captures_deliverables(first.module, &first.case),
+                !first.case.deliverable_contract.artifacts.is_empty(),
                 "{scenario:?}"
             );
             assert!(
@@ -782,7 +727,7 @@ mod tests {
         ] {
             let materialized = scenario.materialize("delegation", 211).unwrap();
             assert!(
-                captures_deliverables(materialized.module, &materialized.case),
+                !materialized.case.deliverable_contract.artifacts.is_empty(),
                 "{scenario:?}"
             );
             assert!(
@@ -818,12 +763,11 @@ mod tests {
                 } else {
                     assert!(first.case.deliverable_contract.artifacts.is_empty());
                 }
-                assert!(!captures_deliverables(first.module, &first.case));
                 continue;
             }
 
             assert!(
-                captures_deliverables(first.module, &first.case),
+                !first.case.deliverable_contract.artifacts.is_empty(),
                 "{scenario:?}"
             );
             assert!(

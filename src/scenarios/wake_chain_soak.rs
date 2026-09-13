@@ -35,10 +35,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "wake_chain_soak";
@@ -118,6 +117,7 @@ fn report_completes(response: &str, ticks: u8) -> bool {
 
 pub struct WakeChainSoak;
 
+#[async_trait]
 impl Scenario for WakeChainSoak {
     fn id(&self) -> &'static str {
         ID
@@ -153,59 +153,134 @@ impl Scenario for WakeChainSoak {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id, RUNG)
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names, RUNG.ticks),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                // One live turn plus one woken turn per tick, with slack for
+                // discovery and the odd re-prompt.
+                max_turns: 8 + 2 * u32::from(RUNG.ticks),
+                max_output_tokens: Some(32_768),
+                // Unbounded on purpose: a soak run is long because the subject
+                // waits, not because it spends. Capping total tokens would turn
+                // scheduler endurance into a token-budget test; spend still shows
+                // up in the Efficiency dimension.
+                max_total_tokens: None,
+                // Each tick resolves in about five seconds, so 120 seconds with
+                // no observable progress is decisively stuck rather than waiting.
+                stuck_timeout_seconds: 120,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
 
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let ticks = case_ticks(&observation.case)?;
+        let observed = observed_counter(context, &names).await?;
+        let final_count = observed.get("count").and_then(Value::as_i64).unwrap_or(-1);
+        let wake = wake_audit(&observation.transcript, &names, ticks);
+        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+        let counter_final = observed == json!({ "count": ticks });
+        let reported = report_completes(&observation.response, ticks);
+        let chain_completed = counter_final && reported;
+        let wake_integrity = wake.registrations_exact && wake.fired_exact && active_bindings == 0;
+        let provenance = if chain_completed && wake_integrity {
+            vec![ProvenanceEvidence {
+                kind: "session".to_string(),
+                source_id: names.root_session.clone(),
+                relation: "sustained_wake_chain".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "soak_trace".to_string(),
+            content: json!({
+                "ticks": ticks,
+                "final_count": final_count,
+                "registrations": wake.tick_registrations,
+                "fired": wake.tick_fired,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "chain_completed".to_string(),
+                    passed: chain_completed,
+                    reason: format!(
+                        "final_counter={observed}, expected_count={ticks}, \
+                         marker_present={reported}"
+                    ),
+                },
+                CapturedInvariant {
+                    id: "wake_integrity".to_string(),
+                    passed: wake_integrity,
+                    reason: format!(
+                        "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} \
+                         (retired={}), active_bindings={active_bindings}",
+                        wake.registration_calls,
+                        wake.tick_registrations,
+                        wake.tick_fired,
+                        wake.retired_fired
+                    ),
+                },
+            ],
+            provenance,
+        }])
     }
 
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_chain(context, observation, run_id).await
     }
 
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names, rung.ticks),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            // One live turn plus one woken turn per tick, with slack for
-            // discovery and the odd re-prompt.
-            max_turns: 8 + 2 * u32::from(rung.ticks),
-            max_output_tokens: Some(32_768),
-            // Unbounded on purpose: a soak run is long because the subject
-            // waits, not because it spends. Capping total tokens would turn
-            // scheduler endurance into a token-budget test; spend still shows
-            // up in the Efficiency dimension.
-            max_total_tokens: None,
-            // Each tick resolves in about five seconds, so 120 seconds with
-            // no observable progress is decisively stuck rather than waiting.
-            stuck_timeout_seconds: 120,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        let _: Value = context
+            .trigger(
+                "state::delete",
+                json!({ "scope": names.scope, "key": COUNTER_KEY }),
+            )
+            .await?;
+        Ok(())
     }
 }
 
@@ -533,14 +608,6 @@ fn wake_audit(transcript: &Value, names: &Names, ticks: u8) -> WakeAudit {
     }
 }
 
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_chain(context, observation, run_id).await })
-}
-
 async fn evaluate_chain(
     context: &E2eContext,
     observation: &ScenarioObservation,
@@ -629,69 +696,6 @@ async fn evaluate_chain(
     ))
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let ticks = case_ticks(&observation.case)?;
-        let observed = observed_counter(context, &names).await?;
-        let final_count = observed.get("count").and_then(Value::as_i64).unwrap_or(-1);
-        let wake = wake_audit(&observation.transcript, &names, ticks);
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let counter_final = observed == json!({ "count": ticks });
-        let reported = report_completes(&observation.response, ticks);
-        let chain_completed = counter_final && reported;
-        let wake_integrity = wake.registrations_exact && wake.fired_exact && active_bindings == 0;
-        let provenance = if chain_completed && wake_integrity {
-            vec![ProvenanceEvidence {
-                kind: "session".to_string(),
-                source_id: names.root_session.clone(),
-                relation: "sustained_wake_chain".to_string(),
-            }]
-        } else {
-            Vec::new()
-        };
-
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "soak_trace".to_string(),
-            content: json!({
-                "ticks": ticks,
-                "final_count": final_count,
-                "registrations": wake.tick_registrations,
-                "fired": wake.tick_fired,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "chain_completed".to_string(),
-                    passed: chain_completed,
-                    reason: format!(
-                        "final_counter={observed}, expected_count={ticks}, \
-                         marker_present={reported}"
-                    ),
-                },
-                CapturedInvariant {
-                    id: "wake_integrity".to_string(),
-                    passed: wake_integrity,
-                    reason: format!(
-                        "registrations={}/{ticks} (tick-labeled={}), fired={}/{ticks} \
-                         (retired={}), active_bindings={active_bindings}",
-                        wake.registration_calls,
-                        wake.tick_registrations,
-                        wake.tick_fired,
-                        wake.retired_fired
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract(ticks: u8) -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -730,42 +734,6 @@ fn deliverable_contract(ticks: u8) -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        let _: Value = context
-            .trigger(
-                "state::delete",
-                json!({ "scope": names.scope, "key": COUNTER_KEY }),
-            )
-            .await?;
-        Ok(())
-    })
 }
 
 struct Names {

@@ -9,8 +9,8 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CriterionSpec,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    CriterionSpec, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
     ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization, ScenarioExecutionKind,
     ScenarioId, ScenarioObservation, ScenarioSpec,
 };
@@ -106,6 +106,7 @@ pub fn is_swe(scenario: ScenarioId) -> bool {
 /// One SWE ticket, or the continuous journey, identified by its registered id.
 pub struct SweService(pub ScenarioId);
 
+#[async_trait]
 impl Scenario for SweService {
     fn id(&self) -> &'static str {
         self.0.as_str()
@@ -164,45 +165,39 @@ impl Scenario for SweService {
     }
 
     fn spec(&self, _run_id: &str) -> ScenarioSpec {
-        spec(self.0)
+        let case = Case::from_scenario(self.0).expect("SWE scenario identity");
+        ScenarioSpec {
+            id: case.id,
+            prompt: case.description().into(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: case.generations(),
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(case.tokens()),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["e2e::*", "github::*", "configuration::*", "compose::*", "router::*"],
+            criteria: vec![CriterionSpec::scored(
+                "swe_delivery", 100,
+                "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
+                EvaluationDimension::Deliverable,
+            )],
+        }
     }
 
     /// The trusted runtime owns the verdict; the generic report bridge attaches it.
-    fn evaluate<'a>(
-        &'a self,
-        _context: &'a E2eContext,
-        _observation: &'a ScenarioObservation,
-        _run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        Box::pin(async {
-            Ok(ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Undetermined,
-                awards: Vec::new(),
-                infrastructure_error: None,
-            })
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        Ok(ObjectiveEvaluation {
+            completion: crate::report::CompletionState::Undetermined,
+            awards: Vec::new(),
+            infrastructure_error: None,
         })
-    }
-}
-
-fn spec(scenario: ScenarioId) -> ScenarioSpec {
-    let case = Case::from_scenario(scenario).expect("SWE scenario identity");
-    ScenarioSpec {
-        id: case.id,
-        prompt: case.description().into(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: case.generations(),
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(case.tokens()),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["e2e::*", "github::*", "configuration::*", "compose::*", "router::*"],
-        criteria: vec![CriterionSpec::scored(
-            "swe_delivery", 100,
-            "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
-            EvaluationDimension::Deliverable,
-        )],
     }
 }
 

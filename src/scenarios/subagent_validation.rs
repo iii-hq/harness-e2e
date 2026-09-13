@@ -21,9 +21,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "subagent_validation";
@@ -52,6 +52,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[CHILD_GOAL, ORCHESTRATION_DISCIPLINE, W
 
 pub struct SubagentValidation;
 
+#[async_trait]
 impl Scenario for SubagentValidation {
     fn id(&self) -> &'static str {
         ID
@@ -80,179 +81,69 @@ impl Scenario for SubagentValidation {
     }
 
     fn spec(&self, run_id: &str) -> ScenarioSpec {
-        scenario_for_case(run_id)
-    }
-
-    fn capture<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> Option<DeliverableCaptureFuture<'a>> {
-        Some(capture(context, observation, run_id))
-    }
-
-    fn evaluate<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        run_id: &'a str,
-    ) -> EvaluationFuture<'a> {
-        evaluate(context, observation, run_id)
-    }
-
-    fn cleanup<'a>(
-        &'a self,
-        context: &'a E2eContext,
-        run_id: &'a str,
-    ) -> Option<CleanupFuture<'a>> {
-        Some(cleanup(context, run_id))
-    }
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let table = table(run_id);
-    let scope = scope(run_id);
-    let child = child_session(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You orchestrate one validated sub-agent. You never poll and never judge its work \
-             yourself: a validator gates every child reply and a verdict wake drives you. Follow \
-             the steps exactly.\n\n\
-             Step 1 — prepare the goal table. database::execute (db \"primary\") twice: sql \
-             \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note \
-             TEXT)\", then sql \"DELETE FROM {table}\".\n\n\
-             Step 2 — install the child's validator. Call engine::register_trigger with:\n\
-             - trigger_type: \"{HOOK_TYPE}\"\n\
-             - function_id: \"fp::pipe\"\n\
-             - config: {{\"sessions\": [\"{child}\"], \"payload\": {{\"through\": \
-             [{{\"function\": \"database::query\", \"payload\": {{\"db\": \"primary\", \"sql\": \
-             \"SELECT COUNT(*) AS n FROM {table}\"}}}}, {{\"function\": \"fp::get\", \"payload\": \
-             {{\"path\": \"/rows/0/n\"}}}}, {{\"function\": \"fp::when\", \"payload\": {{\"op\": \
-             \">\", \"to\": {THRESHOLD}}}}}, {{\"function\": \"state::set\", \"payload\": \
-             {{\"scope\": \"{scope}\", \"key\": \"verdict\"}}}}]}}, \"result_into\": \"/value\", \
-             \"retry_prompt\": \"VALIDATOR: only {{value}} of the required {min} rows exist. \
-             Insert exactly 4 more rows into {table} and reply with a one-line status.\", \
-             \"timeout_ms\": 30000}}\n\
-             The state::set tail only runs when the fp::when guard passes, so the verdict key is \
-             written exactly when the child's work is accepted. Remember the subscription_id.\n\n\
-             Step 3 — arm your wake BEFORE spawning: engine::register_trigger with trigger_type \
-             \"state\", config {{\"scope\": \"{scope}\", \"key\": \"verdict\"}}, label \
-             \"child-validated\", and NO function_id (a wake; once by default).\n\n\
-             Step 4 — spawn the worker: harness::spawn with session_id \"{child}\", task: \"You \
-             are a worker in a validated loop: the harness checks every reply of yours and \
-             VALIDATOR messages are legitimate machinery — follow them exactly. Insert exactly 4 \
-             rows into table {table}: database::execute, db 'primary', sql \\\"INSERT INTO {table} \
-             (note) VALUES ('r'),('r'),('r'),('r')\\\". Then reply with a one-line status. Never \
-             check the count yourself.\", options: {{\"functions\": {{\"allow\": \
-             [\"database::execute\"]}}, \"max_turns\": 8, \"max_validation_retries\": 5}}. \
-             Spawn returns child ids \
-             immediately — that is normal; do NOT wait for or judge the child yourself.\n\n\
-             Step 5 — END YOUR TURN.\n\n\
-             Step 6 — when the wake arrives it carries the accepted row count. Call \
-             engine::unregister_trigger with the validator subscription_id from Step 2, then \
-             reply exactly: CHILD VALIDATED at <count> rows. PARENT DONE.",
-            min = THRESHOLD + 1,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 16,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(400_000),
-            stuck_timeout_seconds: 420,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-    }
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+        let table = table(run_id);
+        let scope = scope(run_id);
         let child = child_session(run_id);
-        let deliverable = observation
-            .deliverables
-            .iter()
-            .find(|deliverable| deliverable.id == DELIVERABLE_ID)
-            .ok_or_else(|| anyhow::anyhow!("captured child deliverable is missing"))?;
-        let content = deliverable
-            .content
-            .as_json()
-            .ok_or_else(|| anyhow::anyhow!("captured child deliverable is not JSON"))?;
-        let rows = content.get("rows").and_then(Value::as_u64).unwrap_or(0);
-        let verdict = content.get("verdict").and_then(Value::as_u64).unwrap_or(0);
-        let child_nudges = content
-            .get("child_nudges")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-
-        let calls = common::function_calls(&observation.transcript);
-        let validator_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
-                && call
-                    .arguments
-                    .pointer("/config/sessions/0")
-                    .and_then(Value::as_str)
-                    == Some(child.as_str())
-        });
-        let wake_index = calls.iter().position(|call| {
-            call.function_id == "engine::register_trigger"
-                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
-                && common::is_wake_registration(&call.arguments)
-        });
-        let spawn_index = calls.iter().position(|call| {
-            call.function_id == "harness::spawn"
-                && call.arguments.get("session_id").and_then(Value::as_str) == Some(child.as_str())
-        });
-        let ordered = matches!(
-            (validator_index, wake_index, spawn_index),
-            (Some(v), Some(w), Some(s)) if v < s && w < s
-        );
-
-        let goal = rows > THRESHOLD && verdict > THRESHOLD;
-        let reported = !observation.response.trim().is_empty();
-        let (_, orchestration_points) = orchestration_outcome(ordered, child_nudges);
-
-        Ok(assessment::build_evaluation(
-            if reported {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You orchestrate one validated sub-agent. You never poll and never judge its work \
+                 yourself: a validator gates every child reply and a verdict wake drives you. Follow \
+                 the steps exactly.\n\n\
+                 Step 1 — prepare the goal table. database::execute (db \"primary\") twice: sql \
+                 \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note \
+                 TEXT)\", then sql \"DELETE FROM {table}\".\n\n\
+                 Step 2 — install the child's validator. Call engine::register_trigger with:\n\
+                 - trigger_type: \"{HOOK_TYPE}\"\n\
+                 - function_id: \"fp::pipe\"\n\
+                 - config: {{\"sessions\": [\"{child}\"], \"payload\": {{\"through\": \
+                 [{{\"function\": \"database::query\", \"payload\": {{\"db\": \"primary\", \"sql\": \
+                 \"SELECT COUNT(*) AS n FROM {table}\"}}}}, {{\"function\": \"fp::get\", \"payload\": \
+                 {{\"path\": \"/rows/0/n\"}}}}, {{\"function\": \"fp::when\", \"payload\": {{\"op\": \
+                 \">\", \"to\": {THRESHOLD}}}}}, {{\"function\": \"state::set\", \"payload\": \
+                 {{\"scope\": \"{scope}\", \"key\": \"verdict\"}}}}]}}, \"result_into\": \"/value\", \
+                 \"retry_prompt\": \"VALIDATOR: only {{value}} of the required {min} rows exist. \
+                 Insert exactly 4 more rows into {table} and reply with a one-line status.\", \
+                 \"timeout_ms\": 30000}}\n\
+                 The state::set tail only runs when the fp::when guard passes, so the verdict key is \
+                 written exactly when the child's work is accepted. Remember the subscription_id.\n\n\
+                 Step 3 — arm your wake BEFORE spawning: engine::register_trigger with trigger_type \
+                 \"state\", config {{\"scope\": \"{scope}\", \"key\": \"verdict\"}}, label \
+                 \"child-validated\", and NO function_id (a wake; once by default).\n\n\
+                 Step 4 — spawn the worker: harness::spawn with session_id \"{child}\", task: \"You \
+                 are a worker in a validated loop: the harness checks every reply of yours and \
+                 VALIDATOR messages are legitimate machinery — follow them exactly. Insert exactly 4 \
+                 rows into table {table}: database::execute, db 'primary', sql \\\"INSERT INTO {table} \
+                 (note) VALUES ('r'),('r'),('r'),('r')\\\". Then reply with a one-line status. Never \
+                 check the count yourself.\", options: {{\"functions\": {{\"allow\": \
+                 [\"database::execute\"]}}, \"max_turns\": 8, \"max_validation_retries\": 5}}. \
+                 Spawn returns child ids \
+                 immediately — that is normal; do NOT wait for or judge the child yourself.\n\n\
+                 Step 5 — END YOUR TURN.\n\n\
+                 Step 6 — when the wake arrives it carries the accepted row count. Call \
+                 engine::unregister_trigger with the validator subscription_id from Step 2, then \
+                 reply exactly: CHILD VALIDATED at <count> rows. PARENT DONE.",
+                min = THRESHOLD + 1,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 16,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(400_000),
+                stuck_timeout_seconds: 420,
+                max_validation_retries: None,
             },
-            [
-                CHILD_GOAL.award(
-                    child_goal_points(goal, rows),
-                    format!(
-                    "rows={rows}, verdict={verdict}, need both above {THRESHOLD}; full marks at \
-                     exactly {EXPECTED_ROWS} rows"
-                ),
-                )?,
-                ORCHESTRATION_DISCIPLINE.award(
-                    orchestration_points,
-                    format!(
-                    "validator@{validator_index:?} wake@{wake_index:?} spawn@{spawn_index:?} — \
-                     validator and wake must precede the spawn; observed {child_nudges} nudge(s) \
-                     in the child transcript"
-                ),
-                )?,
-                WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
-            ],
-        ))
-    })
-}
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
         let child = child_session(run_id);
         let table_exists = context
@@ -345,7 +236,102 @@ fn capture<'a>(
             ],
             provenance,
         }])
-    })
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let child = child_session(run_id);
+        let deliverable = observation
+            .deliverables
+            .iter()
+            .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+            .ok_or_else(|| anyhow::anyhow!("captured child deliverable is missing"))?;
+        let content = deliverable
+            .content
+            .as_json()
+            .ok_or_else(|| anyhow::anyhow!("captured child deliverable is not JSON"))?;
+        let rows = content.get("rows").and_then(Value::as_u64).unwrap_or(0);
+        let verdict = content.get("verdict").and_then(Value::as_u64).unwrap_or(0);
+        let child_nudges = content
+            .get("child_nudges")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+
+        let calls = common::function_calls(&observation.transcript);
+        let validator_index = calls.iter().position(|call| {
+            call.function_id == "engine::register_trigger"
+                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some(HOOK_TYPE)
+                && call
+                    .arguments
+                    .pointer("/config/sessions/0")
+                    .and_then(Value::as_str)
+                    == Some(child.as_str())
+        });
+        let wake_index = calls.iter().position(|call| {
+            call.function_id == "engine::register_trigger"
+                && call.arguments.get("trigger_type").and_then(Value::as_str) == Some("state")
+                && common::is_wake_registration(&call.arguments)
+        });
+        let spawn_index = calls.iter().position(|call| {
+            call.function_id == "harness::spawn"
+                && call.arguments.get("session_id").and_then(Value::as_str) == Some(child.as_str())
+        });
+        let ordered = matches!(
+            (validator_index, wake_index, spawn_index),
+            (Some(v), Some(w), Some(s)) if v < s && w < s
+        );
+
+        let goal = rows > THRESHOLD && verdict > THRESHOLD;
+        let reported = !observation.response.trim().is_empty();
+        let (_, orchestration_points) = orchestration_outcome(ordered, child_nudges);
+
+        Ok(assessment::build_evaluation(
+            if reported {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                CHILD_GOAL.award(
+                    child_goal_points(goal, rows),
+                    format!(
+                    "rows={rows}, verdict={verdict}, need both above {THRESHOLD}; full marks at \
+                     exactly {EXPECTED_ROWS} rows"
+                ),
+                )?,
+                ORCHESTRATION_DISCIPLINE.award(
+                    orchestration_points,
+                    format!(
+                    "validator@{validator_index:?} wake@{wake_index:?} spawn@{spawn_index:?} — \
+                     validator and wake must precede the spawn; observed {child_nudges} nudge(s) \
+                     in the child transcript"
+                ),
+                )?,
+                WAKE_REPORT.full_or_zero(reported, "expected the exact report line"),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let table = table(run_id);
+        let _: Value = context
+            .trigger(
+                "database::execute",
+                json!({ "db": "primary", "sql": format!("DROP TABLE IF EXISTS {table}") }),
+            )
+            .await?;
+        let _: Value = context
+            .trigger(
+                "state::delete",
+                json!({ "scope": scope(run_id), "key": "verdict" }),
+            )
+            .await?;
+        Ok(())
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -405,25 +391,6 @@ fn orchestration_outcome(ordered: bool, child_nudges: usize) -> (bool, u8) {
             0
         },
     )
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let table = table(run_id);
-        let _: Value = context
-            .trigger(
-                "database::execute",
-                json!({ "db": "primary", "sql": format!("DROP TABLE IF EXISTS {table}") }),
-            )
-            .await?;
-        let _: Value = context
-            .trigger(
-                "state::delete",
-                json!({ "scope": scope(run_id), "key": "verdict" }),
-            )
-            .await?;
-        Ok(())
-    })
 }
 
 fn table(run_id: &str) -> String {
