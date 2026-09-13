@@ -133,6 +133,29 @@ struct PlansListResponse {
 
 type PlanControlResponse = BTreeMap<String, Value>;
 
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct EvidenceResponse {
+    availability: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_base64: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mime_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+struct AttemptResponse {
+    status: crate::report::RunStatus,
+    completion: crate::report::CompletionState,
+    technical: crate::report::TechnicalState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    criteria: Option<Vec<crate::report::CriterionReport>>,
+    dimensions: Vec<crate::report::DimensionReport>,
+    failures: Vec<crate::report::FailureRecord>,
+    efficiency: Option<crate::report::EfficiencyReport>,
+}
+
 #[derive(Debug, Serialize, JsonSchema)]
 pub(super) struct CatalogResponse {
     url: String,
@@ -266,7 +289,10 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: crate::history::evidence::EvidenceRequest| {
             let controller = controller.clone();
-            async move { controller.open_history_evidence(request).await.map_err(handler_error) }
+            async move {
+                let response = controller.open_history_evidence(request).await.map_err(handler_error)?;
+                serde_json::from_value::<EvidenceResponse>(response).map_err(handler_error)
+            }
         })
     });
     register(
@@ -313,7 +339,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     controller
                         .delete_execution(&request.execution_id)
                         .await
-                        .map(|()| json!({}))
+                        .map(|()| PlanControlResponse::new())
                         .map_err(handler_error)
                 }
             })
@@ -439,10 +465,11 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         RegisterFunction::new_async(move |request: PlanGetRequest| {
             let controller = controller.clone();
             async move {
-                controller
+                let response = controller
                     .get_plan(&request.plan_id)
                     .await
-                    .map_err(handler_error)
+                    .map_err(handler_error)?;
+                serde_json::from_value::<PlanControlResponse>(response).map_err(handler_error)
             }
         })
     });
@@ -482,7 +509,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 controller
                     .delete_plan(&request.plan_id)
                     .await
-                    .map(|()| json!({}))
+                    .map(|()| PlanControlResponse::new())
                     .map_err(handler_error)
             }
         })
@@ -708,14 +735,18 @@ pub(super) async fn execution_bundle(
     Ok(ExecutionBundle { manifest, detail })
 }
 
-async fn attempt_get(controller: &Controller, request: AttemptGetRequest) -> Result<Value> {
+async fn attempt_get(
+    controller: &Controller,
+    request: AttemptGetRequest,
+) -> Result<AttemptResponse> {
     validate_execution_id(&request.execution_id).map_err(anyhow::Error::msg)?;
     if request.run_id.trim().is_empty() || request.attempt_id.trim().is_empty() {
         bail!("run_id and attempt_id are required");
     }
-    controller
+    let response = controller
         .attempt_get(&request.execution_id, &request.run_id, &request.attempt_id)
-        .await
+        .await?;
+    Ok(serde_json::from_value(response)?)
 }
 
 pub(super) async fn evaluated_versions(
@@ -889,4 +920,61 @@ fn execution_haystack(execution: &Value) -> String {
 
 fn handler_error(error: impl std::fmt::Display) -> Error {
     Error::Handler(error.to_string())
+}
+
+#[cfg(test)]
+mod response_contract_tests {
+    use super::*;
+
+    #[test]
+    fn registered_response_types_describe_and_preserve_existing_payloads() {
+        let evidence_schema =
+            serde_json::to_value(schemars::schema_for!(EvidenceResponse)).unwrap();
+        assert_eq!(evidence_schema["required"], json!(["availability"]));
+        assert!(evidence_schema["properties"]["content_base64"].is_object());
+        for payload in [
+            json!({"availability": "available", "content_base64": "YQ==", "mime_type": "text/plain"}),
+            json!({"availability": "access_unavailable", "reason": "GitHub credentials unavailable"}),
+        ] {
+            let typed: EvidenceResponse = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(serde_json::to_value(typed).unwrap(), payload);
+        }
+
+        let attempt_schema = serde_json::to_value(schemars::schema_for!(AttemptResponse)).unwrap();
+        for field in [
+            "status",
+            "completion",
+            "technical",
+            "dimensions",
+            "failures",
+            "efficiency",
+        ] {
+            assert!(
+                attempt_schema["properties"][field].is_object(),
+                "missing {field}"
+            );
+        }
+        for payload in [
+            json!({"status": "passed", "completion": "completed", "technical": "valid", "criteria": [], "dimensions": [], "failures": [], "efficiency": null}),
+            json!({"status": "subject_error", "completion": "task_incomplete", "technical": "technical_invalid", "dimensions": [], "failures": [], "efficiency": null}),
+        ] {
+            let typed: AttemptResponse = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(serde_json::to_value(typed).unwrap(), payload);
+        }
+
+        let object_schema =
+            serde_json::to_value(schemars::schema_for!(PlanControlResponse)).unwrap();
+        assert_eq!(object_schema["type"], "object");
+        assert_eq!(
+            serde_json::to_value(PlanControlResponse::new()).unwrap(),
+            json!({})
+        );
+        for payload in [
+            json!({"origin": "local", "id": "plan-local", "snapshot": {"models": []}}),
+            json!({"origin": "remote", "id": "plan-remote", "configuration": null}),
+        ] {
+            let typed: PlanControlResponse = serde_json::from_value(payload.clone()).unwrap();
+            assert_eq!(serde_json::to_value(typed).unwrap(), payload);
+        }
+    }
 }
