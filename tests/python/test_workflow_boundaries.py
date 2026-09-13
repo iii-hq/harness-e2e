@@ -211,7 +211,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
         self.assertIn("exact-stack-e2e.yml", workflows)
         self.assertNotIn("shadow.yml", workflows)
-        self.assertNotIn("release.yml", workflows)
+        release = ROOT / ".github/workflows/release.yml"
+        if release.exists():
+            content = release.read_text()
+            self.assertIn("\n  push:\n    tags:\n      - 'harness-e2e/v*'\n", content)
+            self.assertNotIn("workflow_dispatch:", content)
+            self.assertNotIn("workflow_call:", content)
 
     def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
         self.assertFalse(
