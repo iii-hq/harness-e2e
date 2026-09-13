@@ -15,7 +15,7 @@ redesign starts from this map and from `00-design-system.md`.
 | `plans/new` | D · Plan create | `pages/LocalPlanPage.tsx`, `components/ExecutionSetup.tsx`, `ProviderModelDropdown.tsx`, `LocalRunnerDialog.tsx` | 580 + 862 + 411 + 490 |
 | `plans/<id>` | E · Plan detail | `pages/PlanDetailPage.tsx`, `ImportedPlanDetailPage.tsx`, `components/PlanCharts.tsx` | 2942 + 866 + 471 |
 | `executions` (default) | F · Executions list | `pages/ExecutionsPage.tsx` | 840 |
-| `execution/<id>[/run/<runId>]` | G · Execution detail | `pages/ExecutionPage.tsx` + 9 components | 6028 |
+| `execution/<id>[/run/<runId>]` | G · Execution detail | `pages/ExecutionPage.tsx` + 11 components | 6217 |
 | `compare` | H · Compare | `pages/TestsPage.tsx` | 1916 |
 
 Total: 28.6k lines of non-test TypeScript, 9k lines of tests, 2.3k lines of
@@ -504,9 +504,10 @@ Route `page: 'execution'` (`use-hash-route.ts:9-14`, `:97-113`). Files:
 `pages/ExecutionPage.tsx` (1300 lines) and the components it composes:
 `AssessmentWorkspace.tsx` (956), `ScenarioMatrix.tsx` (970),
 `PrimaryMetricsView.tsx` (492) + `PrimaryMetricsView.css` (431),
-`ExecutionMetricsPanel.tsx` (224), `SemanticTestFlow.tsx` (711),
-`TranscriptDialog.tsx` (426), `ScenarioChatAction.tsx` (296),
-`ExecutionComparisonPanel.tsx` (222), `DisclosureLayer.tsx` (62).
+`ExecutionMetricsPanel.tsx` (224), `SemanticTestFlow.tsx` (711, reached
+through `ScenarioMatrix`), `TranscriptDialog.tsx` (426),
+`ScenarioChatAction.tsx` (296), `LiveProgressPanel.tsx` (183),
+`PlanStatus.tsx` (118), `SystemOutcome.tsx` (57), `DisclosureLayer.tsx` (62).
 
 ### 1. Job
 Read one execution's verdict, drill from the aggregate to each test and each
@@ -524,7 +525,7 @@ run's evidence, and act on it (cancel, re-run, delete, open in chat).
 | 7 | `results`: `Execution summary · N tests`, tabs `Grouped` / `By test`, then `AssessmentWorkspace` (`PrimaryMetricBoard`, `AssessmentMatrix`, per-run `AssessmentCard`/`AssessmentPanel`, `RunAssessment`, `AssessmentDetailDialog`) and `ScenarioMatrix` (`ResultContractStrip`, `ScenarioRow`, `MatrixCell`, `ScenarioExpansion`, `ScenarioReliabilityBand`, `RunOutcomeLedger`, `WorkflowDurationProfile`) | `AssessmentWorkspace.tsx:934`, `:234`, `:334`, `:817`, `:722`, `:641`; `ScenarioMatrix.tsx:33`, `:135`, `:275`, `:373`, `:390`, `:491`, `:628`, `:791` | DS `Callout`, `Dialog`, `StatusBadge`, `Panel`; the matrix is `legacy.css` `.scenario-*` (34 selectors, its only remaining users) |
 | 8 | `counts`: `CountsSection` → `PrimaryMetricsView` (`MetricNumber`, `Readout`, `Tokens` / `Activity` bands, `Test results` with metric-group tabs) and `ExecutionMetricsPanel` (`MetricCard` ×4, table) | `:260-410`; `PrimaryMetricsView.tsx:125`, `:237`, `:308`, `:336`, `:363`; `ExecutionMetricsPanel.tsx:47` | `PrimaryMetricsView.css` (66 `.primary-*` / `pm-*` rules, 431 lines); DS `MetricCard`, `DataTable`, `Button`, `EmptyState` |
 | 9 | `provenance`: `ProvenanceSection` (runner, revision, contracts, digests), `Retained runs` `Panel` (`DataTable`), `Retained artifacts` `Panel`, `EvidenceBundleUnavailable` callout | `:411-459`, `:829`, `:855`, `:571-627` | DS `Panel`, `DataTable`, `Callout`, `MetricCard` ×7 across the page |
-| 10 | Workflow executions: `SemanticTestFlow` (`WorkflowMetricsOverview`, `SemanticTestCard`, evidence groups `Evaluations` / `Failures` / `Assets`) | `SemanticTestFlow.tsx:25`, `:115`, `:265`, `:381-427` | DS `StatusBadge`; cards bespoke |
+| 10 | Workflow executions, inside a matrix row's expansion: `SemanticTestFlow` (`WorkflowMetricsOverview`, `SemanticTestCard`, evidence groups `Evaluations` / `Failures` / `Assets`); live progress: `LiveProgressPanel` (`ExecutionPage.tsx:1157`), plan progress: `PlanStatus` | `SemanticTestFlow.tsx:25`, `:115`, `:265`, `:381-427`; `LiveProgressPanel.tsx`; `PlanStatus.tsx` | DS `StatusBadge`; cards bespoke |
 | 11 | Overlays: `TranscriptDialog` (search, role chips, event cards, copy), `AssessmentDetailDialog`, delete `Dialog` (`Delete execution?`) | `TranscriptDialog.tsx:112`; `AssessmentWorkspace.tsx:641`; `ExecutionPage.tsx:1255` | DS `Dialog`, `FilterChip`, `Input` |
 | 12 | `ScenarioChatAction` menu (open the run in the Console chat) | `ScenarioChatAction.tsx:44` | `buttonClassName`; appears in 7 files |
 
@@ -561,8 +562,9 @@ reported`.
   `definition-digest`, `dashboard-data-source`.
 
 ### 6. Size and debt
-- 1300 + 956 + 970 + 492 + 431 (CSS) + 224 + 711 + 426 + 296 + 222 = 6028
-  lines for one screen and its overlays; the largest surface in the app.
+- 1300 + 956 + 970 + 492 + 431 (CSS) + 224 + 711 + 426 + 296 + 183 + 118 +
+  57 + 62 = 6217 lines for one screen and its overlays; the largest surface
+  in the app.
 - Two parallel result views of the same report: `AssessmentWorkspace`
   (grouped) and `ScenarioMatrix` (by test), each with its own row, cell,
   badge and dialog components; `PrimaryMetricsView` and
@@ -570,8 +572,17 @@ reported`.
 - `PrimaryMetricsView.css` is the only remaining component stylesheet;
   `legacy.css` survives almost only for `.scenario-*`.
 - `AssessmentWorkspace` is also embedded in the test-history dialog
-  (`TestHistoryPage.tsx:683-860`); `ExecutionComparisonPanel` is shared with
-  test history and compare.
+  (`TestHistoryPage.tsx:683-860`). `ExecutionComparisonPanel` (222) is not
+  used here despite its name; its only page is test history.
+- Three vocabularies on one screen: DS tokens, the shell's Tailwind aliases
+  (`bg-panel`, `text-ink-muted`) and the `PrimaryMetricsView.css` island
+  with the host's `Tabs` from `@iii-dev/console-ui`.
+- Disclosure is hand-rolled with `<details>` seven times
+  (`AssessmentWorkspace` ×2, `ScenarioMatrix` ×2, `SemanticTestFlow` ×3)
+  beside `DisclosureLayer.tsx`; raw `<table>` markup in `PrimaryMetricsView`,
+  `AssessmentWorkspace` and `ScenarioMatrix` instead of `DataTable`; the
+  legacy `.button` class survives in `AssessmentWorkspace` and
+  `ScenarioChatAction`.
 - `ScenarioChatAction` (296 lines) is used from 7 files.
 
 ---
