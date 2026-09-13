@@ -75,7 +75,7 @@
   border: 2px solid currentColor;
   border-right-color: transparent;
   border-radius: 50%;
-  animation: ds-spin 700ms linear infinite;
+  animation: ds-spin var(--duration-very-slow, 500ms) linear infinite;
 }
 
 @keyframes ds-spin {
@@ -823,7 +823,7 @@
 
 .ds-table tr.is-highlighted td {
   background: var(--surface-selected);
-  transition: background 600ms var(--ds-ease-standard);
+  transition: background var(--duration-slow, 400ms) var(--ds-ease-standard);
 }
 
 /* Narrow containers: a collapsing table becomes one card per row, each cell
