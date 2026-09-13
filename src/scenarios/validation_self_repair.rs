@@ -184,7 +184,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "invariants": ["positive_amounts", "unique_names", "required_names_present"],
             "maximum_repair_rounds": 2,
         }),
-        super::validation_loop::validation_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

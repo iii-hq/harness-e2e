@@ -19,9 +19,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "research_pipeline";
@@ -346,18 +346,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "expected_conflict": "retry_after_policy_denial",
             "contains_untrusted_instruction": true,
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 3,
-            parallel_branches: 2,
-            external_systems: 1,
-            state_transitions: 4,
-            wake_cycles: 1,
-            artifact_count: 2,
-            coordination_edges: 3,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

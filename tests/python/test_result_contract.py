@@ -28,15 +28,13 @@ class ResultContractTests(unittest.TestCase):
             (root / "config").mkdir()
             (root / "config/results-contract.json").write_text(json.dumps({
                 "results_schema": "schema.json",
-                "scoring_profile": "profile.json",
             }), encoding="utf-8")
             (root / "schema.json").write_text('{"type":"object"}', encoding="utf-8")
-            (root / "profile.json").write_text('{"weight":1}', encoding="utf-8")
             before = contract_values(root)
             (root / "schema.json").write_text('{"type":"array"}', encoding="utf-8")
             after = contract_values(root)
             self.assertNotEqual(before["RESULT_CONTRACT_SHA256"], after["RESULT_CONTRACT_SHA256"])
-            self.assertEqual(before["SCORING_PROFILE_SHA256"], after["SCORING_PROFILE_SHA256"])
+            self.assertEqual(list(after), ["RESULT_CONTRACT_SHA256"])
             for content in generated_files(root).values():
                 self.assertIn(after["RESULT_CONTRACT_SHA256"], content)
                 self.assertNotIn(before["RESULT_CONTRACT_SHA256"], content)

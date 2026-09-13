@@ -102,7 +102,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
     let requested_runs = report
         .scenarios
         .iter()
-        .map(|scenario| scenario.aggregate.runs)
+        .map(|scenario| scenario.aggregate.observed_runs)
         .max()
         .unwrap_or(1);
     let seed = report

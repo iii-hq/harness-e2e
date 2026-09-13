@@ -188,13 +188,6 @@ pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<Materialized
             IDS[usize::from(test - 1)],
             super::stable_seed(IDS[usize::from(test - 1)]),
             json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":test}),
-            ComplexityProfile {
-                planning_depth: 4,
-                external_systems: 3,
-                validation_loops: 2,
-                artifact_count: 1,
-                ..Default::default()
-            },
             vec!["iii::functions".into(), "docker".into()],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {

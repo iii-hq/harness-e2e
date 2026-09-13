@@ -145,13 +145,13 @@ export function ExecutionMetricsPanel({
               detail={`${metrics.completed + metrics.incomplete}/${metrics.planned} planned runs determined`}
             />
             <MetricCard
-              label="quality on completed tasks"
+              label="score"
               value={
-                metrics.qualityMedian === null
+                metrics.scoreMean === null
                   ? '—'
-                  : `${number(metrics.qualityMedian)}/100`
+                  : `${number(metrics.scoreMean)}/100`
               }
-              detail={`Median · ${metrics.qualitySamples}/${metrics.completed} completed runs scored`}
+              detail={`Mean · ${metrics.scoreSamples}/${metrics.planned} planned runs scored`}
             />
           </div>
           <DataTable
@@ -208,25 +208,13 @@ export function ExecutionMetricsPanel({
                   runs with telemetry; pooled median, including retries.
                 </td>
               </DataTableRow>
-              <DataTableRow>
-                <td className="font-semibold">Objective score</td>
-                <td className="font-mono tabular-nums">
-                  {metrics.objectiveMedian === null
-                    ? '—'
-                    : `${number(metrics.objectiveMedian)}/100`}
-                </td>
-                <td className="text-xs text-ink-muted">
-                  Median · {metrics.objectiveSamples}/{metrics.planned} planned
-                  runs scored.
-                </td>
-              </DataTableRow>
             </tbody>
           </DataTable>
           <p className="mt-3 mb-0 text-xs leading-5 text-ink-muted">
             Missing telemetry stays unknown. Observed subtotals are not complete
-            totals and must not be interpreted as improved efficiency. Quality
-            and token medians are pooled from individual runs, not averaged
-            across scenarios.
+            totals and must not be interpreted as improved efficiency. The score
+            mean and the token medians are pooled from individual runs, not
+            averaged across scenarios.
           </p>
         </>
       )}

@@ -75,7 +75,6 @@
     "EfficiencyReport": {
       "type": "object",
       "required": [
-        "minimum_expected_work",
         "observed_complexity",
         "technical_attempts",
         "wall_time_ms"
@@ -141,11 +140,6 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "minimum_expected_work": {
-          "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
@@ -223,13 +217,6 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        },
-        "work_amplification": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
         }
       }
     },

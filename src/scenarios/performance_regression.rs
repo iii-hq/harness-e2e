@@ -23,7 +23,7 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -254,14 +254,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
             "wall_clock_policy": "advisory",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 2,
-            validation_loops: 2,
-            artifact_count: 1,
-            ambiguity_level: 4,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

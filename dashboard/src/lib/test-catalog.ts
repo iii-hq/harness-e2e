@@ -33,7 +33,7 @@ export type TestSideSummary = {
   total_runs: number
   scored_runs: number
   case_count: number
-  median_score: number | null
+  mean_score: number | null
   pass_rate: number | null
   median_cost_usd: number | null
   median_tokens: number | null
@@ -85,7 +85,7 @@ export type HistorySeries = {
   cohort_id: string
   execution_count: number
   run_count: number
-  median_score: number | null
+  mean_score: number | null
   median_cost_usd: number | null
   median_tokens: number | null
   median_duration_seconds: number | null
@@ -133,7 +133,7 @@ export type TestObservation = {
   contract_sha256: string
   assessment_profile_sha256: string
   status: string
-  median_score: number | null
+  mean_score: number | null
   run_count: number
   scored_runs: number
   assessment_summary?: AssessmentSummary
@@ -212,16 +212,6 @@ export type TestCatalogRow = {
   test_id: string
   lifecycle: 'active' | 'retired' | 'never_run'
   current_version: string | null
-  complexity?: {
-    method?: 'capability'
-    tier:
-      | 'l0_atomic'
-      | 'l1_sequential'
-      | 'l2_stateful'
-      | 'l3_concurrent'
-      | 'l4_coordinated'
-      | 'l5_adaptive'
-  } | null
   characterization?: {
     human_horizon?: {
       min_minutes?: number

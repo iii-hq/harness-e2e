@@ -12,10 +12,7 @@ import {
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 
 const transcriptEvidence: EvidenceReference[] = [
   {
@@ -78,7 +75,6 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
         available: true,
         report: {
           result_contract_sha256: RESULT_CONTRACT_SHA256,
-          scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: 'complete',
           objective_outcome: 'passed',
           assessment_availability: 'available',
@@ -102,12 +98,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
                 execution_reliability: 1,
                 completion_evidence_coverage: 1,
                 completion_rate: 1,
-                objective_scored_runs: 1,
-                objective_median_score: 100,
-                objective_score_coverage: 1,
-                quality_scored_completed_runs: 1,
-                quality_score_completed: 100,
-                quality_coverage: 1,
+                scored_runs: 1,
+                mean_score: 100,
                 total_tokens_consumed: 1200,
                 tokens_completed_p50: 1200,
                 failed_attempt_tokens: 0,
@@ -123,10 +115,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
                   technical: 'valid',
                   evaluators: {
                     completion: 'available',
-                    quality: 'available',
                   },
-                  objective_score: 100,
-                  quality_score_completed: 100,
+                  score: 100,
                   assessment: run,
                 },
               ],

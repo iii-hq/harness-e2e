@@ -9,7 +9,7 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, ComplexityProfile, CriterionSpec,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CriterionSpec,
     DeliverableContract, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
     ProvenanceEvidence, ScenarioCase, ScenarioId, ScenarioSpec,
 };
@@ -95,25 +95,6 @@ impl Case {
             _ => "Evolve one profile service through eight SWE tickets in one continuing Harness session.",
         }
     }
-
-    pub fn profile(self) -> ComplexityProfile {
-        let adaptive = self.journey() || self.ticket == 5;
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 2,
-            external_systems: 2,
-            state_transitions: if self.journey() { 8 } else { 1 },
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 4,
-            agent_owned_decomposition: true,
-            material_invalidation_events: u8::from(adaptive),
-            replan_loops: u8::from(adaptive),
-            compensable_mutations: u8::from(adaptive),
-            coherent_long_horizon: self.journey(),
-            ..ComplexityProfile::default()
-        }
-    }
 }
 
 pub fn is_swe(scenario: ScenarioId) -> bool {
@@ -167,7 +148,6 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
             "delegation": "optional",
             "curriculum_version": 1,
         }),
-        selection.profile(),
         vec![
             "iii::functions".into(),
             "e2e::control-plane-v1".into(),

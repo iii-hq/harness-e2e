@@ -30,113 +30,6 @@ pub fn scenario_contract_sha256(
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ComplexityProfile {
-    pub planning_depth: u8,
-    pub dependency_depth: u8,
-    pub parallel_branches: u8,
-    pub external_systems: u8,
-    pub state_transitions: u16,
-    pub wake_cycles: u8,
-    pub validation_loops: u8,
-    pub artifact_count: u8,
-    pub coordination_edges: u16,
-    pub ambiguity_level: u8,
-    #[serde(default)]
-    pub agent_owned_decomposition: bool,
-    #[serde(default)]
-    pub material_invalidation_events: u8,
-    #[serde(default)]
-    pub replan_loops: u8,
-    #[serde(default)]
-    pub compensable_mutations: u8,
-    #[serde(default)]
-    pub durable_resume_cycles: u8,
-    #[serde(default)]
-    pub coherent_long_horizon: bool,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ComplexityTier {
-    L0Atomic,
-    L1Sequential,
-    L2Stateful,
-    L3Concurrent,
-    L4Coordinated,
-    L5Adaptive,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ComplexityMethod {
-    #[default]
-    Capability,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ComplexityClassification {
-    pub method: ComplexityMethod,
-    pub tier: ComplexityTier,
-    pub profile: ComplexityProfile,
-}
-
-impl ComplexityClassification {
-    pub fn derive(profile: ComplexityProfile) -> Self {
-        Self {
-            method: ComplexityMethod::Capability,
-            tier: capability_tier(profile),
-            profile,
-        }
-    }
-}
-
-fn capability_tier(profile: ComplexityProfile) -> ComplexityTier {
-    let stretch_signals = [
-        profile.external_systems >= 2,
-        profile.parallel_branches >= 2,
-        profile.compensable_mutations >= 1,
-        profile.durable_resume_cycles >= 1,
-        profile.coherent_long_horizon,
-    ]
-    .into_iter()
-    .filter(|present| *present)
-    .count();
-    if profile.agent_owned_decomposition
-        && profile.material_invalidation_events >= 1
-        && profile.replan_loops >= 1
-        && stretch_signals >= 2
-    {
-        ComplexityTier::L5Adaptive
-    } else {
-        lower_tier(profile)
-    }
-}
-
-fn lower_tier(profile: ComplexityProfile) -> ComplexityTier {
-    if profile.coordination_edges >= 3
-        || (profile.dependency_depth >= 3
-            && (profile.parallel_branches >= 2 || profile.validation_loops > 0))
-    {
-        ComplexityTier::L4Coordinated
-    } else if profile.parallel_branches >= 2 {
-        ComplexityTier::L3Concurrent
-    } else if profile.external_systems > 0
-        || profile.state_transitions > 0
-        || profile.wake_cycles > 0
-        || profile.validation_loops > 0
-    {
-        ComplexityTier::L2Stateful
-    } else if profile.planning_depth > 1
-        || profile.dependency_depth > 0
-        || profile.artifact_count > 0
-    {
-        ComplexityTier::L1Sequential
-    } else {
-        ComplexityTier::L0Atomic
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HumanHorizonBasis {
     #[default]
@@ -356,17 +249,10 @@ pub struct ScenarioCase {
     pub seed: u64,
     pub inputs: Value,
     pub inputs_sha256: String,
-    pub complexity: ComplexityClassification,
     #[serde(default)]
     pub characterization: ScenarioCharacterization,
-    pub work: WorkExpectation,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct WorkExpectation {
-    pub minimum_expected_work: u64,
 }
 
 impl ScenarioCase {
@@ -374,14 +260,10 @@ impl ScenarioCase {
         scenario_id: impl Into<String>,
         seed: u64,
         inputs: Value,
-        profile: ComplexityProfile,
         required_capabilities: Vec<String>,
         deliverable_contract: DeliverableContract,
     ) -> Result<Self> {
         let scenario_id = scenario_id.into();
-        let work = WorkExpectation {
-            minimum_expected_work: minimum_expected_work(profile),
-        };
         let characterization = ScenarioCharacterization::for_scenario(&scenario_id);
         let case = Self {
             case_id: format!("{scenario_id}:seed-{seed:016x}"),
@@ -390,9 +272,7 @@ impl ScenarioCase {
             seed,
             inputs_sha256: sha256_value(&inputs)?,
             inputs,
-            complexity: ComplexityClassification::derive(profile),
             characterization,
-            work,
             required_capabilities,
             deliverable_contract,
         };
@@ -406,13 +286,6 @@ impl ScenarioCase {
     pub fn seal(mut self, behavior_sha256: String) -> Result<Self> {
         self.behavior_sha256 = behavior_sha256;
         self.validate()?;
-        Ok(self)
-    }
-
-    pub fn with_minimum_expected_work(mut self, minimum_expected_work: u64) -> Result<Self> {
-        self.work.minimum_expected_work = minimum_expected_work;
-        self.behavior_sha256.clear();
-        self.validate_shape()?;
         Ok(self)
     }
 
@@ -459,13 +332,7 @@ impl ScenarioCase {
         if sha256_value(&self.inputs)? != self.inputs_sha256 {
             bail!("scenario case inputs do not match inputs_sha256");
         }
-        if self.complexity != ComplexityClassification::derive(self.complexity.profile) {
-            bail!("scenario case complexity classification is inconsistent");
-        }
         self.characterization.validate()?;
-        if self.work.minimum_expected_work == 0 {
-            bail!("scenario case minimum work expectation is invalid");
-        }
         if self
             .required_capabilities
             .iter()
@@ -482,15 +349,6 @@ impl ScenarioCase {
         }
         self.deliverable_contract.validate(&self.scenario_id)
     }
-}
-
-fn minimum_expected_work(profile: ComplexityProfile) -> u64 {
-    1_u64
-        .saturating_add(u64::from(profile.planning_depth))
-        .saturating_add(u64::from(profile.artifact_count))
-        .saturating_add(u64::from(profile.coordination_edges))
-        .saturating_add(u64::from(profile.validation_loops))
-        .saturating_add(u64::from(profile.wake_cycles))
 }
 
 #[derive(Debug, Clone)]
@@ -555,60 +413,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn complexity_tiers_are_derived_from_the_vector() {
-        assert_eq!(
-            ComplexityClassification::derive(ComplexityProfile::default()).tier,
-            ComplexityTier::L0Atomic
-        );
-        assert_eq!(
-            ComplexityClassification::derive(ComplexityProfile {
-                external_systems: 1,
-                state_transitions: 2,
-                ..ComplexityProfile::default()
-            })
-            .tier,
-            ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            ComplexityClassification::derive(ComplexityProfile {
-                dependency_depth: 3,
-                validation_loops: 1,
-                coordination_edges: 4,
-                ..ComplexityProfile::default()
-            })
-            .tier,
-            ComplexityTier::L4Coordinated
-        );
-        let formerly_adaptive = ComplexityProfile {
-            ambiguity_level: 8,
-            validation_loops: 2,
-            ..ComplexityProfile::default()
-        };
-        assert_eq!(
-            ComplexityClassification::derive(formerly_adaptive).tier,
-            ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            ComplexityClassification::derive(ComplexityProfile {
-                agent_owned_decomposition: true,
-                material_invalidation_events: 1,
-                replan_loops: 1,
-                external_systems: 2,
-                compensable_mutations: 1,
-                ..ComplexityProfile::default()
-            })
-            .tier,
-            ComplexityTier::L5Adaptive
-        );
-    }
-
-    #[test]
     fn case_hash_detects_materialized_input_changes() {
         let mut case = ScenarioCase::new(
             "case",
             7,
             serde_json::json!({"value": 1}),
-            ComplexityProfile::default(),
             vec![],
             DeliverableContract::default(),
         )
@@ -631,7 +440,6 @@ mod tests {
             "future_l5",
             7,
             serde_json::json!({}),
-            ComplexityProfile::default(),
             vec![],
             DeliverableContract::default(),
         )

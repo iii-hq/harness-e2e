@@ -7,8 +7,8 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    ExecutionRealism, HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
+    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, ExecutionRealism,
+    HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
     ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
@@ -109,7 +109,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
                 "technical_retries": 0,
             },
         }),
-        complexity_profile(),
         vec![
             "e2e::adaptive-flow-v1".into(),
             "e2e::workflow-resume-v1".into(),
@@ -130,27 +129,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-pub fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 7,
-        dependency_depth: 9,
-        parallel_branches: 3,
-        external_systems: 4,
-        state_transitions: 16,
-        wake_cycles: 2,
-        validation_loops: 3,
-        artifact_count: 10,
-        coordination_edges: 18,
-        ambiguity_level: 8,
-        agent_owned_decomposition: true,
-        material_invalidation_events: 1,
-        replan_loops: 1,
-        compensable_mutations: 1,
-        durable_resume_cycles: 1,
-        coherent_long_horizon: true,
-    }
-}
-
 fn adaptive_only_evaluator<'a>(
     _context: &'a E2eContext,
     _observation: &'a ScenarioObservation,
@@ -166,13 +144,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_case_is_l5_realistic_and_shadowed() {
+    fn canonical_case_is_realistic_and_shadowed() {
         let case = materialize("attempt", 99).unwrap().case;
         assert_eq!(case.seed, CANONICAL_SEED);
-        assert_eq!(
-            case.complexity.tier,
-            super::super::ComplexityTier::L5Adaptive
-        );
         assert_eq!(case.characterization.human_horizon.min_minutes, Some(120));
         assert_eq!(case.characterization.realism.shadow, ShadowMode::ReadOnly);
         assert!(case.deliverable_contract.artifacts.is_empty());

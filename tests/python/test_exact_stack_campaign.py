@@ -79,14 +79,12 @@ def campaign_contract(versions: dict[str, str] | None = None):
                     "scenarios": ["direct_answer"],
                     "runs": 1,
                     "technical_retries": 1,
-                    "weight": 4,
                 },
                 {
                     "id": "weekly-fault-l2",
                     "execution_kind": "fault_injection",
                     "runs": 3,
                     "technical_retries": 0,
-                    "weight": 2,
                     "fault_profile": "weekly-l2-recovery",
                     "fault_scenario": "stateful.2",
                     "soak_minutes": 60,
@@ -464,7 +462,15 @@ fail() {
         self.assertEqual(manifest["campaign_id"], "daily")
         self.assertEqual(manifest["lane"], "daily")
         self.assertEqual([group["id"] for group in manifest["groups"]], ["daily-core", "weekly-fault-l2"])
-        self.assertEqual(manifest["groups"][0]["difficulty_weight"], 4)
+        # Every case counts the same: no weight and no profile travel.
+        self.assertEqual(
+            sorted(manifest),
+            ["campaign_id", "failure_policy", "groups", "kind", "lane"],
+        )
+        self.assertEqual(
+            sorted(manifest["groups"][0]),
+            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
+        )
         self.assertEqual(manifest["groups"][0]["scenarios"], ["direct_answer"])
         self.assertEqual(manifest["groups"][1]["fault_profile"], "weekly-l2-recovery")
         self.assertNotIn("scenarios", manifest["groups"][1])

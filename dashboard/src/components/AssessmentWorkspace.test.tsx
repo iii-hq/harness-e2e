@@ -32,7 +32,7 @@ const model: AssessmentWorkspaceModel = {
       },
       transcript: { messages: [] },
       systemStatus: 'passed',
-      objectiveScore: 35,
+      score: 35,
       assessments: [
         {
           id: 'assessment:durable_result',
@@ -91,7 +91,7 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('run run-1')
     expect(rendered).not.toContain('attempt attempt-1')
     expect(rendered).toContain('data-primary-run-metrics')
-    expect(rendered).toContain('Objective score')
+    expect(rendered).toContain('Score')
     expect(rendered).toContain('35/100')
     expect(rendered).toContain('Assessment outcomes')
     expect(rendered).toContain('Subject tokens')
@@ -122,7 +122,7 @@ describe('assessment workspace component', () => {
     expect(rendered).not.toContain('confidence')
     expect(detailHtml).toContain('Suggested next step')
     expect(detailHtml).not.toContain('hard gate')
-    expect(detailHtml.indexOf('Objective score')).toBeLessThan(
+    expect(detailHtml.indexOf('Score')).toBeLessThan(
       detailHtml.indexOf('System outcome'),
     )
     expect(detailHtml.indexOf('System outcome')).toBeLessThan(
@@ -156,7 +156,7 @@ describe('assessment workspace component', () => {
           key: 'security-review',
           scenarioId: 'security_review',
           systemStatus: 'passed',
-          objectiveScore: 38,
+          score: 38,
           assessments: [
             {
               ...model.runs[0].assessments[0],
@@ -205,7 +205,7 @@ describe('assessment workspace component', () => {
     )
 
     expect(html).toContain('Security Review')
-    expect(html).toContain('Objective score')
+    expect(html).toContain('Score')
     expect(html).toContain('38/100')
     expect(html).not.toContain('75/200')
     expect(html).toContain('Seeded detection')
@@ -230,7 +230,7 @@ describe('assessment workspace component', () => {
       ...model.runs[0],
       key: 'subject-error',
       systemStatus: 'subject_error' as const,
-      objectiveScore: null,
+      score: null,
       assessments: [],
     }
     const html = renderToStaticMarkup(
@@ -240,7 +240,7 @@ describe('assessment workspace component', () => {
       />,
     )
     expect(html).not.toContain('Filter scenario runs by assessment signal')
-    expect(html).toContain('Objective score')
+    expect(html).toContain('Score')
     expect(html).toContain('Not reported')
     expect(html).toContain('Assessment outcomes')
     expect(html).toContain('No assessments retained')
@@ -266,7 +266,7 @@ describe('assessment workspace component', () => {
       ...model.runs[0],
       key: 'infrastructure-error',
       systemStatus: 'infrastructure_error' as const,
-      objectiveScore: null,
+      score: null,
       metrics: { ...model.runs[0].metrics, durationMs: 100 },
       assessments: model.runs[0].assessments.map((entry) => ({
         ...entry,
@@ -280,7 +280,7 @@ describe('assessment workspace component', () => {
         filter="all"
       />,
     )
-    expect(html).toContain('No objective score retained')
+    expect(html).toContain('No score retained')
     expect(html).toContain('1 not evaluated')
     // The old projection counted not_evaluated as a failure on the subject.
     expect(html).not.toContain('1 failed')

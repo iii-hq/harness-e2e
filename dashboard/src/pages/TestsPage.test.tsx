@@ -20,7 +20,7 @@ function side(overrides: Partial<TestSideSummary> = {}): TestSideSummary {
     total_runs: 1,
     scored_runs: 1,
     case_count: 1,
-    median_score: 100,
+    mean_score: 100,
     pass_rate: 1,
     median_cost_usd: null,
     median_tokens: null,
@@ -66,11 +66,8 @@ function row(
             to,
             delta: {
               score:
-                from &&
-                to &&
-                from.median_score !== null &&
-                to.median_score !== null
-                  ? to.median_score - from.median_score
+                from && to && from.mean_score !== null && to.mean_score !== null
+                  ? to.mean_score - from.mean_score
                   : null,
               cost_usd: null,
               tokens: null,
@@ -106,7 +103,7 @@ describe('definition-scoped test side presentation', () => {
 
   it('keeps a measured score when no run completed', () => {
     const incomplete = side({
-      median_score: 65,
+      mean_score: 65,
       outcomes: {
         passed: 0,
         hard_gate_failed: 0,
@@ -127,8 +124,8 @@ describe('definition-scoped test side presentation', () => {
 describe('comparison row states', () => {
   // Audit CP-01: one state per row decides the group and the default filter.
   it('classifies rows and sorts comparable first', () => {
-    const regressed = row(side(), side({ median_score: 60 }))
-    const improved = row(side({ median_score: 60 }), side())
+    const regressed = row(side(), side({ mean_score: 60 }))
+    const improved = row(side({ mean_score: 60 }), side())
     const oneSide = row(null, side(), { test_id: 'b_only' })
     const none = row(null, null, { test_id: 'nothing' })
     const changed = row(

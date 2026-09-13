@@ -1,13 +1,12 @@
 # Harness E2E
 
-`harness-e2e` measures which complexity levels a Harness stack can execute
-with correct deliverables, structural integrity, bounded work, and repeatable
-outcomes.
+`harness-e2e` measures what a Harness stack can execute with correct
+deliverables, structural integrity, bounded work, and repeatable outcomes.
 
 A run's score is the plain sum of the points its evaluated criteria awarded; a
 criterion nobody evaluated adds nothing and nothing is normalized or rescaled.
-Objective scores preserve measured criterion points independently of completion
-or resource limits. Criteria do not veto the score or approve a run. Completion,
+Scores preserve measured criterion points independently of completion or
+resource limits. Criteria do not veto the score or approve a run. Completion,
 technical validity, artifact evidence, and runtime controls are reported
 separately; infrastructure and execution failures still fail the CLI.
 
@@ -381,13 +380,10 @@ execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 `comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric
 deltas remain disabled when the case set or canonical contract differs.
 
-Deliverable, structural, technical, cost, latency, turns, retries, and work
-amplification deltas remain independent. Cost and wall-time are reported as
-observed metrics and compared only within a compatible baseline/candidate
-cohort.
-amplification deltas remain independent. A tier is repeatable after five local
-runs satisfy the deliverable, structural, and technical thresholds. Cost and
-wall-time are reported as observed metrics and compared only within a compatible
+Deliverable, structural, technical, cost, latency, turns, and retry deltas
+remain independent. A case is repeatable after five local runs satisfy the
+deliverable, structural, and technical thresholds. Cost and wall-time are
+reported as observed metrics and compared only within a compatible
 baseline/candidate cohort.
 
 ## Runtime-only package boundary

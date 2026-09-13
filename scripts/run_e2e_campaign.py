@@ -27,19 +27,14 @@ from collections.abc import Callable, Mapping, Sequence
 from functools import cache
 from typing import Any
 
-from result_contract import (
-    RESULT_CONTRACT_SHA256,
-    SCORING_PROFILE_SHA256,
-)
+from result_contract import RESULT_CONTRACT_SHA256
 
 CAMPAIGN_KIND = "harness-e2e-campaign"
-SCORING_PROFILE = "difficulty-weighted"
 ROOT_FIELDS = {
     "kind",
     "campaign_id",
     "lane",
     "failure_policy",
-    "scoring_profile",
     "groups",
 }
 COMMON_GROUP_FIELDS = {
@@ -47,7 +42,6 @@ COMMON_GROUP_FIELDS = {
     "execution_kind",
     "runs",
     "technical_retries",
-    "difficulty_weight",
 }
 SCENARIO_GROUP_FIELDS = COMMON_GROUP_FIELDS | {
     "scenarios",
@@ -81,15 +75,12 @@ RESULT_AGGREGATE_COUNT_FIELDS = (
     "undetermined_runs",
     "technical_valid_runs",
     "technical_invalid_runs",
-    "objective_scored_runs",
-    "quality_scored_completed_runs",
+    "scored_runs",
 )
 RESULT_AGGREGATE_RATE_FIELDS = (
     "execution_reliability",
     "completion_evidence_coverage",
     "completion_rate",
-    "objective_score_coverage",
-    "quality_coverage",
 )
 RESULT_AGGREGATE_TOKEN_FIELDS = (
     "total_tokens_consumed",
@@ -111,11 +102,12 @@ def scenario_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
         raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
 
 
-FAULT_PROFILE_WEIGHT = {
-    "weekly-l2-recovery": 2,
-    "weekly-l3-recovery": 3,
-    "weekly-l4-recovery": 4,
+FAULT_PROFILES = {
+    "weekly-l2-recovery",
+    "weekly-l3-recovery",
+    "weekly-l4-recovery",
 }
+
 
 def _warn(message: str) -> None:
     """Contract drift is reported on stderr and in the summary, never enforced."""
@@ -132,7 +124,6 @@ class CampaignGroup:
     execution_kind: str
     runs: int
     technical_retries: int
-    difficulty_weight: int
     scenarios: tuple[str, ...]
     fault_profile: str | None = None
     fault_scenario: str | None = None
@@ -144,7 +135,6 @@ class Campaign:
     campaign_id: str
     lane: str
     failure_policy: str
-    scoring_profile: str
     groups: tuple[CampaignGroup, ...]
 
 
@@ -196,7 +186,6 @@ def parse_campaign(
 ) -> Campaign:
     catalog = scenario_catalog() if catalog is None else catalog
     scenario_kinds = {key: value["execution_kind"] for key, value in catalog.items()}
-    scenario_weights = {key: value["difficulty_weight"] for key, value in catalog.items()}
     root = _expect_object(value, source)
     _reject_seed_fields(root)
     _reject_unknown_fields(root, ROOT_FIELDS, source)
@@ -213,11 +202,6 @@ def parse_campaign(
     if failure_policy not in FAILURE_POLICIES:
         raise CampaignError(
             f"{source}.failure_policy must be one of {sorted(FAILURE_POLICIES)}"
-        )
-    scoring_profile = root["scoring_profile"]
-    if scoring_profile != SCORING_PROFILE:
-        raise CampaignError(
-            f"{source}.scoring_profile must be {SCORING_PROFILE!r}"
         )
     raw_groups = root["groups"]
     if not isinstance(raw_groups, list) or not raw_groups:
@@ -252,9 +236,6 @@ def parse_campaign(
         retries = _expect_bounded_int(
             group["technical_retries"], f"{label}.technical_retries", 0, 3
         )
-        difficulty_weight = _expect_bounded_int(
-            group["difficulty_weight"], f"{label}.difficulty_weight", 1, 5
-        )
         if execution_kind in {
             "scripted_dialogue",
             "composite_flow",
@@ -271,7 +252,7 @@ def parse_campaign(
                 )
             profile = group["fault_profile"]
             scenario = group["fault_scenario"]
-            if profile not in FAULT_PROFILE_WEIGHT:
+            if profile not in FAULT_PROFILES:
                 raise CampaignError(f"{label}.fault_profile is not canonical")
             if not isinstance(scenario, str) or not scenario:
                 raise CampaignError(f"{label}.fault_scenario must be a non-empty string")
@@ -280,17 +261,12 @@ def parse_campaign(
             )
             if runs < 3:
                 raise CampaignError(f"{label}.runs must be at least 3")
-            if difficulty_weight != FAULT_PROFILE_WEIGHT[profile]:
-                raise CampaignError(
-                    f"{label}.difficulty_weight does not match {profile}"
-                )
             groups.append(
                 CampaignGroup(
                     id=group_id,
                     execution_kind=execution_kind,
                     runs=runs,
                     technical_retries=retries,
-                    difficulty_weight=difficulty_weight,
                     scenarios=(),
                     fault_profile=profile,
                     fault_scenario=scenario,
@@ -324,18 +300,12 @@ def parse_campaign(
             raise CampaignError(
                 f"{label} is adaptive_flow and must select exactly one scenario with runs=1"
             )
-        expected_weight = max(scenario_weights[item] for item in scenarios)
-        if difficulty_weight != expected_weight:
-            raise CampaignError(
-                f"{label}.difficulty_weight must be {expected_weight} for its canonical cases"
-            )
         groups.append(
             CampaignGroup(
                 id=group_id,
                 execution_kind=execution_kind,
                 runs=runs,
                 technical_retries=retries,
-                difficulty_weight=difficulty_weight,
                 scenarios=tuple(scenarios),
             )
         )
@@ -344,7 +314,6 @@ def parse_campaign(
         campaign_id=campaign_id,
         lane=lane,
         failure_policy=failure_policy,
-        scoring_profile=scoring_profile,
         groups=tuple(groups),
     )
 
@@ -456,19 +425,6 @@ def _file_reference(path: pathlib.Path, root: pathlib.Path) -> dict[str, Any]:
     }
 
 
-def _tier_weight(value: Any) -> int | None:
-    if not isinstance(value, str):
-        return None
-    return {
-        "l0_atomic": 1,
-        "l1_sequential": 1,
-        "l2_stateful": 2,
-        "l3_concurrent": 3,
-        "l4_coordinated": 4,
-        "l5_adaptive": 5,
-    }.get(value)
-
-
 def _require_result_hash(value: Any, label: str) -> str:
     if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value):
         raise CampaignError(f"{label} must be a sha256 fingerprint")
@@ -520,19 +476,16 @@ def _regular_group_measurement(
     results_path = output / "results.json"
     if not results_path.is_file():
         return {
-            "objective_score": None,
+            "score": None,
             "score_availability": "unavailable",
             "execution_reliability": 0.0,
             "completion_evidence_coverage": 0.0,
             "completion_rate": None,
-            "objective_score_coverage": 0.0,
-            "quality_score_completed": None,
-            "quality_coverage": None,
+            "score_coverage": 0.0,
             "infrastructure_valid": False,
             "report_state": "partial",
             "objective_outcome": "inconclusive",
             "result_contract_sha256": None,
-            "scoring_profile_sha256": None,
             "warnings": [],
         }
     report = _load_json(results_path)
@@ -545,15 +498,6 @@ def _regular_group_measurement(
         warnings.append(
             f"{results_path}: written under result contract {result_contract_sha256}, "
             f"this campaign expects {RESULT_CONTRACT_SHA256}"
-        )
-    scoring_profile_sha256 = _require_result_hash(
-        report.get("scoring_profile_sha256"),
-        f"{results_path}.scoring_profile_sha256",
-    )
-    if scoring_profile_sha256 != SCORING_PROFILE_SHA256:
-        warnings.append(
-            f"{results_path}: scored under scoring profile {scoring_profile_sha256}, "
-            f"this campaign expects {SCORING_PROFILE_SHA256}"
         )
     for warning in warnings:
         _warn(warning)
@@ -579,10 +523,8 @@ def _regular_group_measurement(
     scenarios = report.get("scenarios")
     if not isinstance(scenarios, list):
         raise CampaignError(f"{results_path}: scenarios must be an array")
-    medians: list[float] = []
+    scenario_scores: list[float] = []
     totals = {field: 0 for field in RESULT_AGGREGATE_COUNT_FIELDS}
-    quality_scores: list[float] = []
-    observed_weights: list[int] = []
     for scenario in scenarios:
         if not isinstance(scenario, dict):
             raise CampaignError(f"{results_path}: every scenario must be an object")
@@ -614,18 +556,11 @@ def _regular_group_measurement(
             if field not in aggregate:
                 raise CampaignError(f"{label}.{field} is required")
             _optional_nonnegative_number(aggregate.get(field), f"{label}.{field}")
-        median = _optional_result_number(
-            aggregate.get("objective_median_score"),
-            f"{label}.objective_median_score",
+        mean_score = _optional_result_number(
+            aggregate.get("mean_score"), f"{label}.mean_score"
         )
-        if median is not None:
-            medians.append(float(median))
-        quality_score = _optional_result_number(
-            aggregate.get("quality_score_completed"),
-            f"{label}.quality_score_completed",
-        )
-        if quality_score is not None:
-            quality_scores.append(quality_score)
+        if mean_score is not None:
+            scenario_scores.append(mean_score)
         case = scenario.get("case")
         if case is None:
             reason = scenario.get("deferral_reason")
@@ -640,26 +575,13 @@ def _regular_group_measurement(
                 raise CampaignError(
                     f"{results_path}: unmaterialized scenario must be wholly deferred with a reason"
                 )
-        complexity = case.get("complexity") if isinstance(case, dict) else None
-        tier = complexity.get("tier") if isinstance(complexity, dict) else None
-        weight = _tier_weight(tier)
-        if weight is not None:
-            observed_weights.append(weight)
-    if observed_weights and max(observed_weights) != group.difficulty_weight:
-        raise CampaignError(
-            f"{results_path}: observed difficulty weight does not match campaign"
-        )
     expected_runs = group.runs * len(group.scenarios)
     if totals["planned_runs"] != expected_runs:
         raise CampaignError(
             f"{results_path}: planned runs do not match campaign ({totals['planned_runs']} != {expected_runs})"
         )
     planned = totals["planned_runs"]
-    completed = totals["completed_runs"]
-    objective_score_coverage = totals["objective_scored_runs"] / planned if planned else 0.0
-    quality_coverage = (
-        totals["quality_scored_completed_runs"] / completed if completed else None
-    )
+    score_coverage = totals["scored_runs"] / planned if planned else 0.0
     execution_reliability = totals["technical_valid_runs"] / planned if planned else 0.0
     completion_evidence_coverage = (
         totals["completed_runs"] + totals["task_incomplete_runs"]
@@ -670,34 +592,30 @@ def _regular_group_measurement(
         if completion_denominator
         else None
     )
-    objective_score = sum(medians) / len(medians) if medians else None
-    quality_score_completed = (
-        sum(quality_scores) / len(quality_scores) if quality_scores else None
+    score = (
+        sum(scenario_scores) / len(scenario_scores) if scenario_scores else None
     )
     availability = (
         "complete"
-        if objective_score is not None
-        and objective_score_coverage >= 1.0
+        if score is not None
+        and score_coverage >= 1.0
         and report_state == "complete"
         and totals["technical_invalid_runs"] == 0
         else "partial"
-        if objective_score is not None
+        if score is not None
         else "unavailable"
     )
     return {
-        "objective_score": objective_score,
+        "score": score,
         "score_availability": availability,
         "execution_reliability": execution_reliability,
         "completion_evidence_coverage": completion_evidence_coverage,
         "completion_rate": completion_rate,
-        "objective_score_coverage": objective_score_coverage,
-        "quality_score_completed": quality_score_completed,
-        "quality_coverage": quality_coverage,
+        "score_coverage": score_coverage,
         "infrastructure_valid": totals["technical_invalid_runs"] == 0 and not persistence_errors,
         "report_state": report_state,
         "objective_outcome": objective_outcome,
         "result_contract_sha256": result_contract_sha256,
-        "scoring_profile_sha256": scoring_profile_sha256,
         "warnings": warnings,
     }
 
@@ -708,19 +626,16 @@ def _fault_group_measurement(
     evaluations = sorted(output.glob("run-*/fault-evaluation.json"))
     if not evaluations:
         return {
-            "objective_score": None,
+            "score": None,
             "score_availability": "unavailable",
             "execution_reliability": 0.0,
             "completion_evidence_coverage": 0.0,
             "completion_rate": None,
-            "objective_score_coverage": 0.0,
-            "quality_score_completed": None,
-            "quality_coverage": None,
+            "score_coverage": 0.0,
             "infrastructure_valid": False,
             "report_state": "partial",
             "objective_outcome": "inconclusive",
             "result_contract_sha256": None,
-            "scoring_profile_sha256": None,
         }
     scores: list[float] = []
     infrastructure_valid = True
@@ -733,27 +648,25 @@ def _fault_group_measurement(
         score = 100.0 if classification == "correct_recovery" else 0.0
         scores.append(score)
     coverage = min(1.0, len(scores) / group.runs)
-    objective_score = sum(scores) / len(scores) if scores else None
+    group_score = sum(scores) / len(scores) if scores else None
     availability = (
         "complete"
-        if objective_score is not None
+        if group_score is not None
         and coverage >= 1.0
         and infrastructure_valid
         else "partial"
-        if objective_score is not None
+        if group_score is not None
         else "unavailable"
     )
     return {
-        "objective_score": objective_score,
+        "score": group_score,
         "score_availability": availability,
         "execution_reliability": coverage,
         "completion_evidence_coverage": coverage,
         "completion_rate": (
             sum(score == 100.0 for score in scores) / len(scores) if scores else None
         ),
-        "objective_score_coverage": coverage,
-        "quality_score_completed": None,
-        "quality_coverage": None,
+        "score_coverage": coverage,
         "infrastructure_valid": infrastructure_valid,
         "report_state": "complete" if len(evaluations) == group.runs else "partial",
         "objective_outcome": (
@@ -764,7 +677,6 @@ def _fault_group_measurement(
             else "inconclusive"
         ),
         "result_contract_sha256": None,
-        "scoring_profile_sha256": None,
     }
 
 
@@ -772,19 +684,18 @@ def score_campaign(
     campaign: Campaign, group_results: Sequence[dict[str, Any]]
 ) -> dict[str, Any]:
     by_id = {result["group_id"]: result for result in group_results}
-    scored_weight = 0
-    expected_weight = sum(group.difficulty_weight for group in campaign.groups)
-    weighted_score = 0.0
+    scored_groups = 0
+    expected_groups = len(campaign.groups)
+    total_score = 0.0
     metric_fields = (
         "execution_reliability",
         "completion_evidence_coverage",
-        "objective_score_coverage",
+        "score_coverage",
     )
     metric_totals = {field: 0.0 for field in metric_fields}
     infrastructure_valid = True
     all_group_scores_complete = True
     result_contracts: set[str] = set()
-    scoring_profiles: set[str] = set()
     for group in campaign.groups:
         result = by_id[group.id]
         output = pathlib.Path(result["output"])
@@ -793,22 +704,15 @@ def score_campaign(
             if group.execution_kind == "fault_injection"
             else _regular_group_measurement(group, output)
         )
-        result.update(
-            {
-                **measurement,
-                "difficulty_weight": group.difficulty_weight,
-            }
-        )
-        score = measurement["objective_score"]
+        result.update(measurement)
+        score = measurement["score"]
         if isinstance(score, (int, float)):
-            scored_weight += group.difficulty_weight
-            weighted_score += float(score) * group.difficulty_weight
+            scored_groups += 1
+            total_score += float(score)
         for field in metric_fields:
             metric_totals[field] += float(measurement[field])
         if measurement["result_contract_sha256"] is not None:
             result_contracts.add(measurement["result_contract_sha256"])
-        if measurement["scoring_profile_sha256"] is not None:
-            scoring_profiles.add(measurement["scoring_profile_sha256"])
         infrastructure_valid = (
             infrastructure_valid and measurement["infrastructure_valid"]
         )
@@ -820,52 +724,36 @@ def score_campaign(
         for group in campaign.groups
         for warning in by_id[group.id].get("warnings", [])
     ]
+    campaign_warnings: list[str] = []
     if len(result_contracts) > 1:
-        warnings.append(
+        campaign_warnings.append(
             "campaign groups were written under different result contracts: "
             + ", ".join(sorted(result_contracts))
         )
-    if len(scoring_profiles) > 1:
-        warnings.append(
-            "campaign groups were scored under different scoring profiles: "
-            + ", ".join(sorted(scoring_profiles))
-        )
-    local_scoring_profile = _canonical_sha256(
-        _load_json(
-            pathlib.Path(__file__).resolve().parents[1]
-            / "config"
-            / "scoring"
-            / "difficulty-weighted.json"
-        )
-    )
-    if scoring_profiles and scoring_profiles != {local_scoring_profile}:
-        warnings.append(
-            "results scoring_profile_sha256 differs from the campaign scoring profile "
-            f"{local_scoring_profile}"
-        )
-    for warning in warnings[len([w for g in campaign.groups for w in by_id[g.id].get("warnings", [])]):]:
+    for warning in campaign_warnings:
         _warn(warning)
-    harness_score = weighted_score / scored_weight if scored_weight else None
+    warnings.extend(campaign_warnings)
+    harness_score = total_score / scored_groups if scored_groups else None
     availability = (
         "complete"
-        if scored_weight == expected_weight and infrastructure_valid and all_group_scores_complete
+        if scored_groups == expected_groups
+        and infrastructure_valid
+        and all_group_scores_complete
         else "partial"
         if harness_score is not None
         else "unavailable"
     )
     return {
-        "profile": campaign.scoring_profile,
         "harness_score": harness_score,
         "score_availability": availability,
-        "scored_weight": scored_weight,
-        "expected_weight": expected_weight,
+        "scored_groups": scored_groups,
+        "expected_groups": expected_groups,
         **{
             field: total / len(campaign.groups)
             for field, total in metric_totals.items()
         },
         "infrastructure_valid": infrastructure_valid,
         "result_contract_sha256": next(iter(sorted(result_contracts)), None),
-        "scoring_profile_sha256": next(iter(sorted(scoring_profiles)), local_scoring_profile),
         "warnings": warnings,
     }
 
@@ -957,7 +845,6 @@ def execute_campaign(
             "scenarios": list(group.scenarios),
             "runs": group.runs,
             "technical_retries": group.technical_retries,
-            "difficulty_weight": group.difficulty_weight,
             "output": str(group_output),
             "command": command,
         }
@@ -1064,7 +951,6 @@ def aggregate_existing_campaign(
                 "scenarios": list(group.scenarios),
                 "runs": group.runs,
                 "technical_retries": group.technical_retries,
-                "difficulty_weight": group.difficulty_weight,
                 "output": str(output),
                 "status": "passed"
                 if has_native_result and not failure.is_file()
@@ -1097,7 +983,6 @@ def build_campaign_bundle(
     *,
     summary_path: pathlib.Path,
     manifest_path: pathlib.Path,
-    scoring_profile_path: pathlib.Path,
 ) -> dict[str, Any]:
     root = summary_path.parent
     if root.is_symlink():
@@ -1124,22 +1009,18 @@ def build_campaign_bundle(
                 "group_id": raw_group.get("group_id"),
                 "execution_kind": raw_group.get("execution_kind"),
                 "status": raw_group.get("status"),
-                "difficulty_weight": raw_group.get("difficulty_weight"),
-                "objective_score": raw_group.get("objective_score"),
+                "score": raw_group.get("score"),
                 "score_availability": raw_group.get("score_availability"),
                 "artifacts": artifacts,
             }
         )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    scoring_profile = json.loads(scoring_profile_path.read_text(encoding="utf-8"))
     return {
         "schema": "e2e-campaign-observation-bundle",
         "campaign_id": summary["campaign_id"],
         "execution_id": summary["execution_id"],
         "lane": summary["lane"],
         "manifest_sha256": _canonical_sha256(manifest),
-        "scoring_profile": SCORING_PROFILE,
-        "scoring_profile_sha256": _canonical_sha256(scoring_profile),
         "summary": _file_reference(summary_path, root),
         "groups": groups,
     }
@@ -1267,14 +1148,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aggregate-existing-root", type=pathlib.Path)
     parser.add_argument("--summary", type=pathlib.Path)
     parser.add_argument("--bundle", type=pathlib.Path)
-    parser.add_argument(
-        "--scoring-profile",
-        type=pathlib.Path,
-        default=pathlib.Path(__file__).resolve().parents[1]
-        / "config"
-        / "scoring"
-        / "difficulty-weighted.json",
-    )
     parser.add_argument("--model")
     parser.add_argument("--provider")
     parser.add_argument("--url")
@@ -1286,12 +1159,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         campaign = load_campaign(args.manifest, scenario_catalog(args.e2e_bin))
-        scoring_profile = _load_json(args.scoring_profile)
-        if scoring_profile.get("profile") != SCORING_PROFILE:
-            _warn(
-                f"scoring profile {scoring_profile.get('profile')!r} differs from "
-                f"the campaign profile {SCORING_PROFILE}; scoring with it as given"
-            )
         if args.validate_only:
             print(
                 json.dumps(
@@ -1300,8 +1167,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "manifest_sha256": _canonical_sha256(
                             json.loads(args.manifest.read_text(encoding="utf-8"))
                         ),
-                        "scoring_profile": SCORING_PROFILE,
-                        "scoring_profile_sha256": _canonical_sha256(scoring_profile),
                     },
                     sort_keys=True,
                 )
@@ -1341,9 +1206,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         summary["manifest_sha256"] = _canonical_sha256(
             json.loads(args.manifest.read_text(encoding="utf-8"))
         )
-        summary["scoring"]["profile_sha256"] = _canonical_sha256(
-            scoring_profile
-        )
         summary_path = args.summary
         if summary_path is None and not args.dry_run:
             summary_path = (
@@ -1361,7 +1223,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     summary,
                     summary_path=summary_path,
                     manifest_path=args.manifest,
-                    scoring_profile_path=args.scoring_profile,
                 )
                 _write_json_atomic(bundle_path, bundle)
                 validate_campaign_bundle(bundle, root=summary_path.parent)

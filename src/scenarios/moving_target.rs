@@ -32,7 +32,7 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -279,14 +279,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "max_submissions": 2,
             "token_derivation": "run-scoped",
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 2,
-            validation_loops: 2,
-            ambiguity_level: 7,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -729,17 +721,13 @@ mod tests {
     }
 
     #[test]
-    fn materialized_case_is_l5_adaptive_and_reproducible_across_namespaces() {
+    fn materialized_case_is_reproducible_across_namespaces() {
         let first = materialize("attempt-a", 29).unwrap();
         let retry = materialize("attempt-b", 29).unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.capture.is_some());

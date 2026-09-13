@@ -105,7 +105,6 @@ pub struct FaultProfile {
     pub out_of_order_results: bool,
     #[serde(default)]
     pub cancellation: Option<CancellationRule>,
-    pub max_work_amplification: f64,
 }
 
 impl FaultProfile {
@@ -119,9 +118,6 @@ impl FaultProfile {
 
     pub fn validate(&self) -> Result<()> {
         validate_identifier(&self.profile_id, "profile_id")?;
-        if !self.max_work_amplification.is_finite() || self.max_work_amplification < 1.0 {
-            bail!("max_work_amplification must be finite and at least 1.0");
-        }
         for rule in &self.delayed_calls {
             validate_target(&rule.target, "delayed call target")?;
             if rule.delay_ms == 0 || rule.delay_ms > MAX_DELAY_MS {
@@ -466,7 +462,6 @@ pub struct FaultJournal {
     pub completed_at: String,
     pub cleanup_completed: bool,
     pub cancellation_observed: bool,
-    pub observed_work_amplification: Option<f64>,
     pub results_sha256: Option<String>,
     pub actions: Vec<FaultObservation>,
     #[serde(default)]
@@ -494,11 +489,6 @@ impl FaultJournal {
             .context("fault journal completed_at must be RFC 3339")?;
         if completed < started {
             bail!("fault journal completed_at precedes started_at");
-        }
-        if let Some(value) = self.observed_work_amplification {
-            if !value.is_finite() || value < 0.0 {
-                bail!("observed_work_amplification must be finite and non-negative");
-            }
         }
         if let Some(value) = &self.results_sha256 {
             validate_sha256(value, "results_sha256")?;
@@ -544,7 +534,6 @@ impl FaultJournal {
 #[serde(rename_all = "snake_case")]
 pub enum RecoveryClassification {
     CorrectRecovery,
-    ExcessiveRecovery,
     IncorrectResult,
     StructuralFailure,
     InfrastructureFailure,
@@ -561,8 +550,6 @@ pub struct FaultEvaluation {
     pub structural_integrity: Option<bool>,
     pub cleanup_completed: bool,
     pub cancellation_observed: bool,
-    pub observed_work_amplification: Option<f64>,
-    pub max_work_amplification: f64,
     pub planned_actions: u32,
     pub recovered_actions: u32,
     pub results_sha256: Option<String>,
@@ -645,7 +632,6 @@ impl FaultEvaluation {
         let mut deliverable_correct = None;
         let mut structural_integrity = None;
         let mut results_sha256 = None;
-        let mut report_work_amplification = None;
         if let Some(report) = report {
             let execution = &report.execution;
             if execution.execution_id != journal.execution_id {
@@ -659,7 +645,6 @@ impl FaultEvaluation {
             deliverable_correct = dimension_outcome(report, EvaluationDimension::Deliverable);
             structural_integrity =
                 dimension_outcome(report, EvaluationDimension::StructuralIntegrity);
-            report_work_amplification = maximum_work_amplification(report);
         }
 
         match profile.expected_outcome {
@@ -707,12 +692,6 @@ impl FaultEvaluation {
             bail!("fault journal declares a results hash but no results were supplied");
         }
 
-        let observed_work_amplification =
-            report_work_amplification.or(journal.observed_work_amplification);
-        if observed_work_amplification.is_none() {
-            infrastructure_failure = true;
-            reasons.push("work amplification evidence is unavailable".into());
-        }
         if !journal.cleanup_completed {
             reasons.push("cleanup did not complete after the perturbation".into());
         }
@@ -735,14 +714,6 @@ impl FaultEvaluation {
                 && !journal.cancellation_observed)
         {
             RecoveryClassification::IncorrectResult
-        } else if observed_work_amplification
-            .is_some_and(|value| value > profile.max_work_amplification)
-        {
-            reasons.push(format!(
-                "work amplification exceeds {:.3}",
-                profile.max_work_amplification
-            ));
-            RecoveryClassification::ExcessiveRecovery
         } else {
             RecoveryClassification::CorrectRecovery
         };
@@ -758,8 +729,6 @@ impl FaultEvaluation {
             structural_integrity,
             cleanup_completed: journal.cleanup_completed,
             cancellation_observed: journal.cancellation_observed,
-            observed_work_amplification,
-            max_work_amplification: profile.max_work_amplification,
             planned_actions: plan.actions.len() as u32,
             recovered_actions,
             results_sha256,
@@ -787,23 +756,6 @@ fn dimension_outcome(report: &E2eReport, dimension: EvaluationDimension) -> Opti
             .find(|candidate| candidate.dimension == dimension)
             .and_then(|candidate| candidate.passed)
             .map(|passed| all_passed && passed)
-    })
-}
-
-fn maximum_work_amplification(report: &E2eReport) -> Option<f64> {
-    let runs = report
-        .scenarios
-        .iter()
-        .flat_map(|scenario| &scenario.runs)
-        .collect::<Vec<_>>();
-    if runs.is_empty() {
-        return None;
-    }
-    runs.into_iter().try_fold(0.0_f64, |maximum, run| {
-        run.efficiency
-            .as_ref()
-            .and_then(|efficiency| efficiency.work_amplification)
-            .map(|value| maximum.max(value))
     })
 }
 
@@ -893,7 +845,6 @@ mod tests {
             throttle_burst: None,
             out_of_order_results: true,
             cancellation: None,
-            max_work_amplification: 4.0,
         }
     }
 
@@ -905,8 +856,8 @@ mod tests {
         profile
     }
 
-    fn degraded_report(work_amplification: f64) -> E2eReport {
-        let mut report = passing_report(work_amplification);
+    fn degraded_report() -> E2eReport {
+        let mut report = passing_report();
         report.passed = false;
         for scenario in &mut report.scenarios {
             scenario.passed = false;
@@ -1072,10 +1023,10 @@ mod tests {
     }
 
     #[test]
-    fn evaluation_separates_correct_and_expensive_recovery() {
+    fn evaluation_classifies_a_recovered_run_as_correct() {
         let profile = profile();
         let plan = profile.materialize().unwrap();
-        let report = passing_report(3.0);
+        let report = passing_report();
         let journal = recovered_journal(&plan, &report);
         let evaluation =
             FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
@@ -1083,22 +1034,13 @@ mod tests {
             evaluation.classification,
             RecoveryClassification::CorrectRecovery
         );
-
-        let report = passing_report(5.0);
-        let journal = recovered_journal(&plan, &report);
-        let evaluation =
-            FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
-        assert_eq!(
-            evaluation.classification,
-            RecoveryClassification::ExcessiveRecovery
-        );
     }
 
     #[test]
     fn cleanup_failure_is_structural_and_injector_failure_is_infrastructure() {
         let profile = profile();
         let plan = profile.materialize().unwrap();
-        let report = passing_report(2.0);
+        let report = passing_report();
         let mut journal = recovered_journal(&plan, &report);
         journal.cleanup_completed = false;
         let evaluation =
@@ -1135,7 +1077,6 @@ mod tests {
             completed_at: "2026-08-12T10:01:00Z".into(),
             cleanup_completed: true,
             cancellation_observed: true,
-            observed_work_amplification: Some(1.5),
             results_sha256: None,
             actions: recovered_actions(&plan),
             infrastructure_failures: Vec::new(),
@@ -1158,7 +1099,7 @@ mod tests {
     fn degraded_profile_expects_a_failed_deliverable() {
         let profile = degraded_profile();
         let plan = profile.materialize().unwrap();
-        let report = degraded_report(2.0);
+        let report = degraded_report();
         let journal = recovered_journal(&plan, &report);
         let evaluation =
             FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
@@ -1168,7 +1109,7 @@ mod tests {
         );
         assert_eq!(evaluation.deliverable_correct, Some(false));
 
-        let report = passing_report(2.0);
+        let report = passing_report();
         let journal = recovered_journal(&plan, &report);
         let evaluation =
             FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
@@ -1182,21 +1123,7 @@ mod tests {
             .any(|reason| reason.contains("degraded profile expects")));
     }
 
-    #[test]
-    fn degraded_over_amplification_is_excessive_recovery() {
-        let profile = degraded_profile();
-        let plan = profile.materialize().unwrap();
-        let report = degraded_report(5.0);
-        let journal = recovered_journal(&plan, &report);
-        let evaluation =
-            FaultEvaluation::evaluate(&profile, &plan, &journal, Some(&report)).unwrap();
-        assert_eq!(
-            evaluation.classification,
-            RecoveryClassification::ExcessiveRecovery
-        );
-    }
-
-    fn passing_report(work_amplification: f64) -> E2eReport {
+    fn passing_report() -> E2eReport {
         let run = E2eRunReport {
             run_id: "run-1".into(),
             attempt_id: "attempt-1".into(),
@@ -1210,10 +1137,7 @@ mod tests {
             technical: crate::report::TechnicalState::Valid,
             evaluators: crate::report::EvaluatorStates {
                 completion: crate::report::EvaluatorAvailability::Available,
-                quality: crate::report::EvaluatorAvailability::Available,
             },
-            objective_score: Some(10),
-            quality_score_completed: Some(10),
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
@@ -1252,9 +1176,7 @@ mod tests {
                 output_tokens: Some(1),
                 total_tokens: Some(2),
                 cost_usd: Some(0.01),
-                minimum_expected_work: 1,
                 observed_work: Some(1),
-                work_amplification: Some(work_amplification),
                 technical_attempts: 1,
                 observed_complexity: ObservedComplexityReport::default(),
                 unavailable: BTreeMap::new(),
@@ -1293,22 +1215,15 @@ mod tests {
                 execution_reliability: Some(1.0),
                 completion_evidence_coverage: Some(1.0),
                 completion_rate: Some(1.0),
-                objective_scored_runs: 1,
-                objective_median_score: Some(10.0),
-                objective_score_coverage: Some(1.0),
-                quality_scored_completed_runs: 1,
-                quality_score_completed: Some(10.0),
-                quality_coverage: Some(1.0),
+                scored_runs: 1,
+                mean_score: Some(10.0),
                 total_tokens_consumed: None,
                 tokens_completed_p50: None,
                 failed_attempt_tokens: None,
                 tokens_per_completion: None,
-                runs: 1,
-                scored_runs: 1,
                 passed_runs: 1,
                 required_passes: 1,
                 pass_rate: 1.0,
-                median_score: Some(10.0),
                 technical_failures: 0,
                 cost: CostReport::default(),
                 robustness: RobustnessReport {
@@ -1334,7 +1249,6 @@ mod tests {
             persistence_errors: Vec::new(),
             slot_start_deadline_seconds: None,
             result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-            scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
             report_state: crate::report::ReportState::Complete,
             objective_outcome: crate::report::ObjectiveOutcome::Passed,
             execution: crate::identity::ExecutionIdentity {
@@ -1385,7 +1299,6 @@ mod tests {
             completed_at: "2026-08-12T10:01:00Z".into(),
             cleanup_completed: true,
             cancellation_observed: false,
-            observed_work_amplification: None,
             results_sha256: Some(artifact::sha256_value(report).unwrap()),
             actions: recovered_actions(plan),
             infrastructure_failures: Vec::new(),

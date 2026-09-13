@@ -40,9 +40,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_engine_build";
@@ -81,28 +81,6 @@ const MAX_ENGINE_SOURCE_BYTES: u64 = 65_536;
 
 /// Per-invocation wall-clock budget for one engine subprocess.
 const ENGINE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// L2Stateful profile: the subject consumes one external fixture system and
-/// produces exactly one captured artifact. `external_systems > 0` alone derives
-/// `L2Stateful`; `artifact_count == 1` matches the single-artifact contract.
-const PROFILE: ComplexityProfile = ComplexityProfile {
-    planning_depth: 1,
-    dependency_depth: 0,
-    parallel_branches: 0,
-    external_systems: 1,
-    state_transitions: 0,
-    wake_cycles: 0,
-    validation_loops: 0,
-    artifact_count: 1,
-    coordination_edges: 0,
-    ambiguity_level: 0,
-    agent_owned_decomposition: false,
-    material_invalidation_events: 0,
-    replan_loops: 0,
-    compensable_mutations: 0,
-    durable_resume_cycles: 0,
-    coherent_long_horizon: false,
-};
 
 // --- Fixed verification battery (positions + expected via kernel oracle) -----
 
@@ -189,7 +167,6 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         ID,
         seed,
         inputs,
-        PROFILE,
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -1029,9 +1006,7 @@ mod tests {
     }
 
     #[test]
-    fn materialize_is_reproducible_across_namespaces_and_is_l2_stateful() {
-        use super::super::ComplexityTier;
-
+    fn materialize_is_reproducible_across_namespaces() {
         let seed = super::super::stable_seed(ID);
         let first = materialize("attempt-a", seed).unwrap();
         let retry = materialize("attempt-b", seed).unwrap();
@@ -1042,13 +1017,8 @@ mod tests {
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.scenario_id, ID);
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
 
-        // Contract/capture/profile coherence.
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
+        // Contract/capture coherence.
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);

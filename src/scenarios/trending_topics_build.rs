@@ -153,15 +153,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "branch": "build",
                 "runtime_assets": asset_hashes,
             }),
-            ComplexityProfile {
-                planning_depth: 4,
-                dependency_depth: 2,
-                external_systems: 2,
-                state_transitions: 4,
-                validation_loops: 2,
-                artifact_count: 1,
-                ..Default::default()
-            },
             vec![
                 "iii::functions".into(),
                 "docker".into(),

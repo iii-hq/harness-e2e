@@ -26,21 +26,16 @@ impl E2eReport {
                 .sum::<u64>();
             let score = scenario
                 .aggregate
-                .median_score
+                .mean_score
                 .map(|score| format!("{score:.1}"))
                 .unwrap_or_else(|| "n/a".to_string());
-            let case = scenario.case.as_ref();
-            let tier = case
-                .map(|case| format!("{:?}", case.complexity.tier))
-                .unwrap_or_else(|| "unclassified".to_string());
             let _ = writeln!(
                 output,
-                "{}  tier={}  score={}  completed={}/{}  time={}  cost={}",
+                "{}  score={}  completed={}/{}  time={}  cost={}",
                 scenario.scenario_id,
-                tier,
                 score,
                 scenario.aggregate.completed_runs,
-                scenario.aggregate.runs,
+                scenario.aggregate.observed_runs,
                 format_duration(duration_ms),
                 format_cost(scenario.aggregate.cost.total_usd),
             );

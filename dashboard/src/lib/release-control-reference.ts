@@ -53,7 +53,7 @@ export type RcRun = {
   status: string | null
   completion: string | null
   technical: string | null
-  objectiveScore: number | null
+  score: number | null
   wallTimeMs: number | null
   totalTokens: number | null
   costSubjectUsd: number | null
@@ -81,7 +81,6 @@ export type RcRun = {
     subjectProvider?: string | null
     subjectModel?: string | null
     resultContractSha256?: string | null
-    scoringProfileSha256?: string | null
   }
 }
 
@@ -216,7 +215,6 @@ function primaryIdentity(values: {
   repetition: unknown
   definitionSha256: unknown
   resultContractSha256: unknown
-  scoringProfileSha256: unknown
   subjectProvider: unknown
   subjectModel: unknown
 }) {
@@ -230,7 +228,6 @@ function primaryIdentity(values: {
       : null,
     text(values.definitionSha256),
     text(values.resultContractSha256),
-    text(values.scoringProfileSha256),
     text(values.subjectProvider),
     text(values.subjectModel),
   ]
@@ -259,11 +256,11 @@ function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
   for (const run of runs) {
     const complete = run.attemptsComplete
     values.score.push(
-      typeof run.objectiveScore === 'number' &&
-        Number.isFinite(run.objectiveScore) &&
-        run.objectiveScore >= 0 &&
-        run.objectiveScore <= 100
-        ? run.objectiveScore
+      typeof run.score === 'number' &&
+        Number.isFinite(run.score) &&
+        run.score >= 0 &&
+        run.score <= 100
+        ? run.score
         : null,
     )
     values.totalTokens.push(complete ? run.totalTokens : null)
@@ -331,7 +328,6 @@ export function referencePrimaryMetrics(
           repetition: run.repetition,
           definitionSha256: run.identity?.definitionSha256,
           resultContractSha256: run.identity?.resultContractSha256,
-          scoringProfileSha256: run.identity?.scoringProfileSha256,
           subjectProvider:
             run.identity?.subjectProvider ?? planSubject?.provider,
           subjectModel: run.identity?.subjectModel ?? planSubject?.model,
@@ -391,7 +387,6 @@ export function localReferencePrimaryMetrics(
                 repetition: localRepetition(entry, run, index),
                 definitionSha256: scenarioCase?.inputs_sha256,
                 resultContractSha256: entry.report?.result_contract_sha256,
-                scoringProfileSha256: entry.report?.scoring_profile_sha256,
                 subjectProvider: reportSubject?.provider ?? subject?.provider,
                 subjectModel: reportSubject?.model ?? subject?.model,
               }),
@@ -507,6 +502,15 @@ export function referenceSummary(view: {
   }
 }
 
+function mean(values: Array<number | null | undefined>) {
+  const measured = values.filter(
+    (value): value is number =>
+      typeof value === 'number' && Number.isFinite(value),
+  )
+  if (measured.length === 0) return null
+  return measured.reduce((total, value) => total + value, 0) / measured.length
+}
+
 function median(values: Array<number | null | undefined>) {
   const measured = values
     .filter(
@@ -598,7 +602,7 @@ function localRuns(detail: DashboardExecutionDetail): RcRun[] {
               status: run.status,
               completion: run.completion,
               technical: run.technical,
-              objectiveScore: run.objective_score,
+              score: run.score,
               wallTimeMs: run.wall_time_ms ?? null,
               totalTokens: inclusiveTokens(run),
               costSubjectUsd: attemptsComplete
@@ -650,7 +654,7 @@ function observation(
           turns: null,
         },
   )
-  const scores = complete.map((run) => run.objectiveScore)
+  const scores = complete.map((run) => run.score)
   const cohorts = new Set(
     complete.map((run) => run.cohortSha256).filter(Boolean),
   )
@@ -669,7 +673,7 @@ function observation(
     contract_sha256: context.contractSha256 ?? '',
     assessment_profile_sha256: '',
     status: aggregateStatus(complete),
-    median_score: median(scores),
+    mean_score: mean(scores),
     run_count: complete.length,
     scored_runs: scores.filter(
       (score) => typeof score === 'number' && Number.isFinite(score),

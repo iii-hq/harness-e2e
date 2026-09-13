@@ -53,141 +53,6 @@
         "schema": true
       }
     },
-    "ComplexityClassification": {
-      "type": "object",
-      "required": [
-        "method",
-        "profile",
-        "tier"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ComplexityMethod"
-        },
-        "profile": {
-          "$ref": "#/definitions/ComplexityProfile"
-        },
-        "tier": {
-          "$ref": "#/definitions/ComplexityTier"
-        }
-      }
-    },
-    "ComplexityMethod": {
-      "type": "string",
-      "enum": [
-        "capability"
-      ]
-    },
-    "ComplexityProfile": {
-      "type": "object",
-      "required": [
-        "ambiguity_level",
-        "artifact_count",
-        "coordination_edges",
-        "dependency_depth",
-        "external_systems",
-        "parallel_branches",
-        "planning_depth",
-        "state_transitions",
-        "validation_loops",
-        "wake_cycles"
-      ],
-      "properties": {
-        "agent_owned_decomposition": {
-          "default": false,
-          "type": "boolean"
-        },
-        "ambiguity_level": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "artifact_count": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "coherent_long_horizon": {
-          "default": false,
-          "type": "boolean"
-        },
-        "compensable_mutations": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "coordination_edges": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "dependency_depth": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "durable_resume_cycles": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "external_systems": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "material_invalidation_events": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "parallel_branches": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "planning_depth": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "replan_loops": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "state_transitions": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "validation_loops": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "wake_cycles": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        }
-      }
-    },
-    "ComplexityTier": {
-      "type": "string",
-      "enum": [
-        "l0_atomic",
-        "l1_sequential",
-        "l2_stateful",
-        "l3_concurrent",
-        "l4_coordinated",
-        "l5_adaptive"
-      ]
-    },
     "DeliverableContract": {
       "type": "object",
       "required": [
@@ -375,8 +240,6 @@
         "behavior_sha256",
         "case_id",
         "characterization",
-        "classification",
-        "complexity",
         "contract_sha256",
         "deliverable_contract",
         "inputs_sha256",
@@ -394,12 +257,6 @@
         },
         "characterization": {
           "$ref": "#/definitions/ScenarioCharacterization"
-        },
-        "classification": {
-          "$ref": "#/definitions/ComplexityClassification"
-        },
-        "complexity": {
-          "$ref": "#/definitions/ComplexityProfile"
         },
         "contract_sha256": {
           "type": "string"

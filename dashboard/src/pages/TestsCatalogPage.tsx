@@ -34,12 +34,11 @@ import { catalogExecutionSummary } from '@/lib/test-catalog-view'
 
 type Lifecycle = TestCatalogRow['lifecycle']
 type LifecycleFilter = 'all' | Lifecycle
-type SortKey = 'lifecycle' | 'name' | 'runs' | 'last_seen' | 'complexity'
+type SortKey = 'lifecycle' | 'name' | 'runs' | 'last_seen'
 
 export type CatalogFilters = {
   query: string
   lifecycle: LifecycleFilter
-  complexity: string
   realism: string
   withExecutions: boolean
   sort: SortKey
@@ -48,20 +47,13 @@ export type CatalogFilters = {
 export const CATALOG_DEFAULT_FILTERS: CatalogFilters = {
   query: '',
   lifecycle: 'all',
-  complexity: 'all',
   realism: 'all',
   withExecutions: false,
   sort: 'lifecycle',
 }
 
 const LIFECYCLES: Lifecycle[] = ['active', 'never_run', 'retired']
-const SORT_KEYS: SortKey[] = [
-  'lifecycle',
-  'name',
-  'runs',
-  'last_seen',
-  'complexity',
-]
+const SORT_KEYS: SortKey[] = ['lifecycle', 'name', 'runs', 'last_seen']
 const PAGE_SIZE = 50
 /** Rows shown per lifecycle group before "show N more". */
 const GROUP_PREVIEW = 10
@@ -82,7 +74,6 @@ export function catalogFiltersFromParams(
       lifecycle && (LIFECYCLES as string[]).includes(lifecycle)
         ? (lifecycle as Lifecycle)
         : 'all',
-    complexity: params.get('complexity') ?? 'all',
     realism: params.get('realism') ?? 'all',
     withExecutions: params.get('evidence') === '1',
     sort:
@@ -98,7 +89,6 @@ export function catalogFiltersToParams(
   const params = new URLSearchParams()
   if (filters.query.trim()) params.set('q', filters.query.trim())
   if (filters.lifecycle !== 'all') params.set('lifecycle', filters.lifecycle)
-  if (filters.complexity !== 'all') params.set('complexity', filters.complexity)
   if (filters.realism !== 'all') params.set('realism', filters.realism)
   if (filters.withExecutions) params.set('evidence', '1')
   if (filters.sort !== 'lifecycle') params.set('sort', filters.sort)
@@ -157,24 +147,6 @@ const lifecyclePresentation: Record<
   },
 }
 
-const complexityTierLabels = {
-  l0_atomic: 'L0 atomic',
-  l1_sequential: 'L1 sequential',
-  l2_stateful: 'L2 stateful',
-  l3_concurrent: 'L3 concurrent',
-  l4_coordinated: 'L4 coordinated',
-  l5_adaptive: 'L5 adaptive',
-} as const
-
-const complexityRank: Record<string, number> = {
-  l0_atomic: 0,
-  l1_sequential: 1,
-  l2_stateful: 2,
-  l3_concurrent: 3,
-  l4_coordinated: 4,
-  l5_adaptive: 5,
-}
-
 const realismLabels = {
   synthetic: 'synthetic',
   realistic_simulator: 'realistic simulator',
@@ -188,16 +160,6 @@ const realismLabels = {
 export type DimensionPresentation = {
   value: string | null
   detail: string | null
-}
-
-export function catalogComplexityPresentation(
-  row: TestCatalogRow,
-): DimensionPresentation {
-  if (!row.complexity) return { value: null, detail: null }
-  return {
-    value: complexityTierLabels[row.complexity.tier],
-    detail: row.complexity.method === 'capability' ? 'capability' : null,
-  }
 }
 
 export function catalogHorizonPresentation(
@@ -298,11 +260,6 @@ export function filterCatalogRows(
     if (filters.lifecycle !== 'all' && row.lifecycle !== filters.lifecycle)
       return false
     if (
-      filters.complexity !== 'all' &&
-      (row.complexity?.tier ?? 'none') !== filters.complexity
-    )
-      return false
-    if (
       filters.realism !== 'all' &&
       (row.characterization?.realism?.execution ?? 'none') !== filters.realism
     )
@@ -332,12 +289,6 @@ export function sortCatalogRows(
         (catalogExecutionSummary(b).lastSeen ?? '').localeCompare(
           catalogExecutionSummary(a).lastSeen ?? '',
         ) || byName(a, b),
-    )
-  } else if (sort === 'complexity') {
-    sorted.sort(
-      (a, b) =>
-        (complexityRank[b.complexity?.tier ?? ''] ?? -1) -
-          (complexityRank[a.complexity?.tier ?? ''] ?? -1) || byName(a, b),
     )
   } else {
     sorted.sort(byName)
@@ -413,10 +364,9 @@ const COLUMNS = [
     title: 'Digest of the current scenario definition',
   },
   {
-    key: 'complexity',
-    label: 'complexity',
-    title:
-      'Capability tier declared by the scenario; hover for the human horizon',
+    key: 'horizon',
+    label: 'human horizon',
+    title: 'Time a person is expected to need for the task',
   },
   {
     key: 'realism',
@@ -457,7 +407,6 @@ function CatalogRows({
     <>
       {rows.map((row) => {
         const tone = lifecyclePresentation[row.lifecycle]
-        const complexity = catalogComplexityPresentation(row)
         const horizon = catalogHorizonPresentation(row)
         const realism = catalogRealismPresentation(row)
         const calibration = catalogCalibrationPresentation(row)
@@ -509,15 +458,8 @@ function CatalogRows({
                 {shortDefinition(row.current_version) ?? '—'}
               </span>
             </td>
-            <td data-label="Complexity">
-              <DimensionCell
-                {...complexity}
-                extra={
-                  horizon.value
-                    ? `human horizon ${horizon.value}${horizon.detail ? ` (${horizon.detail})` : ''}`
-                    : null
-                }
-              />
+            <td data-label="Human horizon">
+              <DimensionCell {...horizon} />
             </td>
             <td data-label="Realism">
               <DimensionCell {...realism} />
@@ -765,15 +707,6 @@ export function TestsCatalogPage() {
     never_run: allRows.filter((row) => row.lifecycle === 'never_run').length,
     retired: allRows.filter((row) => row.lifecycle === 'retired').length,
   }
-  const complexityOptions = [
-    ...new Set(
-      allRows
-        .map((row) => row.complexity?.tier)
-        .filter((tier): tier is keyof typeof complexityTierLabels =>
-          Boolean(tier),
-        ),
-    ),
-  ].sort((a, b) => complexityRank[a] - complexityRank[b])
   const realismOptions = [
     ...new Set(
       allRows
@@ -852,7 +785,6 @@ export function TestsCatalogPage() {
                 <option value="name">sort: name</option>
                 <option value="runs">sort: most runs</option>
                 <option value="last_seen">sort: last seen</option>
-                <option value="complexity">sort: complexity</option>
               </Select>
             </div>
           </div>
@@ -889,24 +821,6 @@ export function TestsCatalogPage() {
                 </FilterChip>
               ) : null}
             </FilterChipGroup>
-            {complexityOptions.length > 0 ? (
-              <Select
-                aria-label="Filter by complexity"
-                className="max-w-[14rem]"
-                value={filters.complexity}
-                onChange={(event) =>
-                  setFilter('complexity', event.target.value)
-                }
-              >
-                <option value="all">complexity: all</option>
-                {complexityOptions.map((tier) => (
-                  <option key={tier} value={tier}>
-                    {complexityTierLabels[tier]}
-                  </option>
-                ))}
-                <option value="none">not declared</option>
-              </Select>
-            ) : null}
             {realismOptions.length > 0 ? (
               <Select
                 aria-label="Filter by realism"
@@ -965,7 +879,7 @@ export function TestsCatalogPage() {
             description={
               counts.available === 0
                 ? 'Register a test in the Harness catalog to start collecting evidence.'
-                : 'Try a broader lifecycle, complexity or realism, or clear the search.'
+                : 'Try a broader lifecycle or realism, or clear the search.'
             }
             actions={
               counts.available === 0 ? null : (

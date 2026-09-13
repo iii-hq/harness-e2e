@@ -17,7 +17,7 @@ function observation(
     contract_sha256: 'contract',
     assessment_profile_sha256: 'assessment',
     status: 'passed',
-    median_score: 80,
+    mean_score: 80,
     run_count: 1,
     scored_runs: 1,
     behavior_sha256:

@@ -13,6 +13,5 @@
     "coordination-child-2"
   ],
   "duplicate_events": true,
-  "out_of_order_results": true,
-  "max_work_amplification": 3.5
+  "out_of_order_results": true
 }

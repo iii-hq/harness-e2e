@@ -7,8 +7,8 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    ExecutionRealism, HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
+    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, ExecutionRealism,
+    HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
     ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
@@ -107,7 +107,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
                 "technical_retries": 0,
             },
         }),
-        complexity_profile(),
         vec![
             "e2e::adaptive-flow-v1".into(),
             "e2e::workflow-resume-v1".into(),
@@ -128,27 +127,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-pub fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 7,
-        dependency_depth: 8,
-        parallel_branches: 3,
-        external_systems: 3,
-        state_transitions: 14,
-        wake_cycles: 1,
-        validation_loops: 3,
-        artifact_count: 9,
-        coordination_edges: 16,
-        ambiguity_level: 8,
-        agent_owned_decomposition: true,
-        material_invalidation_events: 1,
-        replan_loops: 1,
-        compensable_mutations: 1,
-        durable_resume_cycles: 1,
-        coherent_long_horizon: true,
-    }
-}
-
 fn adaptive_only_evaluator<'a>(
     _context: &'a E2eContext,
     _observation: &'a ScenarioObservation,
@@ -164,13 +142,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_case_is_l5_and_hides_consumer_b() {
+    fn canonical_case_hides_consumer_b() {
         let case = materialize("attempt", 99).unwrap().case;
         assert_eq!(case.seed, CANONICAL_SEED);
-        assert_eq!(
-            case.complexity.tier,
-            super::super::ComplexityTier::L5Adaptive
-        );
         assert_eq!(case.characterization.human_horizon.min_minutes, Some(90));
         assert_eq!(
             case.inputs["initially_visible_repositories"],

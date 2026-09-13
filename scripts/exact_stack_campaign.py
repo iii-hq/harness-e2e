@@ -2,11 +2,11 @@
 """Validate and materialize the exact-stack campaign contract.
 
 Release Control owns every campaign decision — the suite, the models, the
-weights, the policy — and states each one exactly once in the contract it
-dispatches. This repository owns the runtime: which scenarios a pinned runner
-release can execute, how the stack boots, and what evidence comes back. No
-campaign configuration is read from this repository, and nothing is verified
-twice: unknown fields are ignored so either side can add one and ship alone.
+policy — and states each one exactly once in the contract it dispatches. This
+repository owns the runtime: which scenarios a pinned runner release can
+execute, how the stack boots, and what evidence comes back. No campaign
+configuration is read from this repository, and nothing is verified twice:
+unknown fields are ignored so either side can add one and ship alone.
 """
 
 from __future__ import annotations
@@ -141,7 +141,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         label = f"suite.groups[{index}]"
         group = require_keys(
             group,
-            {"id", "execution_kind", "runs", "technical_retries", "weight"},
+            {"id", "execution_kind", "runs", "technical_retries"},
             label,
         )
         group_id = require_text(group.get("id"), f"{label}.id")
@@ -153,9 +153,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
             raise ValueError(f"{label}.execution_kind is unsupported")
         require_positive_integer(group.get("runs"), f"{label}.runs")
         require_nonnegative_integer(group.get("technical_retries"), f"{label}.technical_retries")
-        weight = group.get("weight")
-        if weight not in {1, 2, 3, 4, 5}:
-            raise ValueError(f"{label}.weight must be 1-5")
         if kind == "fault_injection":
             require_text(group.get("fault_profile"), f"{label}.fault_profile")
             require_text(group.get("fault_scenario"), f"{label}.fault_scenario")
@@ -373,7 +370,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "difficulty_weight": group["weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {
@@ -389,7 +385,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
         "campaign_id": suite["id"],
         "lane": suite["lane"],
         "failure_policy": "advisory",
-        "scoring_profile": "difficulty-weighted",
         "groups": groups,
     }
 

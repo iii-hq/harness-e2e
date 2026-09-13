@@ -70,7 +70,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expected_marker": null,
             "completion_marker": "TEARDOWN COMPLETE",
         }),
-        super::validation_loop::validation_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

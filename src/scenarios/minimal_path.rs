@@ -10,9 +10,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, ComplexityProfile, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "minimal_path";
@@ -86,15 +86,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expected": expected(seed),
             "done_marker": DONE_MARKER,
         }),
-        ComplexityProfile {
-            planning_depth: 1,
-            dependency_depth: 1,
-            external_systems: 1,
-            state_transitions: 1,
-            artifact_count: 1,
-            compensable_mutations: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

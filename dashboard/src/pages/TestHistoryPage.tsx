@@ -89,10 +89,7 @@ import {
   sameScenarioDefinition,
   testObservationKey,
 } from '@/lib/test-history-comparison'
-import {
-  catalogComplexityPresentation,
-  catalogRealismPresentation,
-} from '@/pages/TestsCatalogPage'
+import { catalogRealismPresentation } from '@/pages/TestsCatalogPage'
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -137,6 +134,14 @@ function modelGroups(history: TestHistoryResponse | null): HistoryModelGroup[] {
       provider,
       models: [...models].sort((left, right) => left.localeCompare(right)),
     }))
+}
+
+function mean(values: Array<number | null | undefined>) {
+  const known = values.filter(
+    (value): value is number => value !== null && Number.isFinite(value),
+  )
+  if (known.length === 0) return null
+  return known.reduce((total, value) => total + value, 0) / known.length
 }
 
 function median(values: Array<number | null | undefined>) {
@@ -271,7 +276,7 @@ export function ScoreTrendChart({
   // Observations arrive newest-first; the chart reads left → right in time.
   const plotted = [...observations]
     .reverse()
-    .filter((item) => finiteMetric(item.median_score) !== null)
+    .filter((item) => finiteMetric(item.mean_score) !== null)
   if (plotted.length === 0) {
     return (
       <p className="m-0 text-xs text-ink-soft">
@@ -293,7 +298,7 @@ export function ScoreTrendChart({
   const line = xs
     .map(
       (x, index) =>
-        `${x.toFixed(1)},${yFor(plotted[index].median_score as number).toFixed(1)}`,
+        `${x.toFixed(1)},${yFor(plotted[index].mean_score as number).toFixed(1)}`,
     )
     .join(' ')
   const gate = yFor(50)
@@ -311,7 +316,7 @@ export function ScoreTrendChart({
         className="block h-40 w-full font-mono text-label"
         viewBox={`0 0 ${width} 160`}
         role="img"
-        aria-label="Median score per retained execution, oldest on the left"
+        aria-label="Mean score per retained execution, oldest on the left"
         data-score-trend
       >
         {[top, gate, bottom].map((y) => (
@@ -369,7 +374,7 @@ export function ScoreTrendChart({
           const key = testObservationKey(item)
           const selectedIndex = selectedKeys.indexOf(key)
           const failed = item.status !== 'passed'
-          const score = item.median_score as number
+          const score = item.mean_score as number
           const x = xs[index]
           const y = yFor(score)
           const slot =
@@ -562,7 +567,7 @@ export function ObservationComparisonPanel({
       metricLabels={
         personal
           ? {
-              score: 'median objective score',
+              score: 'mean score',
               cost: 'subject cost',
               tokens: 'tokens incl. cache',
             }
@@ -734,7 +739,7 @@ function ExecutionDetailsDialog({
   ).length
   const result = statusPresentation(observation.status)
   const metrics = [
-    ['score', formatScore(observation.median_score)],
+    ['score', formatScore(observation.mean_score)],
     ['duration', formatDuration(observation.median_duration_seconds)],
     ['tokens', formatTokens(observation.median_tokens)],
     ['cost', formatCost(observation.median_cost_usd)],
@@ -1095,8 +1100,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     }
   }, [filters.definition, filters.model, filters.system, testId])
 
-  // Identity (complexity, realism, lifecycle) and the previous/next test come
-  // from the catalog (audit T-14 / TH-06).
+  // Identity (realism, lifecycle) and the previous/next test come from the
+  // catalog (audit T-14 / TH-06).
   useEffect(() => {
     let cancelled = false
     void getDashboardDataBridge()
@@ -1167,7 +1172,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     }
   }, [loading, observations, comparisonKeys])
 
-  const scores = allObservations.map((item) => item.median_score)
+  const scores = allObservations.map((item) => item.mean_score)
   const costs = allObservations.map((item) => item.median_cost_usd)
   const durations = allObservations.map((item) => item.median_duration_seconds)
   const tokens = allObservations.map((item) => item.median_tokens)
@@ -1188,9 +1193,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         null)
   const contract = contractSummary(allObservations)
   const lastRun = allObservations[0] ?? null
-  const complexity = catalogRow
-    ? catalogComplexityPresentation(catalogRow)
-    : null
   const realism = catalogRow ? catalogRealismPresentation(catalogRow) : null
   const hasEvidence = allObservations.length > 0
   const filtered = filtersActive(filters)
@@ -1227,7 +1229,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const identity = [
     history ? definitionStatement(history) : null,
     contract?.short ?? null,
-    complexity?.value ? `complexity ${complexity.value}` : null,
     realism?.value ? `realism ${realism.value}` : null,
     history
       ? `${history.total} ${history.total === 1 ? 'execution' : 'executions'} retained`
@@ -1533,8 +1534,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 className="grid gap-3"
               >
                 <p className="m-0 text-xs text-ink-muted">
-                  Retained history · {allObservations.length} executions ·
-                  medians of the reported execution summaries
+                  Retained history · {allObservations.length} executions · mean
+                  score and medians of the reported execution summaries
                 </p>
                 <div
                   className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
@@ -1554,8 +1555,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   />
                   {knownMetricCount(scores) > 0 ? (
                     <MetricCard
-                      label="median score"
-                      value={formatScore(median(scores))}
+                      label="mean score"
+                      value={formatScore(mean(scores))}
                       detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
                     />
                   ) : null}
@@ -1588,7 +1589,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : null}
 
             {allObservations.filter(
-              (item) => finiteMetric(item.median_score) !== null,
+              (item) => finiteMetric(item.mean_score) !== null,
             ).length >= 2 ? (
               <details>
                 <summary className="cursor-pointer text-sm font-medium text-ink">
@@ -1841,7 +1842,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                           />
                         </td>
                         <td data-label="Score" className={numericCellClassName}>
-                          {formatScore(item.median_score)}
+                          {formatScore(item.mean_score)}
                         </td>
                         <td
                           data-label="Duration"

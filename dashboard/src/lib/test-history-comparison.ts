@@ -163,7 +163,7 @@ export function compareTestObservations(
     compatible: reasons.length === 0,
     reasons,
     metrics: {
-      score: compareMetric(baseline.median_score, candidate.median_score),
+      score: compareMetric(baseline.mean_score, candidate.mean_score),
       cost: compareMetric(baseline.median_cost_usd, candidate.median_cost_usd),
       duration: compareMetric(
         baseline.median_duration_seconds,

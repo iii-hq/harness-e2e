@@ -12,9 +12,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, ComplexityProfile, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "database_migration_recovery";
@@ -180,16 +180,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "quarantined_legacy_id": QUARANTINED_LEGACY_ID,
             "expected_report": EXPECTED_REPORT,
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 2,
-            external_systems: 1,
-            state_transitions: 6,
-            validation_loops: 1,
-            artifact_count: 1,
-            compensable_mutations: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

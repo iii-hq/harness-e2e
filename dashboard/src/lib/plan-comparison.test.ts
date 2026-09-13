@@ -558,7 +558,6 @@ describe('retained criterion points', () => {
           available: true,
           report: {
             result_contract_sha256: 'results-contract',
-            scoring_profile_sha256: 'scoring-contract',
             subject: { model: 'subject', provider: 'provider' },
             scenarios: [
               {
@@ -571,7 +570,7 @@ describe('retained criterion points', () => {
                   run_id: `run-${index}`,
                   technical: 'valid',
                   status: 'passed',
-                  objective_score: awarded,
+                  score: awarded,
                   criteria: [{ id: 'delivery', possible, awarded }],
                 })),
               },
@@ -598,9 +597,7 @@ describe('retained criterion points', () => {
     expect(
       comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
     ).toBe(false)
-    expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
-      20,
-    )
+    expect(right.reports[0].report?.scenarios[0].runs[0].score).toBe(20)
   })
 
   it('uses only matched repetitions for deltas while displaying every measured point', () => {

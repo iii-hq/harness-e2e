@@ -21,8 +21,7 @@ use crate::report::{
     CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
 };
 use crate::scenarios::{
-    stable_seed, ComplexityClassification, ExecutionPolicy, ScenarioCharacterization, ScenarioId,
-    ScenarioSpec,
+    stable_seed, ExecutionPolicy, ScenarioCharacterization, ScenarioId, ScenarioSpec,
 };
 
 const DEFAULT_PAGE_SIZE: u16 = 25;
@@ -137,7 +136,7 @@ pub(super) struct TestSideSummary {
     pub total_runs: usize,
     pub scored_runs: usize,
     pub case_count: usize,
-    pub median_score: Option<f64>,
+    pub mean_score: Option<f64>,
     pub pass_rate: Option<f64>,
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
@@ -165,7 +164,7 @@ pub(super) struct TestObservation {
     pub contract_sha256: String,
     pub assessment_profile_sha256: String,
     pub status: String,
-    pub median_score: Option<f64>,
+    pub mean_score: Option<f64>,
     pub run_count: usize,
     pub scored_runs: usize,
     pub assessment_summary: AssessmentSummary,
@@ -206,7 +205,7 @@ pub(super) struct HistorySeries {
     pub cohort_id: String,
     pub execution_count: usize,
     pub run_count: usize,
-    pub median_score: Option<f64>,
+    pub mean_score: Option<f64>,
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
@@ -265,8 +264,6 @@ pub(super) struct TestCatalogRow {
     pub test_id: String,
     pub lifecycle: String,
     pub current_version: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub complexity: Option<ComplexityClassification>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub characterization: Option<ScenarioCharacterization>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -374,7 +371,6 @@ struct TestVersionEntry {
 #[derive(Debug, Clone, Default)]
 struct TestEntry {
     current_version: Option<String>,
-    current_classification: Option<ComplexityClassification>,
     current_characterization: Option<ScenarioCharacterization>,
     current_spec: Option<TestSpecProjection>,
     current_reference_verified: bool,
@@ -761,7 +757,6 @@ impl DashboardReadModel {
             test_id: test_id.into(),
             lifecycle: lifecycle.into(),
             current_version: entry.current_version.clone(),
-            complexity: entry.current_classification.clone(),
             characterization: entry.current_characterization,
             calibration: entry.current_version.as_ref().and_then(|version| {
                 entry.versions.get(version).map(|version| {
@@ -954,8 +949,8 @@ impl DashboardReadModel {
         let delta = if compatibility == "compatible" {
             TestDelta {
                 score: metric_difference(
-                    from.as_ref().and_then(|value| value.median_score),
-                    to.as_ref().and_then(|value| value.median_score),
+                    from.as_ref().and_then(|value| value.mean_score),
+                    to.as_ref().and_then(|value| value.mean_score),
                 ),
                 cost_usd: metric_difference(
                     from.as_ref().and_then(|value| value.median_cost_usd),
@@ -997,7 +992,6 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
                 id.as_str().to_string(),
                 TestEntry {
                     current_version: Some(materialized.case.behavior_sha256.clone()),
-                    current_classification: Some(materialized.case.complexity),
                     current_characterization: Some(materialized.case.characterization),
                     current_spec: Some(spec_projection(*id, &materialized.spec)),
                     current_reference_verified: matches!(
@@ -1172,7 +1166,11 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
             .map(|(input, output)| (input + output) as f64)
     });
     RunMetrics {
-        score: run.score.map(f64::from),
+        // Only a technically valid run's score counts toward a mean.
+        score: (run.technical == crate::report::TechnicalState::Valid)
+            .then_some(run.score)
+            .flatten()
+            .map(f64::from),
         cost_usd: run.cost.total_usd,
         tokens,
         duration_seconds: (run.wall_time_ms > 0).then(|| run.wall_time_ms as f64 / 1_000.0),
@@ -1385,7 +1383,7 @@ fn side_summary(
             .map(|observation| observation.case_id.as_str())
             .collect::<BTreeSet<_>>()
             .len(),
-        median_score: median(scores.clone()),
+        mean_score: mean(&scores),
         pass_rate: (!runs.is_empty()).then(|| outcomes.passed as f64 / runs.len() as f64),
         median_cost_usd: median(costs.clone()),
         median_tokens: median(tokens.clone()),
@@ -1509,7 +1507,7 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         contract_sha256: observation.contract_sha256.clone(),
         assessment_profile_sha256: observation.assessment_profile_sha256.clone(),
         status: observation.status.clone(),
-        median_score: median(scores.clone()),
+        mean_score: mean(&scores),
         run_count: observation.runs.len(),
         scored_runs: scores.len(),
         assessment_summary: summarize(observation.runs.iter().map(|run| &run.assessment)),
@@ -1644,7 +1642,7 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
             .collect::<BTreeSet<_>>()
             .len(),
         run_count: runs.len(),
-        median_score: median(scores),
+        mean_score: mean(&scores),
         median_cost_usd: median(costs),
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
@@ -1695,6 +1693,13 @@ fn metric_difference(from: Option<f64>, to: Option<f64>) -> Option<f64> {
     from.zip(to).map(|(from, to)| to - from)
 }
 
+fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.iter().sum::<f64>() / values.len() as f64)
+}
+
 fn median(mut values: Vec<f64>) -> Option<f64> {
     if values.is_empty() {
         return None;
@@ -1711,7 +1716,7 @@ fn median(mut values: Vec<f64>) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scenarios::{ComplexityMethod, ExecutionRealism};
+    use crate::scenarios::ExecutionRealism;
 
     fn calibration_key(suffix: &str) -> CalibrationGroupKey {
         (
@@ -1752,12 +1757,12 @@ mod tests {
             })
             .unwrap();
         assert_eq!(history.total, 1);
-        assert_eq!(history.observations[0].median_score, Some(90.0));
+        assert_eq!(history.observations[0].mean_score, Some(90.0));
         assert_eq!(history.observations[0].median_tokens, None);
     }
 
     #[test]
-    fn current_catalog_projects_materialized_classification_and_realism() {
+    fn current_catalog_projects_materialized_realism() {
         let root = tempfile::tempdir().expect("temporary dashboard store should exist");
         let model = DashboardReadModel::load(root.path())
             .expect("current scenarios should materialize into the read model");
@@ -1771,14 +1776,6 @@ mod tests {
             .rows
             .first()
             .expect("context pressure should be registered");
-        assert_eq!(
-            context_pressure
-                .complexity
-                .as_ref()
-                .expect("classification should be projected")
-                .method,
-            ComplexityMethod::Capability
-        );
         assert_eq!(
             context_pressure
                 .characterization

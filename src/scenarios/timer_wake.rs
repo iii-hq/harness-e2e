@@ -10,9 +10,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "timer_wake";
@@ -124,15 +124,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "result_key": RESULT_KEY,
             "expected": expected_result(),
         }),
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 1,
-            external_systems: 1,
-            state_transitions: 4,
-            wake_cycles: 1,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

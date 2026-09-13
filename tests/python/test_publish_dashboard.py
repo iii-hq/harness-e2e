@@ -225,8 +225,9 @@ class PublishDashboardTests(unittest.TestCase):
             self.assertEqual(row["test_id"], "coordination.parallel")
             self.assertEqual(row["available_versions"][0]["run_count"], 5)
             sides = row["version_results"]["sha256:" + "d" * 64]["sides"]
-            medians = sorted(side["summary"]["median_score"] for side in sides.values())
-            self.assertEqual(medians, [85.0, 100.0])
+            means = sorted(side["summary"]["mean_score"] for side in sides.values())
+            # Means of the pooled runs: (10 + 100 + 100) / 3 and (80 + 90) / 2.
+            self.assertEqual(means, [70.0, 85.0])
             self.assertTrue(all("::" in side_id for side_id in sides))
             self.assertTrue(
                 all(
@@ -298,7 +299,7 @@ class PublishDashboardTests(unittest.TestCase):
 
     def test_partial_points_preserve_incomplete_scenario_status(self) -> None:
         scenario = {
-            "runs": [{"completion": "task_incomplete", "objective_score": 65}],
+            "runs": [{"completion": "task_incomplete", "score": 65}],
             "aggregate": {"planned_runs": 1, "completed_runs": 0, "task_incomplete_runs": 1, "technical_failures": 0},
         }
         self.assertEqual(_scenario_status(scenario), "incomplete")
@@ -307,7 +308,7 @@ class PublishDashboardTests(unittest.TestCase):
         self.assertEqual(_scenario_status(scenario), "passed")
 
     def test_numeric_result_does_not_become_an_infrastructure_failure(self) -> None:
-        subjects = [{"passed": False, "objective_score": 65}]
+        subjects = [{"passed": False, "score": 65}]
         self.assertEqual(execution_status("success", subjects, 1, 1, 0), "passed")
         self.assertEqual(execution_status("success", subjects, 1, 1, 1), "technical_failed")
         self.assertEqual(execution_status("success", subjects, 2, 1, 0), "incomplete")

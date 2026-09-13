@@ -2,15 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 
 const resultContract = {
   result_contract_sha256: RESULT_CONTRACT_SHA256,
-  scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
@@ -28,12 +24,8 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     execution_reliability: 1,
     completion_evidence_coverage: 1,
     completion_rate: 1,
-    objective_scored_runs: 1,
-    objective_median_score: 100,
-    objective_score_coverage: 1,
-    quality_scored_completed_runs: 1,
-    quality_score_completed: 88,
-    quality_coverage: 1,
+    scored_runs: 1,
+    mean_score: 100,
     total_tokens_consumed: 1200,
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
@@ -72,10 +64,8 @@ const detail = {
                 technical: 'valid',
                 evaluators: {
                   completion: 'available',
-                  quality: 'available',
                 },
-                objective_score: 100,
-                quality_score_completed: 88,
+                score: 100,
                 wall_time_ms: 3_000,
                 assessment: {
                   run_id: 'run-security',
@@ -139,10 +129,7 @@ const detail = {
               completed_runs: 0,
               task_incomplete_runs: 1,
               completion_rate: 0,
-              objective_median_score: 65,
-              quality_scored_completed_runs: 0,
-              quality_score_completed: null,
-              quality_coverage: null,
+              mean_score: 65,
               total_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
@@ -157,10 +144,8 @@ const detail = {
                 technical: 'valid',
                 evaluators: {
                   completion: 'available',
-                  quality: 'not_required',
                 },
-                objective_score: 65,
-                quality_score_completed: null,
+                score: 65,
                 assessment: {
                   system_status: 'passed',
                   assessments: [],
@@ -194,12 +179,8 @@ const detail = {
               execution_reliability: 0,
               completion_evidence_coverage: 0,
               completion_rate: null,
-              objective_scored_runs: 0,
-              objective_median_score: null,
-              objective_score_coverage: 0,
-              quality_scored_completed_runs: 0,
-              quality_score_completed: null,
-              quality_coverage: null,
+              scored_runs: 0,
+              mean_score: null,
               total_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
@@ -236,7 +217,8 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('Sha256:')
     expect(html).toContain('Completion and evidence yield')
     expect(html).toContain('execution reliability')
-    expect(html).toContain('quality score completed')
+    expect(html).toContain('mean score')
+    expect(html).not.toContain('quality')
     expect(html).toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
     expect(html).toContain('1 passed')
@@ -292,7 +274,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toMatch(/<details[^>]*open/)
     expect(html).toContain('title="Persistent State · definition b2b2b2b2"')
     expect(html).toContain('Task Incomplete')
-    expect(html).toContain('Not Required')
+    expect(html).toContain('completion evaluator')
   })
 })
 

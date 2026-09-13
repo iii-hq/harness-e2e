@@ -15,7 +15,6 @@
     "occurred_at",
     "passed",
     "result_contract_sha256",
-    "scoring_profile_sha256",
     "stack_mode",
     "subject_model",
     "subject_provider",
@@ -58,9 +57,6 @@
       "type": "boolean"
     },
     "result_contract_sha256": {
-      "type": "string"
-    },
-    "scoring_profile_sha256": {
       "type": "string"
     },
     "stack_mode": {

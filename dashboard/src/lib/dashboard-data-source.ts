@@ -53,7 +53,6 @@ export type LocalPlan = {
     seed: number
     inputs_sha256: string
     contract_sha256: string
-    complexity_tier: string
   }>
   scenario_ids: string[]
   runs: number
@@ -162,7 +161,7 @@ export type DashboardScenarioSummary = JsonObject & {
   status?: string
   passed?: boolean
   pass_rate?: number | null
-  median_score?: number | null
+  mean_score?: number | null
   technical_failures?: number | null
   wall_time_seconds?: number | null
   total_cost_usd?: number | null
@@ -184,7 +183,6 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     tokens?: number | null
     failed_attempt_tokens?: number | null
     tokens_per_completion?: number | null
-    work_amplification?: number | null
   }
   samples?: JsonObject & {
     cost_usd?: number | null
@@ -195,7 +193,6 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     failed_attempt_tokens?: number | null
     tokens_per_completion?: number | null
     tokens?: number | null
-    work_amplification?: number | null
   }
   workflow?: DashboardWorkflowMetricSummary | null
 }
@@ -303,16 +300,13 @@ export type LiveProgress = {
     run_id: string | null
     completion: CompletionState | null
     technical: TechnicalState | null
-    objective_score: number | null
-    quality_score_completed: number | null
+    score: number | null
   }>
   completed_runs: number
   task_incomplete_runs: number
   undetermined_runs: number
   technical_invalid_runs: number
   completion_rate: number | null
-  quality_score_completed: number | null
-  quality_scored_completed_runs: number
   observed_tokens: number | null
   token_observed_attempts: number
   observed_cost_usd: number | null
@@ -351,7 +345,6 @@ export type EvaluatorAvailability =
 
 export type DashboardEvaluatorStates = {
   completion: EvaluatorAvailability
-  quality: EvaluatorAvailability
 }
 
 export type DashboardScenarioAggregate = JsonObject & {
@@ -366,12 +359,10 @@ export type DashboardScenarioAggregate = JsonObject & {
   execution_reliability: number | null
   completion_evidence_coverage: number | null
   completion_rate: number | null
-  objective_scored_runs: number
-  objective_median_score: number | null
-  objective_score_coverage: number | null
-  quality_scored_completed_runs: number
-  quality_score_completed: number | null
-  quality_coverage: number | null
+  /** Technically valid runs that carry a score. */
+  scored_runs: number
+  /** Mean score of the scored runs; null when none was scored. */
+  mean_score: number | null
   total_tokens_consumed: number | null
   tokens_completed_p50: number | null
   failed_attempt_tokens: number | null
@@ -455,9 +446,9 @@ export type DashboardRunProjection = JsonObject & {
   completion: CompletionState
   technical: TechnicalState
   evaluators: DashboardEvaluatorStates
-  objective_score: number | null
-  quality_score_completed: number | null
-  score?: number | null
+  /** Plain sum of the points the evaluated criteria awarded; null when the
+   *  run evaluated nothing. */
+  score: number | null
   failures?: Array<JsonObject & { phase?: string; message?: string }>
   wall_time_ms?: number | null
   metrics?: DashboardRunMetrics | null
@@ -479,14 +470,12 @@ export type DashboardRetryAttemptProjection = JsonObject & {
   completion: CompletionState
   technical: TechnicalState
   evaluators: DashboardEvaluatorStates
-  objective_score: number | null
-  quality_score_completed: number | null
+  score: number | null
   wall_time_ms?: number | null
 }
 
 export type DashboardReportProjection = JsonObject & {
   result_contract_sha256: string
-  scoring_profile_sha256: string
   report_state: 'complete' | 'partial'
   objective_outcome: 'passed' | 'failed' | 'inconclusive'
   assessment_availability?: 'available' | 'unavailable'
@@ -504,7 +493,7 @@ export type DashboardReportProjection = JsonObject & {
       status?: string
       passed?: boolean
       pass_rate?: number | null
-      median_score?: number | null
+      mean_score?: number | null
       technical_failures?: number
       aggregate: DashboardScenarioAggregate
       runs: DashboardRunProjection[]

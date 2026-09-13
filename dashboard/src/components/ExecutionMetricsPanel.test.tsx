@@ -9,16 +9,16 @@ import {
 describe('execution summary panel', () => {
   it('shows all-scenario metrics without expanding individual scenarios', () => {
     const detail = executionMetricsFixture([
-      { runs: [metricRun('a', 100_000, { quality_score_completed: 60 })] },
+      { runs: [metricRun('a', 100_000, { score: 60 })] },
       {
         runs: [
           metricRun('b', 20_000, {
             completion: 'task_incomplete',
-            quality_score_completed: null,
+            score: null,
           }),
         ],
       },
-      { runs: [metricRun('c', 120_000, { quality_score_completed: 100 })] },
+      { runs: [metricRun('c', 120_000, { score: 100 })] },
     ])
     const html = renderToStaticMarkup(<ExecutionMetricsPanel detail={detail} />)
     expect(html).toContain('execution summary')
@@ -31,6 +31,8 @@ describe('execution summary panel', () => {
     expect(html).toContain('110,000')
     expect(html).toContain('20,000')
     expect(html).toContain('80/100')
+    expect(html).toContain('Mean · 2/3 planned runs scored')
+    expect(html).not.toContain('quality')
     expect(html).toContain('3/3 runs with telemetry')
     expect(html).not.toContain('<details')
   })
@@ -38,7 +40,7 @@ describe('execution summary panel', () => {
   // Audit ED-26: inside the counts layer the layer row is the heading.
   it('renders headless inside a layer: same numbers, no title, no anchor', () => {
     const detail = executionMetricsFixture([
-      { runs: [metricRun('a', 100_000, { quality_score_completed: 60 })] },
+      { runs: [metricRun('a', 100_000, { score: 60 })] },
     ])
     const html = renderToStaticMarkup(
       <ExecutionMetricsPanel detail={detail} headless />,

@@ -5,8 +5,8 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "security_review";
@@ -62,24 +62,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "repository": "iii-hq/security-scan-e2e-fixture",
             "fixture_source": "HARNESS_E2E_SECURITY_FIXTURE_PATH",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 4,
-            parallel_branches: 2,
-            external_systems: 3,
-            state_transitions: 8,
-            wake_cycles: 2,
-            validation_loops: 2,
-            artifact_count: 12,
-            coordination_edges: 6,
-            ambiguity_level: 1,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "security_scan::v1".to_string(),
@@ -124,9 +106,5 @@ mod tests {
             .required_capabilities
             .iter()
             .any(|capability| capability.contains("cron")));
-        assert_eq!(
-            first.case.complexity.tier,
-            crate::scenarios::ComplexityTier::L4Coordinated
-        );
     }
 }

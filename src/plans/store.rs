@@ -1565,7 +1565,7 @@ pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
 }
 fn export(plan: &SavedPlan) -> Result<Value> {
     let suites: Vec<_> = plan.snapshot.campaigns.iter().map(|campaign| {
-        let groups: Vec<_> = campaign["groups"].as_array().into_iter().flatten().map(|g| { let mut g = g.clone(); if let Some(object) = g.as_object_mut() { if let Some(weight) = object.remove("difficulty_weight") { object.insert("weight".into(), weight); } } g }).collect();
+        let groups: Vec<_> = campaign["groups"].as_array().into_iter().flatten().cloned().collect();
         json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "groups": groups})
     }).collect();
     Ok(
@@ -2134,7 +2134,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = FakeRunner::new(root.path().into());
         let efficiency = |tokens| {
-            serde_json::from_value(json!({"wall_time_ms": 0, "root_turns": 1, "child_turns": 0, "child_sessions": 0, "function_calls": 1, "function_call_errors": 0, "validation_retries": 0, "transient_resumes": 0, "wake_resumes": 0, "effective_fan_out": 0, "critical_path_ms": 0, "input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens, "cost_usd": null, "minimum_expected_work": 1, "observed_work": 1, "work_amplification": 1.0, "technical_attempts": 1, "observed_complexity": {}})).unwrap()
+            serde_json::from_value(json!({"wall_time_ms": 0, "root_turns": 1, "child_turns": 0, "child_sessions": 0, "function_calls": 1, "function_call_errors": 0, "validation_retries": 0, "transient_resumes": 0, "wake_resumes": 0, "effective_fan_out": 0, "critical_path_ms": 0, "input_tokens": tokens, "output_tokens": 0, "total_tokens": tokens, "cost_usd": null, "observed_work": 1, "technical_attempts": 1, "observed_complexity": {}})).unwrap()
         };
         let mut failed = E2eRunReport::new(
             "retry-run".into(),

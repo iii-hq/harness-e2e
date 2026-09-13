@@ -766,7 +766,6 @@ describe('local plan scope and provenance', () => {
           seed: 7,
           inputs_sha256: 'sha256:1111111111111111111111',
           contract_sha256: 'sha256:2222222222222222222222',
-          complexity_tier: 'baseline',
         },
       ],
     }
@@ -789,7 +788,7 @@ describe('local plan scope and provenance', () => {
     expect(entries).toContainEqual(['scope hash', 'sha256:scope'])
     expect(entries).toContainEqual([
       'minimal_path · a1a1a1a1',
-      'case case-a · seed 7 · tier baseline · contract sha256:222222222222… · inputs sha256:111111111111…',
+      'case case-a · seed 7 · contract sha256:222222222222… · inputs sha256:111111111111…',
     ])
     expect(planProvenanceScent(plan)).toContain(
       'plan-1 · scope sha256:scope · endpoint https://example.invalid/catalog',

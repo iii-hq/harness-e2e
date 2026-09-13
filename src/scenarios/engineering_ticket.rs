@@ -34,9 +34,9 @@ use super::common;
 use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_ticket";
@@ -380,7 +380,6 @@ pub struct TaskCase {
     pub maximum_validation_rounds: u8,
     pub maximum_changed_files: u16,
     pub maximum_patch_lines: u32,
-    pub complexity_profile: ComplexityProfile,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -403,25 +402,6 @@ const CANCELLATION_HIDDEN: &[HiddenProbe] = &[
     },
 ];
 
-const L4_PROFILE: ComplexityProfile = ComplexityProfile {
-    planning_depth: 4,
-    dependency_depth: 3,
-    parallel_branches: 2,
-    external_systems: 3,
-    state_transitions: 10,
-    wake_cycles: 1,
-    validation_loops: 2,
-    artifact_count: 8,
-    coordination_edges: 5,
-    ambiguity_level: 6,
-    agent_owned_decomposition: false,
-    material_invalidation_events: 0,
-    replan_loops: 0,
-    compensable_mutations: 0,
-    durable_resume_cycles: 0,
-    coherent_long_horizon: false,
-};
-
 const CASES: &[TaskCase] = &[
     TaskCase {
         id: "async_cancellation",
@@ -442,7 +422,6 @@ const CASES: &[TaskCase] = &[
         maximum_validation_rounds: 2,
         maximum_changed_files: 1,
         maximum_patch_lines: 48,
-        complexity_profile: L4_PROFILE,
     },
 ];
 
@@ -538,7 +517,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
         ID,
         CANONICAL_SEED,
         inputs,
-        task.complexity_profile,
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),
@@ -2313,24 +2291,6 @@ pub fn git_handoff_materialize(namespace: &str, _seed: u64) -> Result<Materializ
         GIT_HANDOFF_ID,
         CANONICAL_SEED,
         inputs,
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 4,
-            parallel_branches: 1,
-            external_systems: 4,
-            state_transitions: 16,
-            wake_cycles: 2,
-            validation_loops: 4,
-            artifact_count: 10,
-            coordination_edges: 8,
-            ambiguity_level: 6,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),
@@ -3886,11 +3846,17 @@ fn handoff_efficiency_score(run: &E2eRunReport) -> HandoffEfficiencyScore {
             2,
         ),
         (
-            "work_amplification",
-            efficiency.and_then(|report| report.work_amplification),
+            "observed_work",
+            efficiency
+                .and_then(|report| report.observed_work)
+                .map(|value| value as f64),
             budget_points(
-                efficiency.and_then(|report| report.work_amplification),
-                &[(2.0, 2), (3.0, 1)],
+                efficiency
+                    .and_then(|report| report.observed_work)
+                    .map(|value| value as f64),
+                // Absolute work budget: the sum of the turns and calls budgets
+                // above, so a run that stays inside both stays inside this one.
+                &[(58.0, 2), (85.0, 1)],
             ),
             2,
         ),
@@ -4331,7 +4297,6 @@ mod tests {
             case.validate().unwrap();
             let materialized = materialize("catalog", case.canonical_seed).unwrap();
             assert_eq!(materialized.case.inputs["task_case_id"], case.id);
-            assert_eq!(materialized.case.complexity.profile.artifact_count, 8);
             assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 8);
             assert!(
                 materialized
@@ -4368,7 +4333,6 @@ mod tests {
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(materialized.case.inputs["reference_scenario_id"], ID);
         assert_eq!(materialized.case.inputs["handoff_payload"], "git_only");
-        assert_eq!(materialized.case.complexity.profile.artifact_count, 10);
         assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 10);
         assert!(materialized
             .case
@@ -4477,10 +4441,7 @@ mod tests {
     fn standalone_handoff_has_a_numeric_efficiency_score() {
         let handoff = comparison_scenario(
             git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
-            comparison_run(
-                GIT_HANDOFF_ID,
-                test_efficiency(260_537, 36, 37, 121_439, 2.433_333_333_333_333),
-            ),
+            comparison_run(GIT_HANDOFF_ID, test_efficiency(260_537, 36, 37, 121_439)),
         );
         let mut scenarios = vec![handoff];
 
@@ -4504,18 +4465,18 @@ mod tests {
             .unwrap();
         assert_eq!(assessment.outcome, AssessmentOutcome::Partial);
         assert_eq!(assessment.score.as_ref().unwrap().awarded, 11);
-        assert_eq!(scenarios[0].aggregate.median_score, Some(96.0));
+        assert_eq!(scenarios[0].aggregate.mean_score, Some(96.0));
         assert!(scenarios[0].passed);
     }
 
     #[test]
     fn missing_efficiency_metrics_reduce_score_instead_of_hiding_it() {
-        let mut metrics = test_efficiency(0, 1, 1, 1, 1.0);
+        let mut metrics = test_efficiency(0, 1, 1, 1);
         metrics.root_turns = None;
         metrics.child_turns = None;
         metrics.function_calls = None;
         metrics.total_tokens = None;
-        metrics.work_amplification = None;
+        metrics.observed_work = None;
         let handoff = comparison_scenario(
             git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
             comparison_run(GIT_HANDOFF_ID, metrics),
@@ -4608,7 +4569,6 @@ mod tests {
         turns: u64,
         function_calls: u64,
         total_tokens: u64,
-        work_amplification: f64,
     ) -> EfficiencyReport {
         EfficiencyReport {
             wall_time_ms,
@@ -4626,9 +4586,7 @@ mod tests {
             output_tokens: Some(0),
             total_tokens: Some(total_tokens),
             cost_usd: None,
-            minimum_expected_work: 1,
             observed_work: turns.checked_add(function_calls),
-            work_amplification: Some(work_amplification),
             technical_attempts: 1,
             observed_complexity: crate::report::ObservedComplexityReport::default(),
             unavailable: BTreeMap::new(),
@@ -5316,19 +5274,6 @@ mod tests {
             );
             assert!(baseline.expected_failure_observed, "{}", case.id);
         }
-    }
-
-    #[test]
-    fn complexity_tiers_match_the_reviewed_catalog() {
-        use super::super::ComplexityTier;
-        assert_eq!(
-            materialize("retained", CANONICAL_SEED)
-                .unwrap()
-                .case
-                .complexity
-                .tier,
-            ComplexityTier::L4Coordinated
-        );
     }
 
     #[test]

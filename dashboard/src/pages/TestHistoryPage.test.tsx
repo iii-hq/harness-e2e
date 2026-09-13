@@ -22,7 +22,7 @@ function observation(
     contract_sha256: 'contract',
     assessment_profile_sha256: 'assessment',
     status: 'passed',
-    median_score: 100,
+    mean_score: 100,
     run_count: 1,
     scored_runs: 1,
     behavior_sha256:
@@ -88,7 +88,7 @@ describe('test history comparison', () => {
           execution_id: 'candidate',
           completed_at: '2026-08-22T16:51:00Z',
           status: 'hard_gate_failed',
-          median_score: 60,
+          mean_score: 60,
           median_tokens: 2900,
           median_duration_seconds: 3.2,
           median_function_call_errors: 1,
@@ -120,7 +120,7 @@ describe('test history comparison', () => {
           execution_id: 'candidate',
           seed: 2,
           median_cost_usd: null,
-          median_score: 95,
+          mean_score: 95,
         })}
         testId="direct_answer"
         onClear={() => undefined}
@@ -147,7 +147,7 @@ describe('test history comparison', () => {
             execution_id: 'two',
             completed_at: '2026-08-22T00:00:00Z',
             status: 'hard_gate_failed',
-            median_score: 40,
+            mean_score: 40,
           }),
           observation(),
         ]}
@@ -230,13 +230,13 @@ it('shows descriptive RC deltas without requiring the same stack or exposing RC 
         source_url: 'https://github.com/iii-hq/harness-e2e/actions/runs/123',
         stack_mode: 'published',
         cohort_id: '',
-        median_score: 70,
+        mean_score: 70,
       })}
       candidate={observation({
         execution_id: 'local-candidate',
         source: 'local',
         stack_mode: 'source',
-        median_score: 90,
+        mean_score: 90,
       })}
       testId="direct_answer"
       onClear={() => {}}
@@ -266,13 +266,13 @@ it('withholds RC deltas while the reference carries no scenario digest', () => {
         cohort_id: '',
         contract_sha256: '',
         behavior_sha256: '',
-        median_score: 70,
+        mean_score: 70,
       })}
       candidate={observation({
         execution_id: 'local-candidate',
         source: 'local',
         contract_sha256: '',
-        median_score: 90,
+        mean_score: 90,
       })}
       testId="direct_answer"
       onClear={() => {}}

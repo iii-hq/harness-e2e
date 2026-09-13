@@ -73,10 +73,9 @@ pub mod wake_chain_soak;
 
 pub use domain::{
     is_sha256, scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
-    CapturedDeliverableContent, CapturedInvariant, ComplexityClassification, ComplexityMethod,
-    ComplexityProfile, ComplexityTier, DeliverableContract, ExecutionRealism, HumanHorizon,
-    HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase, ScenarioCharacterization,
-    ScenarioRealism, ShadowMode, WorkExpectation,
+    CapturedDeliverableContent, CapturedInvariant, DeliverableContract, ExecutionRealism,
+    HumanHorizon, HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase,
+    ScenarioCharacterization, ScenarioRealism, ShadowMode,
 };
 
 pub type EvaluationFuture<'a> =
@@ -1038,9 +1037,7 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase, captures: bool) -> R
         "setup": spec.setup.is_some(),
         "cleanup": spec.cleanup.is_some(),
         "captures": captures,
-        "complexity": case.complexity,
         "characterization": case.characterization,
-        "work": case.work,
         "required_capabilities": case.required_capabilities,
         "deliverable_contract": case.deliverable_contract,
     }))
@@ -1103,40 +1100,6 @@ mod tests {
     }
 
     #[test]
-    fn every_scenario_uses_capability_classification() {
-        for scenario in ScenarioId::ALL {
-            let materialized = scenario
-                .materialize("classification-v2", scenario.canonical_seed())
-                .unwrap();
-            assert_eq!(
-                materialized.case.complexity.method,
-                domain::ComplexityMethod::Capability,
-                "{scenario:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn capability_reclassifies_the_former_l5_cases() {
-        for (scenario, tier) in [
-            (ScenarioId::MovingTarget, domain::ComplexityTier::L2Stateful),
-            (
-                ScenarioId::PolicyBoundAction,
-                domain::ComplexityTier::L4Coordinated,
-            ),
-            (
-                ScenarioId::IncidentResponse,
-                domain::ComplexityTier::L5Adaptive,
-            ),
-        ] {
-            let materialized = scenario
-                .materialize("classification-v2", scenario.canonical_seed())
-                .unwrap();
-            assert_eq!(materialized.case.complexity.tier, tier, "{scenario:?}");
-        }
-    }
-
-    #[test]
     fn materialized_cases_are_stable_across_attempt_namespaces() {
         let first = ScenarioId::MechanicalReaction
             .materialize("attempt-a", 42)
@@ -1160,20 +1123,12 @@ mod tests {
     }
 
     #[test]
-    fn converted_scenarios_publish_expected_complexity_tiers_and_contracts() {
+    fn converted_scenarios_publish_deliverable_contracts() {
         let state = ScenarioId::MovingTarget.materialize("state", 7).unwrap();
         let coordination = ScenarioId::SubagentValidation
             .materialize("coordination", 7)
             .unwrap();
 
-        assert_eq!(
-            state.case.complexity.tier,
-            domain::ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            coordination.case.complexity.tier,
-            domain::ComplexityTier::L4Coordinated
-        );
         assert!(state.case.deliverable_contract.capture_before_cleanup);
         assert!(coordination.case.deliverable_contract.provenance_required);
     }
@@ -1189,11 +1144,6 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 91).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,
@@ -1213,11 +1163,6 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 127).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first
@@ -1238,16 +1183,6 @@ mod tests {
             ScenarioId::SubagentValidationFailure,
         ] {
             let materialized = scenario.materialize("delegation", 211).unwrap();
-            assert_eq!(
-                materialized.case.complexity.tier,
-                domain::ComplexityTier::L4Coordinated,
-                "{scenario:?}"
-            );
-            assert_eq!(
-                usize::from(materialized.case.complexity.profile.artifact_count),
-                materialized.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(materialized.capture.is_some(), "{scenario:?}");
             assert!(
                 materialized
@@ -1286,15 +1221,6 @@ mod tests {
                 continue;
             }
 
-            assert!(
-                first.case.complexity.tier != domain::ComplexityTier::L0Atomic,
-                "{scenario:?}"
-            );
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,

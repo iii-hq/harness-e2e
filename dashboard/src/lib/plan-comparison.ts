@@ -443,7 +443,6 @@ function criterionPoints(
         const policy = objectValue(scenario.execution_policy)
         const identity = [
           report.result_contract_sha256,
-          report.scoring_profile_sha256,
           scenario.case_id,
           caseValue.inputs_sha256,
           subject.model,

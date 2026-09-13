@@ -36,7 +36,7 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -196,17 +196,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "hidden_check_families": 6,
             "final_token": FINAL_TOKEN,
         }),
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 3,
-            external_systems: 1,
-            state_transitions: 6,
-            validation_loops: 2,
-            artifact_count: 1,
-            coordination_edges: 2,
-            ambiguity_level: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

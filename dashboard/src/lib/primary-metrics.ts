@@ -170,7 +170,7 @@ export function buildPrimaryMetrics(
       else test.identities.add(identity)
 
       for (const run of scenario.runs) {
-        test.values.score.push(score(run.objective_score))
+        test.values.score.push(score(run.score))
         const values = primaryRunValues(run)
         for (const metric of metricIds) {
           if (metric !== 'score') test.values[metric].push(values[metric])
@@ -472,25 +472,16 @@ function caseIdentity(scenario: unknown, report: unknown): string | null {
   const inputs = string(field(field(scenario, 'case'), 'inputs_sha256'))
   const definition = string(field(field(scenario, 'case'), 'behavior_sha256'))
   const resultContract = string(field(report, 'result_contract_sha256'))
-  const scoringProfile = string(field(report, 'scoring_profile_sha256'))
   const executionPolicy = field(scenario, 'execution_policy')
   if (
     !caseId ||
     !inputs ||
     !definition ||
     !resultContract ||
-    !scoringProfile ||
     !isObject(executionPolicy)
   )
     return null
-  return stable([
-    caseId,
-    inputs,
-    definition,
-    executionPolicy,
-    resultContract,
-    scoringProfile,
-  ])
+  return stable([caseId, inputs, definition, executionPolicy, resultContract])
 }
 
 function subjectDefinition(

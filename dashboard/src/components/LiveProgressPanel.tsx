@@ -64,13 +64,6 @@ export function LiveProgressPanel({
         : `$${progress.observed_cost_usd.toFixed(4)}`,
       `${progress.cost_observed_runs}/${progress.runs_committed} recorded runs with cost, including retries`,
     ],
-    [
-      'Quality on completed tasks',
-      progress.quality_score_completed === null
-        ? '—'
-        : `${progress.quality_score_completed}/100`,
-      `${progress.quality_scored_completed_runs}/${progress.completed_runs} completed runs scored`,
-    ],
   ] as const
   return (
     <Panel
@@ -141,8 +134,7 @@ export function LiveProgressPanel({
                     'Progress',
                     'Completion',
                     'Technical',
-                    'Objective',
-                    'Quality',
+                    'Score',
                   ].map((label) => (
                     <th
                       key={label}
@@ -177,15 +169,7 @@ export function LiveProgressPanel({
                       {slot.technical ? titleCase(slot.technical) : '—'}
                     </td>
                     <td className="px-3 py-3">
-                      {slot.objective_score === null
-                        ? '—'
-                        : `${slot.objective_score}/100`}
-                    </td>
-                    <td className="px-3 py-3">
-                      {slot.completion !== 'completed' ||
-                      slot.quality_score_completed === null
-                        ? '—'
-                        : `${slot.quality_score_completed}/100`}
+                      {slot.score === null ? '—' : `${slot.score}/100`}
                     </td>
                   </DataTableRow>
                 ))}

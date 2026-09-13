@@ -43,14 +43,12 @@ PROFILE_SNAPSHOT = {
             "campaign_id": "regression-r01",
             "lane": "local-regression",
             "failure_policy": "advisory",
-            "scoring_profile": "difficulty-weighted",
             "groups": [
                 {
                     "id": "case-minimal-path",
                     "execution_kind": "harness_turn",
                     "runs": 1,
                     "technical_retries": 1,
-                    "difficulty_weight": 2,
                     "scenarios": ["minimal_path"],
                 }
             ],
@@ -143,7 +141,7 @@ class ReportPayloadTests(unittest.TestCase):
                     "scenario_id": "tool_contract_recovery",
                     "case_id": "tool_contract_recovery@1",
                     "behavior_sha256": "sha256:" + "b" * 64,
-                    "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64, "complexity": {"tier": "t3"}},
+                    "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64},
                     "runs": [{"run_id": "run-a", "status": "passed"}, {"run_id": "run-b", "status": "failed"}],
                 }
             ]
@@ -152,7 +150,19 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual([run["repetition"] for run in runs], [0, 1])
         # Seed travels as a decimal string: it is an input to the slot digest.
         self.assertEqual(runs[0]["seed"], "4404")
-        self.assertEqual(runs[0]["tier"], "t3")
+        # Nothing grades the case: no difficulty travels with the run.
+        self.assertEqual(
+            sorted(runs[0]),
+            [
+                "behavior_sha256",
+                "case_id",
+                "definition_sha256",
+                "repetition",
+                "run",
+                "scenario_id",
+                "seed",
+            ],
+        )
         self.assertEqual(runs[0]["definition_sha256"], "sha256:" + "1" * 64)
         self.assertEqual(runs[0]["run"]["run_id"], "run-a")
 
@@ -278,7 +288,11 @@ class StackResolutionTests(unittest.TestCase):
         # with, so the same slot stays the same slot across executions.
         self.assertIsNone(contract["suite"]["seed"])
         group = contract["suite"]["groups"][0]
-        self.assertEqual(group["weight"], 2)
+        # No difficulty weight travels: every case counts the same.
+        self.assertEqual(
+            sorted(group),
+            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
+        )
         self.assertEqual(group["scenarios"], ["minimal_path"])
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
 

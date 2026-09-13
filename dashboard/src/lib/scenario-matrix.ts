@@ -6,10 +6,7 @@ import type {
   DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
   generalRunMetrics,
@@ -56,11 +53,8 @@ export type ResultContractSummary = {
   reportState: 'complete' | 'partial' | null
   objectiveOutcome: 'passed' | 'failed' | 'inconclusive' | null
   resultContractSha256: string | null
-  scoringProfileSha256: string | null
   /** False when the report was written under another results contract than this Console: shown, with a warning. */
   resultContractCurrent: boolean
-  /** False when the report was scored under another scoring profile than this Console: shown, with a warning. */
-  scoringProfileCurrent: boolean
 }
 
 export type ScenarioMatrixSummary = {
@@ -145,13 +139,7 @@ function resultContracts(
         ? report.objective_outcome
         : null
     const resultContractSha256 = nonEmptyString(report.result_contract_sha256)
-    const scoringProfileSha256 = nonEmptyString(report.scoring_profile_sha256)
-    const key = [
-      reportState,
-      objectiveOutcome,
-      resultContractSha256,
-      scoringProfileSha256,
-    ].join(':')
+    const key = [reportState, objectiveOutcome, resultContractSha256].join(':')
     if (seen.has(key)) return []
     seen.add(key)
     return [
@@ -161,9 +149,7 @@ function resultContracts(
         reportState,
         objectiveOutcome,
         resultContractSha256,
-        scoringProfileSha256,
         resultContractCurrent: resultContractSha256 === RESULT_CONTRACT_SHA256,
-        scoringProfileCurrent: scoringProfileSha256 === SCORING_PROFILE_SHA256,
       },
     ]
   })
@@ -325,8 +311,7 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'undetermined_runs',
     'technical_valid_runs',
     'technical_invalid_runs',
-    'objective_scored_runs',
-    'quality_scored_completed_runs',
+    'scored_runs',
     'technical_failures',
   ]
   if (requiredNumbers.some((key) => finiteNumber(aggregate[key]) === null)) {
@@ -336,10 +321,7 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'execution_reliability',
     'completion_evidence_coverage',
     'completion_rate',
-    'objective_median_score',
-    'objective_score_coverage',
-    'quality_score_completed',
-    'quality_coverage',
+    'mean_score',
     'total_tokens_consumed',
     'tokens_completed_p50',
     'failed_attempt_tokens',
@@ -357,17 +339,15 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
 
 // The definition digest and the contract fingerprint are not gates for now, in
 // step with the Rust reader: a report the server accepted is shown, and the
-// contract and scoring profile it carries stay visible in the identity band.
-// Another contract or profile is a warning there, never a reason to hide
-// figures.
+// results contract it carries stays visible in the identity band. Another
+// contract is a warning there, never a reason to hide figures.
 function validResultContract(report: DashboardReportProjection): boolean {
   return (
     (report.report_state === 'complete' || report.report_state === 'partial') &&
     (report.objective_outcome === 'passed' ||
       report.objective_outcome === 'failed' ||
       report.objective_outcome === 'inconclusive') &&
-    nonEmptyString(report.result_contract_sha256) !== null &&
-    nonEmptyString(report.scoring_profile_sha256) !== null
+    nonEmptyString(report.result_contract_sha256) !== null
   )
 }
 

@@ -20,7 +20,6 @@ pub struct ExecutionJournalHeader {
     pub execution_id: String,
     pub request_sha256: String,
     pub result_contract_sha256: String,
-    pub scoring_profile_sha256: String,
     pub created_at: String,
     pub request: Value,
     pub runner: Value,
@@ -157,7 +156,6 @@ impl ExecutionJournal {
         if header.execution_id.trim().is_empty()
             || header.request_sha256.trim().is_empty()
             || header.result_contract_sha256.trim().is_empty()
-            || header.scoring_profile_sha256.trim().is_empty()
         {
             bail!("execution journal identity must be non-empty");
         }
@@ -440,7 +438,6 @@ mod tests {
             execution_id: "execution-1".into(),
             request_sha256: "sha256:request".into(),
             result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-            scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
             created_at: "2026-09-04T12:00:00Z".into(),
             request: serde_json::json!({"runs": 1}),
             runner: serde_json::json!({"version": "test"}),

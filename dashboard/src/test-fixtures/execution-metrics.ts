@@ -2,10 +2,7 @@ import type {
   DashboardExecutionDetail,
   DashboardRunProjection,
 } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 
 export function metricRun(
   id: string,
@@ -20,10 +17,8 @@ export function metricRun(
     technical: 'valid',
     evaluators: {
       completion: 'not_required',
-      quality: 'available',
     },
-    objective_score: 100,
-    quality_score_completed: 80,
+    score: 100,
     assessment: {} as DashboardRunProjection['assessment'],
     efficiency: {
       total_tokens: tokens,
@@ -51,17 +46,16 @@ export function executionMetricsFixture(
         (run) => run.completion === 'task_incomplete',
       ).length
       const valid = runs.filter((run) => run.technical === 'valid').length
-      const scored = runs.filter((run) => run.objective_score !== null).length
-      const quality = completed.filter(
-        (run) => run.quality_score_completed !== null,
-      ).length
+      const scores = runs
+        .filter((run) => run.technical === 'valid')
+        .map((run) => run.score)
+        .filter((score): score is number => score !== null)
       return {
         subject_id: 'subject',
         scenario_id: `scenario-${index}`,
         available: true,
         report: {
           result_contract_sha256: RESULT_CONTRACT_SHA256,
-          scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: deferred ? 'partial' : 'complete',
           objective_outcome: 'inconclusive',
           assessment_contract: { runs: [] },
@@ -82,15 +76,15 @@ export function executionMetricsFixture(
                 undetermined_runs: runs.length - completed.length - incomplete,
                 technical_valid_runs: valid,
                 technical_invalid_runs: runs.length - valid,
-                objective_scored_runs: scored,
-                quality_scored_completed_runs: quality,
+                scored_runs: scores.length,
                 execution_reliability: null,
                 completion_evidence_coverage: null,
                 completion_rate: null,
-                objective_median_score: null,
-                objective_score_coverage: null,
-                quality_score_completed: null,
-                quality_coverage: null,
+                mean_score:
+                  scores.length === 0
+                    ? null
+                    : scores.reduce((total, score) => total + score, 0) /
+                      scores.length,
                 total_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,

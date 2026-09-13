@@ -17,7 +17,7 @@ function side(issue = false): TestSideSummary {
     total_runs: 1,
     scored_runs: 1,
     case_count: 1,
-    median_score: issue ? 0 : 100,
+    mean_score: issue ? 0 : 100,
     pass_rate: issue ? 0 : 1,
     median_cost_usd: null,
     median_tokens: null,

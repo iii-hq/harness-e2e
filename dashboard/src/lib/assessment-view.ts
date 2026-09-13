@@ -44,7 +44,9 @@ export type AssessmentRunView = {
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
   failureMessages?: string[]
-  objectiveScore: number | null
+  /** Plain sum of the points the evaluated criteria awarded; null when the run
+   *  evaluated nothing. */
+  score: number | null
   assessments: AssessmentEntry[]
   evidence: EvidenceReference[]
 }
@@ -243,7 +245,7 @@ function assessmentRunView(
         ? [failure.message]
         : [],
     ),
-    objectiveScore: finiteNumber(projectedRun.objective_score),
+    score: finiteNumber(projectedRun.score),
     assessments,
     evidence,
   }

@@ -20,7 +20,7 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -696,16 +696,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "injected_fault": "one billing version_conflict",
             "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 3,
-            external_systems: 3,
-            state_transitions: 4,
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

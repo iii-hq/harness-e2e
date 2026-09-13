@@ -1784,7 +1784,6 @@ export function planProvenanceEntries(
       [
         scenario.case_id ? `case ${scenario.case_id}` : null,
         `seed ${scenario.seed}`,
-        scenario.complexity_tier ? `tier ${scenario.complexity_tier}` : null,
         scenario.contract_sha256
           ? `contract ${shortHash(scenario.contract_sha256)}`
           : null,

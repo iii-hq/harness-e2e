@@ -9,16 +9,16 @@ describe('whole-execution metrics', () => {
   it('pools the approved A/B/C example into one execution summary', () => {
     const metrics = buildExecutionMetrics(
       executionMetricsFixture([
-        { runs: [metricRun('a', 100_000, { quality_score_completed: 60 })] },
+        { runs: [metricRun('a', 100_000, { score: 60 })] },
         {
           runs: [
             metricRun('b', 20_000, {
               completion: 'task_incomplete',
-              quality_score_completed: null,
+              score: null,
             }),
           ],
         },
-        { runs: [metricRun('c', 120_000, { quality_score_completed: 100 })] },
+        { runs: [metricRun('c', 120_000, { score: 100 })] },
       ]),
     )
     expect(metrics).toMatchObject({
@@ -35,8 +35,8 @@ describe('whole-execution metrics', () => {
       executionReliability: 1,
       tokensCompletedP50: 110_000,
       tokensPerCompletion: 120_000,
-      qualityMedian: 80,
-      qualitySamples: 2,
+      scoreMean: 80,
+      scoreSamples: 2,
       subjectTokens: { total: 240_000, samples: 3, expected: 3 },
       failedAttemptTokens: { total: 20_000 },
       durationMs: { total: 3_000 },
@@ -45,42 +45,25 @@ describe('whole-execution metrics', () => {
     expect(metrics.cost.total).toBeCloseTo(0.3)
   })
 
-  it('weights by runs and recomputes medians instead of averaging scenario summaries', () => {
+  it('weights by runs instead of averaging scenario summaries', () => {
     const detail = executionMetricsFixture([
+      { runs: [metricRun('a', 10, { score: 10 })] },
       {
         runs: [
-          metricRun('a', 10, {
-            quality_score_completed: 10,
-            objective_score: 10,
-          }),
-        ],
-      },
-      {
-        runs: [
-          metricRun('b', 30, {
-            quality_score_completed: 30,
-            objective_score: 30,
-          }),
-          metricRun('c', 80, {
-            quality_score_completed: 80,
-            objective_score: 80,
-          }),
-          metricRun('d', 90, {
-            quality_score_completed: 90,
-            objective_score: 90,
-          }),
+          metricRun('b', 30, { score: 30 }),
+          metricRun('c', 80, { score: 80 }),
+          metricRun('d', 90, { score: 90 }),
           metricRun('e', 900, {
             completion: 'task_incomplete',
-            quality_score_completed: null,
-            objective_score: null,
+            score: null,
           }),
         ],
       },
     ])
     const metrics = buildExecutionMetrics(detail)
     expect(metrics.completionRate).toBe(4 / 5)
-    expect(metrics.qualityMedian).toBe(55)
-    expect(metrics.objectiveMedian).toBe(55)
+    expect(metrics.scoreMean).toBe(52.5)
+    expect(metrics.scoreSamples).toBe(4)
     expect(metrics.tokensCompletedP50).toBe(55)
     expect(metrics.tokensPerCompletion).toBe(1_110 / 4)
   })
@@ -107,7 +90,6 @@ describe('whole-execution metrics', () => {
     expect(metrics.cost.total).toBe(0.3)
     expect(metrics.durationMs.total).toBe(3_000)
     run.completion = 'task_incomplete'
-    run.quality_score_completed = null
     const incomplete = buildExecutionMetrics(
       executionMetricsFixture([{ runs: [run] }]),
     )
@@ -153,8 +135,7 @@ describe('whole-execution metrics', () => {
             metricRun('b', null, {
               completion: 'undetermined',
               technical: 'technical_invalid',
-              quality_score_completed: null,
-              objective_score: null,
+              score: null,
             }),
           ],
           deferred: 1,
@@ -174,7 +155,7 @@ describe('whole-execution metrics', () => {
     expect(metrics.completionRate).toBe(1)
     expect(metrics.completionCoverage).toBe(1 / 3)
     expect(metrics.executionReliability).toBe(1 / 3)
-    expect(metrics.qualitySamples).toBe(1)
+    expect(metrics.scoreSamples).toBe(1)
   })
 
   it('does not trust a cumulative efficiency counter when retry telemetry is missing', () => {
@@ -205,7 +186,7 @@ describe('whole-execution metrics', () => {
     expect(metrics.completionCoverage).toBe(0)
     expect(metrics.subjectTokens.total).toBeNull()
     expect(metrics.cost.total).toBeNull()
-    expect(metrics.qualityMedian).toBeNull()
+    expect(metrics.scoreMean).toBeNull()
     expect(metrics.tokensPerCompletion).toBeNull()
     expect(
       buildExecutionMetrics(executionMetricsFixture([])).scopeComplete,
@@ -220,8 +201,8 @@ describe('whole-execution metrics', () => {
     const first = detail.reports[0].report
     const second = detail.reports[1].report
     if (!first || !second) throw new Error('fixture must contain reports')
-    // Neither the results contract nor the scoring profile is a gate: only a
-    // report that states no completeness is unavailable.
+    // The results contract is not a gate: only a report that states no
+    // completeness is unavailable.
     delete (second as unknown as Record<string, unknown>).report_state
     const metrics = buildExecutionMetrics(detail)
     expect(metrics).toMatchObject({
@@ -237,14 +218,13 @@ describe('whole-execution metrics', () => {
     expect(buildExecutionMetrics(detail).includedScenarios).toBe(0)
   })
 
-  it('keeps evidence scored under another profile or contract in the totals', () => {
+  it('keeps evidence written under another results contract in the totals', () => {
     const detail = executionMetricsFixture([
       { runs: [metricRun('a', 100)] },
       { runs: [metricRun('b', 200)] },
     ])
     const second = detail.reports[1].report
     if (!second) throw new Error('fixture must contain reports')
-    second.scoring_profile_sha256 = `sha256:${'0'.repeat(64)}`
     second.result_contract_sha256 = `sha256:${'1'.repeat(64)}`
     const metrics = buildExecutionMetrics(detail)
     expect(metrics).toMatchObject({

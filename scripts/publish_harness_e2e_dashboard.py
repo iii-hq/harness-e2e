@@ -542,12 +542,12 @@ def _public_scenario(
     aggregate = _pick(
         value.get("aggregate"),
         (
-            "runs",
+            "observed_runs",
             "scored_runs",
             "passed_runs",
             "required_passes",
             "pass_rate",
-            "median_score",
+            "mean_score",
             "technical_failures",
         ),
     )
@@ -598,7 +598,7 @@ def _public_subject_summary(value: Any) -> dict[str, Any] | None:
                 "status",
                 "passed",
                 "runs",
-                "median_score",
+                "mean_score",
                 "pass_rate",
                 "technical_failures",
                 "retries",
@@ -1256,6 +1256,10 @@ def _assessment_profile_sha256(
     )
 
 
+def _mean(values: list[float]) -> float | None:
+    return sum(values) / len(values) if values else None
+
+
 def _median(values: list[float]) -> float | None:
     if not values:
         return None
@@ -1351,7 +1355,7 @@ def _side_summary(
         "total_runs": len(runs),
         "scored_runs": len(scores),
         "case_count": len({item["case_id"] for item in observations}),
-        "median_score": _median(scores),
+        "mean_score": _mean(scores),
         "pass_rate": outcomes["passed"] / len(runs) if runs else None,
         "median_cost_usd": _median(costs),
         "median_tokens": _median(tokens),
@@ -1526,7 +1530,7 @@ def build_static_test_catalog(
                     )
                 }
                 | {
-                    "median_score": _median(scores),
+                    "mean_score": _mean(scores),
                     "run_count": len(observation["runs"]),
                     "scored_runs": len(scores),
                     "assessment_summary": _assessment_summary(

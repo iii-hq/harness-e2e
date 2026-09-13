@@ -17,9 +17,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, ComplexityProfile,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
+    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_loop";
@@ -61,7 +61,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expected_rows": EXPECTED_ROWS,
             "minimum_nudges": 1,
         }),
-        validation_profile(),
         validation_capabilities(),
         deliverable_contract(),
     )?;
@@ -219,20 +218,6 @@ fn deliverable_contract() -> DeliverableContract {
             "additionalProperties": true
         }),
     )
-}
-
-pub(super) fn validation_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: 2,
-        external_systems: 1,
-        state_transitions: 4,
-        validation_loops: 2,
-        artifact_count: 1,
-        coordination_edges: 1,
-        ambiguity_level: 3,
-        ..ComplexityProfile::default()
-    }
 }
 
 pub(super) fn validation_capabilities() -> Vec<String> {

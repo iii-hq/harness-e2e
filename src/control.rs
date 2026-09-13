@@ -33,14 +33,13 @@ use crate::persistence::Persistence;
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
     ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMetric,
-    ObservationMetricDerivation, ObservationMetricOrigin, ObservationObjective, ObservationOutcome,
-    ObservationProvenance, ObservationRunContract, ObservationSample, ObservationSelectedCase,
-    RunnerIdentity, CATALOG_SCHEMA, OBSERVATION_SCHEMA,
+    ObservationMetricOrigin, ObservationObjective, ObservationOutcome, ObservationProvenance,
+    ObservationRunContract, ObservationSample, ObservationSelectedCase, RunnerIdentity,
+    CATALOG_SCHEMA, OBSERVATION_SCHEMA,
 };
 use crate::scenarios::ScenarioId;
 use crate::scenarios::{
-    scenario_contract_sha256, ComplexityClassification, ComplexityProfile, DeliverableContract,
-    ExecutionPolicy, ScenarioCharacterization,
+    scenario_contract_sha256, DeliverableContract, ExecutionPolicy, ScenarioCharacterization,
 };
 use crate::suite::{
     run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
@@ -330,8 +329,6 @@ pub struct ScenarioDescriptor {
     pub seed: u64,
     pub inputs_sha256: String,
     pub contract_sha256: String,
-    pub classification: ComplexityClassification,
-    pub complexity: ComplexityProfile,
     pub characterization: ScenarioCharacterization,
     pub resource_envelope: ScenarioResourceEnvelope,
     pub required_capabilities: Vec<String>,
@@ -782,7 +779,6 @@ impl ControlPlane {
                 execution_id: execution_id.clone(),
                 request_sha256: request_sha256.clone(),
                 result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                 created_at: now.clone(),
                 request: serde_json::to_value(&request).context("encode journal request")?,
                 runner: serde_json::to_value(RunnerIdentity::runtime())
@@ -1703,7 +1699,6 @@ impl ControlPlane {
                         record.request_sha256.clone()
                     },
                     result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                     created_at: record.requested_at.clone(),
                     request: serde_json::to_value(&record.request)
                         .context("encode recovered journal request")?,
@@ -2192,7 +2187,6 @@ fn materialize_scenario_descriptor(
     let materialized = scenario_id.materialize(label, seed)?;
     let contract_sha256 =
         scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
-    let complexity = materialized.case.complexity.profile;
     let resource_envelope = ScenarioResourceEnvelope {
         execution: materialized.spec.execution,
         workflow: serde_json::from_value(
@@ -2207,8 +2201,6 @@ fn materialize_scenario_descriptor(
         seed: materialized.case.seed,
         inputs_sha256: materialized.case.inputs_sha256,
         contract_sha256,
-        classification: materialized.case.complexity,
-        complexity,
         characterization: materialized.case.characterization,
         resource_envelope,
         required_capabilities: materialized.case.required_capabilities,
@@ -2339,18 +2331,7 @@ fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
                     Some(_) => ObservationDataAvailability::Partial,
                     None => ObservationDataAvailability::Unavailable,
                 };
-                let derivations = run
-                    .efficiency
-                    .as_ref()
-                    .is_some_and(|metrics| metrics.work_amplification.is_some())
-                    .then(|| ObservationMetricDerivation {
-                        metric: "work_amplification".into(),
-                        origin: ObservationMetricOrigin::DerivedFromObserved,
-                        formula: "observed_work / max(minimum_expected_work, 1)".into(),
-                        formula_version: "1".into(),
-                    })
-                    .into_iter()
-                    .collect();
+                let derivations = Vec::new();
                 ObservationSample {
                     scenario_id: scenario.scenario_id.clone(),
                     behavior_sha256: scenario.behavior_sha256.clone(),
@@ -2393,9 +2374,7 @@ fn observation_metric_values(
         ("output_tokens", "tokens"),
         ("total_tokens", "tokens"),
         ("cost_usd", "USD"),
-        ("minimum_expected_work", "work_units"),
         ("observed_work", "work_units"),
-        ("work_amplification", "ratio"),
         ("technical_attempts", "attempts"),
     ];
     let mut values = METRICS
@@ -2461,17 +2440,9 @@ fn observation_metric_values(
                 (Some(metrics), "cost_usd") => {
                     (metrics.cost_usd, ObservationMetricOrigin::Observed)
                 }
-                (Some(metrics), "minimum_expected_work") => (
-                    Some(metrics.minimum_expected_work as f64),
-                    ObservationMetricOrigin::Observed,
-                ),
                 (Some(metrics), "observed_work") => (
                     metrics.observed_work.map(|value| value as f64),
                     ObservationMetricOrigin::Observed,
-                ),
-                (Some(metrics), "work_amplification") => (
-                    metrics.work_amplification,
-                    ObservationMetricOrigin::DerivedFromObserved,
                 ),
                 (Some(metrics), "technical_attempts") => (
                     Some(metrics.technical_attempts as f64),
@@ -2651,7 +2622,6 @@ mod tests {
                     execution_id: "recovery".into(),
                     request_sha256: "request".into(),
                     result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                     created_at: now(),
                     request: serde_json::to_value(request()).unwrap(),
                     runner: json!({}),
@@ -2814,7 +2784,7 @@ mod tests {
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
                 && scenario.contract_sha256.starts_with("sha256:")
-                && scenario.classification.method == crate::scenarios::ComplexityMethod::Capability
+                && scenario.behavior_sha256.starts_with("sha256:")
         }));
         let git = response
             .scenarios
@@ -3191,7 +3161,6 @@ mod tests {
         let metrics: crate::report::EfficiencyReport = serde_json::from_value(json!({
             "wall_time_ms": 0,
             "root_turns": 0,
-            "minimum_expected_work": 1,
             "technical_attempts": 1,
             "observed_complexity": {},
             "unavailable": {}

@@ -15,9 +15,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, ComplexityProfile, CriterionAward,
-    CriterionSpec, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ArtifactExpectation, CapturedDeliverable, CleanupFuture, CriterionAward, CriterionSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
     ScenarioObservation, ScenarioSetup, ScenarioSpec,
 };
 use crate::context::E2eContext;
@@ -142,15 +142,6 @@ pub fn materialize(index: usize, run_id: &str) -> Result<MaterializedScenario> {
             "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
             "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
             "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 3,
-            external_systems: 2,
-            state_transitions: 5,
-            validation_loops: 3,
-            artifact_count: 1,
-            ..Default::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),

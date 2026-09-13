@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 
 use crate::artifact;
 use crate::control::{scenarios_list, ScenarioDescriptor, ScenariosListRequest};
-use crate::scenarios::{ComplexityTier, ScenarioExecutionKind, ScenarioId};
+use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
 
@@ -56,7 +56,6 @@ pub struct FaultGroup {
     pub execution_kind: String,
     pub runs: u32,
     pub technical_retries: u8,
-    pub difficulty_weight: u8,
     pub fault_profile: String,
     pub fault_scenario: String,
     pub soak_minutes: u32,
@@ -98,16 +97,6 @@ pub fn execution_kind(key: &ScenarioId) -> &'static str {
         ScenarioExecutionKind::ScriptedDialogue => "scripted_dialogue",
         ScenarioExecutionKind::CompositeFlow => "composite_flow",
         ScenarioExecutionKind::AdaptiveFlow => "adaptive_flow",
-    }
-}
-
-pub(crate) fn weight(tier: ComplexityTier) -> u8 {
-    match tier {
-        ComplexityTier::L0Atomic | ComplexityTier::L1Sequential => 1,
-        ComplexityTier::L2Stateful => 2,
-        ComplexityTier::L3Concurrent => 3,
-        ComplexityTier::L4Coordinated => 4,
-        ComplexityTier::L5Adaptive => 5,
     }
 }
 
@@ -193,9 +182,9 @@ impl MasterPlan {
                     "invalid fault group id"
                 );
                 let expected = match group.fault_profile.as_str() {
-                    "weekly-l2-recovery" => (2, "stateful.2"),
-                    "weekly-l3-recovery" => (3, "coordination.3"),
-                    "weekly-l4-recovery" => (4, "coordination.4"),
+                    "weekly-l2-recovery" => "stateful.2",
+                    "weekly-l3-recovery" => "coordination.3",
+                    "weekly-l4-recovery" => "coordination.4",
                     _ => bail!("unsupported fault profile"),
                 };
                 ensure!(
@@ -203,8 +192,7 @@ impl MasterPlan {
                         && group.technical_retries == 0
                         && (3..=20).contains(&group.runs)
                         && (60..=180).contains(&group.soak_minutes)
-                        && group.difficulty_weight == expected.0
-                        && group.fault_scenario == expected.1,
+                        && group.fault_scenario == expected,
                     "invalid recovery policy for {}",
                     group.id
                 );
@@ -312,7 +300,7 @@ impl MasterPlan {
             cases.push(json!({
                 "scenario_id": id, "behavior_sha256": case.behavior_sha256, "case_id": case.case_id,
                 "seed": case.seed, "inputs_sha256": case.inputs_sha256, "contract_sha256": case.contract_sha256,
-                "execution_kind": execution_kind(key), "difficulty_weight": weight(case.classification.tier),
+                "execution_kind": execution_kind(key),
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
@@ -327,11 +315,6 @@ impl MasterPlan {
                 continue;
             }
             let group = grouped.cloned().unwrap_or_else(|| vec![id.clone()]);
-            let group_weight = group
-                .iter()
-                .map(|id| weight(native[id].classification.tier))
-                .max()
-                .unwrap();
             let group_retries = if group
                 .iter()
                 .all(|id| native[id].scenario_id.execution_kind().replay_safe())
@@ -343,7 +326,7 @@ impl MasterPlan {
             ordinary_groups.push(json!({
                 "id": format!("case-{}", id.replace('_', "-")),
                 "execution_kind": execution_kind(key), "runs": 1,
-                "technical_retries": group_retries, "difficulty_weight": group_weight,
+                "technical_retries": group_retries,
                 "scenarios": group,
             }));
         }
@@ -362,7 +345,7 @@ impl MasterPlan {
             );
             let campaign = json!({
                 "kind": "harness-e2e-campaign", "campaign_id": format!("{}-r{repetition:02}", profile.id),
-                "lane": profile.lane, "failure_policy": "advisory", "scoring_profile": "difficulty-weighted", "groups": groups,
+                "lane": profile.lane, "failure_policy": "advisory", "groups": groups,
             });
             campaigns.push(campaign);
         }
@@ -409,7 +392,10 @@ impl MasterPlan {
     pub fn campaign_catalog(&self) -> Result<Value> {
         let mut scenarios = BTreeMap::new();
         for (id, case) in native_catalog(None)? {
-            scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier)}));
+            scenarios.insert(
+                id,
+                json!({"execution_kind": execution_kind(&case.scenario_id)}),
+            );
         }
         Ok(
             json!({"schema": "harness-e2e-campaign-catalog", "definition_sha256": self.digest()?, "scenarios": scenarios}),

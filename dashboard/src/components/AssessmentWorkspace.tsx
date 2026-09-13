@@ -81,7 +81,7 @@ type PrimaryMetric = {
   label: string
   value: string
   detail: string
-  context: 'Objective' | 'Signal' | 'Observed'
+  context: 'Score' | 'Signal' | 'Observed'
   tone: PrimaryMetricTone
 }
 
@@ -167,20 +167,17 @@ function primaryRunMetrics(run: AssessmentRunView): PrimaryMetric[] {
 
   return [
     {
-      label: 'Objective score',
-      value:
-        run.objectiveScore === null
-          ? 'Not reported'
-          : `${run.objectiveScore}/100`,
+      label: 'Score',
+      value: run.score === null ? 'Not reported' : `${run.score}/100`,
       detail:
-        run.objectiveScore === null
-          ? 'No objective score retained'
-          : 'Official score from measured criteria',
-      context: 'Objective',
+        run.score === null
+          ? 'No score retained'
+          : 'Points the evaluated criteria awarded',
+      context: 'Score',
       tone:
-        run.objectiveScore === null
+        run.score === null
           ? 'unavailable'
-          : run.objectiveScore === 100
+          : run.score === 100
             ? 'positive'
             : 'warning',
     },

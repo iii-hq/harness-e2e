@@ -23,9 +23,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "shell_coder_sandbox";
@@ -244,17 +244,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "host_demo_stdout": HOST_DEMO_STDOUT,
             "hidden_probe_families": 7,
         }),
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 4,
-            external_systems: 2,
-            state_transitions: 8,
-            validation_loops: 2,
-            artifact_count: 2,
-            coordination_edges: 2,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -1246,10 +1235,6 @@ mod tests {
         assert_eq!(
             materialized.case.inputs["fixture_manifest_sha256"],
             FIXTURE_MANIFEST_SHA256
-        );
-        assert_eq!(
-            materialized.case.complexity.tier,
-            super::super::ComplexityTier::L4Coordinated
         );
         assert!(!materialized
             .case

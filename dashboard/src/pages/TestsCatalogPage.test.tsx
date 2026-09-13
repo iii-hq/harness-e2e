@@ -4,7 +4,6 @@ import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
   CATALOG_DEFAULT_FILTERS,
   catalogCalibrationPresentation,
-  catalogComplexityPresentation,
   catalogCountLabels,
   catalogFiltersActive,
   catalogFiltersFromParams,
@@ -23,10 +22,6 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
     lifecycle: 'active',
     current_version:
       'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
-    complexity: {
-      method: 'capability',
-      tier: 'l5_adaptive',
-    },
     characterization: {
       human_horizon: {
         min_minutes: 60,
@@ -50,7 +45,7 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
   }
 }
 
-describe('test catalog L5 dimensions', () => {
+describe('test catalog dimensions', () => {
   it('keeps catalog total, loaded rows and filters distinct', () => {
     expect(catalogCountLabels(62, 50, 52, 12, true)).toEqual({
       summary:
@@ -74,11 +69,7 @@ describe('test catalog L5 dimensions', () => {
     expect(html).not.toContain('Create a new local test')
   })
 
-  it('presents classification, horizon, and realism independently', () => {
-    expect(catalogComplexityPresentation(row())).toEqual({
-      value: 'L5 adaptive',
-      detail: 'capability',
-    })
+  it('presents horizon and realism independently', () => {
     expect(catalogHorizonPresentation(row())).toEqual({
       value: '60–120 min',
       detail: 'author estimate',
@@ -107,11 +98,9 @@ describe('test catalog L5 dimensions', () => {
   // Audit T-12 / T-14: one marker for anything not declared.
   it('keeps absent dimensions compatible with older responses', () => {
     const legacy = row({
-      complexity: undefined,
       characterization: undefined,
       calibration: undefined,
     })
-    expect(catalogComplexityPresentation(legacy).value).toBeNull()
     expect(catalogHorizonPresentation(legacy).value).toBeNull()
     expect(catalogRealismPresentation(legacy).value).toBeNull()
     expect(catalogCalibrationPresentation(legacy)).toEqual({
@@ -129,7 +118,6 @@ describe('test catalog L5 dimensions', () => {
     expect(filters).toEqual({
       query: 'chess',
       lifecycle: 'active',
-      complexity: 'all',
       realism: 'all',
       withExecutions: true,
       sort: 'runs',
@@ -140,13 +128,9 @@ describe('test catalog L5 dimensions', () => {
     expect(catalogFiltersActive(CATALOG_DEFAULT_FILTERS)).toBe(false)
   })
 
-  it('groups by lifecycle and sorts by runs, last seen or complexity', () => {
+  it('groups by lifecycle and sorts by runs or last seen', () => {
     const rows = [
-      row({
-        test_id: 'b',
-        lifecycle: 'never_run',
-        complexity: { tier: 'l2_stateful' },
-      }),
+      row({ test_id: 'b', lifecycle: 'never_run' }),
       row({
         test_id: 'a',
         available_versions: [
@@ -159,7 +143,11 @@ describe('test catalog L5 dimensions', () => {
           },
         ],
       }),
-      row({ test_id: 'c', lifecycle: 'retired', complexity: null }),
+      row({
+        test_id: 'c',
+        lifecycle: 'retired',
+        characterization: undefined,
+      }),
     ]
     expect(
       groupCatalogRows(rows).map((group) => [
@@ -174,9 +162,9 @@ describe('test catalog L5 dimensions', () => {
     expect(sortCatalogRows(rows, 'runs').map((entry) => entry.test_id)).toEqual(
       ['a', 'b', 'c'],
     )
-    expect(
-      sortCatalogRows(rows, 'complexity').map((entry) => entry.test_id),
-    ).toEqual(['a', 'b', 'c'])
+    expect(sortCatalogRows(rows, 'name').map((entry) => entry.test_id)).toEqual(
+      ['a', 'b', 'c'],
+    )
     expect(
       filterCatalogRows(rows, {
         ...CATALOG_DEFAULT_FILTERS,
@@ -186,7 +174,7 @@ describe('test catalog L5 dimensions', () => {
     expect(
       filterCatalogRows(rows, {
         ...CATALOG_DEFAULT_FILTERS,
-        complexity: 'none',
+        realism: 'none',
       }).map((entry) => entry.test_id),
     ).toEqual(['c'])
   })

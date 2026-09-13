@@ -851,8 +851,7 @@ fn safe_asset_id(value: &str) -> bool {
 mod tests {
     use super::*;
     use crate::scenarios::{
-        ArtifactExpectation, CapturedInvariant, ComplexityProfile, DeliverableContract,
-        InvariantSpec,
+        ArtifactExpectation, CapturedInvariant, DeliverableContract, InvariantSpec,
     };
 
     fn case(max_size_bytes: u64) -> ScenarioCase {
@@ -860,7 +859,6 @@ mod tests {
             "asset_capture",
             7,
             serde_json::json!({}),
-            ComplexityProfile::default(),
             vec![],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {

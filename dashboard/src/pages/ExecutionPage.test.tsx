@@ -62,7 +62,7 @@ const run: AssessmentRunView = {
     turns: null,
   },
   systemStatus: 'passed',
-  objectiveScore: 100,
+  score: 100,
   assessments: [],
   evidence: [],
 }

@@ -43,10 +43,9 @@ function run(id: string, options: RunOptions = {}): DashboardRunProjection {
     status: 'passed',
     completion: 'completed',
     technical: 'valid',
-    evaluators: { completion: 'available', quality: 'available' },
+    evaluators: { completion: 'available' },
     assessment: {} as DashboardRunProjection['assessment'],
-    objective_score: score,
-    quality_score_completed: null,
+    score,
     metrics: {
       totals: {
         input_tokens: input,
@@ -92,7 +91,6 @@ function detail(
           ? undefined
           : ({
               result_contract_sha256: 'result-contract',
-              scoring_profile_sha256: 'scoring-profile',
               scenarios: [
                 {
                   scenario_id: test.id,
@@ -391,7 +389,7 @@ describe('primary metrics comparison', () => {
     const candidate = detail([{ id: 'identity', runs: [run('b')] }])
     const report = candidate.reports[0].report
     if (!report) throw new Error('fixture must contain a report')
-    report.scoring_profile_sha256 = ''
+    report.result_contract_sha256 = ''
 
     const result = comparePrimaryMetrics(
       buildPrimaryMetrics(baseline),

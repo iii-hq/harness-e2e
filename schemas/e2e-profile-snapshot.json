@@ -4,11 +4,6 @@
     "FaultGroup": {
       "additionalProperties": false,
       "properties": {
-        "difficulty_weight": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": "integer"
-        },
         "execution_kind": {
           "type": "string"
         },
@@ -38,7 +33,6 @@
         }
       },
       "required": [
-        "difficulty_weight",
         "execution_kind",
         "fault_profile",
         "fault_scenario",

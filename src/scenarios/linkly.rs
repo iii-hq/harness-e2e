@@ -174,18 +174,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "exchanges": PROMPTS.len(),
                 "prompts_sha256": crate::artifact::sha256_bytes(PROMPTS.concat().as_bytes()),
             }),
-            ComplexityProfile {
-                planning_depth: 7,
-                dependency_depth: 4,
-                parallel_branches: 3,
-                external_systems: 4,
-                state_transitions: 12,
-                validation_loops: 3,
-                artifact_count: 1,
-                coordination_edges: 6,
-                ambiguity_level: 3,
-                ..Default::default()
-            },
             vec![
                 "e2e::control-plane-v1".into(),
                 "iii::functions".into(),

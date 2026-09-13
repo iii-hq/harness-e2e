@@ -11,7 +11,7 @@ const plan: MasterTestPlan = {
       id: 'resilience',
       label: 'Resilience',
       purpose: 'Recover without duplicate effects.',
-      metrics: ['work_amplification'],
+      metrics: ['deliverable_success'],
       scenario_ids: ['cleanup_under_failure'],
       repetitions: 1,
       technical_retries: 0,
@@ -38,7 +38,7 @@ describe('master test profiles', () => {
     expect(html).toContain('Protected fault executor')
     expect(html).toContain('not available for all cases')
     expect(html).toContain('Create Resilience plan')
-    expect(html).toContain('work_amplification')
+    expect(html).toContain('deliverable_success')
     expect(html).not.toContain('run baseline')
   })
 })

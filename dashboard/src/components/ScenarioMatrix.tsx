@@ -118,10 +118,7 @@ export function contractScent(
     `results contract ${distinct(contracts.map((c) => c.reportState ?? 'unavailable'))}`,
     distinct(contracts.map((c) => c.objectiveOutcome ?? 'unavailable')),
     `contract ${distinct(contracts.map((c) => shortDigest(c.resultContractSha256)))}`,
-    `scoring profile ${distinct(contracts.map((c) => shortDigest(c.scoringProfileSha256)))}`,
-    ...(contracts.some(
-      (c) => !c.resultContractCurrent || !c.scoringProfileCurrent,
-    )
+    ...(contracts.some((c) => !c.resultContractCurrent)
       ? ['differs from this console']
       : []),
   ].join(' · ')
@@ -130,14 +127,9 @@ export function contractScent(
 /** What differs from the contract this Console was built with, if anything. */
 export function contractDrift(contract: {
   resultContractCurrent: boolean
-  scoringProfileCurrent: boolean
 }): string | null {
-  const moved = [
-    ...(contract.resultContractCurrent ? [] : ['results contract']),
-    ...(contract.scoringProfileCurrent ? [] : ['scoring profile']),
-  ]
-  if (moved.length === 0) return null
-  return `Written under another ${moved.join(' and ')} than this Console; figures are shown as reported.`
+  if (contract.resultContractCurrent) return null
+  return 'Written under another results contract than this Console; figures are shown as reported.'
 }
 
 export function ResultContractStrip({
@@ -169,7 +161,7 @@ export function ResultContractStrip({
       {contracts.map((contract) => (
         <div
           key={contract.key}
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
           data-results-contract={contract.valid ? 'valid' : 'invalid'}
         >
           {/* Audit ED-30: title case belongs to words. Applied to every value it
@@ -188,13 +180,9 @@ export function ResultContractStrip({
             label="results contract"
             value={shortDigest(contract.resultContractSha256)}
           />
-          <ContractFact
-            label="scoring profile"
-            value={shortDigest(contract.scoringProfileSha256)}
-          />
           {contractDrift(contract) ? (
             <p
-              className="m-0 text-xs text-warning sm:col-span-2 lg:col-span-4"
+              className="m-0 text-xs text-warning sm:col-span-2 lg:col-span-3"
               data-results-contract-drift="true"
             >
               {contractDrift(contract)}
@@ -530,8 +518,6 @@ function ScenarioReliabilityBand({
     ['execution reliability', aggregate.execution_reliability],
     ['completion evidence coverage', aggregate.completion_evidence_coverage],
     ['completion rate', aggregate.completion_rate],
-    ['objective score coverage', aggregate.objective_score_coverage],
-    ['quality coverage', aggregate.quality_coverage],
   ] as const
   const tokenMetrics = [
     ['subject tokens', aggregate.total_tokens_consumed],
@@ -562,13 +548,13 @@ function ScenarioReliabilityBand({
           />
         ))}
         <AggregateFact
-          label="quality score completed"
+          label="mean score"
           value={
-            aggregate.quality_score_completed == null
+            aggregate.mean_score == null
               ? '—'
-              : `${formatDecimal(aggregate.quality_score_completed)}/100`
+              : `${formatDecimal(aggregate.mean_score)}/100`
           }
-          detail={`${aggregate.quality_scored_completed_runs}/${aggregate.completed_runs} completed runs scored`}
+          detail={`${aggregate.scored_runs}/${aggregate.technical_valid_runs} technically valid runs scored`}
         />
       </dl>
       <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
@@ -613,8 +599,7 @@ type PhysicalAttempt = {
   completion?: CompletionState
   technical?: TechnicalState
   evaluators?: DashboardRunProjection['evaluators']
-  objectiveScore?: number | null
-  qualityScoreCompleted?: number | null
+  score?: number | null
 }
 
 function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
@@ -626,8 +611,7 @@ function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
       completion: attempt.completion,
       technical: attempt.technical,
       evaluators: attempt.evaluators,
-      objectiveScore: attempt.objective_score,
-      qualityScoreCompleted: attempt.quality_score_completed,
+      score: attempt.score,
     })),
     {
       key: `${run.attempt_id}:terminal`,
@@ -636,8 +620,7 @@ function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
       completion: run.completion,
       technical: run.technical,
       evaluators: run.evaluators,
-      objectiveScore: run.objective_score,
-      qualityScoreCompleted: run.quality_score_completed,
+      score: run.score,
     },
   ])
 }
@@ -658,16 +641,14 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
         </span>
       </summary>
       <div className="overflow-x-auto bg-panel">
-        <table className="w-full min-w-[860px] border-collapse text-left text-xs">
+        <table className="w-full min-w-[620px] border-collapse text-left text-xs">
           <thead className="bg-panel-raised font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
               <th className="px-4 py-2 font-semibold">run / attempt</th>
               <th className="px-4 py-2 font-semibold">completion</th>
               <th className="px-4 py-2 font-semibold">technical</th>
               <th className="px-4 py-2 font-semibold">completion evaluator</th>
-              <th className="px-4 py-2 font-semibold">quality evaluator</th>
-              <th className="px-4 py-2 font-semibold">objective</th>
-              <th className="px-4 py-2 font-semibold">quality</th>
+              <th className="px-4 py-2 font-semibold">score</th>
             </tr>
           </thead>
           <tbody>
@@ -684,14 +665,8 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
                 <td className="px-4 py-3">
                   {evaluatorLabel(attempt.evaluators?.completion)}
                 </td>
-                <td className="px-4 py-3">
-                  {evaluatorLabel(attempt.evaluators?.quality)}
-                </td>
                 <td className="px-4 py-3 font-mono tabular-nums">
-                  {scoreLabel(attempt.objectiveScore)}
-                </td>
-                <td className="px-4 py-3 font-mono tabular-nums">
-                  {scoreLabel(attempt.qualityScoreCompleted)}
+                  {scoreLabel(attempt.score)}
                 </td>
               </tr>
             ))}

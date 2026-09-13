@@ -10,9 +10,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    CapturedDeliverable, CleanupFuture, ComplexityProfile, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "insert_record";
@@ -46,15 +46,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
         ID,
         seed,
         json!({ "database": DATABASE, "value": VALUE }),
-        ComplexityProfile {
-            planning_depth: 1,
-            dependency_depth: 1,
-            external_systems: 1,
-            state_transitions: 1,
-            artifact_count: 1,
-            compensable_mutations: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

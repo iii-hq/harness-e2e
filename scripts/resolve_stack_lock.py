@@ -229,7 +229,6 @@ def suite_groups(campaign: dict[str, Any]) -> list[dict[str, Any]]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "weight": group["difficulty_weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {

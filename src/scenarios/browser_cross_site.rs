@@ -23,7 +23,7 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -886,16 +886,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "superseded_policy_present": true,
             "backend_oracle": "runner_owned",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 4,
-            external_systems: 3,
-            state_transitions: 2,
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "browser::interactive".into(),

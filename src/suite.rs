@@ -773,8 +773,7 @@ async fn commit_run_checkpoint(
         "status": run.status,
         "completion": run.completion,
         "technical": run.technical,
-        "objective_score": run.objective_score,
-        "quality_score_completed": run.quality_score_completed,
+        "score": run.score,
         "cost": run.cost,
         "metrics": run.metrics,
         "run": run,
@@ -840,8 +839,7 @@ async fn commit_run_checkpoint(
                 attempt.status,
                 attempt.completion,
                 attempt.technical,
-                attempt.objective_score,
-                attempt.quality_score_completed,
+                attempt.score,
                 &attempt.cost,
                 attempt.metrics.as_ref(),
             )
@@ -852,23 +850,13 @@ async fn commit_run_checkpoint(
             run.status,
             run.completion,
             run.technical,
-            run.objective_score,
-            run.quality_score_completed,
+            run.score,
             &run.cost,
             run.metrics.as_ref(),
         )));
-    for attempt in attempts.filter(|attempt| subject_observed && attempt.8.is_some()) {
-        let (
-            attempt_id,
-            attempt_number,
-            status,
-            completion,
-            technical,
-            objective_score,
-            quality_score_completed,
-            cost,
-            metrics,
-        ) = attempt;
+    for attempt in attempts.filter(|attempt| subject_observed && attempt.7.is_some()) {
+        let (attempt_id, attempt_number, status, completion, technical, score, cost, metrics) =
+            attempt;
         let checkpoint = json!({
             "schema": "harness-e2e-subject-observation-checkpoint",
             "slot_id": slot_id,
@@ -878,8 +866,7 @@ async fn commit_run_checkpoint(
             "status": status,
             "completion": completion,
             "technical": technical,
-            "objective_score": objective_score,
-            "quality_score_completed": quality_score_completed,
+            "score": score,
             "cost": cost,
             "metrics": metrics,
         });
@@ -1312,11 +1299,11 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     finish_native_assessment(&spec, &mut report);
     report.update_cost();
-    report.update_efficiency(case.work);
+    report.update_efficiency();
     report.refresh_dimensions(expects_deliverables);
     // Status, score, cost, and efficiency are final; the behavioral audit
     // below is advisory evidence and only ever fills `report.audit`.
-    let audit = crate::audit::run_audit(&spec, &case, &report);
+    let audit = crate::audit::run_audit(&spec, &report);
     report.audit = Some(audit);
     if let Err(error) = emit_event(
         control,
@@ -1703,7 +1690,7 @@ async fn run_adaptive_once(
     if report.assessment_results.is_empty() {
         ensure_assessment_results(&spec, &mut report);
     }
-    report.update_efficiency(case.work);
+    report.update_efficiency();
     report.refresh_dimensions(false);
     emit_attempt_phase(
         control,
@@ -1973,7 +1960,7 @@ async fn run_composite_once(
     if report.assessment_results.is_empty() {
         ensure_assessment_results(&spec, &mut report);
     }
-    report.update_efficiency(case.work);
+    report.update_efficiency();
     report.refresh_dimensions(crate::scenarios::swe_service::is_swe(scenario_id));
     emit_attempt_phase(
         control,
@@ -3096,7 +3083,6 @@ mod tests {
             "failed_capture",
             1,
             json!({}),
-            crate::scenarios::ComplexityProfile::default(),
             vec![],
             crate::scenarios::DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
@@ -3164,7 +3150,7 @@ mod tests {
         ]));
         report.finish(RunStatus::ResourceLimit);
         report.score = Some(17);
-        report.objective_score = Some(17);
+        report.score = Some(17);
         report
     }
 
@@ -3192,7 +3178,7 @@ mod tests {
         );
         assert_eq!(report.technical, crate::report::TechnicalState::Valid);
         assert_eq!(report.score, Some(17));
-        assert_eq!(report.objective_score, Some(17));
+        assert_eq!(report.score, Some(17));
         assert_eq!(
             report.terminal_status.as_ref().map(|status| status.status),
             Some(TurnStatus::Failed)
@@ -3227,7 +3213,7 @@ mod tests {
         );
         assert_eq!(report.technical, crate::report::TechnicalState::Valid);
         assert_eq!(report.score, Some(17));
-        assert_eq!(report.objective_score, Some(17));
+        assert_eq!(report.score, Some(17));
         assert_eq!(
             report.terminal_status.as_ref().map(|status| status.status),
             Some(TurnStatus::Failed)
@@ -3623,7 +3609,6 @@ mod tests {
                 execution_id: "execution".into(),
                 request_sha256: "sha256:request".into(),
                 result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                 created_at: "now".into(),
                 request: json!({}),
                 runner: json!({}),
@@ -3962,7 +3947,7 @@ mod tests {
         );
         // The unevaluated criterion adds nothing; the evaluated one awarded zero.
         assert_eq!(report.score, Some(0));
-        assert_eq!(report.objective_score, Some(0));
+        assert_eq!(report.score, Some(0));
     }
 
     #[test]
@@ -4016,7 +4001,13 @@ mod tests {
             report.assessment_results[1].outcome,
             AssessmentOutcome::NotEvaluated
         );
-        assert_eq!(report.objective_score, None);
+        // The observed criterion keeps its points; the technical axis says the
+        // run cannot be trusted, and aggregates leave it out of the mean.
+        assert_eq!(report.score, Some(70));
+        assert_eq!(
+            report.technical,
+            crate::report::TechnicalState::TechnicalInvalid
+        );
     }
 
     #[test]

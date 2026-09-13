@@ -21,9 +21,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, validation_loop, ArtifactExpectation, CapturedDeliverable, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "contention_ledger";
@@ -118,7 +118,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "report_marker": REPORT_MARKER,
             "token_derivation": "run-scoped",
         }),
-        complexity_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -134,26 +133,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
         case,
         capture: Some(capture),
     })
-}
-
-/// The profile pins the case at L3Concurrent on purpose: three genuine
-/// parallel writers racing one row is the point, so `coordination_edges`
-/// stays at 2 (one barrier arm, one fan-in wake) and `dependency_depth` at 2.
-/// The scenario measures write CONTENTION, not coordination fabric; raising
-/// either value would misfile the case as L4Coordinated.
-fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: 2,
-        parallel_branches: 3,
-        external_systems: 1,
-        state_transitions: 3,
-        wake_cycles: 1,
-        coordination_edges: 2,
-        artifact_count: 1,
-        ambiguity_level: 1,
-        ..ComplexityProfile::default()
-    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -1230,9 +1209,7 @@ mod tests {
     }
 
     #[test]
-    fn cases_materialize_reproducibly_at_the_concurrent_tier() {
-        use super::super::ComplexityTier;
-
+    fn cases_materialize_reproducibly() {
         let first = materialize("attempt-a", 313).unwrap();
         let retry = materialize("attempt-b", 313).unwrap();
         first.validate().unwrap();
@@ -1244,11 +1221,6 @@ mod tests {
         let other_seed = materialize("attempt-c", 314).unwrap();
         assert_ne!(first.case.case_id, other_seed.case.case_id);
 
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L3Concurrent);
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
         assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);

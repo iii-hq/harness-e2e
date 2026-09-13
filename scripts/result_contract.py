@@ -22,10 +22,7 @@ def contract_values(root: Path = ROOT) -> dict[str, str]:
 
     return {
         "RESULT_CONTRACT_SHA256": fingerprint(manifest["results_schema"]),
-        "SCORING_PROFILE_SHA256": fingerprint(manifest["scoring_profile"]),
     }
 
 
-_VALUES = contract_values()
-RESULT_CONTRACT_SHA256 = _VALUES["RESULT_CONTRACT_SHA256"]
-SCORING_PROFILE_SHA256 = _VALUES["SCORING_PROFILE_SHA256"]
+RESULT_CONTRACT_SHA256 = contract_values()["RESULT_CONTRACT_SHA256"]

@@ -28,10 +28,9 @@ export type ExecutionMetrics = {
   completionRate: number | null
   completionCoverage: number | null
   executionReliability: number | null
-  qualityMedian: number | null
-  qualitySamples: number
-  objectiveMedian: number | null
-  objectiveSamples: number
+  /** Mean of the scores the observed runs carry; null when none was scored. */
+  scoreMean: number | null
+  scoreSamples: number
   subjectTokens: UsageCoverage
   failedAttemptTokens: UsageCoverage
   cost: UsageCoverage
@@ -52,11 +51,10 @@ const countFields = [
   'undetermined_runs',
   'technical_valid_runs',
   'technical_invalid_runs',
-  'objective_scored_runs',
-  'quality_scored_completed_runs',
+  'scored_runs',
 ] as const
 
-/** Pool logical runs, never scenario percentages or medians. Read-only Results projection. */
+/** Pool logical runs, never scenario percentages or means. Read-only Results projection. */
 export function buildExecutionMetrics(
   detail: DashboardExecutionDetail,
 ): ExecutionMetrics {
@@ -111,8 +109,7 @@ export function buildExecutionMetrics(
     (run) => run.completion === 'undetermined',
   ).length
   const technicalValid = runs.filter((run) => run.technical === 'valid').length
-  const quality = completed.map((run) => score(run.quality_score_completed))
-  const objective = runs.map((run) => score(run.objective_score))
+  const scores = runs.map((run) => score(run.score))
   const subjectTokens = coverage(runs.map(tokens), scopeComplete)
   const completedTokens = coverage(completed.map(tokens), scopeComplete)
   return {
@@ -134,10 +131,8 @@ export function buildExecutionMetrics(
     completionRate: ratio(completed.length, completed.length + incomplete),
     completionCoverage: ratio(completed.length + incomplete, planned),
     executionReliability: ratio(technicalValid, planned),
-    qualityMedian: median(quality),
-    qualitySamples: quality.filter((value) => value !== null).length,
-    objectiveMedian: median(objective),
-    objectiveSamples: objective.filter((value) => value !== null).length,
+    scoreMean: mean(scores),
+    scoreSamples: scores.filter((value) => value !== null).length,
     subjectTokens,
     failedAttemptTokens: coverage(
       runs.map((run) => {
@@ -254,6 +249,12 @@ function score(value: unknown): number | null {
 
 function ratio(numerator: number, denominator: number): number | null {
   return denominator > 0 ? numerator / denominator : null
+}
+
+function mean(values: Array<number | null>): number | null {
+  const known = values.filter((value): value is number => value !== null)
+  if (known.length === 0) return null
+  return known.reduce((total, value) => total + value, 0) / known.length
 }
 
 function median(values: Array<number | null>): number | null {

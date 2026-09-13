@@ -75,7 +75,6 @@ def runs_from_results(results: dict[str, Any]) -> list[dict[str, Any]]:
                         "case_id": scenario.get("case_id"),
                         "seed": None if seed is None else str(seed),
                         "repetition": repetition,
-                        "tier": obj(case.get("complexity")).get("tier"),
                         "definition_sha256": case.get("inputs_sha256"),
                         "run": run,
                     }
@@ -154,7 +153,6 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "cli_version": resolution.get("cli_version") or args.cli_version,
             "subject": obj(plan.get("subject")) or None,
             "result_contract_sha256": results.get("result_contract_sha256"),
-            "scoring_profile_sha256": results.get("scoring_profile_sha256"),
         }
     )
 

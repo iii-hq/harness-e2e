@@ -19,7 +19,7 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -71,24 +71,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expiry_delay_ms": EXPIRY_DELAY_MS,
             "expected_terminal_status": "failed",
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 3,
-            parallel_branches: 1,
-            external_systems: 2,
-            state_transitions: 6,
-            wake_cycles: 1,
-            validation_loops: 2,
-            artifact_count: 1,
-            coordination_edges: 4,
-            ambiguity_level: 4,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),

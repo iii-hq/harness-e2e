@@ -18,7 +18,7 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -747,16 +747,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "dialogue_exchanges": 4,
             "policy_version": "orders-policy/v3",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 3,
-            external_systems: 3,
-            state_transitions: 8,
-            validation_loops: 2,
-            ambiguity_level: 8,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),

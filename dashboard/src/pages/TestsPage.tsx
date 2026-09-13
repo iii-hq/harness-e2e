@@ -159,7 +159,7 @@ export function SideResult({ summary }: { summary: TestSideSummary | null }) {
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <StatusBadge status={status.status} label={status.label} />
       <span className="font-mono text-xs text-ink">
-        {formatNumber(summary.median_score, 0)}
+        {formatNumber(summary.mean_score, 0)}
         <span className="text-ink-muted"> / 100</span>
       </span>
       <span
@@ -359,7 +359,7 @@ function EvidenceRow({
       ) : null}
       <StatusBadge status={status.status} label={status.label} />
       <span className="text-ink">
-        {formatNumber(observation.median_score, 0)}
+        {formatNumber(observation.mean_score, 0)}
         <span className="text-ink-muted">
           {' '}
           / 100 · n={observation.scored_runs}
@@ -1359,7 +1359,7 @@ export function TestsPage({
         <PageHeader
           title="Compare system versions"
           summary={headline}
-          context="Retained cohorts · per-test run medians"
+          context="Retained cohorts · per-test mean score and run medians"
           headingId="compare-title"
           breadcrumb={[
             { label: 'tests', href: hashForTests() },

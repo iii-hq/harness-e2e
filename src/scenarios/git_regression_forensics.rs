@@ -24,9 +24,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "git_regression_forensics";
@@ -244,18 +244,6 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
         ID,
         seed,
         inputs,
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 3,
-            parallel_branches: 2,
-            external_systems: 2,
-            state_transitions: 9,
-            validation_loops: 1,
-            artifact_count: 3,
-            coordination_edges: 3,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::registry".to_string(),
@@ -1969,7 +1957,6 @@ mod tests {
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 3);
-        assert_eq!(first.case.complexity.profile.artifact_count, 3);
         assert!(!first.spec.prompt.contains(CULPRIT_SHA));
         first.validate().unwrap();
     }

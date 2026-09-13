@@ -25,7 +25,7 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -1044,15 +1044,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "subject_credentials": false,
             },
         }),
-        ComplexityProfile {
-            planning_depth: 10,
-            dependency_depth: 8,
-            state_transitions: 10,
-            validation_loops: 10,
-            artifact_count: 1,
-            ambiguity_level: 6,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),
@@ -1475,7 +1466,6 @@ class DurableQueue:
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_eq!(first.case.seed, CANONICAL_SEED);
-        assert_eq!(first.case.complexity.profile.validation_loops, 10);
     }
 
     #[test]

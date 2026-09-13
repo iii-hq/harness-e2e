@@ -36,7 +36,6 @@ pub(crate) struct PlanScopeItem {
     pub seed: u64,
     pub inputs_sha256: String,
     pub contract_sha256: String,
-    pub complexity_tier: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
@@ -320,7 +319,6 @@ pub(crate) fn resolve_scope(
                 seed: case.seed,
                 inputs_sha256: case.inputs_sha256,
                 contract_sha256,
-                complexity_tier: format!("{:?}", case.complexity.tier),
             })
         })
         .collect()

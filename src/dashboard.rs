@@ -411,7 +411,6 @@ pub(crate) mod tests {
                 execution_id: metadata.id.clone(),
                 request_sha256: "request".into(),
                 result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                 created_at: metadata.started_at.clone(),
                 request: json!({}),
                 runner: json!({}),
@@ -574,9 +573,10 @@ pub(crate) mod tests {
             .find(|row| row.test_id == "direct_answer")
             .unwrap();
         let result = row.result.as_ref().unwrap();
-        assert_eq!(result.from.as_ref().unwrap().median_score, Some(100.0));
-        assert_eq!(result.to.as_ref().unwrap().median_score, Some(85.0));
-        assert_eq!(result.delta.score, Some(-15.0));
+        // Means over the pooled runs: (10 + 100 + 100) / 3 against (80 + 90) / 2.
+        assert_eq!(result.from.as_ref().unwrap().mean_score, Some(70.0));
+        assert_eq!(result.to.as_ref().unwrap().mean_score, Some(85.0));
+        assert_eq!(result.delta.score, Some(15.0));
         assert_eq!(result.compatibility, "compatible");
         assert!(result.compatibility_reasons.is_empty());
         assert_eq!(

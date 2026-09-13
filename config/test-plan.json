@@ -230,7 +230,7 @@
       "metrics": [
         "execution_reliability",
         "completion_rate",
-        "objective_score_coverage"
+        "score_coverage"
       ],
       "modules": [],
       "scenarios": [
@@ -350,8 +350,7 @@
       "purpose": "Measure recovery without duplicate effects or leaked resources.",
       "metrics": [
         "deliverable_success",
-        "structural_integrity",
-        "work_amplification"
+        "structural_integrity"
       ],
       "modules": [],
       "scenarios": [
@@ -368,7 +367,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 2,
           "fault_profile": "weekly-l2-recovery",
           "fault_scenario": "stateful.2",
           "soak_minutes": 60,
@@ -378,7 +376,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 3,
           "fault_profile": "weekly-l3-recovery",
           "fault_scenario": "coordination.3",
           "soak_minutes": 60,
@@ -388,7 +385,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 4,
           "fault_profile": "weekly-l4-recovery",
           "fault_scenario": "coordination.4",
           "soak_minutes": 60,

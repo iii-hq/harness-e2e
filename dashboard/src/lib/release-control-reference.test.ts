@@ -50,7 +50,6 @@ function comparisonCandidate(
       ...(row.repetition === undefined ? {} : { round: row.repetition + 1 }),
       report: {
         result_contract_sha256: 'result-contract',
-        scoring_profile_sha256: 'scoring-profile',
         scenarios: [
           {
             scenario_id: row.scenario,
@@ -76,7 +75,7 @@ function comparisonCandidate(
                 status: row.score === 0 ? 'failed' : 'passed',
                 completion: row.score === null ? 'undetermined' : 'completed',
                 technical: 'valid',
-                objective_score: row.score,
+                score: row.score,
                 wall_time_ms: 1000,
                 efficiency: {
                   total_tokens: 10,
@@ -132,12 +131,11 @@ function comparisonReference(
       scenarioVersion: 2,
       seed: row.seed,
       repetition: row.repetition ?? 0,
-      objectiveScore: row.score,
+      score: row.score,
       caseId: `${row.scenario}:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
       identity: {
         definitionSha256: `definition-${row.scenario}`,
         resultContractSha256: 'result-contract',
-        scoringProfileSha256: 'scoring-profile',
       },
     })),
     aggregate: {
@@ -183,7 +181,7 @@ const reference: RcReference = {
       status: 'passed',
       completion: 'completed',
       technical: 'valid',
-      objectiveScore: 100,
+      score: 100,
       wallTimeMs: 1200,
       totalTokens: 30,
       costSubjectUsd: 0.01,
@@ -196,7 +194,7 @@ const reference: RcReference = {
       status: 'passed',
       completion: 'completed',
       technical: 'valid',
-      objectiveScore: 100,
+      score: 100,
       wallTimeMs: 800,
       totalTokens: 20,
       costSubjectUsd: 0.02,
@@ -438,7 +436,7 @@ it('does not compare consumption whose technical attempts are incomplete', () =>
   ).toMatchObject({ total_tokens: null, total_cost_usd: null })
 })
 
-it('groups RC repetitions by frozen case identity and uses true medians', () => {
+it('groups RC repetitions by case identity, mean score and true medians', () => {
   const run = {
     ...reference.runs[0],
     caseId: 'case-a',
@@ -455,9 +453,9 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
         },
       },
       runs: [
-        { ...run, id: 'a-1', objectiveScore: 10, totalTokens: 10 },
-        { ...run, id: 'a-2', objectiveScore: 100, totalTokens: 30 },
-        { ...run, id: 'a-3', objectiveScore: 30, totalTokens: 20 },
+        { ...run, id: 'a-1', score: 10, totalTokens: 10 },
+        { ...run, id: 'a-2', score: 100, totalTokens: 30 },
+        { ...run, id: 'a-3', score: 40, totalTokens: 20 },
         { ...run, id: 'b-1', caseId: 'case-b', seed: '8' },
         { ...run, id: 'unknown-1', caseId: null, seed: null },
         { ...run, id: 'unknown-2', caseId: null, seed: null },
@@ -475,7 +473,7 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
     behavior_sha256: '',
     seed: 7,
     run_count: 3,
-    median_score: 30,
+    mean_score: 50,
     median_tokens: 20,
     subject_provider: 'openai',
     subject_model: 'subject',
@@ -485,7 +483,7 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
   expect(observations[4]?.seed).toBeNull()
 })
 
-it('normalizes local objective, cache-inclusive tokens and subject cost once', () => {
+it('normalizes the local score, cache-inclusive tokens and subject cost once', () => {
   const scenario = {
     scenario_id: 'alpha',
     behavior_sha256:
@@ -498,7 +496,7 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
         status: 'passed',
         completion: 'completed',
         technical: 'valid',
-        objective_score: 90,
+        score: 90,
         wall_time_ms: 2000,
         efficiency: { total_tokens: 100, function_calls: 3, root_turns: 2 },
         metrics: { complete: true, totals: { cache_read_tokens: 20 } },
@@ -509,7 +507,7 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
         status: 'passed',
         completion: 'completed',
         technical: 'valid',
-        objective_score: 70,
+        score: 70,
         wall_time_ms: 1000,
         efficiency: { total_tokens: 50, function_calls: 1, root_turns: 1 },
         metrics: { complete: true, totals: { cache_read_tokens: 10 } },
@@ -541,7 +539,7 @@ it('normalizes local objective, cache-inclusive tokens and subject cost once', (
       source: 'local',
       run_count: 2,
       scored_runs: 2,
-      median_score: 80,
+      mean_score: 80,
       median_tokens: 90,
       median_cost_usd: 0.30000000000000004,
       contract_sha256: 'contract-a',

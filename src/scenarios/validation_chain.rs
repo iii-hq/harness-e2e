@@ -82,7 +82,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             ],
             "expected_nudges": ["CHAIN-A", "CHAIN-B"],
         }),
-        super::validation_loop::validation_profile(),
         super::validation_loop::validation_capabilities(),
         deliverable_contract(),
     )?;

@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -12,7 +9,6 @@ import {
 
 const resultContract = {
   result_contract_sha256: RESULT_CONTRACT_SHA256,
-  scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
@@ -30,12 +26,8 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     execution_reliability: 1,
     completion_evidence_coverage: 1,
     completion_rate: 1,
-    objective_scored_runs: 1,
-    objective_median_score: 100,
-    objective_score_coverage: 1,
-    quality_scored_completed_runs: 1,
-    quality_score_completed: 88,
-    quality_coverage: 1,
+    scored_runs: 1,
+    mean_score: 100,
     total_tokens_consumed: 1200,
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
@@ -98,10 +90,8 @@ function executionDetail() {
                   technical: 'valid',
                   evaluators: {
                     completion: 'available',
-                    quality: 'available',
                   },
-                  objective_score: 100,
-                  quality_score_completed: 88,
+                  score: 100,
                   wall_time_ms: 3_200,
                   assessment: {
                     run_id: 'run-security',
@@ -176,10 +166,7 @@ function executionDetail() {
                 completed_runs: 0,
                 task_incomplete_runs: 1,
                 completion_rate: 0,
-                objective_median_score: 65,
-                quality_scored_completed_runs: 0,
-                quality_score_completed: null,
-                quality_coverage: null,
+                mean_score: 65,
                 total_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
@@ -194,10 +181,8 @@ function executionDetail() {
                   technical: 'valid',
                   evaluators: {
                     completion: 'available',
-                    quality: 'not_required',
                   },
-                  objective_score: 65,
-                  quality_score_completed: null,
+                  score: 65,
                   wall_time_ms: 1_500,
                   assessment: {
                     system_status: 'passed',
@@ -232,12 +217,8 @@ function executionDetail() {
                 execution_reliability: 0,
                 completion_evidence_coverage: 0,
                 completion_rate: null,
-                objective_scored_runs: 0,
-                objective_median_score: null,
-                objective_score_coverage: 0,
-                quality_scored_completed_runs: 0,
-                quality_score_completed: null,
-                quality_coverage: null,
+                scored_runs: 0,
+                mean_score: null,
                 total_tokens_consumed: null,
                 tokens_completed_p50: null,
                 failed_attempt_tokens: null,
@@ -302,7 +283,7 @@ describe('scenario matrix presentation model', () => {
       status: 'incomplete',
       label: 'Incomplete',
     })
-    expect(model.items[1]?.aggregate?.objective_median_score).toBe(65)
+    expect(model.items[1]?.aggregate?.mean_score).toBe(65)
     expect(model.contracts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -366,12 +347,11 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
-  it('reads another results contract or scoring profile and flags it instead of hiding figures', () => {
+  it('reads another results contract and flags it instead of hiding figures', () => {
     const current = buildScenarioMatrix(executionDetail())
     expect(current.contracts[0]).toMatchObject({
       valid: true,
       resultContractCurrent: true,
-      scoringProfileCurrent: true,
     })
 
     const foreign = executionDetail()
@@ -384,23 +364,8 @@ describe('scenario matrix presentation model', () => {
     expect(foreignModel.contracts[0]).toMatchObject({
       valid: true,
       resultContractCurrent: false,
-      scoringProfileCurrent: true,
     })
     expect(foreignModel.items[0].objective.status).not.toBe('unavailable')
-
-    const detail = executionDetail()
-    const report = detail.reports[0].report as unknown as Record<
-      string,
-      unknown
-    >
-    report.scoring_profile_sha256 = `sha256:${'0'.repeat(64)}`
-    const model = buildScenarioMatrix(detail)
-    expect(model.contracts[0]).toMatchObject({
-      valid: true,
-      resultContractCurrent: true,
-      scoringProfileCurrent: false,
-    })
-    expect(model.items[0].objective.status).not.toBe('unavailable')
   })
 
   it('shows the explicit deferral reason without inventing a physical run', () => {

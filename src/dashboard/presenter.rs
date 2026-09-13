@@ -321,12 +321,11 @@ fn scenario_summary(report: &E2eReport, scenario: &E2eScenarioReport) -> Value {
     json!({
         "id": scenario.scenario_id,
         "case_id": scenario.case_id,
-        "complexity_tier": scenario.case.as_ref().map(|case| case.complexity.tier),
         "seed": scenario.case.as_ref().map(|case| case.seed),
         "status": status,
         "passed": status == "passed",
-        "runs": scenario.aggregate.runs,
-        "median_score": scenario.aggregate.median_score,
+        "runs": scenario.aggregate.observed_runs,
+        "mean_score": scenario.aggregate.mean_score,
         "pass_rate": if scenario.aggregate.planned_runs == 0 {
             0.0
         } else {
@@ -344,11 +343,6 @@ fn scenario_summary(report: &E2eReport, scenario: &E2eScenarioReport) -> Value {
 }
 
 fn scenario_efficiency(scenario: &E2eScenarioReport) -> Value {
-    let work_amplification = scenario
-        .runs
-        .iter()
-        .filter_map(|run| run.efficiency.as_ref()?.work_amplification)
-        .collect::<Vec<_>>();
     let fan_out = scenario
         .runs
         .iter()
@@ -360,7 +354,6 @@ fn scenario_efficiency(scenario: &E2eScenarioReport) -> Value {
         })
         .collect::<Vec<_>>();
     json!({
-        "mean_work_amplification": mean(&work_amplification),
         "mean_effective_fan_out": mean(&fan_out),
     })
 }
@@ -394,10 +387,6 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                         .as_ref()
                         .map(|value| value.totals.sessions as f64),
                     "turns" => run.metrics.as_ref().map(|value| value.totals.turns as f64),
-                    "work_amplification" => run
-                        .efficiency
-                        .as_ref()
-                        .and_then(|value| value.work_amplification),
                     "effective_fan_out" => run
                         .efficiency
                         .as_ref()
@@ -416,7 +405,6 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 "function_call_errors",
                 "sessions",
                 "turns",
-                "work_amplification",
                 "effective_fan_out",
             ] {
                 let values: Vec<_> = scenario
