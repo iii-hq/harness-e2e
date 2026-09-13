@@ -185,7 +185,12 @@ impl ExecutionJournal {
         let header: ExecutionJournalHeader =
             serde_json::from_slice(&bytes).with_context(|| format!("decode {}", path.display()))?;
         if header.schema != EXECUTION_JOURNAL_SCHEMA {
-            bail!("unsupported execution journal schema {}", header.schema);
+            tracing::warn!(
+                path = %path.display(),
+                schema = %header.schema,
+                current = EXECUTION_JOURNAL_SCHEMA,
+                "reading an execution journal written under another schema id"
+            );
         }
         Ok(header)
     }

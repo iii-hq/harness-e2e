@@ -366,7 +366,14 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
-  it('reads another results contract fingerprint but not another scoring profile', () => {
+  it('reads another results contract or scoring profile and flags it instead of hiding figures', () => {
+    const current = buildScenarioMatrix(executionDetail())
+    expect(current.contracts[0]).toMatchObject({
+      valid: true,
+      resultContractCurrent: true,
+      scoringProfileCurrent: true,
+    })
+
     const foreign = executionDetail()
     const foreignReport = foreign.reports[0].report as unknown as Record<
       string,
@@ -374,7 +381,11 @@ describe('scenario matrix presentation model', () => {
     >
     foreignReport.result_contract_sha256 = `sha256:${'0'.repeat(64)}`
     const foreignModel = buildScenarioMatrix(foreign)
-    expect(foreignModel.contracts[0]).toMatchObject({ valid: true })
+    expect(foreignModel.contracts[0]).toMatchObject({
+      valid: true,
+      resultContractCurrent: false,
+      scoringProfileCurrent: true,
+    })
     expect(foreignModel.items[0].objective.status).not.toBe('unavailable')
 
     const detail = executionDetail()
@@ -384,8 +395,12 @@ describe('scenario matrix presentation model', () => {
     >
     report.scoring_profile_sha256 = `sha256:${'0'.repeat(64)}`
     const model = buildScenarioMatrix(detail)
-    expect(model.contracts[0]).toMatchObject({ valid: false })
-    expect(model.items[0].objective.status).toBe('unavailable')
+    expect(model.contracts[0]).toMatchObject({
+      valid: true,
+      resultContractCurrent: true,
+      scoringProfileCurrent: false,
+    })
+    expect(model.items[0].objective.status).not.toBe('unavailable')
   })
 
   it('shows the explicit deferral reason without inventing a physical run', () => {

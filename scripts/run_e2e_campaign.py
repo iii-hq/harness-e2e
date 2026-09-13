@@ -117,6 +117,11 @@ FAULT_PROFILE_WEIGHT = {
     "weekly-l4-recovery": 4,
 }
 
+def _warn(message: str) -> None:
+    """Contract drift is reported on stderr and in the summary, never enforced."""
+    print(f"warning: {message}", file=sys.stderr)
+
+
 class CampaignError(ValueError):
     """A campaign is invalid or cannot be executed safely."""
 
@@ -528,20 +533,30 @@ def _regular_group_measurement(
             "objective_outcome": "inconclusive",
             "result_contract_sha256": None,
             "scoring_profile_sha256": None,
+            "warnings": [],
         }
     report = _load_json(results_path)
+    warnings: list[str] = []
     result_contract_sha256 = _require_result_hash(
         report.get("result_contract_sha256"),
         f"{results_path}.result_contract_sha256",
     )
     if result_contract_sha256 != RESULT_CONTRACT_SHA256:
-        raise CampaignError(f"{results_path}: unsupported result contract fingerprint")
+        warnings.append(
+            f"{results_path}: written under result contract {result_contract_sha256}, "
+            f"this campaign expects {RESULT_CONTRACT_SHA256}"
+        )
     scoring_profile_sha256 = _require_result_hash(
         report.get("scoring_profile_sha256"),
         f"{results_path}.scoring_profile_sha256",
     )
     if scoring_profile_sha256 != SCORING_PROFILE_SHA256:
-        raise CampaignError(f"{results_path}: unsupported scoring profile fingerprint")
+        warnings.append(
+            f"{results_path}: scored under scoring profile {scoring_profile_sha256}, "
+            f"this campaign expects {SCORING_PROFILE_SHA256}"
+        )
+    for warning in warnings:
+        _warn(warning)
     report_state = report.get("report_state")
     if report_state not in RESULT_REPORT_STATES:
         raise CampaignError(
@@ -683,6 +698,7 @@ def _regular_group_measurement(
         "objective_outcome": objective_outcome,
         "result_contract_sha256": result_contract_sha256,
         "scoring_profile_sha256": scoring_profile_sha256,
+        "warnings": warnings,
     }
 
 
@@ -799,10 +815,21 @@ def score_campaign(
         all_group_scores_complete = (
             all_group_scores_complete and measurement["score_availability"] == "complete"
         )
+    warnings: list[str] = [
+        warning
+        for group in campaign.groups
+        for warning in by_id[group.id].get("warnings", [])
+    ]
     if len(result_contracts) > 1:
-        raise CampaignError("campaign groups use incompatible result contracts")
+        warnings.append(
+            "campaign groups were written under different result contracts: "
+            + ", ".join(sorted(result_contracts))
+        )
     if len(scoring_profiles) > 1:
-        raise CampaignError("campaign groups use incompatible scoring profiles")
+        warnings.append(
+            "campaign groups were scored under different scoring profiles: "
+            + ", ".join(sorted(scoring_profiles))
+        )
     local_scoring_profile = _canonical_sha256(
         _load_json(
             pathlib.Path(__file__).resolve().parents[1]
@@ -812,7 +839,12 @@ def score_campaign(
         )
     )
     if scoring_profiles and scoring_profiles != {local_scoring_profile}:
-        raise CampaignError("results scoring_profile_sha256 does not match campaign")
+        warnings.append(
+            "results scoring_profile_sha256 differs from the campaign scoring profile "
+            f"{local_scoring_profile}"
+        )
+    for warning in warnings[len([w for g in campaign.groups for w in by_id[g.id].get("warnings", [])]):]:
+        _warn(warning)
     harness_score = weighted_score / scored_weight if scored_weight else None
     availability = (
         "complete"
@@ -832,8 +864,9 @@ def score_campaign(
             for field, total in metric_totals.items()
         },
         "infrastructure_valid": infrastructure_valid,
-        "result_contract_sha256": next(iter(result_contracts), None),
-        "scoring_profile_sha256": next(iter(scoring_profiles), local_scoring_profile),
+        "result_contract_sha256": next(iter(sorted(result_contracts)), None),
+        "scoring_profile_sha256": next(iter(sorted(scoring_profiles)), local_scoring_profile),
+        "warnings": warnings,
     }
 
 
@@ -1124,7 +1157,10 @@ def validate_campaign_bundle(
     if root.is_symlink():
         raise CampaignError("campaign bundle root must not be a symlink")
     if bundle.get("schema") != "e2e-campaign-observation-bundle":
-        raise CampaignError("unsupported campaign bundle schema")
+        _warn(
+            f"campaign bundle schema {bundle.get('schema')!r} differs from "
+            "e2e-campaign-observation-bundle; verifying its artifacts as listed"
+        )
     references: list[Any] = [bundle.get("summary")]
     groups = bundle.get("groups")
     if not isinstance(groups, list):
@@ -1252,7 +1288,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         campaign = load_campaign(args.manifest, scenario_catalog(args.e2e_bin))
         scoring_profile = _load_json(args.scoring_profile)
         if scoring_profile.get("profile") != SCORING_PROFILE:
-            raise CampaignError("scoring profile identity does not match the campaign")
+            _warn(
+                f"scoring profile {scoring_profile.get('profile')!r} differs from "
+                f"the campaign profile {SCORING_PROFILE}; scoring with it as given"
+            )
         if args.validate_only:
             print(
                 json.dumps(

@@ -82,11 +82,18 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
     }
     let journal = ExecutionJournal::open(root)?;
     let header = journal.read_header()?;
-    if header.execution_id != execution_id
-        || header.result_contract_sha256 != RESULT_CONTRACT_SHA256
+    if header.execution_id != execution_id {
+        bail!("live progress identity mismatch");
+    }
+    if header.result_contract_sha256 != RESULT_CONTRACT_SHA256
         || header.scoring_profile_sha256 != SCORING_PROFILE_SHA256
     {
-        bail!("live progress identity or contract mismatch");
+        tracing::warn!(
+            execution_id,
+            contract = %header.result_contract_sha256,
+            profile = %header.scoring_profile_sha256,
+            "live progress was journaled under another results contract or scoring profile"
+        );
     }
     let verified = journal.replay()?;
     // Read exactly the verified prefix. A writer may append while this read is
@@ -284,8 +291,16 @@ fn read_checkpoint(
         bail!("live checkpoint changed while reading");
     }
     let checkpoint: Checkpoint = serde_json::from_slice(&bytes)?;
-    if checkpoint.schema != schema || checkpoint.slot_id != slot {
+    if checkpoint.slot_id != slot {
         bail!("live checkpoint identity mismatch");
+    }
+    if checkpoint.schema != schema {
+        tracing::warn!(
+            path = %reference.path,
+            schema = %checkpoint.schema,
+            current = schema,
+            "reading a live checkpoint written under another schema id"
+        );
     }
     if checkpoint.objective_score.is_some_and(|score| score > 100)
         || checkpoint

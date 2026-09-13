@@ -220,9 +220,9 @@ describe('whole-execution metrics', () => {
     const first = detail.reports[0].report
     const second = detail.reports[1].report
     if (!first || !second) throw new Error('fixture must contain reports')
-    // The results contract fingerprint is not a gate for now; a different
-    // scoring profile still is.
-    second.scoring_profile_sha256 = 'incompatible'
+    // Neither the results contract nor the scoring profile is a gate: only a
+    // report that states no completeness is unavailable.
+    delete (second as unknown as Record<string, unknown>).report_state
     const metrics = buildExecutionMetrics(detail)
     expect(metrics).toMatchObject({
       includedScenarios: 1,
@@ -235,6 +235,24 @@ describe('whole-execution metrics', () => {
     expect(metrics.tokensPerCompletion).toBeNull()
     first.scenarios[0].aggregate.observed_runs = 99
     expect(buildExecutionMetrics(detail).includedScenarios).toBe(0)
+  })
+
+  it('keeps evidence scored under another profile or contract in the totals', () => {
+    const detail = executionMetricsFixture([
+      { runs: [metricRun('a', 100)] },
+      { runs: [metricRun('b', 200)] },
+    ])
+    const second = detail.reports[1].report
+    if (!second) throw new Error('fixture must contain reports')
+    second.scoring_profile_sha256 = `sha256:${'0'.repeat(64)}`
+    second.result_contract_sha256 = `sha256:${'1'.repeat(64)}`
+    const metrics = buildExecutionMetrics(detail)
+    expect(metrics).toMatchObject({
+      includedScenarios: 2,
+      scenarios: 2,
+      observed: 2,
+    })
+    expect(metrics.subjectTokens).toMatchObject({ observed: 300, total: 300 })
   })
 
   it('does not count duplicate report projections twice', () => {

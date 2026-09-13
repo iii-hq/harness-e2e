@@ -278,8 +278,9 @@ runs, attempts and artifact references are written through the control-plane
 `database::*` worker. Execution records retain compact dashboard summaries and
 observations, so lists and history do not load native reports. Storage carries
 no version number: the worker records a fingerprint of its own table layout and
-results contract, and refuses to start on a database recorded under another
-fingerprint. There is no automatic startup backfill. With the E2E worker stopped
+refuses to start on a database recorded under another fingerprint. A report or
+plan written under another results contract is read with a warning, never
+refused. There is no automatic startup backfill. With the E2E worker stopped
 and its database backed up, run `harness-e2e rebuild-storage --url <iii-url>
 --config <worker-config.yaml>` to inspect the rebuild, then repeat with `--apply`.
 `III_CONFIG` can provide the config path instead. The command uses the same

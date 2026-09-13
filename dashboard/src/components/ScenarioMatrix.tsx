@@ -119,7 +119,25 @@ export function contractScent(
     distinct(contracts.map((c) => c.objectiveOutcome ?? 'unavailable')),
     `contract ${distinct(contracts.map((c) => shortDigest(c.resultContractSha256)))}`,
     `scoring profile ${distinct(contracts.map((c) => shortDigest(c.scoringProfileSha256)))}`,
+    ...(contracts.some(
+      (c) => !c.resultContractCurrent || !c.scoringProfileCurrent,
+    )
+      ? ['differs from this console']
+      : []),
   ].join(' · ')
+}
+
+/** What differs from the contract this Console was built with, if anything. */
+export function contractDrift(contract: {
+  resultContractCurrent: boolean
+  scoringProfileCurrent: boolean
+}): string | null {
+  const moved = [
+    ...(contract.resultContractCurrent ? [] : ['results contract']),
+    ...(contract.scoringProfileCurrent ? [] : ['scoring profile']),
+  ]
+  if (moved.length === 0) return null
+  return `Written under another ${moved.join(' and ')} than this Console; figures are shown as reported.`
 }
 
 export function ResultContractStrip({
@@ -174,6 +192,14 @@ export function ResultContractStrip({
             label="scoring profile"
             value={shortDigest(contract.scoringProfileSha256)}
           />
+          {contractDrift(contract) ? (
+            <p
+              className="m-0 text-xs text-warning sm:col-span-2 lg:col-span-4"
+              data-results-contract-drift="true"
+            >
+              {contractDrift(contract)}
+            </p>
+          ) : null}
         </div>
       ))}
     </Panel>

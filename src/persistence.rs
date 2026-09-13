@@ -5,9 +5,10 @@
 //! the dedicated control-plane database namespace.
 //!
 //! Storage carries no version number.  The layout this runner expects is a
-//! fingerprint of its own SQL and results contract; a database recorded under
-//! another fingerprint is rebuilt explicitly with `harness-e2e rebuild-storage`,
-//! which keeps every row this runner can still read and drops the rest.
+//! fingerprint of its own SQL; a database recorded under another fingerprint
+//! is rebuilt explicitly with `harness-e2e rebuild-storage`, which keeps every
+//! row this runner can still read and drops the rest.  Rows written under
+//! another results contract are data, not a reason to refuse the database.
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -61,17 +62,14 @@ const OWNED_TABLES: &[&str] = &[
     "local_scenarios",
 ];
 
-/// Identity of the storage layout: every statement that creates it plus the
-/// results contract whose projections it stores.
+/// Identity of the storage layout: every statement that creates it.
 pub fn storage_fingerprint() -> String {
-    let mut layout = SCHEMA
+    let layout = SCHEMA
         .iter()
         .chain(crate::history::store::SQL.iter())
         .copied()
         .collect::<Vec<_>>()
         .join("\n");
-    layout.push('\n');
-    layout.push_str(crate::report::RESULT_CONTRACT_SHA256);
     crate::artifact::sha256_bytes(layout.as_bytes())
 }
 

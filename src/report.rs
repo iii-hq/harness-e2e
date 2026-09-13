@@ -2149,10 +2149,11 @@ impl E2eReport {
             .with_context(|| format!("decode E2E report {}", path.display()))?;
         let contract = value.get("result_contract_sha256").and_then(Value::as_str);
         if contract != Some(RESULT_CONTRACT_SHA256) {
-            bail!(
-                "unsupported results contract {}; this runner writes and reads {}",
-                contract.unwrap_or("missing"),
-                RESULT_CONTRACT_SHA256
+            tracing::warn!(
+                path = %path.display(),
+                contract = contract.unwrap_or("missing"),
+                current = RESULT_CONTRACT_SHA256,
+                "reading a results report written under another results contract"
             );
         }
         let report: Self = serde_json::from_value(value)
@@ -2175,11 +2176,21 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
+        // Contract drift is a warning: the report says which contract and
+        // scoring profile it was written under, and both stay visible.
         if self.result_contract_sha256 != RESULT_CONTRACT_SHA256 {
-            bail!("results contract fingerprint is unsupported");
+            tracing::warn!(
+                contract = %self.result_contract_sha256,
+                current = RESULT_CONTRACT_SHA256,
+                "results report was written under another results contract"
+            );
         }
         if self.scoring_profile_sha256 != SCORING_PROFILE_SHA256 {
-            bail!("results scoring profile fingerprint is unsupported");
+            tracing::warn!(
+                profile = %self.scoring_profile_sha256,
+                current = SCORING_PROFILE_SHA256,
+                "results report was scored under another scoring profile"
+            );
         }
         if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
@@ -4026,15 +4037,18 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_a_foreign_result_contract() {
+    fn read_keeps_a_foreign_result_contract_and_rejects_a_missing_one() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value["result_contract_sha256"] = serde_json::json!(format!("sha256:{}", "f".repeat(64)));
+        let foreign = format!("sha256:{}", "f".repeat(64));
+        value["result_contract_sha256"] = serde_json::json!(foreign);
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-        let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results contract sha256:ffff"));
+        // Another contract is a warning, not a refusal: the report keeps saying
+        // which contract it was written under.
+        let (decoded, _) = E2eReport::read_from(&path).unwrap();
+        assert_eq!(decoded.result_contract_sha256, foreign);
 
         value
             .as_object_mut()
@@ -4042,7 +4056,7 @@ mod tests {
             .remove("result_contract_sha256");
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results contract missing"));
+        assert!(format!("{error:#}").contains("decode typed E2E report"));
     }
 
     #[test]

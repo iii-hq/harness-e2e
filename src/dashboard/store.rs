@@ -162,11 +162,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listing_rejects_unsupported_and_corrupt_results() {
+    fn listing_rejects_unreadable_results() {
         let root = tempfile::tempdir().unwrap();
         for (name, bytes) in [
             (
-                "old",
+                "partial",
                 br#"{"result_contract_sha256":"sha256:foreign"}"#.as_slice(),
             ),
             ("corrupt", b"not-json".as_slice()),

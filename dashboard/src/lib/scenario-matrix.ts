@@ -6,7 +6,10 @@ import type {
   DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
-import { SCORING_PROFILE_SHA256 } from '@/lib/result-contract.generated'
+import {
+  RESULT_CONTRACT_SHA256,
+  SCORING_PROFILE_SHA256,
+} from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
   generalRunMetrics,
@@ -54,6 +57,10 @@ export type ResultContractSummary = {
   objectiveOutcome: 'passed' | 'failed' | 'inconclusive' | null
   resultContractSha256: string | null
   scoringProfileSha256: string | null
+  /** False when the report was written under another results contract than this Console: shown, with a warning. */
+  resultContractCurrent: boolean
+  /** False when the report was scored under another scoring profile than this Console: shown, with a warning. */
+  scoringProfileCurrent: boolean
 }
 
 export type ScenarioMatrixSummary = {
@@ -155,6 +162,8 @@ function resultContracts(
         objectiveOutcome,
         resultContractSha256,
         scoringProfileSha256,
+        resultContractCurrent: resultContractSha256 === RESULT_CONTRACT_SHA256,
+        scoringProfileCurrent: scoringProfileSha256 === SCORING_PROFILE_SHA256,
       },
     ]
   })
@@ -348,7 +357,9 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
 
 // The definition digest and the contract fingerprint are not gates for now, in
 // step with the Rust reader: a report the server accepted is shown, and the
-// contract it carries stays visible in the identity band.
+// contract and scoring profile it carries stay visible in the identity band.
+// Another contract or profile is a warning there, never a reason to hide
+// figures.
 function validResultContract(report: DashboardReportProjection): boolean {
   return (
     (report.report_state === 'complete' || report.report_state === 'partial') &&
@@ -356,7 +367,7 @@ function validResultContract(report: DashboardReportProjection): boolean {
       report.objective_outcome === 'failed' ||
       report.objective_outcome === 'inconclusive') &&
     nonEmptyString(report.result_contract_sha256) !== null &&
-    report.scoring_profile_sha256 === SCORING_PROFILE_SHA256
+    nonEmptyString(report.scoring_profile_sha256) !== null
   )
 }
 

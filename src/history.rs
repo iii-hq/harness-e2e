@@ -14,6 +14,7 @@ pub(crate) mod projection;
 pub(crate) mod store;
 
 pub const SCHEMA: &str = "harness-e2e-history";
+const PROFILE_SNAPSHOT_SCHEMA: &str = "harness-e2e-profile-snapshot";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -123,8 +124,34 @@ impl HistoryImport {
 }
 
 impl History {
+    /// Contract drift the import tolerates and reports: a history or profile
+    /// snapshot exported under another schema id is imported as it is.
+    pub fn warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+        if self.schema != SCHEMA {
+            warnings.push(format!(
+                "history schema {} differs from {SCHEMA}; imported as exported",
+                self.schema
+            ));
+        }
+        for execution in &self.executions {
+            let schema = execution
+                .materialization
+                .snapshot
+                .as_ref()
+                .and_then(|snapshot| snapshot.get("schema"))
+                .and_then(Value::as_str);
+            if let Some(schema) = schema.filter(|schema| *schema != PROFILE_SNAPSHOT_SCHEMA) {
+                warnings.push(format!(
+                    "execution {} profile snapshot schema {schema} differs from {PROFILE_SNAPSHOT_SCHEMA}; imported as exported",
+                    execution.record["id"].as_str().unwrap_or("?")
+                ));
+            }
+        }
+        warnings
+    }
+
     pub fn validate(&self) -> Result<()> {
-        ensure!(self.schema == SCHEMA, "Unsupported history schema");
         identity(&self.source.instance_id)?;
         identity(&self.plan.key)?;
         timestamp(&self.captured_at)?;
@@ -204,10 +231,7 @@ impl History {
                             .context("Complete materialization has no snapshot")?,
                     )
                     .context("decode complete profile snapshot")?;
-                    ensure!(
-                        snapshot.schema == "harness-e2e-profile-snapshot",
-                        "Unsupported profile snapshot schema"
-                    );
+                    let _ = snapshot;
                 }
                 MaterializationAvailability::Partial | MaterializationAvailability::Unavailable => {
                     ensure!(

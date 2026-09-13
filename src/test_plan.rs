@@ -125,10 +125,12 @@ impl MasterPlan {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.schema == "harness-e2e-master-test-plan",
-            "unsupported master test plan schema"
-        );
+        if self.schema != "harness-e2e-master-test-plan" {
+            tracing::warn!(
+                schema = %self.schema,
+                "master test plan carries another schema id; read as it is"
+            );
+        }
         ensure!(safe_id(&self.plan_id), "invalid master plan identity");
         let mut covered = BTreeSet::new();
         let mut modules = BTreeSet::new();
