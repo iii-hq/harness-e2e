@@ -570,7 +570,7 @@ def probe_result(evidence, case_id, returncode):
     status = result.get('status')
     functional = result.get('functional_status')
     if (result.get('schema') != 'kanban-evaluation'
-            or coverage.get('schema') != 'kanban-evaluation-coverage/v1'
+            or coverage.get('schema') != 'kanban-evaluation-coverage'
             or result.get('case_id') != case_id or coverage.get('case_id') != case_id
             or coverage.get('criteria') != criteria
             or any(check['status'] not in ('passed', 'failed', 'unverified') for check in checks)

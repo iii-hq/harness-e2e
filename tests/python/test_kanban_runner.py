@@ -112,7 +112,7 @@ class KanbanRunnerTest(unittest.TestCase):
             result = {'schema': 'kanban-evaluation', 'case_id': 'test',
                       'status': 'passed', 'functional_status': 'passed',
                       'checks': [{'id': 'criterion_1', 'status': 'passed', 'detail': 'observed'}]}
-            coverage = {'schema': 'kanban-evaluation-coverage/v1', 'case_id': 'test',
+            coverage = {'schema': 'kanban-evaluation-coverage', 'case_id': 'test',
                         'complete': True, 'criteria': result['checks']}
             (evidence / 'result.json').write_text(json.dumps(result))
             with self.assertRaisesRegex(RuntimeError, 'incomplete evidence'):
