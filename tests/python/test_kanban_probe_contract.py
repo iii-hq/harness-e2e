@@ -290,7 +290,7 @@ try {{
             )
             self.assertEqual(completed.returncode, 2)
             result = json.loads((Path(directory) / "result.json").read_text())
-            self.assertEqual(result["schema"], "kanban-evaluation/v1")
+            self.assertEqual(result["schema"], "kanban-evaluation")
             self.assertEqual(result["status"], "evaluation_failed")
             self.assertIsNone(result["functional_status"])
             self.assertEqual(result["checks"], [])

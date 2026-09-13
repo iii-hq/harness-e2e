@@ -17,11 +17,6 @@ pub fn results() -> RootSchema {
         .as_mut()
         .expect("results schema has an object root");
     object.required.insert("manifest".to_string());
-    if let Some(Schema::Object(version)) = object.properties.get_mut("schema_version") {
-        version.enum_values = Some(vec![serde_json::json!(
-            crate::report::RESULTS_SCHEMA_VERSION
-        )]);
-    }
     let scenario = root
         .definitions
         .get_mut("E2eScenarioReport")
@@ -119,13 +114,13 @@ mod tests {
 
     #[test]
     fn observation_contract_schemas_match_snapshots() {
-        assert_snapshot("e2e-observation-v1.json", &observation());
-        assert_snapshot("e2e-scenario-catalog-v5.json", &scenario_catalog());
+        assert_snapshot("e2e-observation.json", &observation());
+        assert_snapshot("e2e-scenario-catalog.json", &scenario_catalog());
     }
 
     #[test]
     fn workflow_schemas_match_snapshots() {
-        assert_snapshot("workflow-checkpoint-v1.json", &workflow_checkpoint());
+        assert_snapshot("workflow-checkpoint.json", &workflow_checkpoint());
     }
 
     #[test]

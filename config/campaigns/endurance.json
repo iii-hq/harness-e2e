@@ -3,7 +3,7 @@
   "campaign_id": "endurance",
   "lane": "endurance",
   "failure_policy": "advisory",
-  "scoring_profile": "difficulty-weighted-v1",
+  "scoring_profile": "difficulty-weighted",
   "groups": [
     {
       "id": "engineering-endurance",

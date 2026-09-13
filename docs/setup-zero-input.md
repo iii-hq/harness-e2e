@@ -4,12 +4,12 @@ Status: primeiro incremento implementado localmente; etapas restantes propostas.
 
 ## Primeiro incremento
 
-- Worker e `migrate-storage` usam o mesmo YAML, por `--config`/`III_CONFIG`. A migração deriva banco, namespace e diretório de evidências dessa configuração; caminhos relativos são resolvidos a partir do arquivo YAML. Foram removidos os overrides `HARNESS_E2E_CONTROL_DATABASE`/`HARNESS_E2E_CONTROL_NAMESPACE` e `--runs-dir` do comando de migração.
+- Worker e `rebuild-storage` usam o mesmo YAML, por `--config`/`III_CONFIG`. A reconstrução do banco deriva banco, namespace e diretório de evidências dessa configuração; caminhos relativos são resolvidos a partir do arquivo YAML. Foram removidos os overrides `HARNESS_E2E_CONTROL_DATABASE`/`HARNESS_E2E_CONTROL_NAMESPACE` e `--runs-dir` do comando administrativo.
 - `shell_coder_sandbox`, `chess_engine_build` e `trend_blog` preparam automaticamente o bundle compartilhado. O preparador de Git foi extraído do engineering ticket e reutilizado, preservando revisão fixada, ausência de remotes, timeout e cleanup por `TempDir`.
 - O bundle pequeno é materializado em diretórios temporários independentes por leitura. O shell/coder lê os assets verificados em memória e descarta a origem temporária; avaliação e captura materializam novamente o bundle incorporado, independentemente do workspace alterado pelo candidato. Não há cache persistente ou estado adicional no contexto nesta etapa.
 - O launcher exact-stack deixou de preparar e repassar `HARNESS_E2E_FIXTURE_PATH`. O override existente do engineering ticket no executor protegido permanece com seu contrato de posse e cleanup.
 - A prontidão dos três cenários verifica Git sem preparar checkouts. O setup existente valida o conteúdo e prepara o workspace antes de chamar o modelo. Os requisitos dos demais cenários ainda seguem o comportamento anterior.
-- A remoção do campo obsoleto `fixture_path_env` altera o contrato materializado de `chess_engine_build`, agora na versão 4. Planos salvos com essa versão anterior precisam ser editados e salvos para materializar o contrato atual antes de outra execução. Resultados históricos não são reescritos.
+- A remoção do campo obsoleto `fixture_path_env` altera o contrato materializado de `chess_engine_build` e, com ele, o `behavior_sha256` do cenário. Planos salvos com o digest anterior precisam ser editados e salvos para materializar o contrato atual antes de outra execução. Resultados históricos não são reescritos.
 
 Permanecem para os próximos incrementos: derivar todos os diretórios de scratch de uma configuração comum, eliminar os overrides opcionais de workspace, instalação portátil do banco via Compose, Kanban, incidente, segurança, isolamento SWE e proveniência da stack. Este incremento não instala dependências de sistema nem reinicia a stack.
 

@@ -765,7 +765,7 @@ async fn commit_run_checkpoint(
     // Full, redacted run evidence is durable independently of the event sink.
     // This also applies to CLI runs, which have no control-plane journal.
     let mut checkpoint = json!({
-        "schema": "harness-e2e-run-checkpoint/v1",
+        "schema": "harness-e2e-run-checkpoint",
         "slot_id": slot_id,
         "run_id": run.run_id,
         "attempt_id": run.attempt_id,
@@ -870,7 +870,7 @@ async fn commit_run_checkpoint(
             metrics,
         ) = attempt;
         let checkpoint = json!({
-            "schema": "harness-e2e-subject-observation-checkpoint/v1",
+            "schema": "harness-e2e-subject-observation-checkpoint",
             "slot_id": slot_id,
             "run_id": run.run_id,
             "attempt_id": attempt_id,

@@ -15,12 +15,8 @@ def generated_files(root: Path = ROOT) -> dict[Path, str]:
     rust = header
     typescript = header
     for name, value in values.items():
-        if isinstance(value, int):
-            rust += f"pub const {name}: u32 = {value};\n"
-            typescript += f"export const {name} = {value}\n"
-        else:
-            rust += f'pub const {name}: &str =\n    "{value}";\n'
-            typescript += f"export const {name} =\n  '{value}'\n"
+        rust += f'pub const {name}: &str =\n    "{value}";\n'
+        typescript += f"export const {name} =\n  '{value}'\n"
     return {
         root / "src/result_contract.rs": rust,
         root / "dashboard/src/lib/result-contract.generated.ts": typescript,

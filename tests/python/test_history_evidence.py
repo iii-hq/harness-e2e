@@ -15,7 +15,7 @@ class EvidenceTests(unittest.TestCase):
         self.content = b'{"observation":"retained"}'
         self.bundle = {'kind': 'github', 'repository': 'owner/repo', 'run_id': 42, 'run_attempt': 2, 'artifact_name': 'group'}
         self.input = {'execution': {'id': 'exec', 'attempt': 1}, 'report': {'runAttempt': 2, 'payload': {'bundle': self.bundle, 'group': {'group_id': 'group'}}}, 'path': 'result.txt', 'bundles': [self.bundle]}
-        self.manifest = {'schema': 'e2e-observation-bundle/v1', 'execution_id': 'exec', 'campaign_id': 'exec', 'attempt': 1,
+        self.manifest = {'schema': 'e2e-observation-bundle', 'execution_id': 'exec', 'campaign_id': 'exec', 'attempt': 1,
                          'workflow': {'repository': 'owner/repo', 'run_id': 42, 'run_attempt': 2, 'group_id': 'group'},
                          'files': [{'path': 'result.txt', 'sha256': evidence.digest(self.content), 'size_bytes': len(self.content)}]}
 

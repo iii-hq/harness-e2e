@@ -321,7 +321,7 @@ async function main() {
 
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
-    schema: 'kanban-evaluation/v1',
+    schema: 'kanban-evaluation',
     case_id: caseId,
     checks,
     status,

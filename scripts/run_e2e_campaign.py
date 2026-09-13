@@ -28,13 +28,12 @@ from functools import cache
 from typing import Any
 
 from result_contract import (
-    RESULTS_SCHEMA_VERSION,
     RESULT_CONTRACT_SHA256,
     SCORING_PROFILE_SHA256,
 )
 
 CAMPAIGN_KIND = "harness-e2e-campaign"
-SCORING_PROFILE = "difficulty-weighted-v1"
+SCORING_PROFILE = "difficulty-weighted"
 ROOT_FIELDS = {
     "kind",
     "campaign_id",
@@ -531,10 +530,6 @@ def _regular_group_measurement(
             "scoring_profile_sha256": None,
         }
     report = _load_json(results_path)
-    if report.get("schema_version") != RESULTS_SCHEMA_VERSION:
-        raise CampaignError(
-            f"{results_path}: schema_version must be {RESULTS_SCHEMA_VERSION}"
-        )
     result_contract_sha256 = _require_result_hash(
         report.get("result_contract_sha256"),
         f"{results_path}.result_contract_sha256",
@@ -813,7 +808,7 @@ def score_campaign(
             pathlib.Path(__file__).resolve().parents[1]
             / "config"
             / "scoring"
-            / "difficulty-weighted-v1.json"
+            / "difficulty-weighted.json"
         )
     )
     if scoring_profiles and scoring_profiles != {local_scoring_profile}:
@@ -950,7 +945,7 @@ def execute_campaign(
         child_environment["HARNESS_E2E_CAMPAIGN_ID"] = campaign.campaign_id
         child_environment["HARNESS_E2E_CAMPAIGN_GROUP"] = group.id
         materialized_group = {
-            "schema": "harness-e2e-materialized-campaign-group/v1",
+            "schema": "harness-e2e-materialized-campaign-group",
             "campaign_id": campaign.campaign_id,
             "lane": campaign.lane,
             "failure_policy": campaign.failure_policy,
@@ -1105,7 +1100,7 @@ def build_campaign_bundle(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     scoring_profile = json.loads(scoring_profile_path.read_text(encoding="utf-8"))
     return {
-        "schema": "e2e-campaign-observation-bundle/v1",
+        "schema": "e2e-campaign-observation-bundle",
         "campaign_id": summary["campaign_id"],
         "execution_id": summary["execution_id"],
         "lane": summary["lane"],
@@ -1128,7 +1123,7 @@ def validate_campaign_bundle(
     """
     if root.is_symlink():
         raise CampaignError("campaign bundle root must not be a symlink")
-    if bundle.get("schema") != "e2e-campaign-observation-bundle/v1":
+    if bundle.get("schema") != "e2e-campaign-observation-bundle":
         raise CampaignError("unsupported campaign bundle schema")
     references: list[Any] = [bundle.get("summary")]
     groups = bundle.get("groups")
@@ -1242,7 +1237,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=pathlib.Path(__file__).resolve().parents[1]
         / "config"
         / "scoring"
-        / "difficulty-weighted-v1.json",
+        / "difficulty-weighted.json",
     )
     parser.add_argument("--model")
     parser.add_argument("--provider")

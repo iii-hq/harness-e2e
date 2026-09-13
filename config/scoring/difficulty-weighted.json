@@ -1,5 +1,5 @@
 {
-  "profile": "difficulty-weighted-v1",
+  "profile": "difficulty-weighted",
   "difficulty_weights": {
     "l0_atomic": 1,
     "l1_sequential": 1,

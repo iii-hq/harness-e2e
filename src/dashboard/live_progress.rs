@@ -181,7 +181,7 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                 let checkpoint = read_checkpoint(
                     root,
                     &artifact,
-                    "harness-e2e-subject-observation-checkpoint/v1",
+                    "harness-e2e-subject-observation-checkpoint",
                     &slot_id,
                 )?;
                 if checkpoint.attempt_id != attempt_id || !slot_indices.contains_key(&slot_id) {
@@ -205,7 +205,7 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                 artifact,
             } => {
                 let checkpoint =
-                    read_checkpoint(root, &artifact, "harness-e2e-run-checkpoint/v1", &slot_id)?;
+                    read_checkpoint(root, &artifact, "harness-e2e-run-checkpoint", &slot_id)?;
                 if checkpoint.run_id != run_id {
                     bail!("live run identity mismatch");
                 }

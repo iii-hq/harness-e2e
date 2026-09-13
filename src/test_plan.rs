@@ -18,7 +18,6 @@ const SOURCE: &str = include_str!("../config/test-plan.json");
 pub struct MasterPlan {
     pub schema: String,
     pub plan_id: String,
-    pub version: u32,
     pub modules: Vec<CapabilityModule>,
     pub diagnostics: Vec<String>,
     pub requirements: BTreeMap<String, Vec<String>>,
@@ -67,7 +66,6 @@ pub struct FaultGroup {
 pub struct ProfileSnapshot {
     pub schema: String,
     pub plan_id: String,
-    pub version: u32,
     pub definition_sha256: String,
     pub profile_sha256: String,
     pub profile: Profile,
@@ -128,13 +126,10 @@ impl MasterPlan {
 
     pub fn validate(&self) -> Result<()> {
         ensure!(
-            self.schema == "harness-e2e-master-test-plan/v1",
+            self.schema == "harness-e2e-master-test-plan",
             "unsupported master test plan schema"
         );
-        ensure!(
-            safe_id(&self.plan_id) && self.version > 0,
-            "invalid master plan identity"
-        );
+        ensure!(safe_id(&self.plan_id), "invalid master plan identity");
         let mut covered = BTreeSet::new();
         let mut modules = BTreeSet::new();
         for module in &self.modules {
@@ -365,7 +360,7 @@ impl MasterPlan {
             );
             let campaign = json!({
                 "kind": "harness-e2e-campaign", "campaign_id": format!("{}-r{repetition:02}", profile.id),
-                "lane": profile.lane, "failure_policy": "advisory", "scoring_profile": "difficulty-weighted-v1", "groups": groups,
+                "lane": profile.lane, "failure_policy": "advisory", "scoring_profile": "difficulty-weighted", "groups": groups,
             });
             campaigns.push(campaign);
         }
@@ -376,9 +371,8 @@ impl MasterPlan {
             .sum::<u64>()
             * u64::from(profile.repetitions);
         Ok(ProfileSnapshot {
-            schema: "harness-e2e-profile-snapshot/v1".into(),
+            schema: "harness-e2e-profile-snapshot".into(),
             plan_id: self.plan_id.clone(),
-            version: self.version,
             definition_sha256,
             profile_sha256,
             profile: profile.clone(),
@@ -406,7 +400,7 @@ impl MasterPlan {
                 "cases": snapshot.cases}));
         }
         Ok(
-            json!({"plan_id": self.plan_id, "version": self.version, "definition_sha256": self.digest()?, "profiles": profiles}),
+            json!({"plan_id": self.plan_id, "definition_sha256": self.digest()?, "profiles": profiles}),
         )
     }
 
@@ -416,7 +410,7 @@ impl MasterPlan {
             scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier)}));
         }
         Ok(
-            json!({"schema": "harness-e2e-campaign-catalog/v1", "definition_sha256": self.digest()?, "scenarios": scenarios}),
+            json!({"schema": "harness-e2e-campaign-catalog", "definition_sha256": self.digest()?, "scenarios": scenarios}),
         )
     }
 }
@@ -491,7 +485,7 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
             "run_ids": scenario.runs.iter().map(|r| &r.run_id).collect::<Vec<_>>()})
     }).collect();
     Ok(
-        json!({"schema": "harness-e2e-profile-measurements/v1", "interpretation": "descriptive_only",
+        json!({"schema": "harness-e2e-profile-measurements", "interpretation": "descriptive_only",
         "cohorts": cohorts, "deferred": deferred, "input_artifacts": paths}),
     )
 }

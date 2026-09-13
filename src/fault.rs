@@ -1331,7 +1331,6 @@ mod tests {
             runs: vec![run],
         };
         E2eReport {
-            schema_version: crate::report::RESULTS_SCHEMA_VERSION,
             persistence_errors: Vec::new(),
             slot_start_deadline_seconds: None,
             result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),

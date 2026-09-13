@@ -2805,7 +2805,7 @@ mod tests {
                 .contains(&format!("seed-{expected_seed:016x}")));
         }
         assert_eq!(response.schema, CATALOG_SCHEMA);
-        assert_eq!(response.schema, "e2e-scenario-catalog/v5");
+        assert_eq!(response.schema, "e2e-scenario-catalog");
         assert!(response.catalog_sha256.starts_with("sha256:"));
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
@@ -2934,52 +2934,57 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let server =
-            tokio::spawn(async move {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
-                let mut queries = 0;
-                let mut transactions = 0;
-                while let Some(Ok(frame)) = socket.next().await {
-                    let Message::Text(message) = frame else {
-                        continue;
-                    };
-                    let message: Value = serde_json::from_str(&message).unwrap();
-                    if message["type"] != "invokefunction" || message["invocation_id"].is_null() {
-                        continue;
-                    }
-                    let result = match message["function_id"].as_str().unwrap() {
-                        "database::transaction" => {
-                            transactions += 1;
-                            json!({"committed": true})
-                        }
-                        "database::query" => {
-                            queries += 1;
-                            let sql = message["data"]["sql"].as_str().unwrap();
-                            if sql.contains("sqlite_master") {
-                                json!({"rows": []})
-                            } else if sql.contains("SELECT version") {
-                                json!({"rows": [{"version": 4}]})
-                            } else if sql.contains("terminal = 0") {
-                                json!({"rows": []})
-                            } else {
-                                assert!(sql.contains("ORDER BY requested_at DESC"));
-                                json!({"rows": []})
-                            }
-                        }
-                        other => panic!("unexpected bulk restore call: {other}"),
-                    };
-                    socket.send(Message::Text(json!({
-                    "type": "invocationresult", "invocation_id": message["invocation_id"],
-                    "function_id": message["function_id"], "result": result,
-                }).to_string())).await.unwrap();
-                    if transactions == 1 && queries == 4 {
-                        break;
-                    }
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let mut queries = 0;
+            let mut transactions = 0;
+            while let Some(Ok(frame)) = socket.next().await {
+                let Message::Text(message) = frame else {
+                    continue;
+                };
+                let message: Value = serde_json::from_str(&message).unwrap();
+                if message["type"] != "invokefunction" || message["invocation_id"].is_null() {
+                    continue;
                 }
-                assert_eq!(transactions, 1);
-                assert_eq!(queries, 4);
-            });
+                let result = match message["function_id"].as_str().unwrap() {
+                    "database::transaction" => {
+                        transactions += 1;
+                        json!({"committed": true})
+                    }
+                    "database::query" => {
+                        queries += 1;
+                        let sql = message["data"]["sql"].as_str().unwrap();
+                        if sql.contains("sqlite_master") {
+                            json!({"rows": []})
+                        } else if sql.contains("SELECT fingerprint") {
+                            json!({"rows": [{"fingerprint": crate::persistence::storage_fingerprint()}]})
+                        } else if sql.contains("terminal = 0") {
+                            json!({"rows": []})
+                        } else {
+                            assert!(sql.contains("ORDER BY requested_at DESC"));
+                            json!({"rows": []})
+                        }
+                    }
+                    other => panic!("unexpected bulk restore call: {other}"),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "invocationresult", "invocation_id": message["invocation_id"],
+                            "function_id": message["function_id"], "result": result,
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if transactions == 1 && queries == 4 {
+                    break;
+                }
+            }
+            assert_eq!(transactions, 1);
+            assert_eq!(queries, 4);
+        });
         let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
         tokio::time::timeout(Duration::from_secs(5), async {
             while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {

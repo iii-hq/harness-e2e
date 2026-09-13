@@ -178,7 +178,7 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
                 id: REPORT_ID.into(),
                 kind: "swe-service-report".into(),
                 media_type: "application/json".into(),
-                schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report/v1"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
+                schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
                 max_size_bytes: 16 * 1024 * 1024,
             }],
             invariants: vec![InvariantSpec {

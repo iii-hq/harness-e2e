@@ -21,8 +21,8 @@ from publish_swe_service import (
 
 
 REPORT_NAME = "swe_service_report.json"
-REPORT_SCHEMA = "swe-service-report/v1"
-RECEIPT_SCHEMA = "swe-campaign-publication/v1"
+REPORT_SCHEMA = "swe-service-report"
+RECEIPT_SCHEMA = "swe-campaign-publication"
 MAX_REPORTS = 256
 MAX_CLASSIFICATION_BYTES = 16 * 1024 * 1024
 SAFE_FRAGMENT = re.compile(r"[^A-Za-z0-9_.-]+")

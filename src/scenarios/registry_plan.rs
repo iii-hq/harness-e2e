@@ -12,7 +12,7 @@
 
 use serde_json::{json, Value};
 
-pub(super) const VALIDATOR: &str = "deterministic-plan-checks/v1";
+pub(super) const VALIDATOR: &str = "deterministic-plan-checks";
 
 /// Backend files at the pinned Registry commit that can host or call the
 /// comparison behaviour (reference plan, section 3).

@@ -11,8 +11,6 @@ use serde_json::json;
 use crate::artifact;
 use crate::scenarios::ScenarioId;
 
-pub(crate) const PLAN_SCHEMA_VERSION: u32 = 4;
-
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum PlanState {
@@ -43,7 +41,6 @@ pub(crate) struct PlanScopeItem {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub(crate) struct LocalPlan {
-    pub schema_version: u32,
     pub id: String,
     pub label: String,
     pub purpose: String,
@@ -147,7 +144,6 @@ pub(crate) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
     let scope_hash = scope_hash(request, &scenarios)?;
     let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
     Ok(LocalPlan {
-        schema_version: PLAN_SCHEMA_VERSION,
         id,
         label: request.label.trim().to_string(),
         purpose: request.purpose.trim().to_string(),

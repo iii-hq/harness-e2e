@@ -29,7 +29,7 @@ resolve_stack_lock = load("resolve_stack_lock")
 
 
 PROFILE_SNAPSHOT = {
-    "schema": "harness-e2e-profile-snapshot/v1",
+    "schema": "harness-e2e-profile-snapshot",
     "plan_id": "harness",
     "version": 1,
     "definition_sha256": "sha256:" + "d" * 64,
@@ -43,7 +43,7 @@ PROFILE_SNAPSHOT = {
             "campaign_id": "regression-r01",
             "lane": "local-regression",
             "failure_policy": "advisory",
-            "scoring_profile": "difficulty-weighted-v1",
+            "scoring_profile": "difficulty-weighted",
             "groups": [
                 {
                     "id": "case-minimal-path",
@@ -182,7 +182,7 @@ class ReportPayloadTests(unittest.TestCase):
         checkpoint = artifacts / "journal" / "runs" / "slot-2420557511cf4c76c9a21421"
         checkpoint.mkdir(parents=True)
         (checkpoint / "run-a.json").write_text(
-            json.dumps({"schema": "harness-e2e-run-checkpoint/v1", "slot_id": "slot-2420557511cf4c76c9a21421",
+            json.dumps({"schema": "harness-e2e-run-checkpoint", "slot_id": "slot-2420557511cf4c76c9a21421",
                         "run_id": "run-a", "run": {"run_id": "run-a", "status": "failed"}})
         )
 

@@ -27,7 +27,6 @@ class ResultContractTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / "config").mkdir()
             (root / "config/results-contract.json").write_text(json.dumps({
-                "schema_version": 4,
                 "results_schema": "schema.json",
                 "scoring_profile": "profile.json",
             }), encoding="utf-8")

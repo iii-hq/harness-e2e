@@ -98,7 +98,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
 
 def catalog():
     return {
-        "schema": "e2e-scenario-catalog/v5",
+        "schema": "e2e-scenario-catalog",
         "runner": {
             "name": "harness-e2e",
             "version": "0.6.0-experimental",

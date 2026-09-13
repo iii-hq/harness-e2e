@@ -13,7 +13,7 @@ pub(crate) mod evidence;
 pub(crate) mod projection;
 pub(crate) mod store;
 
-pub const SCHEMA: &str = "harness-e2e-history/v1";
+pub const SCHEMA: &str = "harness-e2e-history";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -205,7 +205,7 @@ impl History {
                     )
                     .context("decode complete profile snapshot")?;
                     ensure!(
-                        snapshot.schema == "harness-e2e-profile-snapshot/v1",
+                        snapshot.schema == "harness-e2e-profile-snapshot",
                         "Unsupported profile snapshot schema"
                     );
                 }
@@ -484,7 +484,7 @@ mod tests {
         let snapshot_schema =
             serde_json::to_value(schemars::schema_for!(crate::test_plan::ProfileSnapshot)).unwrap();
         let snapshot_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("schemas/e2e-profile-snapshot-v1.json");
+            .join("schemas/e2e-profile-snapshot.json");
         if std::env::var_os("UPDATE_HISTORY_SCHEMA").is_some() {
             std::fs::write(
                 &snapshot_path,
@@ -501,7 +501,7 @@ mod tests {
         );
         let schema = serde_json::to_value(schemars::schema_for!(History)).unwrap();
         let path =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/e2e-history-v1.json");
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/e2e-history.json");
         if std::env::var_os("UPDATE_HISTORY_SCHEMA").is_some() {
             std::fs::write(
                 &path,

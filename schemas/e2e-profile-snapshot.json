@@ -159,11 +159,6 @@
     },
     "schema": {
       "type": "string"
-    },
-    "version": {
-      "format": "uint32",
-      "minimum": 0.0,
-      "type": "integer"
     }
   },
   "required": [
@@ -177,8 +172,7 @@
     "profile_sha256",
     "protected_supervisor_required",
     "scenario_ids",
-    "schema",
-    "version"
+    "schema"
   ],
   "title": "ProfileSnapshot",
   "type": "object"

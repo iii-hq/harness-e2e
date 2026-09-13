@@ -254,7 +254,7 @@ fn materialized_inputs() -> anyhow::Result<Value> {
     let fixture_contract_sha256 =
         crate::artifact::sha256_value(&expected_fixture_contract_identity())?;
     let hidden_probe_manifest_sha256 = crate::artifact::sha256_value(&json!({
-        "contract": "incident-hidden-probes-v1",
+        "contract": "incident-hidden-probes",
         "probe_count": 5,
     }))?;
     Ok(json!({

@@ -103,7 +103,7 @@ impl LocalIncidentAdapter {
         }
         let fixture_contract_sha256 = crate::artifact::sha256_value(&contract)?;
         let hidden_probe_manifest_sha256 = crate::artifact::sha256_value(&json!({
-            "contract": "incident-hidden-probes-v1",
+            "contract": "incident-hidden-probes",
             "probe_count": 5,
         }))?;
         let protected_hashes = protected_hashes(&root)?;

@@ -216,7 +216,7 @@ def write_failure(evidence, case, error):
             provisional = {}
         if isinstance(provisional, dict) and provisional.get('functional_status') in ('passed', 'failed'):
             atomic_json(evidence / 'functional-result.json', provisional)
-    result = {'schema': 'kanban-evaluation/v1', 'case_id': case,
+    result = {'schema': 'kanban-evaluation', 'case_id': case,
               'status': 'evaluation_failed' if isinstance(error, EvaluationError) else 'infrastructure_failed',
               'functional_status': None, 'error': str(error) or type(error).__name__, 'checks': []}
     atomic_json(result_path, result)
@@ -569,7 +569,7 @@ def probe_result(evidence, case_id, returncode):
     criteria = [check for check in checks if check['id'].startswith('criterion_')]
     status = result.get('status')
     functional = result.get('functional_status')
-    if (result.get('schema') != 'kanban-evaluation/v1'
+    if (result.get('schema') != 'kanban-evaluation'
             or coverage.get('schema') != 'kanban-evaluation-coverage/v1'
             or result.get('case_id') != case_id or coverage.get('case_id') != case_id
             or coverage.get('criteria') != criteria
@@ -767,7 +767,7 @@ print('workspace readable; trusted files, evaluator process and external network
         delivered_diff_captured = True
 
         build_checks = []
-        result = {'schema': 'kanban-evaluation/v1', 'case_id': args.case,
+        result = {'schema': 'kanban-evaluation', 'case_id': args.case,
                   'status': 'failed', 'functional_status': 'failed', 'checks': build_checks}
         if subprocess.run(docker_exec(candidate, ['test', '-f', '/workspace/kanban/package.json']), check=False).returncode:
             build_checks.append({'id': 'application_present', 'status': 'failed',

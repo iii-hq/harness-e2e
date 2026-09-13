@@ -164,14 +164,14 @@ reserves admission across the whole execution. It cancels active work before
 releasing admission, retains finished evidence and marks remaining slots. Restart
 reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
-No synthetic Results v4 report is created. Missing telemetry stays unavailable.
+No synthetic results report is created. Missing telemetry stays unavailable.
 
-Saved plans (`schema_version: 3`) and composed receipts live in the local SQL
-store (storage schema 3), accessed only through the database worker. Run the
-explicit `migrate-storage` dry-run and apply before switching from storage schema
-1 or 2. Existing PlanStore files are migration inputs, never runtime authority.
-The migration preserves IDs, baseline/candidate relationships, slots and native
-child references; corrupt or active records block the cutover.
+Saved plans and composed receipts live in the local SQL store, accessed only
+through the database worker. The store carries no version: the worker refuses a
+database whose layout fingerprint differs from its own, and the explicit
+`rebuild-storage` dry-run and apply recreate it, keeping every execution, plan
+and receipt the current binary can still read. Plans written by another binary
+are deleted, never migrated; active records block the rebuild.
 
 The plans list combines local plans and imported RC plans, marked `remote`.
 Import history accepts the versioned JSON transport or explicitly discovers and

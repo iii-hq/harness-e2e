@@ -389,7 +389,7 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
         "campaign_id": suite["id"],
         "lane": suite["lane"],
         "failure_policy": "advisory",
-        "scoring_profile": "difficulty-weighted-v1",
+        "scoring_profile": "difficulty-weighted",
         "groups": groups,
     }
 
@@ -733,7 +733,7 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
 def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
     files = _package_files(root)
     return {
-        "schema": "e2e-observation-bundle/v1",
+        "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
         "execution_id": contract["execution_id"],
         "attempt": contract["attempt"],

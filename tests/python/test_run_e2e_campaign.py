@@ -15,7 +15,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from run_e2e_campaign import (
     CampaignError,
     FAULT_PROFILE_WEIGHT,
-    RESULTS_SCHEMA_VERSION,
     RESULT_CONTRACT_SHA256,
     SCORING_PROFILE_SHA256,
     RESULT_AGGREGATE_COUNT_FIELDS,
@@ -64,7 +63,6 @@ def native_scenario(scenario_id, *, deferred=False):
 
 def native_report(scenarios, *, partial=False):
     return {
-        "schema_version": RESULTS_SCHEMA_VERSION,
         "result_contract_sha256": RESULT_CONTRACT_SHA256,
         "scoring_profile_sha256": SCORING_PROFILE_SHA256,
         "report_state": "partial" if partial else "complete",
@@ -106,7 +104,7 @@ def manifest(groups=None):
         "campaign_id": "test-campaign",
         "lane": "daily",
         "failure_policy": "enforcing",
-        "scoring_profile": "difficulty-weighted-v1",
+        "scoring_profile": "difficulty-weighted",
         "groups": selected,
     }
 
@@ -431,7 +429,7 @@ class CampaignRunnerTests(unittest.TestCase):
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
             campaign_path = root / "campaign.json"
             campaign_path.write_text(json.dumps(manifest()), encoding="utf-8")
-            scoring_path = ROOT / "config" / "scoring" / "difficulty-weighted-v1.json"
+            scoring_path = ROOT / "config" / "scoring" / "difficulty-weighted.json"
             bundle = build_campaign_bundle(
                 summary,
                 summary_path=summary_path,
@@ -474,7 +472,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 summary,
                 summary_path=summary_path,
                 manifest_path=campaign_path,
-                scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
+                scoring_profile_path=ROOT / "config/scoring/difficulty-weighted.json",
             )
 
             paths = [artifact["path"] for artifact in bundle["groups"][0]["artifacts"]]
@@ -507,7 +505,7 @@ class CampaignRunnerTests(unittest.TestCase):
                     summary,
                     summary_path=summary_path,
                     manifest_path=campaign_path,
-                    scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
+                    scoring_profile_path=ROOT / "config/scoring/difficulty-weighted.json",
                 )
 
     def test_legacy_results_v3_shape_is_rejected(self):
@@ -529,12 +527,10 @@ class CampaignRunnerTests(unittest.TestCase):
             output = pathlib.Path(directory) / "core"
             output.mkdir()
             (output / "results.json").write_text(
-                json.dumps({"schema_version": 3, "passed": True, "scenarios": []}),
+                json.dumps({"passed": True, "scenarios": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(
-                CampaignError, f"schema_version must be {RESULTS_SCHEMA_VERSION}"
-            ):
+            with self.assertRaisesRegex(CampaignError, "result_contract_sha256"):
                 score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
     def test_compact_aggregate_keeps_only_bundle_references(self):
@@ -635,12 +631,11 @@ class CampaignRunnerTests(unittest.TestCase):
                 output = root / group_id
                 output.mkdir()
                 scoring_profile = json.loads(
-                    (ROOT / "config/scoring/difficulty-weighted-v1.json").read_text()
+                    (ROOT / "config/scoring/difficulty-weighted.json").read_text()
                 )
                 (output / "results.json").write_text(
                     json.dumps(
                         {
-                            "schema_version": RESULTS_SCHEMA_VERSION,
                             "result_contract_sha256": RESULT_CONTRACT_SHA256,
                             "scoring_profile_sha256": _canonical_sha256(scoring_profile),
                             "report_state": "complete",

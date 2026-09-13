@@ -609,7 +609,7 @@ fn portable_evidence_with_limit(directory: &Path, result: &mut Value, limit: u64
         )?;
     }
     Ok(json!({
-        "format": "trending-topics-evidence-v1",
+        "format": "trending-topics-evidence",
         "files": files,
         "omitted_files": omitted,
         "capture_verification_errors": result["capture_verification_errors"],

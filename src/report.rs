@@ -1555,11 +1555,9 @@ pub struct ModelArtifact {
     pub supports_vision: Option<bool>,
 }
 
-pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
-pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v5";
-pub use crate::result_contract::{
-    RESULTS_SCHEMA_VERSION, RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256,
-};
+pub const OBSERVATION_SCHEMA: &str = "e2e-observation";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog";
+pub use crate::result_contract::{RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -2021,7 +2019,6 @@ pub enum ObjectiveOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct E2eReport {
-    pub schema_version: u32,
     pub result_contract_sha256: String,
     pub scoring_profile_sha256: String,
     pub report_state: ReportState,
@@ -2078,7 +2075,6 @@ impl E2eReport {
                 || scenario.aggregate.technical_invalid_runs > 0
         });
         let mut report = Self {
-            schema_version: RESULTS_SCHEMA_VERSION,
             result_contract_sha256: RESULT_CONTRACT_SHA256.into(),
             scoring_profile_sha256: SCORING_PROFILE_SHA256.into(),
             report_state: if partial {
@@ -2118,7 +2114,6 @@ impl E2eReport {
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
-        self.schema_version = RESULTS_SCHEMA_VERSION;
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
         manifest.validate().context("validate E2E manifest")?;
@@ -2152,12 +2147,11 @@ impl E2eReport {
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("decode E2E report {}", path.display()))?;
-        let version = value.get("schema_version").and_then(Value::as_u64);
-        if version != Some(u64::from(RESULTS_SCHEMA_VERSION)) {
+        let contract = value.get("result_contract_sha256").and_then(Value::as_str);
+        if contract != Some(RESULT_CONTRACT_SHA256) {
             bail!(
-                "unsupported results schema_version {}; expected {} with result contract {}",
-                version.map_or_else(|| "missing".into(), |value| value.to_string()),
-                RESULTS_SCHEMA_VERSION,
+                "unsupported results contract {}; this runner writes and reads {}",
+                contract.unwrap_or("missing"),
                 RESULT_CONTRACT_SHA256
             );
         }
@@ -2181,9 +2175,6 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
-        if self.schema_version != RESULTS_SCHEMA_VERSION {
-            bail!("results schema_version must be {RESULTS_SCHEMA_VERSION}");
-        }
         if self.result_contract_sha256 != RESULT_CONTRACT_SHA256 {
             bail!("results contract fingerprint is unsupported");
         }
@@ -3094,10 +3085,9 @@ mod tests {
 
     #[test]
     fn scoring_profile_fingerprint_tracks_checked_in_bytes() {
-        let profile: Value = serde_json::from_slice(include_bytes!(
-            "../config/scoring/difficulty-weighted-v1.json"
-        ))
-        .unwrap();
+        let profile: Value =
+            serde_json::from_slice(include_bytes!("../config/scoring/difficulty-weighted.json"))
+                .unwrap();
         assert_eq!(
             artifact::sha256_value(&profile).unwrap(),
             SCORING_PROFILE_SHA256
@@ -3480,7 +3470,7 @@ mod tests {
             std::fs::write(
                 path,
                 serde_json::to_vec(&serde_json::json!({
-                    "schema": "swe-service-report/v1",
+                    "schema": "swe-service-report",
                     "scenario_id": "swe_config_isolation",
                     "fixture_revision": crate::scenarios::swe_service::FIXTURE_REVISION,
                     "accepted_head": "0123456789abcdef0123456789abcdef01234567",
@@ -3990,8 +3980,8 @@ mod tests {
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
         assert_eq!(
-            value.get("schema_version"),
-            Some(&serde_json::json!(RESULTS_SCHEMA_VERSION))
+            value.get("result_contract_sha256"),
+            Some(&serde_json::json!(RESULT_CONTRACT_SHA256))
         );
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
@@ -4036,24 +4026,23 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_legacy_and_unknown_versions() {
+    fn read_rejects_a_foreign_result_contract() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value["schema_version"] = serde_json::json!(2);
+        value["result_contract_sha256"] = serde_json::json!(format!("sha256:{}", "f".repeat(64)));
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results schema_version 2"));
+        assert!(format!("{error:#}").contains("unsupported results contract sha256:ffff"));
 
-        value["schema_version"] = serde_json::json!(RESULTS_SCHEMA_VERSION + 1);
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("result_contract_sha256");
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains(&format!(
-            "unsupported results schema_version {}",
-            RESULTS_SCHEMA_VERSION + 1
-        )));
+        assert!(format!("{error:#}").contains("unsupported results contract missing"));
     }
 
     #[test]

@@ -74,7 +74,7 @@ fn checkpoint(
         "run"
     };
     let mut value = json!({
-        "schema": format!("harness-e2e-{kind}-checkpoint/v1"),
+        "schema": format!("harness-e2e-{kind}-checkpoint"),
         "slot_id": slot, "run_id": format!("run-{slot}"), "attempt_id": attempt,
         "completion": "completed", "technical": "valid", "objective_score": 100,
         "quality_score_completed": 80, "metrics": null, "cost": null,

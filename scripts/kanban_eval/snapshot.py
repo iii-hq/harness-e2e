@@ -77,7 +77,7 @@ def _load_catalog(path: Path, expected_digest: str | None) -> tuple[dict[str, An
         catalog = json.loads(raw)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise SnapshotError(f"invalid catalog: {error}") from error
-    if not isinstance(catalog, dict) or catalog.get("schema") != "kanban-scenarios/v1":
+    if not isinstance(catalog, dict) or catalog.get("schema") != "kanban-scenarios":
         raise SnapshotError("unsupported Kanban scenario catalog")
     if not isinstance(catalog.get("shared_prompt"), str) or not isinstance(catalog.get("cases"), list):
         raise SnapshotError("invalid Kanban scenario catalog")

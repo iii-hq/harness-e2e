@@ -17,7 +17,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse
 
 
 ALLOWED_REPOSITORY = "iii-hq/e2e-fixture"
-SCHEMA = "swe-service-report/v1"
+SCHEMA = "swe-service-report"
 SCENARIO_ID = "swe_service_journey"
 SAFE_EXECUTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,95}$")
 SAFE_RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")

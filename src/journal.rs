@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::artifact;
 
-pub const EXECUTION_JOURNAL_SCHEMA: &str = "harness-e2e-execution-journal/v1";
+pub const EXECUTION_JOURNAL_SCHEMA: &str = "harness-e2e-execution-journal";
 static JOURNAL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
