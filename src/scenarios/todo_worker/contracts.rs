@@ -11,7 +11,6 @@ pub struct FunctionSchemaContract {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TodoTaskContract {
-    pub scenario_version: u32,
     pub contract_sha256: String,
     pub worker_name: String,
     pub workspace_root: String,
@@ -43,7 +42,6 @@ pub struct TodoValidationCheck {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TodoValidationPlan {
-    pub scenario_version: u32,
     pub task_contract_sha256: String,
     pub summary: String,
     pub implementation_tasks: Vec<TodoImplementationTask>,
@@ -60,7 +58,6 @@ pub struct PlanDiagnostic {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CompiledValidationPlan {
-    pub scenario_version: u32,
     pub raw_plan_sha256: String,
     pub compiled_plan_sha256: String,
     pub task_contract: TodoTaskContract,
@@ -102,10 +99,7 @@ impl CompiledValidationPlan {
     }
 
     pub fn validate_integrity(&self) -> Result<()> {
-        if self.scenario_version != CONTRACT_VERSION
-            || !self.ready_for_build
-            || !self.diagnostics.is_empty()
-        {
+        if !self.ready_for_build || !self.diagnostics.is_empty() {
             bail!("compiled Todo validation plan is not ready for construction");
         }
         self.task_contract.validate()?;
@@ -209,7 +203,6 @@ pub fn compile_validation_plan(
 
     let ready_for_build = diagnostics.is_empty();
     let mut compiled = CompiledValidationPlan {
-        scenario_version: CONTRACT_VERSION,
         raw_plan_sha256,
         compiled_plan_sha256: String::new(),
         task_contract: contract.clone(),
@@ -229,16 +222,6 @@ fn validate_plan_fields(
     implementation_tasks: &mut Vec<TodoImplementationTask>,
     compiled_checks: &mut Vec<TodoValidationCheck>,
 ) {
-    if plan.scenario_version != CONTRACT_VERSION {
-        plan_diagnostic(
-            diagnostics,
-            "scenario_version_mismatch",
-            format!(
-                "plan scenario_version={} but expected {CONTRACT_VERSION}",
-                plan.scenario_version
-            ),
-        );
-    }
     if plan.task_contract_sha256 != contract.contract_sha256 {
         plan_diagnostic(
             diagnostics,
@@ -395,10 +378,7 @@ pub(super) fn bounded_text(value: &str, limit: usize) -> String {
 
 impl TodoTaskContract {
     pub fn validate(&self) -> Result<()> {
-        if self.scenario_version != CONTRACT_VERSION
-            || self.worker_name.trim().is_empty()
-            || !Path::new(&self.workspace_root).is_absolute()
-        {
+        if self.worker_name.trim().is_empty() || !Path::new(&self.workspace_root).is_absolute() {
             bail!("Todo task contract has an invalid worker name or workspace root");
         }
         let expected = contract_for_identity(&self.worker_name, Path::new(&self.workspace_root))?;
@@ -500,7 +480,6 @@ pub(super) fn contract_for_identity(
         "todo.invalid_inputs".into(),
     ];
     let unsigned = json!({
-        "scenario_version": CONTRACT_VERSION,
         "worker_name": worker_name,
         "workspace_root": workspace_root,
         "function_ids": function_ids,
@@ -508,7 +487,6 @@ pub(super) fn contract_for_identity(
         "required_capabilities": required_capabilities,
     });
     Ok(TodoTaskContract {
-        scenario_version: CONTRACT_VERSION,
         contract_sha256: crate::artifact::sha256_value(&unsigned)?,
         worker_name: worker_name.into(),
         workspace_root,

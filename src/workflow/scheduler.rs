@@ -22,11 +22,10 @@ use super::catalog::{
     WorkflowEvaluationResult, WorkflowGateResult,
 };
 use super::{
-    ActivationPolicy, AdaptivePlanRevisionEvidence, AdaptiveWorkflowPlanV1,
-    AdaptiveWorkflowPolicyV1, DependencyPolicy, MaterializedWorkflow, ReplayPolicy,
-    ResumeDisposition, StepResumePhase, WorkflowDefinitionV1, WorkflowInputBinding, WorkflowNodeV1,
-    WorkflowResumeIdentityV1, WorkflowResumeStateV1, WorkflowResumeStepV1, WorkflowResumeStore,
-    WORKFLOW_RESUME_SCHEMA_VERSION,
+    ActivationPolicy, AdaptivePlanRevisionEvidence, AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy,
+    DependencyPolicy, MaterializedWorkflow, ReplayPolicy, ResumeDisposition, StepResumePhase,
+    WorkflowDefinition, WorkflowInputBinding, WorkflowNode, WorkflowResumeIdentity,
+    WorkflowResumeState, WorkflowResumeStep, WorkflowResumeStore,
 };
 
 const MAX_PORT_VALUE_BYTES: usize = 64 * 1024;
@@ -61,7 +60,7 @@ impl WorkflowExecutionRequest {
 pub struct ResumableWorkflowExecutionRequest {
     /// Durable, runner-owned root. This is not the public artifact directory.
     pub state_root: PathBuf,
-    pub identity: WorkflowResumeIdentityV1,
+    pub identity: WorkflowResumeIdentity,
     pub plan_revisions: Vec<AdaptivePlanRevisionEvidence>,
     pub resume_existing: bool,
 }
@@ -83,7 +82,7 @@ pub enum ResumableWorkflowOutcome {
 #[derive(Clone)]
 struct ResumeCoordinator {
     store: WorkflowResumeStore,
-    state: Arc<Mutex<WorkflowResumeStateV1>>,
+    state: Arc<Mutex<WorkflowResumeState>>,
 }
 
 impl ResumeCoordinator {
@@ -96,7 +95,7 @@ impl ResumeCoordinator {
         let mut state = self.state.lock().await;
         state.steps.insert(
             report.node_id.clone(),
-            WorkflowResumeStepV1 {
+            WorkflowResumeStep {
                 phase,
                 replay_policy,
                 report,
@@ -211,7 +210,6 @@ pub struct WorkflowAssetReport {
 pub struct WorkflowStepReport {
     pub node_id: String,
     pub step_type: String,
-    pub step_version: u32,
     pub required: bool,
     pub dependencies: Vec<String>,
     pub dependency_policy: DependencyPolicy,
@@ -245,11 +243,10 @@ pub struct WorkflowStepReport {
 }
 
 impl WorkflowStepReport {
-    fn pending(node: &WorkflowNodeV1) -> Self {
+    fn pending(node: &WorkflowNode) -> Self {
         Self {
             node_id: node.id.clone(),
             step_type: node.step_type.clone(),
-            step_version: node.step_version,
             required: node.required,
             dependencies: node.depends_on.clone(),
             dependency_policy: node.dependency_policy,
@@ -272,7 +269,7 @@ impl WorkflowStepReport {
         }
     }
 
-    fn skipped(node: &WorkflowNodeV1, reason: impl Into<String>) -> Self {
+    fn skipped(node: &WorkflowNode, reason: impl Into<String>) -> Self {
         let now = timestamp();
         let mut report = Self::pending(node);
         report.status = WorkflowStepStatus::Skipped;
@@ -352,8 +349,7 @@ pub struct WorkflowCriterionResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowCheckpointV1 {
-    pub schema_version: u32,
+pub struct WorkflowCheckpoint {
     pub workflow_id: String,
     pub workflow_sha256: String,
     pub run_id: String,
@@ -384,7 +380,7 @@ impl CheckpointStore {
         }
     }
 
-    pub fn persist(&self, checkpoint: &WorkflowCheckpointV1) -> Result<ArtifactReference> {
+    pub fn persist(&self, checkpoint: &WorkflowCheckpoint) -> Result<ArtifactReference> {
         artifact::write_json(
             &self.output_dir,
             &self.relative_path,
@@ -396,7 +392,7 @@ impl CheckpointStore {
 }
 
 pub async fn execute_workflow(
-    definition: &WorkflowDefinitionV1,
+    definition: &WorkflowDefinition,
     catalog: Arc<StepCatalog>,
     request: WorkflowExecutionRequest,
 ) -> Result<WorkflowAttemptReport> {
@@ -448,7 +444,7 @@ pub async fn execute_workflow(
 }
 
 pub async fn execute_resumable_workflow(
-    definition: &WorkflowDefinitionV1,
+    definition: &WorkflowDefinition,
     catalog: Arc<StepCatalog>,
     request: WorkflowExecutionRequest,
     resume_request: ResumableWorkflowExecutionRequest,
@@ -532,8 +528,7 @@ pub async fn execute_resumable_workflow(
         }
     }
 
-    let state = existing.unwrap_or_else(|| WorkflowResumeStateV1 {
-        schema_version: WORKFLOW_RESUME_SCHEMA_VERSION,
+    let state = existing.unwrap_or_else(|| WorkflowResumeState {
         sequence: 1,
         identity: resume_request.identity,
         run_id: request.run_id.clone(),
@@ -553,13 +548,13 @@ pub async fn execute_resumable_workflow(
             .iter()
             .map(|node| {
                 let replay_policy = catalog
-                    .get(&node.step_type, node.step_version)
+                    .get(&node.step_type)
                     .expect("validated catalog entry")
                     .descriptor
                     .replay_policy;
                 (
                     node.id.clone(),
-                    WorkflowResumeStepV1 {
+                    WorkflowResumeStep {
                         phase: StepResumePhase::Pending,
                         replay_policy,
                         report: WorkflowStepReport::pending(node),
@@ -662,8 +657,8 @@ pub async fn execute_resumable_workflow(
 /// the resumable scheduler. This is the suite integration point: caller-owned
 /// planner output is never executed before policy validation/materialization.
 pub async fn execute_adaptive_workflow(
-    policy: &AdaptiveWorkflowPolicyV1,
-    plans: &[AdaptiveWorkflowPlanV1],
+    policy: &AdaptiveWorkflowPolicy,
+    plans: &[AdaptiveWorkflowPlan],
     completed_node_ids: &BTreeSet<String>,
     catalog: Arc<StepCatalog>,
     request: WorkflowExecutionRequest,
@@ -682,8 +677,8 @@ pub async fn execute_adaptive_workflow(
 
 fn existing_state_for_recovery(
     resume_existing: bool,
-    state: WorkflowResumeStateV1,
-) -> Option<WorkflowResumeStateV1> {
+    state: WorkflowResumeState,
+) -> Option<WorkflowResumeState> {
     resume_existing.then_some(state)
 }
 
@@ -707,7 +702,7 @@ async fn recover_resume_state(
     attempt_id: &str,
     cancellation: watch::Receiver<bool>,
     coordinator: &ResumeCoordinator,
-    state: WorkflowResumeStateV1,
+    state: WorkflowResumeState,
 ) -> Result<ResumeRecovery> {
     state.validate()?;
     let expected_ids = materialized
@@ -739,12 +734,11 @@ async fn recover_resume_state(
             .find(|node| &node.id == id)
             .expect("validated node");
         let registered = catalog
-            .get(&node.step_type, node.step_version)
+            .get(&node.step_type)
             .expect("validated catalog entry");
         let stored = &state.steps[id];
         if stored.replay_policy != registered.descriptor.replay_policy
             || stored.report.step_type != node.step_type
-            || stored.report.step_version != node.step_version
             || stored.report.dependencies != node.depends_on
         {
             return stop_for_reconciliation(
@@ -934,7 +928,7 @@ async fn sync_scheduler_resume_state(
             continue;
         }
         let replay_policy = catalog
-            .get(&report.step_type, report.step_version)
+            .get(&report.step_type)
             .expect("validated catalog entry")
             .descriptor
             .replay_policy;
@@ -1019,7 +1013,7 @@ async fn execute_materialized_workflow(
     request: &WorkflowExecutionRequest,
     attempt_id: String,
     resume: Option<ResumeCoordinator>,
-    resume_state: Option<WorkflowResumeStateV1>,
+    resume_state: Option<WorkflowResumeState>,
 ) -> Result<MaterializedRunOutcome> {
     let started = Instant::now();
     let workflow_deadline = tokio::time::Instant::now()
@@ -1180,7 +1174,7 @@ async fn execute_materialized_workflow(
                 for id in ready.into_iter().take(available) {
                     let node = nodes[&id].clone();
                     let registered = catalog
-                        .get(&node.step_type, node.step_version)
+                        .get(&node.step_type)
                         .expect("validated catalog entry")
                         .clone();
                     let inputs = resolve_inputs(&node, &outputs)?;
@@ -1406,7 +1400,7 @@ async fn preflight_all(
             .find(|node| &node.id == id)
             .expect("validated node");
         let registered = catalog
-            .get(&node.step_type, node.step_version)
+            .get(&node.step_type)
             .expect("validated catalog entry");
         registered
             .executor
@@ -1816,7 +1810,7 @@ fn bounded_text_preview(value: &str, limit: usize) -> (String, bool) {
 }
 
 fn dependencies_terminal(
-    node: &WorkflowNodeV1,
+    node: &WorkflowNode,
     reports: &HashMap<String, WorkflowStepReport>,
 ) -> bool {
     node.depends_on
@@ -1824,10 +1818,7 @@ fn dependencies_terminal(
         .all(|dependency| reports[dependency].status.terminal())
 }
 
-fn dependencies_ready(
-    node: &WorkflowNodeV1,
-    reports: &HashMap<String, WorkflowStepReport>,
-) -> bool {
+fn dependencies_ready(node: &WorkflowNode, reports: &HashMap<String, WorkflowStepReport>) -> bool {
     if !dependencies_terminal(node, reports) {
         return false;
     }
@@ -1841,7 +1832,7 @@ fn dependencies_ready(
 }
 
 fn activation_satisfied(
-    node: &WorkflowNodeV1,
+    node: &WorkflowNode,
     outputs: &HashMap<String, BTreeMap<String, TypedPortValue>>,
 ) -> Result<bool> {
     let evaluate = |condition: &super::BooleanCondition| -> Result<bool> {
@@ -1882,7 +1873,7 @@ fn activation_satisfied(
 }
 
 fn resolve_inputs(
-    node: &WorkflowNodeV1,
+    node: &WorkflowNode,
     outputs: &HashMap<String, BTreeMap<String, TypedPortValue>>,
 ) -> Result<BTreeMap<String, TypedPortValue>> {
     node.inputs
@@ -1915,7 +1906,7 @@ fn resolve_inputs(
 
 async fn cancel_active(catalog: &StepCatalog, contexts: &HashMap<String, StepExecutorContext>) {
     for context in contexts.values() {
-        if let Some(registered) = catalog.get(&context.node.step_type, context.node.step_version) {
+        if let Some(registered) = catalog.get(&context.node.step_type) {
             if let Err(error) = registered.executor.cancel(context).await {
                 tracing::warn!(node = context.node.id, error = %format!("{error:#}"), "cancel workflow step failed");
             }
@@ -1998,7 +1989,7 @@ fn checkpoint_value<'a>(
     attempt_id: &str,
     steps: &[WorkflowStepReport],
     active: impl Iterator<Item = &'a String>,
-) -> WorkflowCheckpointV1 {
+) -> WorkflowCheckpoint {
     let mut terminal_nodes = steps
         .iter()
         .filter_map(|step| step.status.terminal().then_some(step.node_id.clone()))
@@ -2006,8 +1997,7 @@ fn checkpoint_value<'a>(
     terminal_nodes.sort();
     let mut active_nodes = active.cloned().collect::<Vec<_>>();
     active_nodes.sort();
-    WorkflowCheckpointV1 {
-        schema_version: 1,
+    WorkflowCheckpoint {
         workflow_id: materialized.definition.id.clone(),
         workflow_sha256: materialized.sha256.clone(),
         run_id: run_id.to_string(),
@@ -2230,7 +2220,6 @@ mod tests {
             .register(
                 StepTypeDescriptor {
                     id: "test.delay".into(),
-                    version: 1,
                     description: "delayed deterministic step".into(),
                     config_schema: json!({
                         "type": "object",
@@ -2262,11 +2251,10 @@ mod tests {
         catalog
     }
 
-    fn node(id: &str, dependencies: Vec<&str>, required: bool) -> WorkflowNodeV1 {
-        WorkflowNodeV1 {
+    fn node(id: &str, dependencies: Vec<&str>, required: bool) -> WorkflowNode {
+        WorkflowNode {
             id: id.into(),
             step_type: "test.delay".into(),
-            step_version: 1,
             config: json!({}),
             depends_on: dependencies.into_iter().map(str::to_string).collect(),
             inputs: BTreeMap::new(),
@@ -2285,7 +2273,6 @@ mod tests {
             .register(
                 StepTypeDescriptor {
                     id: "test.cancellable".into(),
-                    version: 1,
                     description: "cancellable test step".into(),
                     config_schema: json!({
                         "type": "object",
@@ -2312,8 +2299,7 @@ mod tests {
         let active = Arc::new(AtomicUsize::new(0));
         let maximum = Arc::new(AtomicUsize::new(0));
         let catalog = Arc::new(catalog(active, maximum.clone()));
-        let definition = WorkflowDefinitionV1 {
-            schema_version: 1,
+        let definition = WorkflowDefinition {
             id: "parallel.test".into(),
             description: "parallel scheduler".into(),
             limits: WorkflowLimits {
@@ -2362,8 +2348,7 @@ mod tests {
         }]);
         let mut join = node("join", vec!["branch"], true);
         join.dependency_policy = DependencyPolicy::Terminal;
-        let definition = WorkflowDefinitionV1 {
-            schema_version: 1,
+        let definition = WorkflowDefinition {
             id: "branch.test".into(),
             description: "branch scheduler".into(),
             limits: WorkflowLimits::default(),
@@ -2392,8 +2377,7 @@ mod tests {
         ));
         let mut active = node("active", vec![], true);
         active.step_type = "test.cancellable".into();
-        let definition = WorkflowDefinitionV1 {
-            schema_version: 1,
+        let definition = WorkflowDefinition {
             id: "cancel.test".into(),
             description: "cancel active workflow".into(),
             limits: WorkflowLimits::default(),
@@ -2443,8 +2427,7 @@ mod tests {
             "input_tokens": 80,
             "output_tokens": 40
         });
-        let definition = WorkflowDefinitionV1 {
-            schema_version: 1,
+        let definition = WorkflowDefinition {
             id: "budget.test".into(),
             description: "aggregate budget enforcement".into(),
             limits: WorkflowLimits {
@@ -2478,8 +2461,7 @@ mod tests {
         let catalog = Arc::new(catalog(active, maximum));
         let mut token_heavy = node("token_heavy", vec![], true);
         token_heavy.config = json!({"input_tokens": 80, "output_tokens": 40});
-        let token_definition = WorkflowDefinitionV1 {
-            schema_version: 1,
+        let token_definition = WorkflowDefinition {
             id: "token_budget.test".into(),
             description: "aggregate token budget enforcement".into(),
             limits: WorkflowLimits {
@@ -2576,10 +2558,10 @@ mod tests {
     }
 
     fn resume_identity(
-        definition: &WorkflowDefinitionV1,
+        definition: &WorkflowDefinition,
         catalog: &StepCatalog,
-    ) -> WorkflowResumeIdentityV1 {
-        WorkflowResumeIdentityV1 {
+    ) -> WorkflowResumeIdentity {
+        WorkflowResumeIdentity {
             execution_id: "execution-1".into(),
             scenario_id: definition.id.clone(),
             scenario_contract_sha256: digest('1'),
@@ -2609,9 +2591,8 @@ mod tests {
         }
     }
 
-    fn one_node_definition() -> WorkflowDefinitionV1 {
-        WorkflowDefinitionV1 {
-            schema_version: 1,
+    fn one_node_definition() -> WorkflowDefinition {
+        WorkflowDefinition {
             id: "resume.test".into(),
             description: "resumable workflow".into(),
             limits: WorkflowLimits::default(),
@@ -2622,7 +2603,7 @@ mod tests {
 
     fn seed_interrupted_state(
         state_root: &Path,
-        definition: &WorkflowDefinitionV1,
+        definition: &WorkflowDefinition,
         catalog: &StepCatalog,
         replay_policy: ReplayPolicy,
     ) {
@@ -2630,8 +2611,7 @@ mod tests {
         report.status = WorkflowStepStatus::Running;
         report.started_at = Some(timestamp());
         let identity = resume_identity(definition, catalog);
-        let state = WorkflowResumeStateV1 {
-            schema_version: WORKFLOW_RESUME_SCHEMA_VERSION,
+        let state = WorkflowResumeState {
             sequence: 1,
             identity,
             run_id: "run-1".into(),
@@ -2647,7 +2627,7 @@ mod tests {
             plan_revisions: Vec::new(),
             steps: BTreeMap::from([(
                 "work".into(),
-                WorkflowResumeStepV1 {
+                WorkflowResumeStep {
                     phase: StepResumePhase::Running,
                     replay_policy,
                     report,
@@ -2666,7 +2646,6 @@ mod tests {
             .register(
                 StepTypeDescriptor {
                     id: "test.delay".into(),
-                    version: 1,
                     description: "compensable step".into(),
                     config_schema: json!({"type": "object", "additionalProperties": false}),
                     inputs: BTreeMap::new(),

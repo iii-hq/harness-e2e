@@ -11,7 +11,7 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
     >
       <div className="p-4">
         <h2 className="m-0 text-sm font-semibold text-ink">
-          Master test plan · v{plan.version}
+          Master test plan · {shortDigest(plan.definition_sha256)}
         </h2>
         <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
           Choose the purpose of the evaluation. Plans preserve cases,
@@ -81,4 +81,10 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
       </div>
     </Panel>
   )
+}
+
+/** The plan is identified by the digest of the definition it was read from,
+ *  shortened as every other digest in the Console. */
+function shortDigest(value: string) {
+  return value.replace(/^sha256:/, '').slice(0, 12)
 }

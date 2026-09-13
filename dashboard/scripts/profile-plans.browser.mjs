@@ -36,7 +36,6 @@ function createPlan(request) {
     ...configuration,
     ...request,
     id: `saved-${plans.length + 1}`,
-    schema_version: 3,
     scenarios: request.scenarios.map((scenario_id) => ({
       scenario_id,
       behavior_sha256:

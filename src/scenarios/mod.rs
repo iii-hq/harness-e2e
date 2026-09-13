@@ -1103,21 +1103,21 @@ mod tests {
     }
 
     #[test]
-    fn every_scenario_uses_capability_v2_classification() {
+    fn every_scenario_uses_capability_classification() {
         for scenario in ScenarioId::ALL {
             let materialized = scenario
                 .materialize("classification-v2", scenario.canonical_seed())
                 .unwrap();
             assert_eq!(
                 materialized.case.complexity.method,
-                domain::ComplexityMethod::CapabilityV2,
+                domain::ComplexityMethod::Capability,
                 "{scenario:?}"
             );
         }
     }
 
     #[test]
-    fn capability_v2_reclassifies_the_former_l5_cases() {
+    fn capability_reclassifies_the_former_l5_cases() {
         for (scenario, tier) in [
             (ScenarioId::MovingTarget, domain::ComplexityTier::L2Stateful),
             (

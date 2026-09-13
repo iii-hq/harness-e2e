@@ -302,7 +302,7 @@ function scenarioAverage(
     return null
   }
 
-  // Security Review v3 persists operation counts instead of canonical Harness
+  // Security review persists operation counts instead of canonical Harness
   // usage totals. Include its scan and history entrypoints once per run so a
   // retained summary remains comparable before full execution detail is loaded.
   return (requests + polls + reconciliation + 2 * runCount) / runCount

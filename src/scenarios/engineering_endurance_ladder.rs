@@ -32,9 +32,6 @@ use super::{
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
-/// Version of the ladder report the scenario delivers; part of its
-/// deliverable schema, not a harness identity.
-const REPORT_VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x656e_6475_7261_0001;
 const DELIVERABLE_ID: &str = "engineering_endurance_report";
 const BRANCH: &str = "endurance-run";
@@ -1284,7 +1281,6 @@ fn capture<'a>(
             id: DELIVERABLE_ID.into(),
             kind: "engineering_endurance_report".into(),
             content: json!({
-                "scenario_version": REPORT_VERSION,
                 "initial_head": snapshot.initial_head,
                 "accepted_head": snapshot.accepted_head,
                 "accepted_rungs": snapshot.accepted_rungs,
@@ -1336,12 +1332,11 @@ fn deliverable_contract() -> DeliverableContract {
             schema: json!({
                 "type": "object",
                 "required": [
-                    "scenario_version", "initial_head", "accepted_head", "accepted_rungs",
+                    "initial_head", "accepted_head", "accepted_rungs",
                     "total_rungs", "terminal_status", "elapsed_ms", "checkpoints",
                     "accepted_patch", "github_handoff", "measurements"
                 ],
                 "properties": {
-                    "scenario_version": {"const": REPORT_VERSION},
                     "initial_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_rungs": {"type": "integer", "minimum": 0, "maximum": 10},

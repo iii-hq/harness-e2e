@@ -7,7 +7,7 @@ use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
-use crate::workflow::WorkflowCheckpointV1;
+use crate::workflow::WorkflowCheckpoint;
 
 pub fn results() -> RootSchema {
     let mut root = root_schema_for::<E2eReport>();
@@ -55,7 +55,7 @@ pub fn scenario_catalog() -> RootSchema {
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
-    root_schema_for::<WorkflowCheckpointV1>()
+    root_schema_for::<WorkflowCheckpoint>()
 }
 
 pub fn durable_archive() -> RootSchema {

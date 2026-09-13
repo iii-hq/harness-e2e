@@ -23,21 +23,6 @@ export type EvidenceReference = {
   locator?: string
 }
 
-/** Identity of the opt-in transcript-audit analyzer, the only producer. */
-export type AnalyzerIdentity = {
-  analyzer: string
-  provider?: string
-  model?: string
-  input_sha256: string
-}
-
-export type AnalyzerUsage = {
-  latency_ms?: number
-  input_tokens?: number
-  output_tokens?: number
-  cost_usd?: number
-}
-
 export type AssessmentResult = {
   criterion_id: string
   target: { kind: 'criterion'; id: string }
@@ -170,9 +155,13 @@ export function readAssessmentContract(result: unknown): AssessmentContract {
   if (!isRecord(result)) {
     throw new AssessmentContractError('E2E result must be an object')
   }
-  if ('schema_version' in result) {
+  const contractSha256 = result.result_contract_sha256
+  if (
+    typeof contractSha256 !== 'string' ||
+    !contractSha256.startsWith('sha256:')
+  ) {
     throw new AssessmentContractError(
-      'versioned E2E payloads are not supported',
+      'results require a result_contract_sha256 digest',
     )
   }
   const contract = result.assessment_contract

@@ -4,13 +4,11 @@ import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
   SCORING_PROFILE_SHA256,
 } from '@/lib/result-contract.generated'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 
 const resultContract = {
-  schema_version: RESULTS_SCHEMA_VERSION,
   result_contract_sha256: RESULT_CONTRACT_SHA256,
   scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
@@ -89,7 +87,6 @@ const detail = {
                   {
                     node_id: 'scan',
                     step_type: 'security.scan',
-                    step_version: 1,
                     required: true,
                     dependencies: [],
                     status: 'succeeded',
@@ -109,7 +106,6 @@ const detail = {
                   {
                     node_id: 'report',
                     step_type: 'security.report',
-                    step_version: 1,
                     required: true,
                     dependencies: ['scan'],
                     status: 'succeeded',
@@ -231,9 +227,12 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('4 scenarios')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
-    // Audit ED-30: the schema version keeps its own casing; title case is
-    // for words.
-    expect(html).toContain(`Results v${RESULTS_SCHEMA_VERSION}`)
+    // The report is identified by its results contract digest, shortened as
+    // every other digest in the Console and never title cased (audit ED-30).
+    expect(html).toContain('results contract')
+    expect(html).toContain(
+      RESULT_CONTRACT_SHA256.replace('sha256:', '').slice(0, 12),
+    )
     expect(html).not.toContain('Sha256:')
     expect(html).toContain('Completion and evidence yield')
     expect(html).toContain('execution reliability')

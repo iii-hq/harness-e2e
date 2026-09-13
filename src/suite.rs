@@ -35,10 +35,10 @@ use crate::wire::{
 use crate::workflow::{
     adaptive_runtime, composite_definition, composite_descriptor_catalog, composite_runtime,
     execute_adaptive_workflow, execute_workflow, observe_worker_contracts, plan_adaptive_workflow,
-    AdaptivePlannerInvalidationV1, AdaptivePlannerMetadataV1, AdaptivePlannerReferenceCheckV1,
+    AdaptivePlannerInvalidation, AdaptivePlannerMetadata, AdaptivePlannerReferenceCheck,
     AgentPlannerRequest, ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome,
     WorkflowCleanupContext, WorkflowCleanupStatus, WorkflowExecutionRequest, WorkflowFailurePhase,
-    WorkflowResumeIdentityV1, WorkflowResumeStore,
+    WorkflowResumeIdentity, WorkflowResumeStore,
 };
 
 const MAX_RUNS: u32 = 20;
@@ -1549,12 +1549,10 @@ async fn run_adaptive_once(
                             )
                             .await
                         {
-                            let uses_harness = runtime
-                                .materialized
-                                .definition
-                                .nodes
-                                .iter()
-                                .any(|node| node.step_type == crate::workflow::HARNESS_STEP_ID);
+                            let uses_harness =
+                                runtime.materialized.definition.nodes.iter().any(|node| {
+                                    crate::workflow::opens_harness_session(&node.step_type)
+                                });
                             let bind_result = if uses_harness {
                                 context.bind_turn_completed().await
                             } else {
@@ -1577,7 +1575,7 @@ async fn run_adaptive_once(
                                     runtime.materialized.definition.canonical_sha256();
                                 let identity =
                                     scenario_contract_sha256.and_then(|scenario_contract_sha256| {
-                                        Ok(WorkflowResumeIdentityV1 {
+                                        Ok(WorkflowResumeIdentity {
                                             execution_id: execution_id.clone(),
                                             scenario_id: scenario_id.as_str().into(),
                                             scenario_contract_sha256,
@@ -1754,23 +1752,23 @@ fn adaptive_planner_failure_status(message: &str) -> RunStatus {
 fn adaptive_planner_metadata(
     scenario_id: ScenarioId,
     spec: &ScenarioSpec,
-) -> Result<AdaptivePlannerMetadataV1> {
+) -> Result<AdaptivePlannerMetadata> {
     let invalidation = match scenario_id {
-        ScenarioId::IncidentResponse => AdaptivePlannerInvalidationV1 {
+        ScenarioId::IncidentResponse => AdaptivePlannerInvalidation {
             description: "A trusted candidate-validation probe invalidated the initial diagnosis-only plan and requires bounded remediation plus revalidation before terminal action."
                 .into(),
             evidence_ids: vec![
                 crate::workflow::incident_response::INVALIDATION_EVIDENCE_ID.into(),
             ],
         },
-        ScenarioId::ReleaseTrainRecovery => AdaptivePlannerInvalidationV1 {
+        ScenarioId::ReleaseTrainRecovery => AdaptivePlannerInvalidation {
             description: "The trusted promotion preview exposed an incompatible historical latest graph and invalidated the stale null-CAS operation."
                 .into(),
             evidence_ids: vec![
                 crate::workflow::release_train_recovery::INVALIDATION_EVIDENCE_ID.into(),
             ],
         },
-        ScenarioId::CrossRepoContractMigration => AdaptivePlannerInvalidationV1 {
+        ScenarioId::CrossRepoContractMigration => AdaptivePlannerInvalidation {
             description: "The trusted canary revealed consumer B and proved that the v2-only route plan breaks backwards compatibility."
                 .into(),
             evidence_ids: vec![
@@ -1782,13 +1780,13 @@ fn adaptive_planner_metadata(
             scenario_id.as_str()
         ),
     };
-    Ok(AdaptivePlannerMetadataV1 {
+    Ok(AdaptivePlannerMetadata {
         scenario_id: scenario_id.as_str().into(),
         objective: spec.prompt.clone(),
         reference_checks: spec
             .criteria
             .iter()
-            .map(|criterion| AdaptivePlannerReferenceCheckV1 {
+            .map(|criterion| AdaptivePlannerReferenceCheck {
                 id: criterion.id.into(),
                 description: criterion.description.into(),
             })
@@ -1892,7 +1890,7 @@ async fn run_composite_once(
                     .definition
                     .nodes
                     .iter()
-                    .any(|node| node.step_type == crate::workflow::HARNESS_STEP_ID)
+                    .any(|node| crate::workflow::opens_harness_session(&node.step_type))
                     || crate::scenarios::swe_service::is_swe(scenario_id);
                 let bind_result = if uses_harness {
                     context.bind_turn_completed().await

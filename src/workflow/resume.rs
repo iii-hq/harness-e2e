@@ -13,8 +13,6 @@ use super::{
     WorkflowStepStatus,
 };
 
-pub const WORKFLOW_RESUME_SCHEMA_VERSION: u32 = 1;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum StepResumePhase {
@@ -39,7 +37,7 @@ pub enum ResumeDisposition {
 /// usable when every identity and contract hash still matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowResumeIdentityV1 {
+pub struct WorkflowResumeIdentity {
     pub execution_id: String,
     pub scenario_id: String,
     pub scenario_contract_sha256: String,
@@ -53,7 +51,7 @@ pub struct WorkflowResumeIdentityV1 {
     pub provider: String,
 }
 
-impl WorkflowResumeIdentityV1 {
+impl WorkflowResumeIdentity {
     pub fn validate(&self) -> Result<()> {
         validate_identifier(&self.execution_id, "execution id")?;
         validate_identifier(&self.scenario_id, "scenario id")?;
@@ -77,7 +75,7 @@ impl WorkflowResumeIdentityV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowResumeStepV1 {
+pub struct WorkflowResumeStep {
     pub phase: StepResumePhase,
     pub replay_policy: ReplayPolicy,
     pub report: WorkflowStepReport,
@@ -85,10 +83,9 @@ pub struct WorkflowResumeStepV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowResumeStateV1 {
-    pub schema_version: u32,
+pub struct WorkflowResumeState {
     pub sequence: u64,
-    pub identity: WorkflowResumeIdentityV1,
+    pub identity: WorkflowResumeIdentity,
     pub run_id: String,
     pub attempt_id: String,
     pub updated_at: String,
@@ -108,14 +105,11 @@ pub struct WorkflowResumeStateV1 {
     #[serde(default)]
     pub plan_revisions: Vec<AdaptivePlanRevisionEvidence>,
     #[serde(default)]
-    pub steps: BTreeMap<String, WorkflowResumeStepV1>,
+    pub steps: BTreeMap<String, WorkflowResumeStep>,
 }
 
-impl WorkflowResumeStateV1 {
+impl WorkflowResumeState {
     pub fn validate(&self) -> Result<()> {
-        if self.schema_version != WORKFLOW_RESUME_SCHEMA_VERSION {
-            bail!("unsupported workflow resume state schema version");
-        }
         self.identity.validate()?;
         validate_identifier(&self.run_id, "run id")?;
         validate_identifier(&self.attempt_id, "attempt id")?;
@@ -179,9 +173,9 @@ impl WorkflowResumeStateV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowResumeEnvelopeV1 {
+pub struct WorkflowResumeEnvelope {
     pub state_sha256: String,
-    pub state: WorkflowResumeStateV1,
+    pub state: WorkflowResumeState,
 }
 
 /// Private runner store. Its location is derived from trusted identities and
@@ -209,7 +203,7 @@ impl WorkflowResumeStore {
                 .join(execution_id)
                 .join(run_id)
                 .join(attempt_id)
-                .join("state-v1.json"),
+                .join("state.json"),
         })
     }
 
@@ -217,10 +211,10 @@ impl WorkflowResumeStore {
         self.state_root.join(&self.relative_path)
     }
 
-    pub fn persist(&self, state: &WorkflowResumeStateV1) -> Result<String> {
+    pub fn persist(&self, state: &WorkflowResumeState) -> Result<String> {
         state.validate()?;
         let state_sha256 = state.canonical_sha256()?;
-        let envelope = WorkflowResumeEnvelopeV1 {
+        let envelope = WorkflowResumeEnvelope {
             state_sha256: state_sha256.clone(),
             state: state.clone(),
         };
@@ -231,7 +225,7 @@ impl WorkflowResumeStore {
         let parent = path.parent().context("resume state path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
         if let Ok(bytes) = fs::read(&path) {
-            let existing: WorkflowResumeEnvelopeV1 = serde_json::from_slice(&bytes)
+            let existing: WorkflowResumeEnvelope = serde_json::from_slice(&bytes)
                 .with_context(|| format!("decode existing {}", path.display()))?;
             let observed = existing.state.canonical_sha256()?;
             if observed != existing.state_sha256 {
@@ -247,7 +241,7 @@ impl WorkflowResumeStore {
                 return Ok(state_sha256);
             }
         }
-        let temporary = path.with_file_name(".state-v1.json.tmp");
+        let temporary = path.with_file_name(".state.json.tmp");
         let mut options = OpenOptions::new();
         options.write(true).create(true).truncate(true);
         #[cfg(unix)]
@@ -267,10 +261,7 @@ impl WorkflowResumeStore {
         Ok(state_sha256)
     }
 
-    pub fn load(
-        &self,
-        expected: &WorkflowResumeIdentityV1,
-    ) -> Result<Option<WorkflowResumeStateV1>> {
+    pub fn load(&self, expected: &WorkflowResumeIdentity) -> Result<Option<WorkflowResumeState>> {
         expected.validate()?;
         let path = self.path();
         let bytes = match fs::read(&path) {
@@ -278,7 +269,7 @@ impl WorkflowResumeStore {
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
         };
-        let envelope: WorkflowResumeEnvelopeV1 =
+        let envelope: WorkflowResumeEnvelope =
             serde_json::from_slice(&bytes).with_context(|| format!("decode {}", path.display()))?;
         envelope.state.validate()?;
         let observed = envelope.state.canonical_sha256()?;
@@ -322,8 +313,8 @@ mod tests {
         format!("sha256:{}", byte.to_string().repeat(64))
     }
 
-    fn identity() -> WorkflowResumeIdentityV1 {
-        WorkflowResumeIdentityV1 {
+    fn identity() -> WorkflowResumeIdentity {
+        WorkflowResumeIdentity {
             execution_id: "execution-1".into(),
             scenario_id: "adaptive.test".into(),
             scenario_contract_sha256: digest('1'),
@@ -338,9 +329,8 @@ mod tests {
         }
     }
 
-    fn state() -> WorkflowResumeStateV1 {
-        WorkflowResumeStateV1 {
-            schema_version: 1,
+    fn state() -> WorkflowResumeState {
+        WorkflowResumeState {
             sequence: 1,
             identity: identity(),
             run_id: "run-1".into(),

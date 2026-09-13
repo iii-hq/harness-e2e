@@ -4,17 +4,16 @@ use anyhow::Result;
 
 use super::definition;
 use crate::workflow::{
-    AdaptiveAnchorPlacement, AdaptiveNodeTemplateV1, AdaptivePlanNodeV1, AdaptiveTrustedAnchorV1,
-    AdaptiveWorkflowPlanV1, AdaptiveWorkflowPolicyV1, WorkflowNodeV1,
-    ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    AdaptiveAnchorPlacement, AdaptiveNodeTemplate, AdaptivePlanNode, AdaptiveTrustedAnchor,
+    AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy, WorkflowNode,
 };
 
 pub const INVALIDATION_EVIDENCE_ID: &str = "incident_candidate_validation/v1";
 
 #[derive(Debug, Clone)]
 pub struct IncidentAdaptiveContract {
-    pub policy: AdaptiveWorkflowPolicyV1,
-    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub policy: AdaptiveWorkflowPolicy,
+    pub plans: Vec<AdaptiveWorkflowPlan>,
     pub completed_node_ids: BTreeSet<String>,
 }
 
@@ -46,13 +45,13 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
         .iter()
         .filter_map(|node| {
             if before_ids.contains(&node.id.as_str()) {
-                Some(AdaptiveTrustedAnchorV1 {
+                Some(AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::BeforePlan,
                     terminal: false,
                     node: node.clone(),
                 })
             } else if after_ids.contains(&node.id.as_str()) {
-                Some(AdaptiveTrustedAnchorV1 {
+                Some(AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::AfterPlan,
                     terminal: node.id == "validate_incident_report",
                     node: node.clone(),
@@ -62,8 +61,7 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
             }
         })
         .collect();
-    let policy = AdaptiveWorkflowPolicyV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let policy = AdaptiveWorkflowPolicy {
         id: source.id,
         description: "Runner-bounded incident response with agent-owned investigation and remediation decomposition, one evidence-bound revision, and trusted mutation/reconciliation anchors.".into(),
         limits: source.limits,
@@ -76,8 +74,7 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
         criteria: source.criteria,
     };
     let policy_sha256 = policy.canonical_sha256()?;
-    let revision_one = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let revision_one = AdaptiveWorkflowPlan {
         policy_sha256: policy_sha256.clone(),
         revision: 1,
         supersedes_sha256: None,
@@ -86,8 +83,7 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
         nodes: planned_nodes(false),
     };
     let revision_one_sha256 = revision_one.canonical_sha256()?;
-    let revision_two = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let revision_two = AdaptiveWorkflowPlan {
         policy_sha256,
         revision: 2,
         supersedes_sha256: Some(revision_one_sha256),
@@ -105,12 +101,11 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
     })
 }
 
-fn template_from_node(node: &WorkflowNodeV1) -> AdaptiveNodeTemplateV1 {
-    AdaptiveNodeTemplateV1 {
+fn template_from_node(node: &WorkflowNode) -> AdaptiveNodeTemplate {
+    AdaptiveNodeTemplate {
         id: node.id.clone(),
         description: format!("Allowlisted incident-response capability for {}", node.id),
         step_type: node.step_type.clone(),
-        step_version: node.step_version,
         base_config: node.config.clone(),
         inputs: node.inputs.clone(),
         activation: node.activation.clone(),
@@ -124,7 +119,7 @@ fn template_from_node(node: &WorkflowNodeV1) -> AdaptiveNodeTemplateV1 {
     }
 }
 
-fn planned_nodes(include_remediation: bool) -> Vec<AdaptivePlanNodeV1> {
+fn planned_nodes(include_remediation: bool) -> Vec<AdaptivePlanNode> {
     let source = definition();
     let mut included = vec![
         "analyze_logs",
@@ -145,7 +140,7 @@ fn planned_nodes(include_remediation: bool) -> Vec<AdaptivePlanNodeV1> {
                 .iter()
                 .find(|node| node.id == id)
                 .unwrap_or_else(|| panic!("missing incident workflow node '{id}'"));
-            AdaptivePlanNodeV1 {
+            AdaptivePlanNode {
                 id: node.id.clone(),
                 template_id: node.id.clone(),
                 depends_on: node.depends_on.clone(),

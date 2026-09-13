@@ -20,9 +20,9 @@ use super::{
     ReplayPolicy, StepCatalog, StepEvaluation, StepExecutor, StepExecutorContext,
     StepExecutorOutput, StepOperationalKind, StepPortDescriptor, StepTypeDescriptor,
     TypedPortValue, WorkflowAssetContent, WorkflowCleanupContext, WorkflowCleanupHook,
-    WorkflowCriterionDeclaration, WorkflowDefinitionV1, WorkflowEvaluationOutcome,
+    WorkflowCriterionDeclaration, WorkflowDefinition, WorkflowEvaluationOutcome,
     WorkflowEvaluationResult, WorkflowGateResult, WorkflowInputBinding, WorkflowLimits,
-    WorkflowNodeV1, WorkflowProvenance,
+    WorkflowNode, WorkflowProvenance,
 };
 
 const PREPARE_STEP: &str = "todo_worker.prepare_workspace";
@@ -37,7 +37,7 @@ pub const VALIDATION_ASSET: &str = "validate_todo_worker.todo_validation_evidenc
 
 const PLANNER_PROMPT: &str = r#"Planeje a criação de um Todo Worker para o contrato fornecido.
 
-Não implemente o worker e não instale nada. Escreva exatamente um arquivo validation-plan.json na raiz do workspace. O arquivo deve ser JSON estrito com scenario_version=1, task_contract_sha256, summary, implementation_tasks (1..8) e validation_checks (1..12). Cada task contém apenas id, objective e completion_signal. Cada check contém id, probe_id, rationale e, somente quando aplicável, repetitions ou concurrency.
+Não implemente o worker e não instale nada. Escreva exatamente um arquivo validation-plan.json na raiz do workspace. O arquivo deve ser JSON estrito com task_contract_sha256, summary, implementation_tasks (1..8) e validation_checks (1..12). Cada task contém apenas id, objective e completion_signal. Cada check contém id, probe_id, rationale e, somente quando aplicável, repetitions ou concurrency.
 
 O catálogo fechado de probes é: compose_valid, worker_live, function_surface, todo_crud_isolated, todo_invalid_contracts, todo_repeatability e todo_concurrent_create. Os cinco primeiros são obrigatórios. todo_repeatability aceita repetitions de 1 a 3. todo_concurrent_create aceita concurrency de 1 a 5. Não escreva shell, SQL, function ids ou expressões executáveis como probes. Revise o JSON contra o contrato antes de concluir."#;
 
@@ -45,9 +45,8 @@ const BUILDER_PROMPT: &str = r#"Execute o plano compilado fornecido e construa o
 
 O plano compilado e seu task_contract são autoritativos. Trabalhe somente no workspace_root indicado. Preserve exatamente worker_name, function_ids e request_response_schemas. O worker-compose.yaml raiz deve declarar o worker run-scoped no catálogo, runtime.exec explícito e uma stack com o mesmo nome. Você pode escolher linguagem e armazenamento. Valide o Compose, inicie a stack local com wait=false, acompanhe worker::status e teste o comportamento antes de concluir. Não modifique o plano compilado."#;
 
-pub fn definition() -> WorkflowDefinitionV1 {
-    WorkflowDefinitionV1 {
-        schema_version: super::WORKFLOW_SCHEMA_VERSION,
+pub fn definition() -> WorkflowDefinition {
+    WorkflowDefinition {
         id: PLANNED_ID.into(),
         description: "Plan a run-scoped Todo Worker, compile its closed validation plan, build it in a separate Harness session, and execute every compiled hard gate independently.".into(),
         limits: WorkflowLimits {
@@ -61,10 +60,9 @@ pub fn definition() -> WorkflowDefinitionV1 {
         },
         nodes: vec![
             node("prepare_workspace", PREPARE_STEP, &[], BTreeMap::new()),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 id: "plan_todo_worker".into(),
-                step_type: super::HARNESS_STEP_ID.into(),
-                step_version: super::HARNESS_STEP_VERSION_V2,
+                step_type: super::BOUNDED_HARNESS_STEP_ID.into(),
                 config: harness_config(PLANNER_PROMPT, 12, None, true),
                 depends_on: vec!["prepare_workspace".into()],
                 inputs: BTreeMap::from([
@@ -81,7 +79,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                 dependency_policy: DependencyPolicy::Succeeded,
                 required: true,
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 inputs: BTreeMap::from([
                     (
                         "task_contract".into(),
@@ -99,10 +97,9 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     BTreeMap::new(),
                 )
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 id: "build_todo_worker".into(),
-                step_type: super::HARNESS_STEP_ID.into(),
-                step_version: super::HARNESS_STEP_VERSION_V2,
+                step_type: super::BOUNDED_HARNESS_STEP_ID.into(),
                 config: harness_config(BUILDER_PROMPT, 48, None, false),
                 depends_on: vec!["compile_validation_plan".into()],
                 inputs: BTreeMap::from([
@@ -119,7 +116,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                 dependency_policy: DependencyPolicy::Succeeded,
                 required: true,
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 inputs: BTreeMap::from([(
                     "compiled_plan".into(),
                     output("compile_validation_plan", "compiled_plan"),
@@ -518,11 +515,10 @@ fn node(
     step_type: &str,
     dependencies: &[&str],
     inputs: BTreeMap<String, WorkflowInputBinding>,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+) -> WorkflowNode {
+    WorkflowNode {
         id: id.into(),
         step_type: step_type.into(),
-        step_version: 1,
         config: json!({}),
         depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
         inputs,
@@ -589,7 +585,6 @@ fn descriptor(
 ) -> Result<StepTypeDescriptor> {
     let descriptor = StepTypeDescriptor {
         id: id.into(),
-        version: 1,
         description: description.into(),
         config_schema: json!({"type": "object", "additionalProperties": false}),
         inputs,
@@ -775,7 +770,7 @@ mod tests {
     fn descriptors_validate_the_definition() {
         let mut catalog = StepCatalog::new();
         catalog
-            .register_descriptor(super::super::harness_descriptor_v2().unwrap())
+            .register_descriptor(super::super::bounded_harness_descriptor().unwrap())
             .unwrap();
         for descriptor in descriptors_only().unwrap() {
             catalog.register_descriptor(descriptor).unwrap();

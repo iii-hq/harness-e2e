@@ -11,17 +11,15 @@ use super::{
     SCENARIO_ID,
 };
 use crate::workflow::{
-    ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow,
-    AdaptiveNodeTemplateV1, AdaptivePlanNodeV1, AdaptiveTrustedAnchorV1, AdaptiveWorkflowPlanV1,
-    AdaptiveWorkflowPolicyV1, BooleanCondition, ControlSource, DependencyPolicy, PortValueKind,
-    ReplayPolicy, StepCatalog, StepExecutor, StepExecutorContext, StepExecutorOutput,
-    StepOperationalKind, StepPortDescriptor, StepReconcileOutcome, StepReconcileState,
-    StepTypeDescriptor, TypedPortValue, WorkflowCleanupContext, WorkflowCleanupHook,
-    WorkflowCriterionDeclaration, WorkflowEvaluationOutcome, WorkflowEvaluationResult,
-    WorkflowLimits, WorkflowNodeV1, ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplate,
+    AdaptivePlanNode, AdaptiveTrustedAnchor, AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy,
+    BooleanCondition, ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, StepCatalog,
+    StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind, StepPortDescriptor,
+    StepReconcileOutcome, StepReconcileState, StepTypeDescriptor, TypedPortValue,
+    WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration,
+    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowLimits, WorkflowNode,
 };
 
-const STEP_VERSION: u32 = 1;
 const MATERIALIZE: &str = "cross_repo.materialize";
 const INSPECT_VISIBLE: &str = "cross_repo.inspect_visible_contracts";
 const MIGRATE_VISIBLE: &str = "cross_repo.migrate_visible_contract";
@@ -62,8 +60,8 @@ impl CrossRepoRuntimeState {
 }
 
 pub struct CrossRepoAdaptiveRuntime {
-    pub policy: AdaptiveWorkflowPolicyV1,
-    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub policy: AdaptiveWorkflowPolicy,
+    pub plans: Vec<AdaptiveWorkflowPlan>,
     pub completed_before_replan: BTreeSet<String>,
     pub materialized: AdaptiveMaterializedWorkflow,
     pub catalog: Arc<StepCatalog>,
@@ -71,7 +69,7 @@ pub struct CrossRepoAdaptiveRuntime {
     pub state: Arc<Mutex<CrossRepoRuntimeState>>,
 }
 
-pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
+pub fn adaptive_policy() -> AdaptiveWorkflowPolicy {
     let templates = [
         (
             "inspect_visible",
@@ -113,11 +111,10 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
     .into_iter()
     .map(|(id, step_type, description)| {
         let mutates_product = matches!(step_type, MIGRATE_VISIBLE | REVEAL_CANARY | ADD_ALIAS);
-        AdaptiveNodeTemplateV1 {
+        AdaptiveNodeTemplate {
             id: id.into(),
             description: description.into(),
             step_type: step_type.into(),
-            step_version: STEP_VERSION,
             base_config: json!({}),
             inputs: BTreeMap::new(),
             activation: if mutates_product {
@@ -140,8 +137,7 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
     })
     .collect();
 
-    AdaptiveWorkflowPolicyV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    AdaptiveWorkflowPolicy {
         id: SCENARIO_ID.into(),
         description: "Bounded multi-repository contract migration with a hidden-consumer invalidation, compensable fixture mutations, and deterministic compatibility gates.".into(),
         limits: WorkflowLimits {
@@ -183,8 +179,8 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
 }
 
 pub fn reference_adaptive_plans(
-    policy: &AdaptiveWorkflowPolicyV1,
-) -> Result<(Vec<AdaptiveWorkflowPlanV1>, BTreeSet<String>)> {
+    policy: &AdaptiveWorkflowPolicy,
+) -> Result<(Vec<AdaptiveWorkflowPlan>, BTreeSet<String>)> {
     let policy_sha256 = policy.canonical_sha256()?;
     let first_nodes = vec![
         plan_node("inspect_visible", "inspect_visible", &[]),
@@ -192,8 +188,7 @@ pub fn reference_adaptive_plans(
         plan_node("validate_visible", "validate_visible", &["migrate_visible"]),
         plan_node("reveal_canary", "reveal_canary", &["validate_visible"]),
     ];
-    let first = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let first = AdaptiveWorkflowPlan {
         policy_sha256: policy_sha256.clone(),
         revision: 1,
         supersedes_sha256: None,
@@ -213,8 +208,7 @@ pub fn reference_adaptive_plans(
             &["validate_full"],
         ),
     ]);
-    let second = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let second = AdaptiveWorkflowPlan {
         policy_sha256,
         revision: 2,
         supersedes_sha256: Some(first_sha256),
@@ -394,7 +388,6 @@ fn descriptor(
     }
     StepTypeDescriptor {
         id: id.into(),
-        version: STEP_VERSION,
         description: description.into(),
         config_schema: json!({"type": "object", "additionalProperties": false}),
         inputs: BTreeMap::new(),
@@ -421,14 +414,13 @@ fn trusted_anchor(
     terminal: bool,
     id: &str,
     step_type: &str,
-) -> AdaptiveTrustedAnchorV1 {
-    AdaptiveTrustedAnchorV1 {
+) -> AdaptiveTrustedAnchor {
+    AdaptiveTrustedAnchor {
         placement,
         terminal,
-        node: WorkflowNodeV1 {
+        node: WorkflowNode {
             id: id.into(),
             step_type: step_type.into(),
-            step_version: STEP_VERSION,
             config: json!({}),
             depends_on: Vec::new(),
             inputs: BTreeMap::new(),
@@ -439,8 +431,8 @@ fn trusted_anchor(
     }
 }
 
-fn plan_node(id: &str, template_id: &str, depends_on: &[&str]) -> AdaptivePlanNodeV1 {
-    AdaptivePlanNodeV1 {
+fn plan_node(id: &str, template_id: &str, depends_on: &[&str]) -> AdaptivePlanNode {
+    AdaptivePlanNode {
         id: id.into(),
         template_id: template_id.into(),
         depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
@@ -733,10 +725,7 @@ mod tests {
         let workspace = temporary.path().join("workspace");
         let runtime = build_adaptive_runtime(&fixture_root(), &workspace)?;
         for node in &runtime.materialized.definition.nodes {
-            let registered = runtime
-                .catalog
-                .get(&node.step_type, node.step_version)
-                .unwrap();
+            let registered = runtime.catalog.get(&node.step_type).unwrap();
             registered
                 .executor
                 .execute(StepExecutorContext {

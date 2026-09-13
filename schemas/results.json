@@ -596,7 +596,7 @@
     "ComplexityMethod": {
       "type": "string",
       "enum": [
-        "capability_v2"
+        "capability"
       ]
     },
     "ComplexityProfile": {
@@ -3258,8 +3258,7 @@
         "node_id",
         "required",
         "status",
-        "step_type",
-        "step_version"
+        "step_type"
       ],
       "properties": {
         "activation": {
@@ -3364,11 +3363,6 @@
         },
         "step_type": {
           "type": "string"
-        },
-        "step_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "transcript": true
       },

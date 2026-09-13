@@ -220,8 +220,8 @@ describe('whole-execution metrics', () => {
     const first = detail.reports[0].report
     const second = detail.reports[1].report
     if (!first || !second) throw new Error('fixture must contain reports')
-    // The schema version and contract fingerprint are not gates for now; a
-    // different scoring profile still is.
+    // The results contract fingerprint is not a gate for now; a different
+    // scoring profile still is.
     second.scoring_profile_sha256 = 'incompatible'
     const metrics = buildExecutionMetrics(detail)
     expect(metrics).toMatchObject({

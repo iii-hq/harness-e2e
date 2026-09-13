@@ -14,7 +14,6 @@ import {
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
   SCORING_PROFILE_SHA256,
 } from '@/lib/result-contract.generated'
 
@@ -78,7 +77,6 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
         scenario_id: 'direct_answer',
         available: true,
         report: {
-          schema_version: RESULTS_SCHEMA_VERSION,
           result_contract_sha256: RESULT_CONTRACT_SHA256,
           scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: 'complete',

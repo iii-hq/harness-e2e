@@ -10,17 +10,16 @@ use crate::scenarios::ScenarioId;
 use crate::workflow::{
     ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, RequiredFunctionContract,
     StepCatalog, StepOperationalKind, StepPortDescriptor, StepTypeDescriptor, WorkflowCleanupHook,
-    WorkflowCriterionDeclaration, WorkflowDefinitionV1, WorkflowLimits, WorkflowNodeV1,
+    WorkflowCriterionDeclaration, WorkflowDefinition, WorkflowLimits, WorkflowNode,
 };
 
 pub const PREPARE: &str = "swe.prepare";
 pub const SUBJECT: &str = "swe.subject";
 pub const CAPTURE: &str = "swe.capture";
 
-pub fn definition(scenario: ScenarioId) -> WorkflowDefinitionV1 {
+pub fn definition(scenario: ScenarioId) -> WorkflowDefinition {
     let case = Case::from_scenario(scenario).expect("SWE identity");
-    WorkflowDefinitionV1 {
-        schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
+    WorkflowDefinition {
         id: case.id.into(),
         description: case.description().into(),
         limits: WorkflowLimits {
@@ -52,11 +51,10 @@ fn node(
     step: &str,
     dependencies: &[&str],
     dependency_policy: DependencyPolicy,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+) -> WorkflowNode {
+    WorkflowNode {
         id: id.into(),
         step_type: step.into(),
-        step_version: 1,
         config: json!({}),
         depends_on: dependencies.iter().map(|id| (*id).into()).collect(),
         inputs: BTreeMap::new(),
@@ -71,7 +69,6 @@ pub fn descriptors() -> Vec<StepTypeDescriptor> {
         let capture = id == CAPTURE;
         StepTypeDescriptor {
             id: id.into(),
-            version: 1,
             description: match id {
                 PREPARE => "Export and verify the selected SWE entry snapshot and execution boundary.",
                 SUBJECT => "Run one continuing Harness session with optional delegation and aggregate resource limits.",

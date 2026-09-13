@@ -19,7 +19,6 @@ from publish_engineering_endurance import (
 
 def report():
     return {
-        "scenario_version": 1,
         "initial_head": "a" * 40,
         "accepted_head": "b" * 40,
         "accepted_rungs": 1,
@@ -66,7 +65,7 @@ def report():
 class PublisherContractTests(unittest.TestCase):
     def test_load_report_rejects_wrong_contract(self):
         value = report()
-        value["scenario_version"] = 2
+        value["total_rungs"] = 9
         with tempfile.TemporaryDirectory() as directory:
             path = pathlib.Path(directory) / "report.json"
             path.write_text(json.dumps(value), encoding="utf-8")

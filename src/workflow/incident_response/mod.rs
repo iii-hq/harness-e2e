@@ -15,9 +15,9 @@ use super::{
     HarnessStepPolicy, PortValueKind, ReplayPolicy, RequiredFunctionContract, StepCatalog,
     StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind,
     StepPortDescriptor, StepTypeDescriptor, TypedPortValue, WorkflowAssetContent,
-    WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration,
-    WorkflowDefinitionV1, WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult,
-    WorkflowInputBinding, WorkflowLimits, WorkflowNodeV1, WorkflowProvenance,
+    WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration, WorkflowDefinition,
+    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult, WorkflowInputBinding,
+    WorkflowLimits, WorkflowNode, WorkflowProvenance,
 };
 
 mod adaptive_runtime;

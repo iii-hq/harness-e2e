@@ -50,7 +50,6 @@ export type ScenarioMatrixItem = {
 export type ResultContractSummary = {
   key: string
   valid: boolean
-  schemaVersion: number | null
   reportState: 'complete' | 'partial' | null
   objectiveOutcome: 'passed' | 'failed' | 'inconclusive' | null
   resultContractSha256: string | null
@@ -128,7 +127,6 @@ function resultContracts(
   return (detail.reports ?? []).flatMap((record, index) => {
     const report = record.report
     if (!record.available || !report) return []
-    const schemaVersion = finiteNumber(report.schema_version)
     const reportState =
       report.report_state === 'complete' || report.report_state === 'partial'
         ? report.report_state
@@ -142,7 +140,6 @@ function resultContracts(
     const resultContractSha256 = nonEmptyString(report.result_contract_sha256)
     const scoringProfileSha256 = nonEmptyString(report.scoring_profile_sha256)
     const key = [
-      schemaVersion,
       reportState,
       objectiveOutcome,
       resultContractSha256,
@@ -154,7 +151,6 @@ function resultContracts(
       {
         key: key || `invalid-${index}`,
         valid: validResultContract(report),
-        schemaVersion,
         reportState,
         objectiveOutcome,
         resultContractSha256,
@@ -355,7 +351,6 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
 // contract it carries stays visible in the identity band.
 function validResultContract(report: DashboardReportProjection): boolean {
   return (
-    finiteNumber(report.schema_version) !== null &&
     (report.report_state === 'complete' || report.report_state === 'partial') &&
     (report.objective_outcome === 'passed' ||
       report.objective_outcome === 'failed' ||

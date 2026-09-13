@@ -29,10 +29,6 @@ use super::{
     ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
-/// Version of the task contract and validation-plan protocol the subject
-/// must echo back. It is part of the scenario's deliverable schema, not a
-/// harness identity.
-pub const CONTRACT_VERSION: u32 = 4;
 pub const SIMPLE_ID: &str = "todo_worker_simple";
 pub const PLANNED_ID: &str = "todo_worker_planned";
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";

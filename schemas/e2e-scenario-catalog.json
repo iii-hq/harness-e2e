@@ -75,7 +75,7 @@
     "ComplexityMethod": {
       "type": "string",
       "enum": [
-        "capability_v2"
+        "capability"
       ]
     },
     "ComplexityProfile": {

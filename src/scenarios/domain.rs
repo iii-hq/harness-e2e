@@ -70,7 +70,7 @@ pub enum ComplexityTier {
 #[serde(rename_all = "snake_case")]
 pub enum ComplexityMethod {
     #[default]
-    CapabilityV2,
+    Capability,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -83,14 +83,14 @@ pub struct ComplexityClassification {
 impl ComplexityClassification {
     pub fn derive(profile: ComplexityProfile) -> Self {
         Self {
-            method: ComplexityMethod::CapabilityV2,
-            tier: capability_v2_tier(profile),
+            method: ComplexityMethod::Capability,
+            tier: capability_tier(profile),
             profile,
         }
     }
 }
 
-fn capability_v2_tier(profile: ComplexityProfile) -> ComplexityTier {
+fn capability_tier(profile: ComplexityProfile) -> ComplexityTier {
     let stretch_signals = [
         profile.external_systems >= 2,
         profile.parallel_branches >= 2,

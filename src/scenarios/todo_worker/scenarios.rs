@@ -142,7 +142,6 @@ fn materialized_case_inputs() -> Result<Value> {
         Path::new("/run-dir/scenario-workspaces/todo-e2e-attempt_id"),
     )?;
     Ok(json!({
-        "scenario_version": CONTRACT_VERSION,
         "worker_name_template": "todo-e2e-<attempt_id>",
         "function_prefix_template": "<worker_name>::",
         "workspace_root_template": "<run-dir>/scenario-workspaces/<worker_name>",

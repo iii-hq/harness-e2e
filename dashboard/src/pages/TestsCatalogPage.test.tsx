@@ -24,7 +24,7 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
     current_version:
       'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
     complexity: {
-      method: 'capability_v2',
+      method: 'capability',
       tier: 'l5_adaptive',
     },
     characterization: {
@@ -77,7 +77,7 @@ describe('test catalog L5 dimensions', () => {
   it('presents classification, horizon, and realism independently', () => {
     expect(catalogComplexityPresentation(row())).toEqual({
       value: 'L5 adaptive',
-      detail: 'capability v2',
+      detail: 'capability',
     })
     expect(catalogHorizonPresentation(row())).toEqual({
       value: '60–120 min',

@@ -13,7 +13,6 @@ import {
 } from '@/pages/PlansPage'
 
 const plan: LocalPlan = {
-  schema_version: 1,
   id: 'plan-1',
   label: 'Focused regression check',
   purpose: 'Confirm the affected local flow.',

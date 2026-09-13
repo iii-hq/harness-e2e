@@ -35,7 +35,6 @@ describe('SemanticTestFlow', () => {
                       {
                         node_id: 'evaluate_asset',
                         step_type: 'asset.evaluate',
-                        step_version: 1,
                         required: true,
                         dependencies: ['produce_asset'],
                         status: 'hard_gate_failed',
@@ -67,7 +66,6 @@ describe('SemanticTestFlow', () => {
                       {
                         node_id: 'scan_source',
                         step_type: 'security.scan',
-                        step_version: 1,
                         required: true,
                         dependencies: [],
                         status: 'succeeded',

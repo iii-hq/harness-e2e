@@ -4,7 +4,6 @@ import type {
 } from '@/lib/dashboard-data-source'
 import {
   RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
   SCORING_PROFILE_SHA256,
 } from '@/lib/result-contract.generated'
 
@@ -61,7 +60,6 @@ export function executionMetricsFixture(
         scenario_id: `scenario-${index}`,
         available: true,
         report: {
-          schema_version: RESULTS_SCHEMA_VERSION,
           result_contract_sha256: RESULT_CONTRACT_SHA256,
           scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: deferred ? 'partial' : 'complete',

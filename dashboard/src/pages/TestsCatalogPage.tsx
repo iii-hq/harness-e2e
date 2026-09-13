@@ -196,7 +196,7 @@ export function catalogComplexityPresentation(
   if (!row.complexity) return { value: null, detail: null }
   return {
     value: complexityTierLabels[row.complexity.tier],
-    detail: row.complexity.method === 'capability_v2' ? 'capability v2' : null,
+    detail: row.complexity.method === 'capability' ? 'capability' : null,
   }
 }
 

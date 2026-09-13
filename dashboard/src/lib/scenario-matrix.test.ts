@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
   SCORING_PROFILE_SHA256,
 } from '@/lib/result-contract.generated'
 import {
@@ -12,7 +11,6 @@ import {
 } from '@/lib/scenario-matrix'
 
 const resultContract = {
-  schema_version: RESULTS_SCHEMA_VERSION,
   result_contract_sha256: RESULT_CONTRACT_SHA256,
   scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
@@ -122,7 +120,6 @@ function executionDetail() {
                     {
                       node_id: 'scan',
                       step_type: 'security.scan',
-                      step_version: 1,
                       required: true,
                       dependencies: [],
                       status: 'succeeded',
@@ -144,7 +141,6 @@ function executionDetail() {
                     {
                       node_id: 'report',
                       step_type: 'security.report',
-                      step_version: 1,
                       required: true,
                       dependencies: ['scan'],
                       status: 'succeeded',
@@ -311,7 +307,7 @@ describe('scenario matrix presentation model', () => {
       expect.arrayContaining([
         expect.objectContaining({
           valid: true,
-          schemaVersion: RESULTS_SCHEMA_VERSION,
+          resultContractSha256: RESULT_CONTRACT_SHA256,
           reportState: 'complete',
         }),
       ]),
@@ -370,21 +366,16 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
-  it('reads other schema versions and fingerprints but not another scoring profile', () => {
-    for (const [key, value] of [
-      ['schema_version', 3],
-      ['result_contract_sha256', `sha256:${'0'.repeat(64)}`],
-    ] as const) {
-      const detail = executionDetail()
-      const report = detail.reports[0].report as unknown as Record<
-        string,
-        unknown
-      >
-      report[key] = value
-      const model = buildScenarioMatrix(detail)
-      expect(model.contracts[0]).toMatchObject({ valid: true })
-      expect(model.items[0].objective.status).not.toBe('unavailable')
-    }
+  it('reads another results contract fingerprint but not another scoring profile', () => {
+    const foreign = executionDetail()
+    const foreignReport = foreign.reports[0].report as unknown as Record<
+      string,
+      unknown
+    >
+    foreignReport.result_contract_sha256 = `sha256:${'0'.repeat(64)}`
+    const foreignModel = buildScenarioMatrix(foreign)
+    expect(foreignModel.contracts[0]).toMatchObject({ valid: true })
+    expect(foreignModel.items[0].objective.status).not.toBe('unavailable')
 
     const detail = executionDetail()
     const report = detail.reports[0].report as unknown as Record<

@@ -4,13 +4,17 @@ import {
   readAssessmentContract,
   summarizeAssessmentContract,
 } from '@/lib/assessment-contract'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import resultFixture from '../../../tests/fixtures/results/results-assessment-contract.json'
 
 describe('assessment result contract', () => {
   it('preserves the shared current contract fixture', () => {
-    const result = resultFixture as {
-      assessment_contract: unknown
-      dashboard_projection: { summary: unknown }
+    const result = {
+      result_contract_sha256: RESULT_CONTRACT_SHA256,
+      ...(resultFixture as {
+        assessment_contract: unknown
+        dashboard_projection: { summary: unknown }
+      }),
     }
     const contract = readAssessmentContract(result)
 
@@ -27,20 +31,33 @@ describe('assessment result contract', () => {
     )
   })
 
-  it('rejects versioned result and assessment payloads', () => {
-    expect(() => readAssessmentContract({ schema_version: 3 })).toThrow(
-      AssessmentContractError,
-    )
+  it('rejects payloads without the results contract digest', () => {
+    expect(() =>
+      readAssessmentContract({ assessment_contract: { runs: [] } }),
+    ).toThrow(AssessmentContractError)
     expect(() =>
       readAssessmentContract({
+        result_contract_sha256: 'results-v4',
+        assessment_contract: { runs: [] },
+      }),
+    ).toThrow(AssessmentContractError)
+  })
+
+  it('rejects versioned assessment contracts', () => {
+    expect(() =>
+      readAssessmentContract({
+        result_contract_sha256: RESULT_CONTRACT_SHA256,
         assessment_contract: { contract_version: 1, runs: [] },
       }),
     ).toThrow(AssessmentContractError)
   })
 
   it('rejects results without the assessment contract', () => {
-    expect(() => readAssessmentContract({ scenarios: [] })).toThrow(
-      AssessmentContractError,
-    )
+    expect(() =>
+      readAssessmentContract({
+        result_contract_sha256: RESULT_CONTRACT_SHA256,
+        scenarios: [],
+      }),
+    ).toThrow(AssessmentContractError)
   })
 })

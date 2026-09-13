@@ -5,7 +5,6 @@ import type {
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 import type { PlanExecution } from '@/lib/plan-execution'
-import type { RESULTS_SCHEMA_VERSION } from '@/lib/result-contract.generated'
 import type {
   EvaluatedVersionsResponse,
   TestHistoryInput,
@@ -36,7 +35,6 @@ export type LocalPlan = {
   origin?: 'local'
   reference_execution_id?: string
   reference_differences?: string[]
-  schema_version: number
   id: string
   label: string
   purpose: string
@@ -124,7 +122,6 @@ export type MasterTestProfile = {
 
 export type MasterTestPlan = {
   plan_id: string
-  version: number
   definition_sha256: string
   profiles: MasterTestProfile[]
 }
@@ -403,7 +400,6 @@ export type SemanticTestAsset = JsonObject & {
 export type SemanticTestReport = JsonObject & {
   node_id: string
   step_type: string
-  step_version: number
   required: boolean
   dependencies: string[]
   status: string
@@ -489,7 +485,6 @@ export type DashboardRetryAttemptProjection = JsonObject & {
 }
 
 export type DashboardReportProjection = JsonObject & {
-  schema_version: typeof RESULTS_SCHEMA_VERSION
   result_contract_sha256: string
   scoring_profile_sha256: string
   report_state: 'complete' | 'partial'

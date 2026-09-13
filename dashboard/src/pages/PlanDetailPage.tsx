@@ -1770,7 +1770,6 @@ export function planProvenanceEntries(
     ['plan id', plan.id],
     ['scope hash', plan.scope_hash],
     ['endpoint', plan.url],
-    ['schema', plan.schema_version ? `v${plan.schema_version}` : null],
     ['created', formatDate(plan.created_at)],
     ['updated', plan.updated_at ? formatDate(plan.updated_at) : null],
     ['official baseline', plan.baseline_execution_id],

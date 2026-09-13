@@ -5,8 +5,7 @@ import { MasterTestProfiles } from './MasterTestProfiles'
 
 const plan: MasterTestPlan = {
   plan_id: 'harness',
-  version: 1,
-  definition_sha256: 'sha256:definition',
+  definition_sha256: `sha256:${'d4'.repeat(32)}`,
   profiles: [
     {
       id: 'resilience',
@@ -33,6 +32,8 @@ const plan: MasterTestPlan = {
 describe('master test profiles', () => {
   it('shows scope, incomplete budget and protected executor without implying a successful run', () => {
     const html = renderToStaticMarkup(<MasterTestProfiles plan={plan} />)
+    // The plan is identified by its definition digest, never by a version.
+    expect(html).toContain('Master test plan · d4d4d4d4d4d4')
     expect(html).toContain('Resilience')
     expect(html).toContain('Protected fault executor')
     expect(html).toContain('not available for all cases')

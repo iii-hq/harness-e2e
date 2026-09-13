@@ -1,8 +1,7 @@
 use super::*;
 
-pub fn definition() -> WorkflowDefinitionV1 {
-    WorkflowDefinitionV1 {
-        schema_version: super::super::WORKFLOW_SCHEMA_VERSION,
+pub fn definition() -> WorkflowDefinition {
+    WorkflowDefinition {
         id: crate::scenarios::incident_response::ID.into(),
         description: "Code-owned incident response: preflight, baseline, reproduction, parallel triage, diagnosis, bounded remediation, deterministic promotion or rollback, reconciliation, report, and mandatory cleanup.".into(),
         limits: WorkflowLimits {
@@ -23,7 +22,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
             harness_node("analyze_logs", prompts::ANALYZE_LOGS, &["reproduce_incident"], "reproduce_incident", "analysis_bundle", true),
             harness_node("analyze_metrics", prompts::ANALYZE_METRICS, &["reproduce_incident"], "reproduce_incident", "analysis_bundle", true),
             harness_node("analyze_trace_change", prompts::ANALYZE_TRACE_CHANGE, &["reproduce_incident"], "reproduce_incident", "analysis_bundle", true),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 inputs: BTreeMap::from([(
                     "reproduction".into(),
                     WorkflowInputBinding::Output {
@@ -46,7 +45,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                 "triage",
                 true,
             ),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 inputs: BTreeMap::from([(
                     "triage".into(),
                     WorkflowInputBinding::Output {
@@ -73,7 +72,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     equals: true,
                 },
             ),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 required: false,
                 dependency_policy: DependencyPolicy::Terminal,
                 activation: ActivationPolicy::All(vec![BooleanCondition {
@@ -88,7 +87,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     false,
                 )
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 dependency_policy: DependencyPolicy::Terminal,
                 ..semantic_test(
                     "decide_terminal_action",
@@ -117,7 +116,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     equals: true,
                 },
             ),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 dependency_policy: DependencyPolicy::Terminal,
                 ..semantic_test(
                     "reconcile_final_state",
@@ -171,16 +170,10 @@ pub fn definition() -> WorkflowDefinitionV1 {
     }
 }
 
-fn semantic_test(
-    id: &str,
-    step_type: &str,
-    dependencies: &[&str],
-    required: bool,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+fn semantic_test(id: &str, step_type: &str, dependencies: &[&str], required: bool) -> WorkflowNode {
+    WorkflowNode {
         id: id.into(),
         step_type: step_type.into(),
-        step_version: 1,
         config: json!({}),
         depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
         inputs: BTreeMap::new(),
@@ -195,8 +188,8 @@ fn conditional_semantic_test(
     step_type: &str,
     dependencies: &[&str],
     condition: BooleanCondition,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+) -> WorkflowNode {
+    WorkflowNode {
         required: false,
         activation: ActivationPolicy::All(vec![condition]),
         ..semantic_test(id, step_type, dependencies, false)
@@ -210,11 +203,10 @@ fn harness_node(
     data_node: &str,
     data_port: &str,
     required: bool,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+) -> WorkflowNode {
+    WorkflowNode {
         id: id.into(),
-        step_type: super::super::HARNESS_STEP_ID.into(),
-        step_version: super::super::HARNESS_STEP_VERSION_V2,
+        step_type: super::super::BOUNDED_HARNESS_STEP_ID.into(),
         config: harness_config(prompt, false),
         depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
         inputs: BTreeMap::from([
@@ -246,8 +238,8 @@ fn conditional_harness_node(
     data_node: &str,
     data_port: &str,
     condition: BooleanCondition,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+) -> WorkflowNode {
+    WorkflowNode {
         required: false,
         activation: ActivationPolicy::All(vec![condition]),
         config: harness_config(prompt, true),
@@ -337,7 +329,6 @@ fn pair(
     Ok((
         StepTypeDescriptor {
             id: id.into(),
-            version: 1,
             description: description.into(),
             config_schema: json!({"type": "object", "properties": {}, "additionalProperties": false}),
             inputs,

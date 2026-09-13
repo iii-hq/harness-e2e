@@ -1777,7 +1777,7 @@ mod tests {
                 .as_ref()
                 .expect("classification should be projected")
                 .method,
-            ComplexityMethod::CapabilityV2
+            ComplexityMethod::Capability
         );
         assert_eq!(
             context_pressure

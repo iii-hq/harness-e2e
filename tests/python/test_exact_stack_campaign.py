@@ -685,13 +685,13 @@ fail() {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             group = root / "groups" / "daily-core"
-            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state-v1.json"
+            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state.json"
             checkpoint.parent.mkdir(parents=True)
             payload = b'{"state_sha256":"sha256:checkpoint","state":{"sequence":3}}\n'
             checkpoint.write_bytes(payload)
             for package_root in [group, root]:
                 manifest = MODULE.package_bundle(package_root, campaign_contract(), {})
-                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state-v1.json"))
+                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state.json"))
                 self.assertEqual(reference["path"], checkpoint.relative_to(package_root).as_posix())
                 self.assertEqual(reference["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
                 self.assertEqual(reference["size_bytes"], len(payload))

@@ -117,15 +117,8 @@ export function contractScent(
   return [
     `results contract ${distinct(contracts.map((c) => c.reportState ?? 'unavailable'))}`,
     distinct(contracts.map((c) => c.objectiveOutcome ?? 'unavailable')),
-    distinct(
-      contracts.map((c) =>
-        c.schemaVersion === null
-          ? 'schema unavailable'
-          : `Results v${c.schemaVersion}`,
-      ),
-    ),
-    distinct(contracts.map((c) => shortHash(c.resultContractSha256))),
-    `scoring profile ${distinct(contracts.map((c) => shortHash(c.scoringProfileSha256)))}`,
+    `contract ${distinct(contracts.map((c) => shortDigest(c.resultContractSha256)))}`,
+    `scoring profile ${distinct(contracts.map((c) => shortDigest(c.scoringProfileSha256)))}`,
   ].join(' · ')
 }
 
@@ -158,11 +151,11 @@ export function ResultContractStrip({
       {contracts.map((contract) => (
         <div
           key={contract.key}
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4"
           data-results-contract={contract.valid ? 'valid' : 'invalid'}
         >
           {/* Audit ED-30: title case belongs to words. Applied to every value it
-              turned a hash into "Sha256:A7eb…" and a version into "Results V4". */}
+              turned a hash into "Sha256:A7eb…". */}
           <ContractFact
             label="report state"
             value={titleCase(contract.reportState ?? 'unavailable')}
@@ -171,21 +164,15 @@ export function ResultContractStrip({
             label="objective outcome"
             value={titleCase(contract.objectiveOutcome ?? 'unavailable')}
           />
+          {/* The report is identified by the contract it was written against,
+              the digest the runner also refuses to read across. */}
           <ContractFact
-            label="schema"
-            value={
-              contract.schemaVersion === null
-                ? 'unavailable'
-                : `Results v${contract.schemaVersion}`
-            }
-          />
-          <ContractFact
-            label="result contract"
-            value={shortHash(contract.resultContractSha256)}
+            label="results contract"
+            value={shortDigest(contract.resultContractSha256)}
           />
           <ContractFact
             label="scoring profile"
-            value={shortHash(contract.scoringProfileSha256)}
+            value={shortDigest(contract.scoringProfileSha256)}
           />
         </div>
       ))}
@@ -204,9 +191,11 @@ function ContractFact({ label, value }: { label: string; value: string }) {
   )
 }
 
-function shortHash(value: string | null) {
+/** Digests are shown as the first hex chars of the SHA-256, as elsewhere in
+ *  the Console; the `sha256:` prefix carries no identity. */
+function shortDigest(value: string | null) {
   if (!value) return 'unavailable'
-  return value.length > 19 ? `${value.slice(0, 19)}…` : value
+  return value.replace(/^sha256:/, '').slice(0, 12)
 }
 
 const MATRIX_COLUMNS =
@@ -496,7 +485,7 @@ function ScenarioReliabilityBand({
         className="m-0 bg-panel-raised px-4 py-3 text-xs text-ink-muted md:px-5"
         data-scenario-aggregate="unavailable"
       >
-        Required Results v3 aggregate is unavailable; no completion or
+        The required results aggregate is unavailable; no completion or
         reliability metric was inferred.
       </p>
     )

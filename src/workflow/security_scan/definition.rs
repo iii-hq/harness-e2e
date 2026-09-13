@@ -1,8 +1,7 @@
 use super::*;
 
-pub fn definition() -> WorkflowDefinitionV1 {
-    WorkflowDefinitionV1 {
-        schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
+pub fn definition() -> WorkflowDefinition {
+    WorkflowDefinition {
         id: SCENARIO_ID.into(),
         description: "Rust-defined local security review: immediate scans, deduplication, optional suggestions, GitHub reconciliation, final listing, and mandatory cleanup.".into(),
         limits: WorkflowLimits {
@@ -16,10 +15,9 @@ pub fn definition() -> WorkflowDefinitionV1 {
         },
         nodes: vec![
             semantic_test("scan_commit_a", "security_review.scan_commit_a", &[], true),
-            WorkflowNodeV1 {
+            WorkflowNode {
                 id: "suggest_commit_a".into(),
                 step_type: "security_review.suggest_commit_a".into(),
-                step_version: 1,
                 config: json!({}),
                 depends_on: vec!["scan_commit_a".into()],
                 inputs: BTreeMap::from([
@@ -46,7 +44,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                 dependency_policy: DependencyPolicy::Succeeded,
                 required: false,
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 inputs: BTreeMap::from([(
                     "scan_run_id".into(),
                     WorkflowInputBinding::Output {
@@ -61,7 +59,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     true,
                 )
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 dependency_policy: DependencyPolicy::Terminal,
                 inputs: BTreeMap::from([(
                     "repository".into(),
@@ -77,7 +75,7 @@ pub fn definition() -> WorkflowDefinitionV1 {
                     true,
                 )
             },
-            WorkflowNodeV1 {
+            WorkflowNode {
                 dependency_policy: DependencyPolicy::Terminal,
                 ..semantic_test(
                     "list_run_history",
@@ -95,16 +93,10 @@ pub fn definition() -> WorkflowDefinitionV1 {
     }
 }
 
-fn semantic_test(
-    id: &str,
-    step_type: &str,
-    dependencies: &[&str],
-    required: bool,
-) -> WorkflowNodeV1 {
-    WorkflowNodeV1 {
+fn semantic_test(id: &str, step_type: &str, dependencies: &[&str], required: bool) -> WorkflowNode {
+    WorkflowNode {
         id: id.into(),
         step_type: step_type.into(),
-        step_version: 1,
         config: json!({}),
         depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
         inputs: BTreeMap::new(),
@@ -231,7 +223,6 @@ fn descriptor(
     };
     StepTypeDescriptor {
         id: id.into(),
-        version: 1,
         description: description.into(),
         config_schema,
         inputs,

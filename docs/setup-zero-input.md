@@ -42,7 +42,7 @@ O projeto já tem uma implementação adequada para reutilizar: [engineering_tic
 
 ### Inicialização e persistência têm duas fontes de configuração
 
-O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e `III_CONFIG`, fornecidos pelo Compose. Seu YAML define `data_dir`, `control_database` e `control_namespace`. Modelo, juiz e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
+O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e `III_CONFIG`, fornecidos pelo Compose. Seu YAML define `data_dir`, `control_database` e `control_namespace`. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
 
 O setup documentado exige iniciar dois arquivos Compose em ordem. [worker-compose.control.yaml](../worker-compose.control.yaml) depende de `path://../workers/database` e contém um caminho absoluto da máquina do autor; [worker-compose.yaml](../worker-compose.yaml) aponta para o banco desse namespace. O pacote declara dependências, mas isso não comprova que a instalação inicial configure automaticamente o banco nomeado e a ligação entre namespaces.
 

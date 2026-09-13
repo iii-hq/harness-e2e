@@ -165,7 +165,10 @@ mod tests {
     fn listing_rejects_unsupported_and_corrupt_results() {
         let root = tempfile::tempdir().unwrap();
         for (name, bytes) in [
-            ("old", br#"{"schema_version":2}"#.as_slice()),
+            (
+                "old",
+                br#"{"result_contract_sha256":"sha256:foreign"}"#.as_slice(),
+            ),
             ("corrupt", b"not-json".as_slice()),
         ] {
             let directory = root.path().join(name);

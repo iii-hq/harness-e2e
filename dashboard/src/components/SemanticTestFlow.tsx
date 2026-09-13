@@ -451,7 +451,7 @@ function SemanticTestCard({
               <div>
                 <dt className="text-ink-muted">Step type</dt>
                 <dd className="m-0 mt-0.5 break-all font-mono text-label text-ink-soft">
-                  {test.step_type}@{test.step_version}
+                  {test.step_type}
                 </dd>
               </div>
               {test.cost_usd != null && (

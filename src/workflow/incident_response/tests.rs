@@ -5,7 +5,7 @@ use super::*;
 fn descriptor_catalog() -> StepCatalog {
     let mut catalog = StepCatalog::new();
     catalog
-        .register_descriptor(super::super::harness_descriptor_v2().unwrap())
+        .register_descriptor(super::super::bounded_harness_descriptor().unwrap())
         .unwrap();
     for descriptor in descriptors_only().unwrap() {
         catalog.register_descriptor(descriptor).unwrap();
@@ -155,7 +155,7 @@ fn graph_keeps_parallel_triage_and_exclusive_terminal_branches() {
     for id in ["analyze_logs", "analyze_metrics", "analyze_trace_change"] {
         let node = definition.nodes.iter().find(|node| node.id == id).unwrap();
         assert_eq!(node.depends_on, ["reproduce_incident"]);
-        assert_eq!(node.step_version, super::super::HARNESS_STEP_VERSION_V2);
+        assert_eq!(node.step_type, super::super::BOUNDED_HARNESS_STEP_ID);
     }
     let promote = definition
         .nodes

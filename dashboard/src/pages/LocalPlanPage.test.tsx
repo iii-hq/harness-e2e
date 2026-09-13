@@ -44,7 +44,6 @@ describe('new plan form dirtiness', () => {
 })
 
 const candidateRunningPlan: LocalPlan = {
-  schema_version: 1,
   id: 'plan-1',
   label: 'Focused regression check',
   purpose: 'Confirm the affected local flow.',

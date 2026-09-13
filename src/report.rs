@@ -4050,7 +4050,6 @@ mod tests {
         let step = WorkflowStepReport {
             node_id: "assess".into(),
             step_type: "test.assess".into(),
-            step_version: 1,
             required: true,
             dependencies: Vec::new(),
             dependency_policy: DependencyPolicy::Succeeded,

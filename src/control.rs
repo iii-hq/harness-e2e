@@ -2810,8 +2810,7 @@ mod tests {
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
                 && scenario.contract_sha256.starts_with("sha256:")
-                && scenario.classification.method
-                    == crate::scenarios::ComplexityMethod::CapabilityV2
+                && scenario.classification.method == crate::scenarios::ComplexityMethod::Capability
         }));
         let git = response
             .scenarios
