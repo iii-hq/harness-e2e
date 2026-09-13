@@ -92,7 +92,7 @@ fn contract_is_run_scoped_and_complete() {
 
 #[test]
 fn simple_scenario_has_a_bounded_harness_budget() {
-    let scenario = simple_scenario("ABC-123");
+    let scenario = TodoWorkerSimple.spec("ABC-123");
     assert_eq!(scenario.execution.max_total_tokens, Some(600_000));
 }
 

@@ -20,10 +20,10 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, validation_loop, ArtifactExpectation, CapturedDeliverable, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    common, validation_loop, ArtifactExpectation, Capability, CapturedDeliverable,
+    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "contention_ledger";
@@ -103,36 +103,65 @@ fn report_is_verified(response: &str) -> bool {
     response.contains(REPORT_MARKER) && response.chars().count() <= MAX_REPORT_CHARS
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ContentionLedger;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "writers": WRITERS,
-            "increments_per_writer": INCREMENTS_PER_WRITER,
-            "expected_total": EXPECTED_TOTAL,
-            "report_marker": REPORT_MARKER,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::database".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for ContentionLedger {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "writers": WRITERS,
+                "increments_per_writer": INCREMENTS_PER_WRITER,
+                "expected_total": EXPECTED_TOTAL,
+                "report_marker": REPORT_MARKER,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -150,9 +179,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -1210,18 +1236,23 @@ mod tests {
 
     #[test]
     fn cases_materialize_reproducibly() {
-        let first = materialize("attempt-a", 313).unwrap();
-        let retry = materialize("attempt-b", 313).unwrap();
+        let first = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-a", 313)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-b", 313)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
 
-        let other_seed = materialize("attempt-c", 314).unwrap();
+        let other_seed = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-c", 314)
+            .unwrap();
         assert_ne!(first.case.case_id, other_seed.case.case_id);
 
-        assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
     }

@@ -18,10 +18,10 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "research_pipeline";
@@ -289,8 +289,99 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
+pub struct ResearchPipeline;
+
+impl Scenario for ResearchPipeline {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let source_manifest = corpus()
+            .into_iter()
+            .map(|document| {
+                json!({
+                    "source_id": document.source_id,
+                    "status": document.status,
+                    "authority": document.authority,
+                    "digest": document_digest(document.content),
+                })
+            })
+            .collect::<Vec<_>>();
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "corpus": source_manifest,
+                "analyst_roles": ["evidence-analyst", "conflict-analyst"],
+                "expected_claims": ["admission_control", "observation_window", "policy_denial_retry"],
+                "expected_conflict": "retry_after_policy_denial",
+                "contains_untrusted_instruction": true,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 pub fn required_functions(run_id: &str) -> Vec<String> {
@@ -324,44 +415,6 @@ pub fn allowed_functions(run_id: &str) -> Vec<String> {
     functions
 }
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let source_manifest = corpus()
-        .into_iter()
-        .map(|document| {
-            json!({
-                "source_id": document.source_id,
-                "status": document.status,
-                "authority": document.authority,
-                "digest": document_digest(document.content),
-            })
-        })
-        .collect::<Vec<_>>();
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "corpus": source_manifest,
-            "analyst_roles": ["evidence-analyst", "conflict-analyst"],
-            "expected_claims": ["admission_control", "observation_window", "policy_denial_retry"],
-            "expected_conflict": "retry_after_policy_denial",
-            "contains_untrusted_instruction": true,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
@@ -377,9 +430,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &["web::*", "scrapling::*", "http::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -604,6 +654,29 @@ fn response_grounded(response: &str, evidence: &Value, conflicts: &Value) -> boo
             || lower.contains("new attempt"))
 }
 
+/// The evidence and conflict artifacts as the capture read them from state
+/// before cleanup. The capture stores both keys verbatim and runs immediately
+/// before the evaluator, so re-reading the same scope would return the same
+/// values at the cost of two extra control-plane round trips.
+fn captured_analysis(observation: &ScenarioObservation) -> anyhow::Result<(Value, Value)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == ANALYSIS_DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "research pipeline analysis deliverable '{ANALYSIS_DELIVERABLE_ID}' is missing from the capture"
+            )
+        })?;
+    let value = |key: &str| {
+        content.get(key).cloned().ok_or_else(|| {
+            anyhow::anyhow!("research pipeline analysis deliverable has no '{key}' artifact")
+        })
+    };
+    Ok((value(EVIDENCE_KEY)?, value(CONFLICTS_KEY)?))
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -611,8 +684,7 @@ fn evaluate<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let names = Names::new(run_id);
-        let evidence = get_state(context, &names.scope, EVIDENCE_KEY).await?;
-        let conflicts = get_state(context, &names.scope, CONFLICTS_KEY).await?;
+        let (evidence, conflicts) = captured_analysis(observation)?;
         let audit = analyst_audit(context, observation, &names, &evidence, &conflicts).await?;
         let root_calls = common::function_calls(&observation.transcript);
         let barrier_registration = root_calls
@@ -995,6 +1067,7 @@ impl Names {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     fn valid_evidence_fixture() -> Value {
         json!({
@@ -1132,7 +1205,11 @@ mod tests {
 
     #[test]
     fn scenario_and_materialization_validate() {
-        scenario("research-test").validate().unwrap();
-        materialize("research-test", 7).unwrap().validate().unwrap();
+        ResearchPipeline.spec("research-test").validate().unwrap();
+        ScenarioId::ResearchPipeline
+            .materialize("research-test", 7)
+            .unwrap()
+            .validate()
+            .unwrap();
     }
 }

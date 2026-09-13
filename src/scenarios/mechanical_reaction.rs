@@ -4,10 +4,9 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "mechanical_reaction";
@@ -42,34 +41,66 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     CLEAN_COMPLETION,
 ];
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, super::stable_seed(ID))
-}
+pub struct MechanicalReaction;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let source = source_value(seed);
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "source_key": SOURCE_KEY,
-            "mirror_key": MIRROR_KEY,
-            "source": source,
-            "event_into": "/value",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, seed),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for MechanicalReaction {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "source_key": SOURCE_KEY,
+                "mirror_key": MIRROR_KEY,
+                "source": source_value(seed),
+                "event_into": "/value",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, super::stable_seed(ID))
+    }
+
+    fn case_spec(&self, case: &ScenarioCase, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, case.seed)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
@@ -111,10 +142,18 @@ binding armed."#,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
+}
+
+/// The mirror value the capture stored verbatim before cleanup.
+fn captured_mirror(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()
+        .cloned()
 }
 
 fn evaluate<'a>(
@@ -130,14 +169,19 @@ fn evaluate<'a>(
             .get("source")
             .cloned()
             .unwrap_or(Value::Null);
-        let mirror = common::state_value(
-            context
-                .trigger_value(
-                    "state::get",
-                    json!({ "scope": names.scope, "key": MIRROR_KEY }),
-                )
-                .await?,
-        );
+        // The capture stored this same mirror value before cleanup; reuse it
+        // instead of reading the mirror key a second time.
+        let mirror = match captured_mirror(observation) {
+            Some(mirror) => mirror,
+            None => common::state_value(
+                context
+                    .trigger_value(
+                        "state::get",
+                        json!({ "scope": names.scope, "key": MIRROR_KEY }),
+                    )
+                    .await?,
+            ),
+        };
         let calls = common::function_calls(&observation.transcript);
         let registrations: Vec<_> = calls
             .iter()

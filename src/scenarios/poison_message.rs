@@ -28,10 +28,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "poison_message";
@@ -182,32 +181,65 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct PoisonMessage;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "items": ITEMS,
-            "retry_budget": RETRY_BUDGET,
-            "quarantine_key": QUARANTINE_KEY,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for PoisonMessage {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "items": ITEMS,
+                "retry_budget": RETRY_BUDGET,
+                "quarantine_key": QUARANTINE_KEY,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -250,9 +282,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -342,14 +371,31 @@ fn honest_report(response: &str, run_id: &str) -> bool {
         && response.matches(RECEIPT_PREFIX).count() == 2
 }
 
+/// The quarantine record exactly as `capture` read it from the run's state
+/// scope before cleanup. A record is always present when the evaluator runs —
+/// capture precedes evaluation and a failed capture aborts the attempt — and
+/// an absent one reads as null, which never matches the expected object.
+fn captured_quarantine(deliverables: &[CapturedDeliverable]) -> Value {
+    deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .and_then(|content| content.get("quarantine"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 fn evaluate<'a>(
-    context: &'a E2eContext,
+    _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let audit = batch_audit(run_id, &observation.transcript);
-        let observed = observed_quarantine(context, run_id).await?;
+        // `capture` read `{scope}/{QUARANTINE_KEY}` before cleanup and stored
+        // the value verbatim, so the evaluator scores that record instead of
+        // reading the same location again.
+        let observed = captured_quarantine(&observation.deliverables);
         let expected = expected_quarantine(run_id, audit.poison_attempts);
         let errors = observation.metrics.totals.function_call_errors;
 
@@ -720,9 +766,15 @@ mod tests {
 
     #[test]
     fn materialized_case_is_reproducible() {
-        let first = materialize("attempt-a", 23).unwrap();
-        let retry = materialize("attempt-b", 23).unwrap();
-        let other_seed = materialize("attempt-c", 24).unwrap();
+        let first = crate::scenarios::ScenarioId::PoisonMessage
+            .materialize("attempt-a", 23)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::PoisonMessage
+            .materialize("attempt-b", 23)
+            .unwrap();
+        let other_seed = crate::scenarios::ScenarioId::PoisonMessage
+            .materialize("attempt-c", 24)
+            .unwrap();
 
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
@@ -731,7 +783,25 @@ mod tests {
         assert_ne!(first.case.case_id, other_seed.case.case_id);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
-        assert!(first.capture.is_some());
         first.validate().unwrap();
+    }
+
+    #[test]
+    fn the_quarantine_record_comes_from_the_capture() {
+        let record = |content: Value| CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "quarantine_record".to_string(),
+            content: content.into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        };
+        let quarantine = expected_quarantine("run", 3).unwrap();
+        assert_eq!(
+            captured_quarantine(&[record(json!({ "quarantine": quarantine }))]),
+            expected_quarantine("run", 3).unwrap()
+        );
+        // A record that never arrived reads as null and never matches.
+        assert_eq!(captured_quarantine(&[]), Value::Null);
+        assert_eq!(captured_quarantine(&[record(json!({}))]), Value::Null);
     }
 }

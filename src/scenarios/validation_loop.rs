@@ -17,9 +17,9 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_loop";
@@ -46,29 +46,58 @@ const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::scored(
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[GOAL_REACHED, VALIDATOR_DISCIPLINE, LOOP_EVIDENCE];
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ValidationLoop;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "database": "primary",
-            "rows_per_attempt": 4,
-            "threshold": THRESHOLD,
-            "expected_rows": EXPECTED_ROWS,
-            "minimum_nudges": 1,
-        }),
-        validation_capabilities(),
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for ValidationLoop {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "database": "primary",
+                "rows_per_attempt": 4,
+                "threshold": THRESHOLD,
+                "expected_rows": EXPECTED_ROWS,
+                "minimum_nudges": 1,
+            }),
+            validation_capabilities(),
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -108,10 +137,19 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
+}
+
+/// The row count the capture stored before cleanup.
+fn captured_rows(observation: &ScenarioObservation) -> Option<u64> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("rows")
+        .and_then(Value::as_u64)
 }
 
 fn evaluate<'a>(
@@ -121,7 +159,12 @@ fn evaluate<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let table = table(run_id);
-        let rows = row_count(context, &table).await?;
+        // The capture counted the same table before cleanup; reuse the number
+        // instead of querying it again.
+        let rows = match captured_rows(observation) {
+            Some(rows) => rows,
+            None => row_count(context, &table).await?,
+        };
         let calls = common::function_calls(&observation.transcript);
         let registrations: Vec<_> = calls
             .iter()
@@ -220,13 +263,13 @@ fn deliverable_contract() -> DeliverableContract {
     )
 }
 
-pub(super) fn validation_capabilities() -> Vec<String> {
+pub(super) fn validation_capabilities() -> Vec<Capability> {
     vec![
-        "e2e::control-plane-v1".to_string(),
-        "iii::functions".to_string(),
-        "iii::database".to_string(),
-        "iii::state".to_string(),
-        "iii::triggers".to_string(),
+        Capability::E2eControlPlaneV1,
+        Capability::IiiFunctions,
+        Capability::IiiDatabase,
+        Capability::IiiState,
+        Capability::IiiTriggers,
     ]
 }
 

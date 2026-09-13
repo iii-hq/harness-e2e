@@ -36,10 +36,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "typescript_chat_service";
@@ -168,8 +167,88 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     SUITE_AND_SCOPE,
 ];
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
+pub struct TypescriptChatService;
+
+impl Scenario for TypescriptChatService {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARY)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "streaming-typescript-chat-service",
+                "language": "typescript",
+                "runtime": "node-type-stripping",
+                "dependency_policy": "zero-runtime-and-dev-dependencies",
+                "entrypoint": SERVER_PATH,
+                "protected_paths": [PUBLIC_TEST_PATH, PROTOCOL_PATH, TASK_PATH, TSCONFIG_PATH],
+                "documented_goals": 14,
+                "hidden_check_families": 6,
+                "final_token": FINAL_TOKEN,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eFilesystem,
+                Capability::E2eShell,
+                Capability::Node,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 pub fn allowed_functions(_run_id: &str) -> Vec<String> {
@@ -179,37 +258,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
         "coder::*".into(),
         "shell::*".into(),
     ]
-}
-
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "streaming-typescript-chat-service",
-            "language": "typescript",
-            "runtime": "node-type-stripping",
-            "dependency_policy": "zero-runtime-and-dev-dependencies",
-            "entrypoint": SERVER_PATH,
-            "protected_paths": [PUBLIC_TEST_PATH, PROTOCOL_PATH, TASK_PATH, TSCONFIG_PATH],
-            "documented_goals": 14,
-            "hidden_check_families": 6,
-            "final_token": FINAL_TOKEN,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "e2e::filesystem".to_string(),
-            "e2e::shell".to_string(),
-            "node".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -253,9 +301,6 @@ observed it. If any goal is unmet, report `INCOMPLETE` instead and name the goal
         },
         denied_functions: &["web::*", "scrapling::*", "http::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -748,11 +793,16 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     #[test]
     fn scenario_and_materialization_validate() {
-        scenario("typescript-chat-test").validate().unwrap();
-        materialize("typescript-chat-test", CANONICAL_SEED)
+        TypescriptChatService
+            .spec("typescript-chat-test")
+            .validate()
+            .unwrap();
+        ScenarioId::TypescriptChatService
+            .materialize("typescript-chat-test", CANONICAL_SEED)
             .unwrap()
             .validate()
             .unwrap();

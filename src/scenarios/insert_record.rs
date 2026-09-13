@@ -10,8 +10,8 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
@@ -37,27 +37,60 @@ fn table(run_id: &str) -> String {
     format!("e2e_insert_record_{run_id}")
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct InsertRecord;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({ "database": DATABASE, "value": VALUE }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::database".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for InsertRecord {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({ "database": DATABASE, "value": VALUE }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -141,9 +174,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -177,6 +207,31 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
+/// The rows the capture stored for this run, as `(rows, query_error)`.
+fn captured_rows(observation: &ScenarioObservation) -> Option<(Vec<Value>, Option<String>)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("rows")?
+        .clone();
+    match content {
+        Value::Array(rows) => Some((rows, None)),
+        other => Some((
+            Vec::new(),
+            Some(
+                other
+                    .get("error")
+                    .and_then(Value::as_str)
+                    .unwrap_or("rows unavailable")
+                    .to_string(),
+            ),
+        )),
+    }
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -191,9 +246,14 @@ fn evaluate<'a>(
             ));
         }
         let table = table(run_id);
-        let (rows, query_error) = match table_rows(context, &table).await {
-            Ok(rows) => (rows, None),
-            Err(error) => (Vec::new(), Some(error)),
+        // The capture stored the rows of this same table before cleanup; reuse
+        // them instead of querying the database a second time.
+        let (rows, query_error) = match captured_rows(observation) {
+            Some(captured) => captured,
+            None => match table_rows(context, &table).await {
+                Ok(rows) => (rows, None),
+                Err(error) => (Vec::new(), Some(error)),
+            },
         };
         let values: Vec<Option<&str>> = rows
             .iter()
@@ -236,10 +296,12 @@ mod tests {
 
     #[test]
     fn prompt_names_the_run_scoped_table() {
-        let spec = scenario("abc123");
+        let spec = InsertRecord.spec("abc123");
         spec.validate().unwrap();
         assert!(spec.prompt.contains("e2e_insert_record_abc123"));
         assert!(spec.prompt.contains(VALUE));
-        materialize("case", 5).unwrap();
+        crate::scenarios::ScenarioId::InsertRecord
+            .materialize("case", 5)
+            .unwrap();
     }
 }

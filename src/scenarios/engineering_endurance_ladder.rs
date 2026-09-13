@@ -25,10 +25,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
@@ -1011,55 +1010,102 @@ or stop merely because one checkpoint was rejected."#,
             "database::*",
         ],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+/// Ten cumulative engineering rungs over one durable-queue fixture.
+pub struct EngineeringEnduranceLadder;
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "cumulative-durable-queue-engineering",
-            "language": "python",
-            "rungs": TICKETS.iter().enumerate().map(|(index, ticket)| json!({
-                "rung": index + 1,
-                "id": ticket.id,
-                "title": ticket.title,
-            })).collect::<Vec<_>>(),
-            "max_attempts_per_rung": MAX_ATTEMPTS_PER_RUNG,
-            "production_paths": [PRODUCTION_PATH],
-            "protected_paths": [PUBLIC_TEST_PATH, MANIFEST_PATH, GITIGNORE_PATH],
-            "termination": "first_rung_with_three_rejected_checkpoints_or_all_complete",
-            "github_handoff": {
-                "repository": "iii-hq/e2e-fixture",
-                "publisher": "trusted_runner_only",
-                "branch_prefix": "benchmark-runs/endurance/",
-                "subject_credentials": false,
-            },
-        }),
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "e2e::filesystem".into(),
-            "e2e::shell".into(),
-            "e2e::git".into(),
-            "python3".into(),
-            "github::trusted-handoff".into(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for EngineeringEnduranceLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "cumulative-durable-queue-engineering",
+                "language": "python",
+                "rungs": TICKETS.iter().enumerate().map(|(index, ticket)| json!({
+                    "rung": index + 1,
+                    "id": ticket.id,
+                    "title": ticket.title,
+                })).collect::<Vec<_>>(),
+                "max_attempts_per_rung": MAX_ATTEMPTS_PER_RUNG,
+                "production_paths": [PRODUCTION_PATH],
+                "protected_paths": [PUBLIC_TEST_PATH, MANIFEST_PATH, GITIGNORE_PATH],
+                "termination": "first_rung_with_three_rejected_checkpoints_or_all_complete",
+                "github_handoff": {
+                    "repository": "iii-hq/e2e-fixture",
+                    "publisher": "trusted_runner_only",
+                    "branch_prefix": "benchmark-runs/endurance/",
+                    "subject_credentials": false,
+                },
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eFilesystem,
+                Capability::E2eShell,
+                Capability::E2eGit,
+                Capability::Python3,
+                Capability::GithubTrustedHandoff,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn evaluate<'a>(
@@ -1460,8 +1506,12 @@ class DurableQueue:
 
     #[test]
     fn materialization_is_canonical_across_namespaces() {
-        let first = materialize("alpha-attempt", 7).unwrap();
-        let retry = materialize("omega-attempt", 99).unwrap();
+        let first = crate::scenarios::ScenarioId::EngineeringEnduranceLadder
+            .materialize("alpha-attempt", 7)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::EngineeringEnduranceLadder
+            .materialize("omega-attempt", 99)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
@@ -1470,7 +1520,7 @@ class DurableQueue:
 
     #[test]
     fn subject_capabilities_exclude_github_and_network() {
-        let spec = scenario("attempt");
+        let spec = EngineeringEnduranceLadder.spec("attempt");
         assert!(spec.denied_functions.contains(&"github::*"));
         assert!(spec.denied_functions.contains(&"web::*"));
         assert_eq!(required_functions("attempt").len(), 1);

@@ -33,10 +33,10 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase,
+    ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_ticket";
@@ -486,52 +486,97 @@ fn runtime_registry() -> &'static Mutex<HashMap<String, SharedRuntime>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, &CASES[0])
-}
+pub struct EngineeringTicket;
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let task = task_case();
-    task.validate()?;
-    let inputs = json!({
-        "task_case_id": task.id,
-        "case_version": task.case_version,
-        "canonical_seed": task.canonical_seed,
-        "fixture_repository": task.fixture_repository,
-        "fixture_revision": task.fixture_revision,
-        "fixture_manifest_sha256": task.fixture_manifest_sha256,
-        "ticket": task.ticket,
-        "focused_test_command": task.focused_test.display,
-        "full_test_command": task.full_test.display,
-        "allowed_production_paths": task.allowed_production_paths,
-        "protected_paths": task.protected_paths,
-        "relevant_read_paths": task.relevant_read_paths,
-        "public_probe_ids": task.public_probe_ids,
-        "hidden_probe_manifest_sha256": task.hidden_probe_manifest_sha256,
-        "maximum_validation_rounds": task.maximum_validation_rounds,
-        "maximum_changed_files": task.maximum_changed_files,
-        "maximum_patch_lines": task.maximum_patch_lines,
-        "network_profile": NETWORK_PROFILE,
-    });
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        inputs,
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "iii::coder".into(),
-            "iii::shell".into(),
-            "iii::triggers".into(),
-            "harness::post-turn-validation".into(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, task),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for EngineeringTicket {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let task = task_case();
+        task.validate()?;
+        let inputs = json!({
+            "task_case_id": task.id,
+            "case_version": task.case_version,
+            "canonical_seed": task.canonical_seed,
+            "fixture_repository": task.fixture_repository,
+            "fixture_revision": task.fixture_revision,
+            "fixture_manifest_sha256": task.fixture_manifest_sha256,
+            "ticket": task.ticket,
+            "focused_test_command": task.focused_test.display,
+            "full_test_command": task.full_test.display,
+            "allowed_production_paths": task.allowed_production_paths,
+            "protected_paths": task.protected_paths,
+            "relevant_read_paths": task.relevant_read_paths,
+            "public_probe_ids": task.public_probe_ids,
+            "hidden_probe_manifest_sha256": task.hidden_probe_manifest_sha256,
+            "maximum_validation_rounds": task.maximum_validation_rounds,
+            "maximum_changed_files": task.maximum_changed_files,
+            "maximum_patch_lines": task.maximum_patch_lines,
+            "network_profile": NETWORK_PROFILE,
+        });
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            inputs,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+                Capability::IiiTriggers,
+                Capability::HarnessPostTurnValidation,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, task_case())
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup_case(context, run_id, task_case()))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn task_case() -> &'static TaskCase {
@@ -635,28 +680,8 @@ fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup_for(task)),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
-
-fn setup_for(task: &'static TaskCase) -> super::ScenarioSetup {
-    match task.id {
-        "async_cancellation" => setup_async_cancellation,
-        _ => setup_async_cancellation,
-    }
-}
-
-macro_rules! case_setup {
-    ($name:ident, $index:expr) => {
-        fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-            setup_case(context, run_id, &CASES[$index])
-        }
-    };
-}
-
-case_setup!(setup_async_cancellation, 0);
 
 fn setup_case<'a>(
     context: &'a E2eContext,
@@ -2255,82 +2280,124 @@ pub(crate) fn prepared_filesystem_root(scenario_id: &str, run_id: &str) -> Resul
         .with_context(|| format!("engineering fixture was not prepared for attempt {run_id}"))
 }
 
-pub fn git_handoff_scenario(run_id: &str) -> ScenarioSpec {
-    git_handoff_scenario_for_case(run_id, task_case())
-}
+pub struct EngineeringTicketGitHandoff;
 
-pub fn git_handoff_materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let task = task_case();
-    task.validate()?;
-    let inputs = json!({
-        "task_case_id": task.id,
-        "case_version": task.case_version,
-        "canonical_seed": task.canonical_seed,
-        "difficulty_profile": GIT_HANDOFF_DIFFICULTY_PROFILE,
-        "reference_scenario_id": ID,
-        "workflow_mode": "git_handoff",
-        "fixture_repository": task.fixture_repository,
-        "fixture_revision": task.fixture_revision,
-        "fixture_manifest_sha256": task.fixture_manifest_sha256,
-        "ticket": task.ticket,
-        "plan_path": IMPLEMENTATION_PLAN_PATH,
-        "handoff_payload": "git_only",
-        "commit_policy": "one_or_more_linear_commits_per_phase",
-        "focused_test_command": task.focused_test.display,
-        "full_test_command": task.full_test.display,
-        "allowed_production_paths": task.allowed_production_paths,
-        "protected_paths": task.protected_paths,
-        "public_probe_ids": task.public_probe_ids,
-        "hidden_probe_manifest_sha256": task.hidden_probe_manifest_sha256,
-        "maximum_validation_rounds_per_phase": task.maximum_validation_rounds,
-        "maximum_changed_files": task.maximum_changed_files,
-        "maximum_patch_lines": task.maximum_patch_lines,
-        "network_profile": NETWORK_PROFILE,
-    });
-    let case = ScenarioCase::new(
-        GIT_HANDOFF_ID,
-        CANONICAL_SEED,
-        inputs,
+impl Scenario for EngineeringTicketGitHandoff {
+    fn id(&self) -> &'static str {
+        GIT_HANDOFF_ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let task = task_case();
+        task.validate()?;
+        let inputs = json!({
+            "task_case_id": task.id,
+            "case_version": task.case_version,
+            "canonical_seed": task.canonical_seed,
+            "difficulty_profile": GIT_HANDOFF_DIFFICULTY_PROFILE,
+            "reference_scenario_id": ID,
+            "workflow_mode": "git_handoff",
+            "fixture_repository": task.fixture_repository,
+            "fixture_revision": task.fixture_revision,
+            "fixture_manifest_sha256": task.fixture_manifest_sha256,
+            "ticket": task.ticket,
+            "plan_path": IMPLEMENTATION_PLAN_PATH,
+            "handoff_payload": "git_only",
+            "commit_policy": "one_or_more_linear_commits_per_phase",
+            "focused_test_command": task.focused_test.display,
+            "full_test_command": task.full_test.display,
+            "allowed_production_paths": task.allowed_production_paths,
+            "protected_paths": task.protected_paths,
+            "public_probe_ids": task.public_probe_ids,
+            "hidden_probe_manifest_sha256": task.hidden_probe_manifest_sha256,
+            "maximum_validation_rounds_per_phase": task.maximum_validation_rounds,
+            "maximum_changed_files": task.maximum_changed_files,
+            "maximum_patch_lines": task.maximum_patch_lines,
+            "network_profile": NETWORK_PROFILE,
+        });
+        ScenarioCase::new(
+            GIT_HANDOFF_ID,
+            CANONICAL_SEED,
+            inputs,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+                Capability::IiiTriggers,
+                Capability::IiiState,
+                Capability::E2eSubagents,
+                Capability::HarnessPostTurnValidation,
+            ],
+            git_handoff_deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        git_handoff_scenario_for_case(run_id, task_case())
+    }
+
+    /// The two post-turn validators the root orchestrator registers itself.
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
         vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "iii::coder".into(),
-            "iii::shell".into(),
-            "iii::triggers".into(),
-            "iii::state".into(),
-            "e2e::subagents".into(),
-            "harness::post-turn-validation".into(),
-        ],
-        git_handoff_deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: git_handoff_scenario_for_case(namespace, task),
-        case,
-        capture: Some(git_handoff_capture),
-    })
-}
+            plan_auditor_function_id(run_id),
+            implementation_auditor_function_id(run_id),
+        ]
+    }
 
-pub fn git_handoff_required_functions(run_id: &str) -> Vec<String> {
-    vec![
-        plan_auditor_function_id(run_id),
-        implementation_auditor_function_id(run_id),
-    ]
-}
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        let mut functions = self.required_functions(run_id);
+        functions.extend([
+            "engine::functions::list".into(),
+            "engine::functions::info".into(),
+            "engine::register_trigger".into(),
+            "engine::unregister_trigger".into(),
+            "harness::spawn".into(),
+            "coder::*".into(),
+            "shell::exec".into(),
+        ]);
+        functions.sort();
+        functions.dedup();
+        Some(functions)
+    }
 
-pub fn git_handoff_allowed_functions(run_id: &str) -> Vec<String> {
-    let mut functions = git_handoff_required_functions(run_id);
-    functions.extend([
-        "engine::functions::list".into(),
-        "engine::functions::info".into(),
-        "engine::register_trigger".into(),
-        "engine::unregister_trigger".into(),
-        "harness::spawn".into(),
-        "coder::*".into(),
-        "shell::exec".into(),
-    ]);
-    functions.sort();
-    functions.dedup();
-    functions
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(git_handoff_setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(git_handoff_capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        git_handoff_evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(git_handoff_cleanup(context, run_id))
+    }
 }
 
 fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
@@ -2369,9 +2436,6 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(GIT_HANDOFF_ASSESSMENTS),
-        setup: Some(git_handoff_setup),
-        evaluate: git_handoff_evaluate,
-        cleanup: Some(git_handoff_cleanup),
     }
 }
 
@@ -4278,12 +4342,15 @@ fn git_handoff_cleanup_fixture(run_id: &str) -> CleanupFuture<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::{MaterializedScenario, ScenarioId};
     use std::collections::HashSet;
 
     #[test]
     fn only_the_async_cancellation_case_is_materialized() {
         assert_eq!(task_case().id, "async_cancellation");
-        let materialized = materialize("catalog", 1004).unwrap();
+        let materialized = ScenarioId::EngineeringTicket
+            .materialize("catalog", 1004)
+            .unwrap();
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(
             materialized.case.inputs["task_case_id"],
@@ -4295,7 +4362,9 @@ mod tests {
     fn all_cases_validate_and_publish_eight_assets() {
         for case in CASES {
             case.validate().unwrap();
-            let materialized = materialize("catalog", case.canonical_seed).unwrap();
+            let materialized = ScenarioId::EngineeringTicket
+                .materialize("catalog", case.canonical_seed)
+                .unwrap();
             assert_eq!(materialized.case.inputs["task_case_id"], case.id);
             assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 8);
             assert!(
@@ -4305,26 +4374,29 @@ mod tests {
                     .capture_before_cleanup
             );
             assert!(materialized.case.deliverable_contract.provenance_required);
-            assert!(materialized.capture.is_some());
         }
     }
 
     #[test]
     fn engineering_ticket_remains_the_single_session_baseline() {
-        let baseline = scenario("regression");
-        let materialized = materialize("regression", CANONICAL_SEED).unwrap();
+        let baseline = EngineeringTicket.spec("regression");
+        let materialized = ScenarioId::EngineeringTicket
+            .materialize("regression", CANONICAL_SEED)
+            .unwrap();
         assert_eq!(baseline.id, ID);
         assert!(!baseline.prompt.contains("harness::spawn"));
         assert!(!materialized
             .case
             .required_capabilities
-            .contains(&"e2e::subagents".to_string()));
+            .contains(&Capability::E2eSubagents));
         assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 8);
     }
 
     #[test]
     fn git_handoff_materializes_a_distinct_ten_asset_contract() {
-        let materialized = git_handoff_materialize("catalog", 42).unwrap();
+        let materialized = ScenarioId::EngineeringTicketGitHandoff
+            .materialize("catalog", 42)
+            .unwrap();
         assert_eq!(materialized.spec.id, GIT_HANDOFF_ID);
         assert_eq!(
             materialized.case.inputs["difficulty_profile"],
@@ -4337,7 +4409,7 @@ mod tests {
         assert!(materialized
             .case
             .required_capabilities
-            .contains(&"e2e::subagents".to_string()));
+            .contains(&Capability::E2eSubagents));
         let artifact_ids = materialized
             .case
             .deliverable_contract
@@ -4351,7 +4423,7 @@ mod tests {
 
     #[test]
     fn git_handoff_v4_uses_numeric_criteria() {
-        let spec = git_handoff_scenario("rubric");
+        let spec = EngineeringTicketGitHandoff.spec("rubric");
         let rubric = spec
             .criteria
             .iter()
@@ -4440,7 +4512,9 @@ mod tests {
     #[test]
     fn standalone_handoff_has_a_numeric_efficiency_score() {
         let handoff = comparison_scenario(
-            git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
+            ScenarioId::EngineeringTicketGitHandoff
+                .materialize("comparison", CANONICAL_SEED)
+                .unwrap(),
             comparison_run(GIT_HANDOFF_ID, test_efficiency(260_537, 36, 37, 121_439)),
         );
         let mut scenarios = vec![handoff];
@@ -4478,7 +4552,9 @@ mod tests {
         metrics.total_tokens = None;
         metrics.observed_work = None;
         let handoff = comparison_scenario(
-            git_handoff_materialize("comparison", CANONICAL_SEED).unwrap(),
+            ScenarioId::EngineeringTicketGitHandoff
+                .materialize("comparison", CANONICAL_SEED)
+                .unwrap(),
             comparison_run(GIT_HANDOFF_ID, metrics),
         );
         let mut scenarios = vec![handoff];
@@ -4515,9 +4591,9 @@ mod tests {
 
     fn comparison_run(scenario_id: &str, efficiency: EfficiencyReport) -> E2eRunReport {
         let spec = if scenario_id == GIT_HANDOFF_ID {
-            git_handoff_scenario("comparison")
+            EngineeringTicketGitHandoff.spec("comparison")
         } else {
-            scenario("comparison")
+            EngineeringTicket.spec("comparison")
         };
         let mut run = E2eRunReport::new(
             format!("{scenario_id}-run"),
@@ -4595,7 +4671,7 @@ mod tests {
 
     #[test]
     fn git_handoff_prompt_keeps_the_implementation_payload_git_only() {
-        let prompt = git_handoff_scenario("attempt-1").prompt;
+        let prompt = EngineeringTicketGitHandoff.spec("attempt-1").prompt;
         assert!(prompt.contains("e2e_attempt-1-planner"));
         assert!(prompt.contains("e2e_attempt-1-implementer"));
         assert!(prompt.contains(IMPLEMENTER_TASK));

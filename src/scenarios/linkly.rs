@@ -118,53 +118,23 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
-pub fn scenario(_run_id: &str) -> ScenarioSpec {
-    ScenarioSpec {
-        id: ID,
-        prompt: PROMPTS[0].trim_end().to_string(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 256,
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(6_000_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &[
-            "approval::*",
-            "configuration::register",
-            "shell::workspace::*",
-        ],
-        criteria: metrics()
-            .iter()
-            .map(|m| {
-                CriterionSpec::scored(
-                    m["id"].as_str().unwrap(),
-                    m["weight"].as_u64().unwrap() as u8,
-                    m["question"].as_str().unwrap(),
-                    EvaluationDimension::Deliverable,
-                )
-            })
-            .collect(),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
+pub struct LinklyTutorial;
+
+impl Scenario for LinklyTutorial {
+    fn id(&self) -> &'static str {
+        ID
     }
-}
 
-/// Chapters 2–7 and the guard, sent on the same session after the first
-/// prompt completes.
-pub fn dialogue_followups(_run_id: &str) -> Vec<String> {
-    PROMPTS[1..]
-        .iter()
-        .map(|prompt| prompt.trim_end().to_string())
-        .collect()
-}
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::ScriptedDialogue
+    }
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    Ok(MaterializedScenario {
-        spec: scenario(namespace),
-        case: ScenarioCase::new(
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
             ID,
             super::stable_seed(ID),
             json!({
@@ -175,12 +145,12 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "prompts_sha256": crate::artifact::sha256_bytes(PROMPTS.concat().as_bytes()),
             }),
             vec![
-                "e2e::control-plane-v1".into(),
-                "iii::functions".into(),
-                "iii::compose".into(),
-                "harness::scripted-dialogue-v1".into(),
-                "node".into(),
-                "curl".into(),
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCompose,
+                Capability::HarnessScriptedDialogueV1,
+                Capability::Node,
+                Capability::Curl,
             ],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
@@ -194,9 +164,78 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 provenance_required: true,
                 capture_before_cleanup: true,
             },
-        )?,
-        capture: Some(capture),
-    })
+        )
+    }
+
+    fn spec(&self, _run_id: &str) -> ScenarioSpec {
+        ScenarioSpec {
+            id: ID,
+            prompt: PROMPTS[0].trim_end().to_string(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 256,
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(6_000_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &[
+                "approval::*",
+                "configuration::register",
+                "shell::workspace::*",
+            ],
+            criteria: metrics()
+                .iter()
+                .map(|m| {
+                    CriterionSpec::scored(
+                        m["id"].as_str().unwrap(),
+                        m["weight"].as_u64().unwrap() as u8,
+                        m["question"].as_str().unwrap(),
+                        EvaluationDimension::Deliverable,
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    /// Chapters 2–7 and the guard, sent on the same session after the first
+    /// prompt completes.
+    fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
+        PROMPTS[1..]
+            .iter()
+            .map(|prompt| prompt.trim_end().to_string())
+            .collect()
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 /// The subject's `fs_scope` root once `setup` has found the project; `None`
@@ -1576,19 +1615,24 @@ fn capture<'a>(
 fn evaluate<'a>(
     _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
-    run_id: &'a str,
+    _run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
-        let validation: Value = serde_json::from_slice(&std::fs::read(
-            root(run_id).join("validation/observations.json"),
-        )?)?;
+        // `capture` probed the application and embedded the very observations it
+        // wrote to `validation/observations.json` in the evidence deliverable.
+        let validation = observation
+            .deliverables
+            .iter()
+            .find(|deliverable| deliverable.id == EVIDENCE_ID)
+            .and_then(|deliverable| deliverable.content.as_json())
+            .context("Linkly evidence deliverable was not captured")?;
         Ok(ObjectiveEvaluation {
             completion: if observation.metrics.complete {
                 CompletionState::Completed
             } else {
                 CompletionState::TaskIncomplete
             },
-            awards: atomic_awards(metrics(), &validation)?,
+            awards: atomic_awards(metrics(), validation)?,
             infrastructure_error: None,
         })
     })
@@ -1607,7 +1651,7 @@ mod tests {
 
     #[test]
     fn twenty_two_atomic_criteria_total_one_hundred_points() {
-        let scenario = scenario("test");
+        let scenario = LinklyTutorial.spec("test");
         scenario.validate().unwrap();
         assert_eq!(scenario.criteria.len(), 22);
         assert_eq!(
@@ -1622,7 +1666,7 @@ mod tests {
             .criteria
             .iter()
             .all(|c| c.description.matches('?').count() == 1));
-        let materialized = materialize("test", 7).unwrap();
+        let materialized = ScenarioId::LinklyTutorial.materialize("test", 7).unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.case.seed, super::super::stable_seed(ID));
         assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 1);
@@ -1630,10 +1674,13 @@ mod tests {
 
     #[test]
     fn the_dialogue_is_the_seven_chapters_then_the_guard() {
-        let followups = dialogue_followups("test");
+        let followups = LinklyTutorial.dialogue_followups("test");
         assert_eq!(followups.len(), 7);
-        assert_eq!(scenario("test").prompt, PROMPTS[0].trim_end());
-        assert!(scenario("test").prompt.starts_with("Build the link worker"));
+        assert_eq!(LinklyTutorial.spec("test").prompt, PROMPTS[0].trim_end());
+        assert!(LinklyTutorial
+            .spec("test")
+            .prompt
+            .starts_with("Build the link worker"));
         assert!(followups.iter().all(|prompt| !prompt.trim().is_empty()));
         assert!(followups[6].contains("compose::restart"));
         assert!(followups[5].contains("Turn a browser tab into a worker"));

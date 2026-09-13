@@ -7,16 +7,16 @@
 //! persisted by the workflow scheduler before its mandatory cleanup, so they
 //! are not duplicated as ordinary `ScenarioDeliverableCapture` hooks here.
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, ExecutionRealism,
-    HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec, ShadowMode,
+    Capability, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    ExecutionRealism, HumanHorizon, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioExecutionKind, ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
 pub const ID: &str = "incident_response";
@@ -160,56 +160,71 @@ pub const CRITERIA: [CriterionSpec; 5] = [
     FINAL_RECONCILIATION,
 ];
 
-pub fn scenario(_run_id: &str) -> ScenarioSpec {
-    ScenarioSpec {
-        id: ID,
-        // Adaptive scenarios retain a purpose prompt for the common scenario
-        // contract. The workflow sends bounded node-specific prompts.
-        prompt: "Investigate, reproduce, diagnose, remediate, validate, and safely resolve an isolated synthetic software incident in an environment-prepared disposable repository. Preserve deterministic evidence, choose exactly one safe terminal action, and leave fixture restoration to mandatory cleanup.".into(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 1,
-            max_output_tokens: None,
-            max_total_tokens: Some(750_000),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: CRITERIA.to_vec(),
-        setup: None,
-        evaluate: composite_only_evaluator,
-        cleanup: None,
-    }
-}
+pub struct IncidentResponse;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let spec = scenario(namespace);
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        materialized_inputs()?,
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "harness::independent_session".to_string(),
-            "iii::functions".to_string(),
-            "iii::coder".to_string(),
-            "iii::shell".to_string(),
-            "incident_fixture::v1".to_string(),
-        ],
-        // Adaptive assets belong to semantic workflow steps and are captured
-        // by the scheduler. Ordinary scenario captures are intentionally empty.
-        DeliverableContract::default(),
-    )?
-    .with_characterization(ScenarioCharacterization::new(
-        HumanHorizon::author_estimate(60, 120)?,
-        ExecutionRealism::RealisticSimulator,
-        ShadowMode::None,
-    )?)?;
-    Ok(MaterializedScenario {
-        spec,
-        case,
-        capture: None,
-    })
+impl Scenario for IncidentResponse {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::AdaptiveFlow
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        ScenarioCharacterization::new(
+            HumanHorizon::author_estimate(60, 120)?,
+            ExecutionRealism::RealisticSimulator,
+            ShadowMode::None,
+        )
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            materialized_inputs()?,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::HarnessIndependentSession,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+                Capability::IncidentFixtureV1,
+            ],
+            // Adaptive assets belong to semantic workflow steps and are captured
+            // by the scheduler. Ordinary scenario captures are intentionally empty.
+            DeliverableContract::default(),
+        )
+    }
+
+    fn spec(&self, _run_id: &str) -> ScenarioSpec {
+        ScenarioSpec {
+            id: ID,
+            // Adaptive scenarios retain a purpose prompt for the common scenario
+            // contract. The workflow sends bounded node-specific prompts.
+            prompt: "Investigate, reproduce, diagnose, remediate, validate, and safely resolve an isolated synthetic software incident in an environment-prepared disposable repository. Preserve deterministic evidence, choose exactly one safe terminal action, and leave fixture restoration to mandatory cleanup.".into(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: None,
+                max_total_tokens: Some(750_000),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: CRITERIA.to_vec(),
+        }
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        composite_only_evaluator(context, observation, run_id)
+    }
 }
 
 pub fn expected_fixture_contract_identity() -> Value {
@@ -284,26 +299,34 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::assessment::{AssessmentKind, AssessmentPolicy};
+    use crate::scenarios::ScenarioId;
 
     use super::*;
 
     #[test]
     fn materialized_contract_is_stable() {
-        let first = materialize("attempt-a", 42).unwrap();
-        let retry = materialize("attempt-b", 42).unwrap();
-        let rotated = materialize("attempt-c", 43).unwrap();
+        let first = ScenarioId::IncidentResponse
+            .materialize("attempt-a", 42)
+            .unwrap();
+        let retry = ScenarioId::IncidentResponse
+            .materialize("attempt-b", 42)
+            .unwrap();
+        let rotated = ScenarioId::IncidentResponse
+            .materialize("attempt-c", 43)
+            .unwrap();
 
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.case.case_id, rotated.case.case_id);
         assert!(first.case.deliverable_contract.artifacts.is_empty());
-        assert!(first.capture.is_none());
     }
 
     #[test]
     fn case_inputs_are_stable_non_secret_contract_data() {
-        let materialized = materialize("attempt", 7).unwrap();
+        let materialized = ScenarioId::IncidentResponse
+            .materialize("attempt", 7)
+            .unwrap();
         let inputs = &materialized.case.inputs;
 
         assert_eq!(inputs["incident_event_id"], INCIDENT_EVENT_ID);
@@ -328,23 +351,25 @@ mod tests {
 
     #[test]
     fn required_capabilities_match_the_fixture_boundary() {
-        let materialized = materialize("attempt", 7).unwrap();
+        let materialized = ScenarioId::IncidentResponse
+            .materialize("attempt", 7)
+            .unwrap();
         assert_eq!(
             materialized.case.required_capabilities,
             [
-                "e2e::control-plane-v1",
-                "harness::independent_session",
-                "iii::functions",
-                "iii::coder",
-                "iii::shell",
-                "incident_fixture::v1",
+                Capability::E2eControlPlaneV1,
+                Capability::HarnessIndependentSession,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+                Capability::IncidentFixtureV1,
             ]
         );
     }
 
     #[test]
     fn assessment_contract_is_numeric_and_totals_one_hundred() {
-        let spec = scenario("attempt");
+        let spec = IncidentResponse.spec("attempt");
         spec.validate().unwrap();
 
         assert_eq!(
@@ -404,7 +429,11 @@ mod tests {
 
     #[test]
     fn resource_budgets_match_the_code_owned_workflow_contract() {
-        let inputs = materialize("attempt", 7).unwrap().case.inputs;
+        let inputs = ScenarioId::IncidentResponse
+            .materialize("attempt", 7)
+            .unwrap()
+            .case
+            .inputs;
         let budgets = &inputs["workflow_resource_budgets"];
         assert_eq!(budgets["max_parallel"], 3);
         assert_eq!(budgets["max_nodes"], 20);

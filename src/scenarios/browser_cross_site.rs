@@ -23,10 +23,10 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "browser_cross_site";
@@ -870,34 +870,87 @@ pub fn allowed_functions(run_id: &str) -> Vec<String> {
     ]
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct BrowserCrossSite;
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "cross-site-ui-policy-reconciliation",
-            "sites": ["support", "knowledge_base", "order_admin"],
-            "target_ticket": TARGET_TICKET,
-            "target_order": TARGET_ORDER,
-            "superseded_policy_present": true,
-            "backend_oracle": "runner_owned",
-        }),
-        vec![
-            "e2e::control-plane-v1".into(),
-            "browser::interactive".into(),
-            "fixture::multi-origin-http".into(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for BrowserCrossSite {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "cross-site-ui-policy-reconciliation",
+                "sites": ["support", "knowledge_base", "order_admin"],
+                "target_ticket": TARGET_TICKET,
+                "target_order": TARGET_ORDER,
+                "superseded_policy_present": true,
+                "backend_oracle": "runner_owned",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::BrowserInteractive,
+                Capability::FixtureMultiOriginHttp,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -941,20 +994,22 @@ before replying, and include the genuine receipt in the final response."#,
             "browser::execute",
         ],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     #[test]
     fn canonical_case_ignores_requested_seed() {
-        let first = materialize("attempt-a", 7).unwrap();
-        let second = materialize("attempt-b", 999).unwrap();
+        let first = ScenarioId::BrowserCrossSite
+            .materialize("attempt-a", 7)
+            .unwrap();
+        let second = ScenarioId::BrowserCrossSite
+            .materialize("attempt-b", 999)
+            .unwrap();
         assert_eq!(first.case.seed, CANONICAL_SEED);
         assert_eq!(first.case.case_id, second.case.case_id);
         first.validate().unwrap();

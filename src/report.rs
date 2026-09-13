@@ -2995,7 +2995,7 @@ mod tests {
         SystemStatus,
     };
     use crate::identity::StackIdentity;
-    use crate::scenarios::{ArtifactExpectation, InvariantSpec};
+    use crate::scenarios::{ArtifactExpectation, Capability, InvariantSpec};
     use crate::wire::{
         ControlPlaneEvidence, FunctionContractEvidence, SessionMetricsResponse, StatusReport,
     };
@@ -4058,7 +4058,7 @@ mod tests {
             "case",
             7,
             serde_json::json!({ "status": "ready" }),
-            vec!["iii::state".into()],
+            vec![Capability::IiiState],
             contract,
         )
         .unwrap()

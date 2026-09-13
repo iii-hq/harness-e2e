@@ -26,9 +26,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
@@ -132,35 +132,68 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct QuorumFanIn;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "members": MEMBER_COUNT,
-            "quorum": QUORUM_INDEXES.len(),
-            "straggler": member_key(STRAGGLER_INDEX),
-            "report_marker": REPORT_MARKER,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for QuorumFanIn {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "members": MEMBER_COUNT,
+                "quorum": QUORUM_INDEXES.len(),
+                "straggler": member_key(STRAGGLER_INDEX),
+                "report_marker": REPORT_MARKER,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -178,9 +211,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -232,15 +262,14 @@ contain the token of `member-02`. Do not answer before the barrier wake."#,
 }
 
 fn evaluate<'a>(
-    context: &'a E2eContext,
+    _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_quorum(context, observation, run_id).await })
+    Box::pin(async move { evaluate_quorum(observation, run_id).await })
 }
 
 async fn evaluate_quorum(
-    context: &E2eContext,
     observation: &ScenarioObservation,
     run_id: &str,
 ) -> anyhow::Result<ObjectiveEvaluation> {
@@ -285,8 +314,10 @@ async fn evaluate_quorum(
     let children = depth_one_children(observation, &names);
     let audit = stop_audit(&observation.transcript, &names.quorum_label);
     let stopped_after_barrier = audit.stopped_child_after_barrier(&children);
-    let straggler_value = get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
-    let straggler_never_wrote = straggler_value.is_null();
+    // `capture` already read this exact state location before cleanup and
+    // stored the verdict verbatim in the quorum record, so the evaluator reads
+    // the captured value instead of triggering `state::get` a second time.
+    let straggler_never_wrote = !captured_straggler_written(&observation.deliverables);
     let three_children = children.len() == usize::from(MEMBER_COUNT);
 
     let reports = response_reports(&observation.response, run_id);
@@ -514,6 +545,20 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         // (`quorum:<run_id>:members`) and this stack's store is in-memory.
         Ok(())
     })
+}
+
+/// Whether the captured quorum record saw a straggler write. A record is
+/// always present when the evaluator runs — capture precedes evaluation and a
+/// failed capture aborts the attempt — and an absent one is read as a write,
+/// which withholds the straggler award rather than granting it unproven.
+fn captured_straggler_written(deliverables: &[CapturedDeliverable]) -> bool {
+    deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .and_then(|content| content.get("straggler_written"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
@@ -854,10 +899,38 @@ mod tests {
         assert!(audit.stopped_child_after_barrier(&children));
     }
 
+    fn quorum_record(content: Value) -> CapturedDeliverable {
+        CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "quorum_record".to_string(),
+            content: content.into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_straggler_verdict_comes_from_the_captured_record() {
+        assert!(!captured_straggler_written(&[quorum_record(
+            json!({ "straggler_written": false })
+        )]));
+        assert!(captured_straggler_written(&[quorum_record(
+            json!({ "straggler_written": true })
+        )]));
+        // A record that never arrived withholds the award instead of granting
+        // an unproven one.
+        assert!(captured_straggler_written(&[]));
+        assert!(captured_straggler_written(&[quorum_record(json!({}))]));
+    }
+
     #[test]
     fn materialization_is_reproducible() {
-        let first = materialize("attempt-a", 77).unwrap();
-        let retry = materialize("attempt-b", 77).unwrap();
+        let first = crate::scenarios::ScenarioId::QuorumFanIn
+            .materialize("attempt-a", 77)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::QuorumFanIn
+            .materialize("attempt-b", 77)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
@@ -865,6 +938,5 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
-        assert!(first.capture.is_some());
     }
 }

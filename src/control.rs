@@ -39,7 +39,8 @@ use crate::report::{
 };
 use crate::scenarios::ScenarioId;
 use crate::scenarios::{
-    scenario_contract_sha256, DeliverableContract, ExecutionPolicy, ScenarioCharacterization,
+    scenario_contract_sha256, Capability, DeliverableContract, ExecutionPolicy,
+    ScenarioCharacterization,
 };
 use crate::suite::{
     run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
@@ -331,7 +332,7 @@ pub struct ScenarioDescriptor {
     pub contract_sha256: String,
     pub characterization: ScenarioCharacterization,
     pub resource_envelope: ScenarioResourceEnvelope,
-    pub required_capabilities: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
     pub deliverable_contract: DeliverableContract,
 }
 
@@ -1443,16 +1444,21 @@ impl ControlPlane {
                 json!({ "root_session_id": active.session_id }),
             )
             .await;
-        if let Some(cleanup) = active.scenario_id.spec(&active.attempt_id).cleanup {
-            let context = E2eContext::from_client(self.inner.iii.clone());
-            if let Err(error) = cleanup(&context, &active.attempt_id).await {
-                tracing::warn!(
-                    scenario = active.scenario_id.as_str(),
-                    attempt_id = active.attempt_id,
-                    %error,
-                    "restart compensation could not complete scenario cleanup"
-                );
-            }
+        let context = E2eContext::from_client(self.inner.iii.clone());
+        let cleanup = active
+            .scenario_id
+            .module()
+            .cleanup(&context, &active.attempt_id);
+        let Some(cleanup) = cleanup else {
+            return;
+        };
+        if let Err(error) = cleanup.await {
+            tracing::warn!(
+                scenario = active.scenario_id.as_str(),
+                attempt_id = active.attempt_id,
+                %error,
+                "restart compensation could not complete scenario cleanup"
+            );
         }
     }
 

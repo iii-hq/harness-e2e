@@ -31,9 +31,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
@@ -308,44 +308,72 @@ fn setup_game<'a>(context: &'a E2eContext, run_id: &'a str, depth: u32) -> Clean
     })
 }
 
-macro_rules! rung_setup {
-    ($name:ident, $depth:expr) => {
-        fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-            setup_game(context, run_id, $depth)
-        }
-    };
-}
+pub struct ChessPlayLadder;
 
-rung_setup!(setup_depth_3, 3);
+impl Scenario for ChessPlayLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, RUNG)
-}
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = RUNG;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        // Nothing here is run-scoped: inputs are identical across namespaces
-        // for a given seed, so canonical identity stays stable across attempts.
-        json!({
-            "opponent_depth": rung.depth,
-            "move_cap_plies": MOVE_CAP,
-            "start_fen": chess_engine::STARTPOS,
-            "result_marker": RESULT_MARKER,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, rung),
-        case,
-        capture: Some(capture),
-    })
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let rung = RUNG;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            // Nothing here is run-scoped: inputs are identical across namespaces
+            // for a given seed, so canonical identity stays stable across attempts.
+            json!({
+                "opponent_depth": rung.depth,
+                "move_cap_plies": MOVE_CAP,
+                "start_fen": chess_engine::STARTPOS,
+                "result_marker": RESULT_MARKER,
+            }),
+            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, RUNG)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup_game(context, run_id, RUNG.depth))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
@@ -370,9 +398,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
         },
         denied_functions: &["state::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup_depth_3),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -620,7 +645,11 @@ mod tests {
     fn every_seed_request_normalizes_to_the_maximum_case() {
         assert_eq!(RUNG.depth, 3);
         assert_eq!(
-            materialize("attempt", 6002).unwrap().case.seed,
+            crate::scenarios::ScenarioId::ChessPlayLadder
+                .materialize("attempt", 6002)
+                .unwrap()
+                .case
+                .seed,
             CANONICAL_SEED
         );
     }
@@ -714,8 +743,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_uses_the_maximum_depth() {
-        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        let first = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("attempt-a", CANONICAL_SEED)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("attempt-b", CANONICAL_SEED)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
@@ -730,7 +763,6 @@ mod tests {
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
         assert!(first.spec.execution.max_total_tokens.is_none());
-        assert!(first.capture.is_some());
         first.validate().unwrap();
     }
 
@@ -738,7 +770,9 @@ mod tests {
     fn the_materialized_spec_and_case_pass_the_shared_contract() {
         // The same invariants the registry-wide test enforces for a wired
         // scenario, checked here so the file stands on its own.
-        let materialized = materialize("chess", CANONICAL_SEED).unwrap();
+        let materialized = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("chess", CANONICAL_SEED)
+            .unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.spec.id, ID);
         let weights: u16 = materialized

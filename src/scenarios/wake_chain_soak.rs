@@ -35,9 +35,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
@@ -116,34 +116,71 @@ fn report_completes(response: &str, ticks: u8) -> bool {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, RUNG)
-}
+pub struct WakeChainSoak;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = RUNG;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "ticks": rung.ticks,
-            "interval_ms": INTERVAL_MS,
-            "counter_key": COUNTER_KEY,
-            "report_marker": report_marker(rung.ticks),
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(rung.ticks),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, rung),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for WakeChainSoak {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let rung = RUNG;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "ticks": rung.ticks,
+                "interval_ms": INTERVAL_MS,
+                "counter_key": COUNTER_KEY,
+                "report_marker": report_marker(rung.ticks),
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(rung.ticks),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, RUNG)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
@@ -169,9 +206,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -760,7 +794,11 @@ mod tests {
     fn every_seed_request_normalizes_to_the_maximum_case() {
         assert_eq!(RUNG.ticks, 50);
         assert_eq!(
-            materialize("attempt", 5002).unwrap().case.seed,
+            crate::scenarios::ScenarioId::WakeChainSoak
+                .materialize("attempt", 5002)
+                .unwrap()
+                .case
+                .seed,
             CANONICAL_SEED
         );
     }
@@ -999,8 +1037,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_scaled_to_maximum_ticks() {
-        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        let first = crate::scenarios::ScenarioId::WakeChainSoak
+            .materialize("attempt-a", CANONICAL_SEED)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::WakeChainSoak
+            .materialize("attempt-b", CANONICAL_SEED)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);

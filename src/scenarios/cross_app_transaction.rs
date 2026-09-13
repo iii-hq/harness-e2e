@@ -20,10 +20,10 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "cross_app_transaction";
@@ -679,35 +679,88 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct CrossAppTransaction;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "account_id": TARGET_ACCOUNT,
-            "ticket_id": TARGET_TICKET,
-            "from_team": INITIAL_TEAM,
-            "to_team": TARGET_TEAM,
-            "services": ["crm", "billing", "support"],
-            "injected_fault": "one billing version_conflict",
-            "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "e2e::run-scoped-fixtures".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for CrossAppTransaction {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "account_id": TARGET_ACCOUNT,
+                "ticket_id": TARGET_TICKET,
+                "from_team": INITIAL_TEAM,
+                "to_team": TARGET_TEAM,
+                "services": ["crm", "billing", "support"],
+                "injected_fault": "one billing version_conflict",
+                "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eRunScopedFixtures,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -744,9 +797,6 @@ Finish with a short PASS/FAIL report containing the exact receipt returned by ea
         },
         denied_functions: &["state::*", "database::*", "http::*", "shell::*", "coder::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -1030,6 +1080,7 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     fn transfer(account_id: &str, team: &str, version: u64, key: &str) -> TransferAccountRequest {
         TransferAccountRequest {
@@ -1145,8 +1196,12 @@ mod tests {
 
     #[test]
     fn materialized_case_is_canonical_and_valid() {
-        let first = materialize("attempt-a", 41).unwrap();
-        let retry = materialize("attempt-b", 41).unwrap();
+        let first = ScenarioId::CrossAppTransaction
+            .materialize("attempt-a", 41)
+            .unwrap();
+        let retry = ScenarioId::CrossAppTransaction
+            .materialize("attempt-b", 41)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);

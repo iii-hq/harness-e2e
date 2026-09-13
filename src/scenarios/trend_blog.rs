@@ -31,10 +31,10 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "trend_blog";
@@ -49,8 +49,8 @@ const FEED_IN_SUBTREE: &str = "feed.json";
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const TRENDS_MANIFEST_SHA256: &str =
     "sha256:8b2d66ae15256ffdda85d69a80bd73571ef2d0de8730695af6d708b7c58ce902";
-/// Pinned edition string (mirrors the fixture's `edition`) so `materialize`
-/// stays filesystem-independent — `cargo test` needs no checkout.
+/// Pinned edition string (mirrors the fixture's `edition`) so the case stays
+/// filesystem-independent — `cargo test` needs no checkout.
 const EDITION: &str = "2026-W34";
 
 const OUTPUT_INDEX: &str = "site/index.html";
@@ -223,36 +223,73 @@ fn remove_workspace(run_id: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct TrendBlog;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "edition": EDITION,
-            "top_k": TOP_K,
-            "source": SOURCE_RELATIVE,
-            "fixture_repository": "iii-hq/e2e-fixture",
-            "fixture_subtree": FIXTURE_SUBTREE,
-            "fixture_revision": FIXTURE_REVISION,
-            "outputs": [OUTPUT_INDEX, OUTPUT_FEED, OUTPUT_MANIFEST],
-            "rule": "cover the top-ranked topics using only the provided sources; never invent facts, quotes, URLs, or figures the sources withhold",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::coder".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for TrendBlog {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "edition": EDITION,
+                "top_k": TOP_K,
+                "source": SOURCE_RELATIVE,
+                "fixture_repository": "iii-hq/e2e-fixture",
+                "fixture_subtree": FIXTURE_SUBTREE,
+                "fixture_revision": FIXTURE_REVISION,
+                "outputs": [OUTPUT_INDEX, OUTPUT_FEED, OUTPUT_MANIFEST],
+                "rule": "cover the top-ranked topics using only the provided sources; never invent facts, quotes, URLs, or figures the sources withhold",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -271,9 +308,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         // which is what makes the anti-fabrication gate meaningful.
         denied_functions: &["http::*", "browser::*", "web::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -938,12 +972,15 @@ mod tests {
 
     #[test]
     fn materialize_is_reproducible() {
-        let first = materialize("attempt-a", 7).unwrap();
-        let retry = materialize("attempt-b", 7).unwrap();
+        let first = crate::scenarios::ScenarioId::TrendBlog
+            .materialize("attempt-a", 7)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::TrendBlog
+            .materialize("attempt-b", 7)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert!(first.capture.is_some());
         first.validate().unwrap();
     }
 }
