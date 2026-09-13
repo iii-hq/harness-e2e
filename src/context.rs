@@ -54,7 +54,7 @@ impl E2eContext {
         &self.client
     }
 
-    pub(crate) fn from_client(client: IIIClient) -> Self {
+    pub fn from_client(client: IIIClient) -> Self {
         Self {
             client,
             hub: ObserveHub::new(),
