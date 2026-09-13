@@ -23,10 +23,10 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, CriterionSpec, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, CleanupFuture, CriterionSpec, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase,
+    ScenarioCharacterization, ScenarioExecutionKind, ScenarioObservation, ScenarioSpec,
 };
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";

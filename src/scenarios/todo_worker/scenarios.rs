@@ -6,7 +6,115 @@ use super::evidence::{
 use super::workspace::{persist_json, validation_bundle_path};
 use super::*;
 
-pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
+/// The single-session Todo Worker build, validated by an independent probe run.
+pub struct TodoWorkerSimple;
+
+impl Scenario for TodoWorkerSimple {
+    fn id(&self) -> &'static str {
+        SIMPLE_ID
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            SIMPLE_ID,
+            seed,
+            materialized_case_inputs()?,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiCompose,
+                Capability::IiiFunctions,
+                Capability::IiiWorkers,
+            ],
+            validation_deliverable_contract(SIMPLE_ASSESSMENTS),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        simple_scenario(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup_workspace(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture_simple(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate_simple(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup_atomic(context, run_id))
+    }
+}
+
+/// The planned build: one planner session, one separate builder, one independent validator.
+pub struct TodoWorkerPlanned;
+
+impl Scenario for TodoWorkerPlanned {
+    fn id(&self) -> &'static str {
+        PLANNED_ID
+    }
+
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::CompositeFlow
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            PLANNED_ID,
+            seed,
+            materialized_case_inputs()?,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::HarnessIndependentSession,
+                Capability::IiiCompose,
+                Capability::IiiFunctions,
+                Capability::IiiWorkers,
+            ],
+            DeliverableContract::default(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        planned_scenario(run_id)
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        composite_only_evaluator(context, observation, run_id)
+    }
+}
+
+fn simple_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: SIMPLE_ID,
@@ -24,33 +132,10 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(SIMPLE_ASSESSMENTS),
-        setup: Some(setup_workspace),
-        evaluate: evaluate_simple,
-        cleanup: Some(cleanup_atomic),
     }
 }
 
-pub fn simple_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        SIMPLE_ID,
-        seed,
-        materialized_case_inputs()?,
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::compose".into(),
-            "iii::functions".into(),
-            "iii::workers".into(),
-        ],
-        validation_deliverable_contract(SIMPLE_ASSESSMENTS),
-    )?;
-    Ok(MaterializedScenario {
-        spec: simple_scenario(namespace),
-        case,
-        capture: Some(capture_simple),
-    })
-}
-
-pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
+fn planned_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: PLANNED_ID,
@@ -65,31 +150,7 @@ pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: PLANNED_CRITERIA.to_vec(),
-        setup: None,
-        evaluate: composite_only_evaluator,
-        cleanup: None,
     }
-}
-
-pub fn planned_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        PLANNED_ID,
-        seed,
-        materialized_case_inputs()?,
-        vec![
-            "e2e::control-plane-v1".into(),
-            "harness::independent_session".into(),
-            "iii::compose".into(),
-            "iii::functions".into(),
-            "iii::workers".into(),
-        ],
-        DeliverableContract::default(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: planned_scenario(namespace),
-        case,
-        capture: None,
-    })
 }
 
 fn composite_only_evaluator<'a>(

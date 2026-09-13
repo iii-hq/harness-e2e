@@ -14,9 +14,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "sequential_pipeline";
@@ -107,31 +107,64 @@ fn expected_results() -> [(&'static str, Value); 3] {
     ]
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct SequentialPipeline;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "contracts": contracts().iter().map(|(key, value)| json!({ "key": key, "value": value })).collect::<Vec<_>>(),
-            "expected_results": expected_results().iter().map(|(key, value)| json!({ "key": key, "value": value })).collect::<Vec<_>>(),
-            "receipt": RECEIPT_TOKEN,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for SequentialPipeline {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "contracts": contracts().iter().map(|(key, value)| json!({ "key": key, "value": value })).collect::<Vec<_>>(),
+                "expected_results": expected_results().iter().map(|(key, value)| json!({ "key": key, "value": value })).collect::<Vec<_>>(),
+                "receipt": RECEIPT_TOKEN,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -219,9 +252,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -271,6 +301,18 @@ fn sequence_tokens(text: &str) -> BTreeSet<String> {
     .collect()
 }
 
+/// The pipeline result keys the capture stored for this run.
+fn captured_results(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("results")
+        .cloned()
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -286,9 +328,15 @@ fn evaluate<'a>(
         }
         let scope = scope(run_id);
         let expected = expected_results();
+        // The capture stored these same result keys before cleanup; reuse them
+        // instead of reading the scope a second time.
+        let captured = captured_results(observation);
         let mut results_match = [false; 3];
         for (index, (key, value)) in expected.iter().enumerate() {
-            results_match[index] = read_key(context, &scope, key).await? == *value;
+            results_match[index] = match captured.as_ref().and_then(|results| results.get(*key)) {
+                Some(stored) => stored == value,
+                None => read_key(context, &scope, key).await? == *value,
+            };
         }
         let receipt_stored = results_match[2];
 
@@ -400,8 +448,10 @@ mod tests {
         assert_eq!(results[0].1["issued"], results[1].1["accepted"]);
         assert_eq!(results[1].1["issued"], results[2].1["accepted"]);
         assert_eq!(results[2].1["receipt"], contracts[2].1["receipt"]);
-        scenario("run").validate().unwrap();
-        materialize("case", 11).unwrap();
+        SequentialPipeline.spec("run").validate().unwrap();
+        crate::scenarios::ScenarioId::SequentialPipeline
+            .materialize("case", 11)
+            .unwrap();
     }
 
     #[test]

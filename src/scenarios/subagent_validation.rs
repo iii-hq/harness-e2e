@@ -21,10 +21,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "subagent_validation";
@@ -51,37 +50,64 @@ const WAKE_REPORT: AssessmentSpec = AssessmentSpec::scored(
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[CHILD_GOAL, ORCHESTRATION_DISCIPLINE, WAKE_REPORT];
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct SubagentValidation;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let spec = scenario_for_case(namespace);
-    let contract = deliverable_contract();
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "initial_rows": 4,
-            "repair_rows": 4,
-            "expected_rows": EXPECTED_ROWS,
-            "acceptance_threshold": THRESHOLD,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "e2e::subagents".to_string(),
-            "iii::triggers".to_string(),
-            "iii::database".to_string(),
-            "iii::state".to_string(),
-        ],
-        contract,
-    )?;
-    Ok(MaterializedScenario {
-        spec,
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for SubagentValidation {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "initial_rows": 4,
+                "repair_rows": 4,
+                "expected_rows": EXPECTED_ROWS,
+                "acceptance_threshold": THRESHOLD,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eSubagents,
+                Capability::IiiTriggers,
+                Capability::IiiDatabase,
+                Capability::IiiState,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -139,9 +165,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -424,7 +447,7 @@ mod tests {
 
     #[test]
     fn child_budget_allows_the_declared_validation_repair() {
-        let prompt = scenario("run").prompt;
+        let prompt = SubagentValidation.spec("run").prompt;
         assert!(prompt.contains("\"max_turns\": 8"));
         assert!(prompt.contains("\"max_validation_retries\": 5"));
     }

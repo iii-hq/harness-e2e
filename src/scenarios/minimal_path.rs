@@ -10,9 +10,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "minimal_path";
@@ -72,32 +72,69 @@ fn expected(seed: u64) -> Value {
     json!({ "owner": OWNER, "case_seed": seed, "status": "stored" })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, super::stable_seed(ID))
-}
+pub struct MinimalPath;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "key": KEY,
-            "baseline": baseline(),
-            "expected": expected(seed),
-            "done_marker": DONE_MARKER,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, seed),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for MinimalPath {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "key": KEY,
+                "baseline": baseline(),
+                "expected": expected(seed),
+                "done_marker": DONE_MARKER,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, super::stable_seed(ID))
+    }
+
+    fn case_spec(&self, case: &ScenarioCase, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id, case.seed)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -177,9 +214,6 @@ fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -204,6 +238,18 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
+/// The stored state the capture recorded for this run.
+fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("state")
+        .cloned()
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -219,11 +265,16 @@ fn evaluate<'a>(
         }
         let scope = scope(run_id);
         let expected = expected(observation.case.seed);
-        let state = common::state_value(
-            context
-                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
-                .await?,
-        );
+        // The capture stored this same state value before cleanup; reuse it
+        // instead of reading the scope a second time.
+        let state = match captured_state(observation) {
+            Some(state) => state,
+            None => common::state_value(
+                context
+                    .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
+                    .await?,
+            ),
+        };
         let calls: Vec<_> = common::function_outcomes(&observation.transcript)
             .into_iter()
             .filter(|call| !common::is_contract_discovery(&call.function_id))
@@ -303,17 +354,19 @@ mod tests {
 
     #[test]
     fn materialized_case_carries_the_seeded_expected_value() {
-        let materialized = materialize("case", 7).unwrap();
+        let materialized = crate::scenarios::ScenarioId::MinimalPath
+            .materialize("case", 7)
+            .unwrap();
         assert_eq!(materialized.case.scenario_id, ID);
         assert_eq!(materialized.case.seed, 7);
         assert_eq!(materialized.case.inputs["expected"]["case_seed"], 7);
-        assert!(materialized.spec.prompt.contains("\"case_seed\":7"));
         assert!(materialized.spec.prompt.contains("e2e-minimal-case"));
+        assert!(materialized.spec.prompt.contains("\"case_seed\":7"));
     }
 
     #[test]
     fn criteria_weights_total_one_hundred() {
-        let spec = scenario("run");
+        let spec = MinimalPath.spec("run");
         spec.validate().unwrap();
         assert_eq!(spec.criteria.len(), ASSESSMENTS.len());
     }

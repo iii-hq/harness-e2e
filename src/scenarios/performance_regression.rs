@@ -23,10 +23,10 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "performance_regression";
@@ -226,8 +226,88 @@ impl PerformanceAudit {
     }
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
+pub struct PerformanceRegression;
+
+impl Scenario for PerformanceRegression {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "stable-unique-quadratic-regression",
+                "language": "python",
+                "canonical_seed": CANONICAL_SEED,
+                "allowed_production_paths": [PRODUCTION_PATH],
+                "protected_paths": [TEST_PATH, TASK_PATH],
+                "workloads": [WORKLOAD_SMALL, WORKLOAD_LARGE],
+                "deterministic_work_limit": WORK_LIMIT_LARGE,
+                "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
+                "wall_clock_policy": "advisory",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eFilesystem,
+                Capability::E2eShell,
+                Capability::Python3,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 pub fn allowed_functions(_run_id: &str) -> Vec<String> {
@@ -237,37 +317,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
         "coder::*".into(),
         "shell::*".into(),
     ]
-}
-
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "stable-unique-quadratic-regression",
-            "language": "python",
-            "canonical_seed": CANONICAL_SEED,
-            "allowed_production_paths": [PRODUCTION_PATH],
-            "protected_paths": [TEST_PATH, TASK_PATH],
-            "workloads": [WORKLOAD_SMALL, WORKLOAD_LARGE],
-            "deterministic_work_limit": WORK_LIMIT_LARGE,
-            "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
-            "wall_clock_policy": "advisory",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "e2e::filesystem".to_string(),
-            "e2e::shell".to_string(),
-            "python3".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -304,9 +353,6 @@ measure yourself."#,
         },
         denied_functions: &["web::*", "scrapling::*", "http::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -782,6 +828,7 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     #[test]
     fn bytecode_caches_are_not_patch_scope_violations() {
@@ -846,8 +893,12 @@ mod tests {
 
     #[test]
     fn scenario_and_materialization_validate() {
-        scenario("performance-test").validate().unwrap();
-        materialize("performance-test", CANONICAL_SEED)
+        PerformanceRegression
+            .spec("performance-test")
+            .validate()
+            .unwrap();
+        ScenarioId::PerformanceRegression
+            .materialize("performance-test", CANONICAL_SEED)
             .unwrap()
             .validate()
             .unwrap();

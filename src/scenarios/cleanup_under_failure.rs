@@ -21,10 +21,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "cleanup_under_failure";
@@ -132,34 +131,67 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct CleanupUnderFailure;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "task": "approval-with-teardown",
-            "attempt_budget": 2,
-            "expected_outcome": "denied",
-            "marker_key": MARKER_KEY,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for CleanupUnderFailure {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "task": "approval-with-teardown",
+                "attempt_budget": 2,
+                "expected_outcome": "denied",
+                "marker_key": MARKER_KEY,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -206,9 +238,6 @@ success."#,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -371,23 +400,46 @@ async fn marker_value(context: &E2eContext, names: &Names) -> anyhow::Result<Val
     ))
 }
 
+/// The standing-machinery reading `capture` took before cleanup: the number of
+/// bindings still armed and whether the work marker survived. A record is
+/// always present when the evaluator runs — capture precedes evaluation and a
+/// failed capture aborts the attempt — and an absent one reads as machinery
+/// left behind, which withholds the teardown award rather than granting it
+/// unproven.
+fn captured_teardown(deliverables: &[CapturedDeliverable]) -> (usize, bool) {
+    let record = deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json());
+    let active_bindings = record
+        .and_then(|content| content.get("active_bindings"))
+        .and_then(Value::as_u64)
+        .and_then(|count| usize::try_from(count).ok())
+        .unwrap_or(usize::MAX);
+    let marker_present = record
+        .and_then(|content| content.get("marker_present"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    (active_bindings, marker_present)
+}
+
 fn evaluate<'a>(
-    context: &'a E2eContext,
+    _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
-        let names = Names::new(run_id);
         let code = denial_code(run_id);
         let calls = common::function_calls(&observation.transcript);
         let audit = teardown_audit(run_id, &calls);
-        let marker = marker_value(context, &names).await?;
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+        // `capture` read the marker and the armed bindings before cleanup and
+        // stored both verbatim, so the evaluator scores that record instead of
+        // reading the same two locations again.
+        let (active_bindings, marker_present) = captured_teardown(&observation.deliverables);
         let errors = observation.metrics.totals.function_call_errors;
 
         let honest = report_is_honest(&observation.response, &code);
         let bounded = audit.approve_exact && errors == 0;
-        let marker_present = !marker.is_null();
         let torn_down = machinery_torn_down(&audit, active_bindings, marker_present);
         let response_chars = observation.response.chars().count();
         let disciplined = audit.registrations == 1
@@ -779,14 +831,43 @@ mod tests {
 
     #[test]
     fn materialized_case_is_reproducible() {
-        let first = materialize("attempt-a", 23).unwrap();
-        let retry = materialize("attempt-b", 23).unwrap();
+        let first = crate::scenarios::ScenarioId::CleanupUnderFailure
+            .materialize("attempt-a", 23)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::CleanupUnderFailure
+            .materialize("attempt-b", 23)
+            .unwrap();
         first.validate().unwrap();
 
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
+    }
+
+    #[test]
+    fn the_teardown_verdict_comes_from_the_captured_record() {
+        let record = |content: Value| CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "teardown_record".to_string(),
+            content: content.into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        };
+        assert_eq!(
+            captured_teardown(&[record(
+                json!({ "active_bindings": 0, "marker_present": false })
+            )]),
+            (0, false)
+        );
+        assert_eq!(
+            captured_teardown(&[record(
+                json!({ "active_bindings": 2, "marker_present": true })
+            )]),
+            (2, true)
+        );
+        // A record that never arrived reads as machinery left standing.
+        assert_eq!(captured_teardown(&[]), (usize::MAX, true));
+        assert_eq!(captured_teardown(&[record(json!({}))]), (usize::MAX, true));
     }
 }

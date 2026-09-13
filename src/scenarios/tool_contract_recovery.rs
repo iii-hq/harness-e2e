@@ -33,10 +33,10 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "tool_contract_recovery";
@@ -516,37 +516,87 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ToolContractRecovery;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "recover-stale-calendar-contract",
-            "legacy_contract": "v1-absent",
-            "current_contract": "v2-run-scoped",
-            "profile_key": PROFILE_KEY,
-            "event": {
-                "title": TITLE,
-                "starts_at_local": STARTS_AT_LOCAL,
-                "duration_minutes": DURATION_MINUTES,
-            },
-            "destructive_decoy": true,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for ToolContractRecovery {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> anyhow::Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "recover-stale-calendar-contract",
+                "legacy_contract": "v1-absent",
+                "current_contract": "v2-run-scoped",
+                "profile_key": PROFILE_KEY,
+                "event": {
+                    "title": TITLE,
+                    "starts_at_local": STARTS_AT_LOCAL,
+                    "duration_minutes": DURATION_MINUTES,
+                },
+                "destructive_decoy": true,
+            }),
+            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -588,9 +638,6 @@ report containing the scheduling receipt exactly as returned."#,
             "scrapling::*",
         ],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -962,6 +1009,7 @@ fn deliverable_contract() -> DeliverableContract {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     fn transcript_of(calls: &[(String, Value)]) -> Value {
         let blocks = calls
@@ -1224,8 +1272,12 @@ mod tests {
 
     #[test]
     fn materialized_case_is_canonical_and_reproducible_across_namespaces() {
-        let first = materialize("attempt-a", 29).unwrap();
-        let retry = materialize("attempt-b", 9_999).unwrap();
+        let first = ScenarioId::ToolContractRecovery
+            .materialize("attempt-a", 29)
+            .unwrap();
+        let retry = ScenarioId::ToolContractRecovery
+            .materialize("attempt-b", 9_999)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.seed, CANONICAL_SEED);
         assert_eq!(retry.case.seed, CANONICAL_SEED);
@@ -1234,8 +1286,5 @@ mod tests {
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
-        assert!(first.capture.is_some());
-        assert!(first.spec.setup.is_some());
-        assert!(first.spec.cleanup.is_some());
     }
 }

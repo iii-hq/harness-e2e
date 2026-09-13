@@ -9,10 +9,9 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "timer_wake";
@@ -110,33 +109,66 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct TimerWake;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "delay_ms": DELAY_MS,
-            "signal_ready_after_seconds": READY_AFTER_SECONDS,
-            "result_key": RESULT_KEY,
-            "expected": expected_result(),
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for TimerWake {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "delay_ms": DELAY_MS,
+                "signal_ready_after_seconds": READY_AFTER_SECONDS,
+                "result_key": RESULT_KEY,
+                "expected": expected_result(),
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -177,9 +209,6 @@ binding armed."#,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -302,6 +331,20 @@ fn normalized_block_call(block: &Value) -> Option<(&str, &Value)> {
     Some((function, arguments))
 }
 
+/// The wake result exactly as `capture` read it from the run's state scope
+/// before cleanup. A record is always present when the evaluator runs —
+/// capture precedes evaluation and a failed capture aborts the attempt — and
+/// an absent one reads as null, which never matches the expected result.
+fn captured_result(deliverables: &[CapturedDeliverable]) -> Value {
+    deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .and_then(|content| content.get("result"))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -317,14 +360,10 @@ fn evaluate<'a>(
             .get("expected")
             .cloned()
             .unwrap_or(Value::Null);
-        let observed = common::state_value(
-            context
-                .trigger_value(
-                    "state::get",
-                    json!({ "scope": names.scope, "key": RESULT_KEY }),
-                )
-                .await?,
-        );
+        // `capture` read `{scope}/{RESULT_KEY}` before cleanup and stored the
+        // value verbatim, so the evaluator scores that record instead of
+        // reading the same location again.
+        let observed = captured_result(&observation.deliverables);
         let calls = common::function_calls(&observation.transcript);
         let writes: Vec<_> = calls
             .iter()
@@ -755,5 +794,23 @@ mod tests {
             ]),
         ] });
         assert!(!timer_audit(&repeated, &names).disciplined());
+    }
+
+    #[test]
+    fn the_wake_result_comes_from_the_captured_record() {
+        let record = |content: Value| CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "timer_result".to_string(),
+            content: content.into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        };
+        assert_eq!(
+            captured_result(&[record(json!({ "result": expected_result() }))]),
+            expected_result()
+        );
+        // A record that never arrived reads as null and never matches.
+        assert_eq!(captured_result(&[]), Value::Null);
+        assert_eq!(captured_result(&[record(json!({}))]), Value::Null);
     }
 }

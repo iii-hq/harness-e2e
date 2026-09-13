@@ -26,9 +26,8 @@ use super::common;
 use super::validation_hook::{HookEnvelope, HookVerdict};
 use super::validation_loop::suffix;
 use super::{
-    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_self_repair";
@@ -163,40 +162,73 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ValidationSelfRepair;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "database": "primary",
-            "required_names": REQUIRED_NAMES,
-            "seed_rows": [
-                { "name": "alpha", "amount": 10 },
-                { "name": "beta", "amount": -5 },
-                { "name": "gamma", "amount": 30 },
-                { "name": "beta", "amount": 7 },
-                { "name": "delta", "amount": 200 }
+impl Scenario for ValidationSelfRepair {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "database": "primary",
+                "required_names": REQUIRED_NAMES,
+                "seed_rows": [
+                    { "name": "alpha", "amount": 10 },
+                    { "name": "beta", "amount": -5 },
+                    { "name": "gamma", "amount": 30 },
+                    { "name": "beta", "amount": 7 },
+                    { "name": "delta", "amount": 200 }
+                ],
+                "invariants": ["positive_amounts", "unique_names", "required_names_present"],
+                "maximum_repair_rounds": 2,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+                Capability::IiiTriggers,
             ],
-            "invariants": ["positive_amounts", "unique_names", "required_names_present"],
-            "maximum_repair_rounds": 2,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::database".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -242,9 +274,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         // the loop doing its job; live run 1: the model "renamed the second
         // beta to delta", created a duplicate delta, and was caught.
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -308,6 +337,25 @@ fn deliverable_contract() -> super::DeliverableContract {
     )
 }
 
+/// The repaired dataset the capture stored before cleanup, as
+/// `(row_count, remaining_violations)`.
+fn captured_dataset(observation: &ScenarioObservation) -> Option<(usize, Vec<String>)> {
+    let content = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?;
+    let rows = content.get("rows").and_then(Value::as_array)?;
+    let remaining = content
+        .get("remaining_violations")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|violation| violation.as_str().map(str::to_string))
+        .collect();
+    Some((rows.len(), remaining))
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
@@ -315,11 +363,19 @@ fn evaluate<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let auditor = function_id(run_id);
-        let rows = fetch_rows(context.client(), &table(run_id))
-            .await
-            .unwrap_or_default();
-        let remaining = violations(&rows);
-        let repaired = remaining.is_empty() && !rows.is_empty();
+        // The capture read the same rows and ran the same audit before
+        // cleanup; reuse its verdict instead of reading the table again.
+        let (row_count, remaining) = match captured_dataset(observation) {
+            Some(dataset) => dataset,
+            None => {
+                let rows = fetch_rows(context.client(), &table(run_id))
+                    .await
+                    .unwrap_or_default();
+                let remaining = violations(&rows);
+                (rows.len(), remaining)
+            }
+        };
+        let repaired = remaining.is_empty() && row_count > 0;
 
         let calls = common::function_calls(&observation.transcript);
         let registrations: Vec<_> = calls
@@ -358,7 +414,7 @@ fn evaluate<'a>(
             [
                 DATA_REPAIRED.full_or_zero(
                     repaired,
-                    format!("rows={}, remaining violations: {remaining:?}", rows.len()),
+                    format!("rows={row_count}, remaining violations: {remaining:?}"),
                 ),
                 DIAGNOSIS_DRIVEN.full_or_zero(
                     diagnosed && envelope_mode,

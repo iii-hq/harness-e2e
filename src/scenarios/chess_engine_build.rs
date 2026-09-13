@@ -17,11 +17,11 @@
 //! of truth for perft node counts and legal-move sets, so this scenario never
 //! reimplements chess.
 //!
-//! Determinism and reproducibility: `materialize` is a pure function of its
-//! `(namespace, seed)` and the pinned constants below — it never reads the
-//! filesystem or environment, so `cargo test --lib` works without the fixture
-//! present. Only `setup`, `evaluate`, `capture`, and `cleanup` touch the fixture
-//! checkout or the copied workspace.
+//! Determinism and reproducibility: `case` and `spec` are pure functions of
+//! their `(seed)` / `(run_id)` and the pinned constants below — they never read
+//! the filesystem or environment, so `cargo test --lib` works without the
+//! fixture present. Only `setup`, `evaluate`, `capture`, and `cleanup` touch the
+//! fixture checkout or the copied workspace.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -39,9 +39,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
+    EvaluationFuture, ExecutionPolicy, InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
@@ -146,40 +146,77 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 // --- Scenario construction ---------------------------------------------------
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ChessEngineBuild;
 
-pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    // Pure: inputs are derived only from pinned constants — no filesystem or
-    // environment access, so materialization works without the fixture present.
-    let inputs = json!({
-        "fixture_repository": FIXTURE_REPOSITORY,
-        "fixture_subtree": CHESS_SUBTREE,
-        "fixture_revision": FIXTURE_REVISION,
-        "chess_manifest_sha256": CHESS_MANIFEST_SHA256,
-        "engine_relpath": ENGINE_RELPATH,
-        "perft_cli": "python3 engine/engine.py perft <FEN> <DEPTH>",
-        "legalmoves_cli": "python3 engine/engine.py legalmoves <FEN>",
-        "network_profile": NETWORK_PROFILE,
-    });
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        inputs,
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::coder".to_string(),
-            "iii::shell".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for ChessEngineBuild {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARY)
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        // Pure: inputs are derived only from pinned constants — no filesystem or
+        // environment access, so materialization works without the fixture present.
+        let inputs = json!({
+            "fixture_repository": FIXTURE_REPOSITORY,
+            "fixture_subtree": CHESS_SUBTREE,
+            "fixture_revision": FIXTURE_REVISION,
+            "chess_manifest_sha256": CHESS_MANIFEST_SHA256,
+            "engine_relpath": ENGINE_RELPATH,
+            "perft_cli": "python3 engine/engine.py perft <FEN> <DEPTH>",
+            "legalmoves_cli": "python3 engine/engine.py legalmoves <FEN>",
+            "network_profile": NETWORK_PROFILE,
+        });
+        ScenarioCase::new(
+            ID,
+            seed,
+            inputs,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -236,9 +273,6 @@ the engine is implemented."#,
         },
         denied_functions: &["http::*", "browser::*", "github::*"],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -1008,8 +1042,12 @@ mod tests {
     #[test]
     fn materialize_is_reproducible_across_namespaces() {
         let seed = super::super::stable_seed(ID);
-        let first = materialize("attempt-a", seed).unwrap();
-        let retry = materialize("attempt-b", seed).unwrap();
+        let first = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("attempt-a", seed)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("attempt-b", seed)
+            .unwrap();
         first.validate().unwrap();
         retry.validate().unwrap();
 
@@ -1020,7 +1058,6 @@ mod tests {
 
         // Contract/capture coherence.
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
         for invariant in &first.case.deliverable_contract.invariants {
@@ -1048,12 +1085,13 @@ mod tests {
         // No fixture and no fixture env var are required to materialize: the
         // filesystem_root points at the copy destination under the workspace
         // base, never at the fixture checkout.
-        let materialized = materialize("no-fixture", 7).unwrap();
+        let materialized = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("no-fixture", 7)
+            .unwrap();
         let root = materialized.spec.filesystem_root.expect("filesystem root");
         let root = root.to_string_lossy();
         assert!(root.contains("scenario-workspaces"));
         assert!(root.ends_with(&format!("{ID}-no-fixture")));
-        assert!(materialized.capture.is_some());
     }
 
     #[test]

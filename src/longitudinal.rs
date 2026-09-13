@@ -1322,7 +1322,7 @@ mod tests {
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
     use crate::report::{CostReport, E2eScenarioReport};
     use crate::scenarios::ExecutionPolicy;
-    use crate::scenarios::{DeliverableContract, ScenarioCase};
+    use crate::scenarios::{Capability, DeliverableContract, ScenarioCase};
 
     #[test]
     fn wilson_interval_exposes_sample_size_and_uncertainty() {
@@ -1730,7 +1730,7 @@ mod tests {
             "todo_worker_simple",
             7,
             serde_json::json!({"variant": "canonical"}),
-            vec!["iii::state".into()],
+            vec![Capability::IiiState],
             DeliverableContract::default(),
         )
         .unwrap()

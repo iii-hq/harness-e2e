@@ -1,15 +1,15 @@
 //! Adaptive recovery of an immutable release train and a stale promotion.
 
-use anyhow::bail;
+use anyhow::{bail, Result};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, ExecutionRealism,
-    HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
-    ScenarioObservation, ScenarioSpec, ShadowMode,
+    Capability, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    ExecutionRealism, HumanHorizon, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioExecutionKind, ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
 pub const ID: &str = "release_train_recovery";
@@ -54,79 +54,103 @@ pub const CRITERIA: [CriterionSpec; 5] = [
     RELEASE_RECONCILIATION,
 ];
 
-pub fn scenario(_run_id: &str) -> ScenarioSpec {
-    ScenarioSpec {
-        id: ID,
-        prompt: "Recover a partially published immutable Workers release, verify exact publication, then safely replan a promotion when the historical latest graph is incompatible. Preserve the original tag/version/run identity, use evidence-gated operations, never mutate latest directly, and reconcile the final state.".into(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 1,
-            max_output_tokens: None,
-            max_total_tokens: Some(900_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: CRITERIA.to_vec(),
-        setup: None,
-        evaluate: adaptive_only_evaluator,
-        cleanup: None,
-    }
-}
+pub struct ReleaseTrainRecovery;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let initial: Value = serde_json::from_str(include_str!(
-        "../../fixtures/release_train_recovery/initial_state.json"
-    ))?;
-    let fixture_sha256 = crate::artifact::sha256_value(&initial)?;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "variant": "partial_publication_then_incompatible_latest",
-            "fixture_sha256": fixture_sha256,
-            "initial_identity": {
-                "tag": initial["immutable_tag"],
-                "version": initial["version"],
-                "run_id": initial["github_run"]["run_id"],
-                "run_attempt": initial["github_run"]["run_attempt"],
+impl Scenario for ReleaseTrainRecovery {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::AdaptiveFlow
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        ScenarioCharacterization::new(
+            HumanHorizon::author_estimate(120, 240)?,
+            ExecutionRealism::RealisticSimulator,
+            ShadowMode::ReadOnly,
+        )
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let initial: Value = serde_json::from_str(include_str!(
+            "../../fixtures/release_train_recovery/initial_state.json"
+        ))?;
+        let fixture_sha256 = crate::artifact::sha256_value(&initial)?;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "variant": "partial_publication_then_incompatible_latest",
+                "fixture_sha256": fixture_sha256,
+                "initial_identity": {
+                    "tag": initial["immutable_tag"],
+                    "version": initial["version"],
+                    "run_id": initial["github_run"]["run_id"],
+                    "run_attempt": initial["github_run"]["run_attempt"],
+                },
+                "invalidation_evidence_id": crate::workflow::release_train_recovery::INVALIDATION_EVIDENCE_ID,
+                "maximum_plan_revisions": 2,
+                "shadow": {
+                    "mode": "read_only",
+                    "objective_authority": false,
+                    "missing_outcome": "not_evaluated",
+                },
+                "workflow_resource_budgets": {
+                    "max_parallel": 3,
+                    "max_nodes": 24,
+                    "step_timeout_seconds": 900,
+                    "workflow_timeout_seconds": 7200,
+                    "max_total_tokens": 836000,
+                    "planner_max_total_tokens": 64000,
+                    "max_cost_usd": 30.0,
+                    "technical_retries": 0,
+                },
+            }),
+            vec![
+                Capability::E2eAdaptiveFlowV1,
+                Capability::E2eWorkflowResumeV1,
+                Capability::ReleaseTrainSimulatorV1,
+                Capability::ReleaseShadowReadOnlyV1,
+            ],
+            DeliverableContract::default(),
+        )
+    }
+
+    fn spec(&self, _run_id: &str) -> ScenarioSpec {
+        ScenarioSpec {
+            id: ID,
+            prompt: "Recover a partially published immutable Workers release, verify exact publication, then safely replan a promotion when the historical latest graph is incompatible. Preserve the original tag/version/run identity, use evidence-gated operations, never mutate latest directly, and reconcile the final state.".into(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: None,
+                max_total_tokens: Some(900_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
             },
-            "invalidation_evidence_id": crate::workflow::release_train_recovery::INVALIDATION_EVIDENCE_ID,
-            "maximum_plan_revisions": 2,
-            "shadow": {
-                "mode": "read_only",
-                "objective_authority": false,
-                "missing_outcome": "not_evaluated",
-            },
-            "workflow_resource_budgets": {
-                "max_parallel": 3,
-                "max_nodes": 24,
-                "step_timeout_seconds": 900,
-                "workflow_timeout_seconds": 7200,
-                "max_total_tokens": 836000,
-                "planner_max_total_tokens": 64000,
-                "max_cost_usd": 30.0,
-                "technical_retries": 0,
-            },
-        }),
-        vec![
-            "e2e::adaptive-flow-v1".into(),
-            "e2e::workflow-resume-v1".into(),
-            "release_train_simulator::v1".into(),
-            "release_shadow::read-only-v1".into(),
-        ],
-        DeliverableContract::default(),
-    )?
-    .with_characterization(ScenarioCharacterization::new(
-        HumanHorizon::author_estimate(120, 240)?,
-        ExecutionRealism::RealisticSimulator,
-        ShadowMode::ReadOnly,
-    )?)?;
-    Ok(MaterializedScenario {
-        spec: scenario(namespace),
-        case,
-        capture: None,
-    })
+            denied_functions: &[],
+            criteria: CRITERIA.to_vec(),
+        }
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        adaptive_only_evaluator(context, observation, run_id)
+    }
 }
 
 fn adaptive_only_evaluator<'a>(
@@ -143,9 +167,14 @@ fn adaptive_only_evaluator<'a>(
 mod tests {
     use super::*;
 
+    use crate::scenarios::ScenarioId;
+
     #[test]
     fn canonical_case_is_realistic_and_shadowed() {
-        let case = materialize("attempt", 99).unwrap().case;
+        let case = ScenarioId::ReleaseTrainRecovery
+            .materialize("attempt", 99)
+            .unwrap()
+            .case;
         assert_eq!(case.seed, CANONICAL_SEED);
         assert_eq!(case.characterization.human_horizon.min_minutes, Some(120));
         assert_eq!(case.characterization.realism.shadow, ShadowMode::ReadOnly);

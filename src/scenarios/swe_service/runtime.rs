@@ -1430,7 +1430,9 @@ mod tests {
                     "resource_limit"
                 }
             );
-            let case = super::super::materialize(crate::scenarios::ScenarioId::SweConfigIsolation)
+            let scenario = crate::scenarios::ScenarioId::SweConfigIsolation;
+            let case = scenario
+                .materialize("swe-runtime-test", scenario.canonical_seed())
                 .unwrap()
                 .case;
             let mut top = crate::report::E2eRunReport::new(

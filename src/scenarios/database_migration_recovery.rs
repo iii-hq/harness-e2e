@@ -1,8 +1,9 @@
 //! `database_migration_recovery` — resume an interrupted money-column
 //! migration inside one idempotent `database::transaction`, prove it by
 //! replaying the same transaction, and touch nothing outside the run-scoped
-//! prefix. The evaluator reads every owned relation back and inspects the
-//! subject's write calls for scope and transaction discipline.
+//! prefix. The capture reads every owned relation back before cleanup and the
+//! evaluator scores that record together with the subject's write calls, for
+//! scope and transaction discipline.
 
 use anyhow::bail;
 use serde_json::{json, Value};
@@ -12,9 +13,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    common, Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, ProvenanceEvidence, Scenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "database_migration_recovery";
@@ -160,38 +161,71 @@ impl Relations {
     }
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct DatabaseMigrationRecovery;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "database": DATABASE,
-            "migration_id": MIGRATION_ID,
-            "legacy_rows": LEGACY_ROWS.iter().map(|(id, customer, total, status)| json!({
-                "id": id, "customer": customer, "total_text": total, "status": status
-            })).collect::<Vec<_>>(),
-            "expected_target_rows": TARGET_ROWS.iter().map(|(id, customer, cents, status, source)| json!({
-                "id": id, "customer": customer, "amount_cents": cents, "status": status, "source_legacy_id": source
-            })).collect::<Vec<_>>(),
-            "quarantined_legacy_id": QUARANTINED_LEGACY_ID,
-            "expected_report": EXPECTED_REPORT,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::database".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for DatabaseMigrationRecovery {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "database": DATABASE,
+                "migration_id": MIGRATION_ID,
+                "legacy_rows": LEGACY_ROWS.iter().map(|(id, customer, total, status)| json!({
+                    "id": id, "customer": customer, "total_text": total, "status": status
+                })).collect::<Vec<_>>(),
+                "expected_target_rows": TARGET_ROWS.iter().map(|(id, customer, cents, status, source)| json!({
+                    "id": id, "customer": customer, "amount_cents": cents, "status": status, "source_legacy_id": source
+                })).collect::<Vec<_>>(),
+                "quarantined_legacy_id": QUARANTINED_LEGACY_ID,
+                "expected_report": EXPECTED_REPORT,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -348,9 +382,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -568,8 +599,37 @@ fn foreign_relations(sql: &str, prefix: &str) -> Vec<String> {
     foreign
 }
 
+/// The owned relations exactly as `capture` stored them before cleanup. A
+/// record is always present when the evaluator runs — capture precedes
+/// evaluation and a failed capture aborts the attempt.
+fn captured_relations(deliverables: &[CapturedDeliverable]) -> serde_json::Map<String, Value> {
+    deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// The rows captured for one relation, or the reason it was unreadable.
+fn relation_rows(
+    captured: &serde_json::Map<String, Value>,
+    label: &str,
+) -> Result<Vec<Value>, String> {
+    match captured.get(label) {
+        Some(Value::Array(rows)) => Ok(rows.clone()),
+        Some(Value::Object(failure)) => Err(failure
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unreported error")
+            .to_string()),
+        _ => Err("relation was not captured".to_string()),
+    }
+}
+
 fn evaluate<'a>(
-    context: &'a E2eContext,
+    _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
@@ -582,77 +642,24 @@ fn evaluate<'a>(
             ));
         }
         let relations = Relations::new(run_id);
+        // `capture` read every owned relation with these exact statements
+        // immediately before this evaluation, so the record is the read: a
+        // second round trip could only observe the same rows.
+        let captured = captured_relations(&observation.deliverables);
         let mut notes = Vec::new();
-        let mut read = |label: &'static str, result: Result<Vec<Value>, String>| match result {
+        let mut read = |label: &'static str| match relation_rows(&captured, label) {
             Ok(rows) => rows,
             Err(error) => {
                 notes.push(format!("{label} unreadable: {error}"));
                 Vec::new()
             }
         };
-        let target = read(
-            "target",
-            query_rows(
-                context,
-                format!(
-                    "SELECT id, customer, amount_cents, status, source_legacy_id FROM {} ORDER BY id",
-                    relations.target
-                ),
-            )
-            .await,
-        );
-        let quarantine = read(
-            "quarantine",
-            query_rows(
-                context,
-                format!(
-                    "SELECT legacy_id, customer, raw_total, status, reason FROM {} ORDER BY legacy_id",
-                    relations.quarantine
-                ),
-            )
-            .await,
-        );
-        let compat = read(
-            "compat",
-            query_rows(
-                context,
-                format!(
-                    "SELECT id, customer, total_text, status, migration_status FROM {} ORDER BY id",
-                    relations.compat
-                ),
-            )
-            .await,
-        );
-        let journal = read(
-            "journal",
-            query_rows(
-                context,
-                format!(
-                    "SELECT migration_id, status, applied_rows, quarantined_rows, replay_count FROM {}",
-                    relations.journal
-                ),
-            )
-            .await,
-        );
-        let legacy = read(
-            "legacy",
-            query_rows(
-                context,
-                format!(
-                    "SELECT id, customer, total_text, status FROM {} ORDER BY id",
-                    relations.legacy
-                ),
-            )
-            .await,
-        );
-        let sentinel = read(
-            "sentinel",
-            query_rows(
-                context,
-                format!("SELECT key, value FROM {}", relations.sentinel),
-            )
-            .await,
-        );
+        let target = read("target");
+        let quarantine = read("quarantine");
+        let compat = read("compat");
+        let journal = read("journal");
+        let legacy = read("legacy");
+        let sentinel = read("sentinel");
 
         let target_ok = target_rows_exact(&target);
         let quarantine_ok = quarantine_rows_exact(&quarantine);
@@ -764,8 +771,13 @@ mod tests {
                 "{name}"
             );
         }
-        scenario("run").validate().unwrap();
-        materialize("case", 9).unwrap();
+        crate::scenarios::ScenarioId::DatabaseMigrationRecovery
+            .spec("run")
+            .validate()
+            .unwrap();
+        crate::scenarios::ScenarioId::DatabaseMigrationRecovery
+            .materialize("case", 9)
+            .unwrap();
     }
 
     #[test]
@@ -812,5 +824,32 @@ mod tests {
             write_statements(&json!({ "statements": ["A", { "sql": "B" }] })),
             vec!["A".to_string(), "B".to_string()]
         );
+    }
+
+    #[test]
+    fn the_evaluator_reads_rows_and_failures_out_of_the_captured_record() {
+        let rows = vec![json!({ "id": 1 })];
+        let captured = captured_relations(&[CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_record".to_string(),
+            content: json!({
+                "target": rows,
+                "journal": { "error": "no such table" },
+                "response": EXPECTED_REPORT,
+            })
+            .into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        }]);
+        assert_eq!(relation_rows(&captured, "target"), Ok(rows));
+        assert_eq!(
+            relation_rows(&captured, "journal"),
+            Err("no such table".to_string())
+        );
+        assert_eq!(
+            relation_rows(&captured, "legacy"),
+            Err("relation was not captured".to_string())
+        );
+        assert!(relation_rows(&captured_relations(&[]), "target").is_err());
     }
 }

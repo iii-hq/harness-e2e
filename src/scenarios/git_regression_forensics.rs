@@ -23,10 +23,10 @@ use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
+    common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    InvariantSpec, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "git_regression_forensics";
@@ -232,31 +232,69 @@ impl Snapshot {
     }
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+/// A bisect investigation over a frozen snapshot of a real public repository.
+pub struct GitRegressionForensics;
 
-pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    let inputs: Value = serde_json::from_str(PUBLIC_MANIFEST)
-        .context("decode embedded Git regression case manifest")?;
-    validate_public_manifest(&inputs)?;
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        inputs,
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::registry".to_string(),
-            "iii::shell".to_string(),
-            "git::offline-bundle".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for GitRegressionForensics {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::frozen_real_artifact())
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        let inputs: Value = serde_json::from_str(PUBLIC_MANIFEST)
+            .context("decode embedded Git regression case manifest")?;
+        validate_public_manifest(&inputs)?;
+        ScenarioCase::new(
+            ID,
+            seed,
+            inputs,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiRegistry,
+                Capability::IiiShell,
+                Capability::GitOfflineBundle,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(setup(context, run_id))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -319,9 +357,6 @@ clean at the known-bad revision."#,
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -1952,8 +1987,12 @@ mod tests {
 
     #[test]
     fn materialization_is_stable_and_publishes_three_assets() {
-        let first = materialize("attempt-a", 91).unwrap();
-        let retry = materialize("attempt-b", 91).unwrap();
+        let first = crate::scenarios::ScenarioId::GitRegressionForensics
+            .materialize("attempt-a", 91)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::GitRegressionForensics
+            .materialize("attempt-b", 91)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 3);

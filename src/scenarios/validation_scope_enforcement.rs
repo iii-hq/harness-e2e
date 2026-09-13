@@ -24,9 +24,8 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    Capability, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
+    ExecutionPolicy, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_scope_enforcement";
@@ -55,34 +54,63 @@ fn scope(run_id: &str) -> String {
     format!("scopetest-{}", suffix(run_id))
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ValidationScopeEnforcement;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "foreign_session": "someone-elses-session-1",
-            "marker_key": "marker",
-            "expected_nudges": 1,
-            "expected_marker": null,
-            "completion_marker": "TEARDOWN COMPLETE",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
+impl Scenario for ValidationScopeEnforcement {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "foreign_session": "someone-elses-session-1",
+                "marker_key": "marker",
+                "expected_nudges": 1,
+                "expected_marker": null,
+                "completion_marker": "TEARDOWN COMPLETE",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        scenario_for_case(run_id)
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
 }
 
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
@@ -122,9 +150,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         },
         denied_functions: &[],
         criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -184,20 +209,37 @@ fn deliverable_contract() -> super::DeliverableContract {
     )
 }
 
+/// The marker the capture read before cleanup.
+fn captured_marker(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("marker")
+        .cloned()
+}
+
 fn evaluate<'a>(
     context: &'a E2eContext,
     observation: &'a ScenarioObservation,
     run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
-        let marker = common::state_value(
-            context
-                .trigger(
-                    "state::get",
-                    json!({ "scope": scope(run_id), "key": "marker" }),
-                )
-                .await?,
-        );
+        // The capture read the same marker before cleanup; reuse it instead of
+        // reading the scope a second time.
+        let marker = match captured_marker(observation) {
+            Some(marker) => marker,
+            None => common::state_value(
+                context
+                    .trigger(
+                        "state::get",
+                        json!({ "scope": scope(run_id), "key": "marker" }),
+                    )
+                    .await?,
+            ),
+        };
         let marker_absent = marker.is_null();
 
         let calls = common::function_calls(&observation.transcript);

@@ -15,10 +15,10 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, CriterionAward, CriterionSpec,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSetup, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, CleanupFuture, CriterionAward,
+    CriterionSpec, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
@@ -81,11 +81,94 @@ pub fn function_id(run_id: &str) -> String {
     format!("kanban_eval_{:x}::exec", Sha256::digest(run_id.as_bytes()))
 }
 
-pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
+/// One of the seven Kanban cases, indexed into [`IDS`] in catalog order.
+pub struct Kanban(pub usize);
+
+impl Scenario for Kanban {
+    fn id(&self) -> &'static str {
+        IDS[self.0]
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let item = case(self.0);
+        ScenarioCase::new(
+            IDS[self.0],
+            super::stable_seed(IDS[self.0]),
+            json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
+                "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
+                "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
+                "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::Docker,
+                Capability::Node,
+                Capability::Playwright,
+            ],
+            DeliverableContract {
+                artifacts: vec![ArtifactExpectation {
+                    id: REPORT.into(),
+                    kind: "application_audit".into(),
+                    media_type: "application/json".into(),
+                    schema: json!({"type":"object", "required":["result","provenance","diff"]}),
+                    max_size_bytes: 16 * 1024 * 1024,
+                }],
+                provenance_required: true,
+                capture_before_cleanup: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        spec(self.0, run_id)
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        vec![function_id(run_id)]
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(vec![function_id(run_id)])
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(Box::pin(setup(context, run_id, self.0)))
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(capture(context, observation, run_id))
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        evaluate(context, observation, run_id)
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(cleanup(context, run_id))
+    }
+}
+
+fn spec(index: usize, run_id: &str) -> ScenarioSpec {
     let case = case(index);
-    let setups: [ScenarioSetup; 7] = [
-        setup_c1, setup_c2, setup_c3, setup_c4, setup_c5, setup_c6, setup_c7,
-    ];
     ScenarioSpec {
         id: case.id.as_str(),
         prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
@@ -94,7 +177,7 @@ pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
         execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
             max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
         denied_functions: &["harness::spawn", "shell::*", "coder::*", "compose::*", "router::*", "harness::send", "harness::run"],
-        criteria: criteria(index), setup: Some(setups[index]), evaluate, cleanup: Some(cleanup),
+        criteria: criteria(index),
     }
 }
 
@@ -121,43 +204,6 @@ fn criteria(index: usize) -> Vec<CriterionSpec> {
         .collect()
 }
 
-pub fn materialize(index: usize, run_id: &str) -> Result<MaterializedScenario> {
-    let item = case(index);
-    let contract = DeliverableContract {
-        artifacts: vec![ArtifactExpectation {
-            id: REPORT.into(),
-            kind: "application_audit".into(),
-            media_type: "application/json".into(),
-            schema: json!({"type":"object", "required":["result","provenance","diff"]}),
-            max_size_bytes: 16 * 1024 * 1024,
-        }],
-        provenance_required: true,
-        capture_before_cleanup: true,
-        ..Default::default()
-    };
-    let case = ScenarioCase::new(
-        IDS[index],
-        super::stable_seed(IDS[index]),
-        json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
-            "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
-            "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
-            "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "docker".into(),
-            "node".into(),
-            "playwright".into(),
-        ],
-        contract,
-    )?;
-    Ok(MaterializedScenario {
-        spec: spec(index, run_id),
-        case,
-        capture: Some(capture),
-    })
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ExecRequest {
@@ -166,21 +212,6 @@ struct ExecRequest {
     #[schemars(skip)]
     _caller: Option<String>,
 }
-
-macro_rules! setup_hook {
-    ($name:ident, $index:expr) => {
-        fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-            Box::pin(setup(context, run_id, $index))
-        }
-    };
-}
-setup_hook!(setup_c1, 0);
-setup_hook!(setup_c2, 1);
-setup_hook!(setup_c3, 2);
-setup_hook!(setup_c4, 3);
-setup_hook!(setup_c5, 4);
-setup_hook!(setup_c6, 5);
-setup_hook!(setup_c7, 6);
 
 async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
     let path = root(run_id);
@@ -770,7 +801,10 @@ mod tests {
     #[test]
     fn pinned_cases_are_valid_and_do_not_expose_future_revisions_in_prompts() {
         for (index, id) in IDS.iter().enumerate() {
-            let materialized = materialize(index, "contract-test").unwrap();
+            let scenario: crate::scenarios::ScenarioId = id.parse().unwrap();
+            let materialized = scenario
+                .materialize("contract-test", scenario.canonical_seed())
+                .unwrap();
             materialized.validate().unwrap();
             assert_eq!(case(index).id, *id);
             assert!(!materialized

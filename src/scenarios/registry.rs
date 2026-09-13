@@ -153,42 +153,31 @@ fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
     FUNCTIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn scenario(test: u8, run_id: &str) -> ScenarioSpec {
-    match test {
-        1 => spec::<1>(run_id),
-        2 => spec::<2>(run_id),
-        3 => spec::<3>(run_id),
-        4 => spec::<4>(run_id),
-        _ => unreachable!(),
+/// One of the four Registry tests, numbered 1..=4 in the order they run.
+pub struct Registry(pub u8);
+
+impl Registry {
+    fn index(&self) -> usize {
+        usize::from(self.0 - 1)
     }
 }
-fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
-    let id = IDS[usize::from(N - 1)];
-    ScenarioSpec {
-        id,
-        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
-        filesystem_root: None,
-        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
-        denied_functions: &[],
-        criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
-        setup: Some(setup::<N>), evaluate: evaluate::<N>, cleanup: Some(cleanup::<N>),
+
+impl Scenario for Registry {
+    fn id(&self) -> &'static str {
+        IDS[self.index()]
     }
-}
-pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let capture: ScenarioDeliverableCapture = match test {
-        1 => capture::<1>,
-        2 => capture::<2>,
-        3 => capture::<3>,
-        4 => capture::<4>,
-        _ => unreachable!(),
-    };
-    Ok(MaterializedScenario {
-        spec: scenario(test, namespace),
-        case: ScenarioCase::new(
-            IDS[usize::from(test - 1)],
-            super::stable_seed(IDS[usize::from(test - 1)]),
-            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":test}),
-            vec!["iii::functions".into(), "docker".into()],
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let id = self.id();
+        ScenarioCase::new(
+            id,
+            stable_seed(id),
+            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":self.0}),
+            vec![Capability::IiiFunctions, Capability::Docker],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
                     id: "registry_evidence".into(),
@@ -201,9 +190,92 @@ pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<Materialized
                 provenance_required: true,
                 capture_before_cleanup: true,
             },
-        )?,
-        capture: Some(capture),
-    })
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        match self.0 {
+            1 => spec::<1>(run_id),
+            2 => spec::<2>(run_id),
+            3 => spec::<3>(run_id),
+            4 => spec::<4>(run_id),
+            _ => unreachable!(),
+        }
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(self.id(), run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(self.id(), run_id))
+    }
+
+    fn setup<'a>(&'a self, context: &'a E2eContext, run_id: &'a str) -> Option<CleanupFuture<'a>> {
+        Some(match self.0 {
+            1 => setup::<1>(context, run_id),
+            2 => setup::<2>(context, run_id),
+            3 => setup::<3>(context, run_id),
+            4 => setup::<4>(context, run_id),
+            _ => unreachable!(),
+        })
+    }
+
+    fn capture<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> Option<DeliverableCaptureFuture<'a>> {
+        Some(match self.0 {
+            1 => capture::<1>(context, observation, run_id),
+            2 => capture::<2>(context, observation, run_id),
+            3 => capture::<3>(context, observation, run_id),
+            4 => capture::<4>(context, observation, run_id),
+            _ => unreachable!(),
+        })
+    }
+
+    fn evaluate<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        observation: &'a ScenarioObservation,
+        run_id: &'a str,
+    ) -> EvaluationFuture<'a> {
+        match self.0 {
+            1 => evaluate::<1>(context, observation, run_id),
+            2 => evaluate::<2>(context, observation, run_id),
+            3 => evaluate::<3>(context, observation, run_id),
+            4 => evaluate::<4>(context, observation, run_id),
+            _ => unreachable!(),
+        }
+    }
+
+    fn cleanup<'a>(
+        &'a self,
+        context: &'a E2eContext,
+        run_id: &'a str,
+    ) -> Option<CleanupFuture<'a>> {
+        Some(match self.0 {
+            1 => cleanup::<1>(context, run_id),
+            2 => cleanup::<2>(context, run_id),
+            3 => cleanup::<3>(context, run_id),
+            4 => cleanup::<4>(context, run_id),
+            _ => unreachable!(),
+        })
+    }
+}
+
+fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
+    let id = IDS[usize::from(N - 1)];
+    ScenarioSpec {
+        id,
+        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
+        filesystem_root: None,
+        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
+        denied_functions: &[],
+        criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -659,15 +731,21 @@ fn capture<'a, const N: u8>(
 fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
     super::common::atomic_awards(metrics(test), validation)
 }
+/// Scores the observations the capture already sealed into the evidence
+/// deliverable, so the verdict no longer depends on the workspace surviving.
 fn evaluate<'a, const N: u8>(
     _context: &'a E2eContext,
     observation: &'a ScenarioObservation,
-    run_id: &'a str,
+    _run_id: &'a str,
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
-        let validation: Value = serde_json::from_slice(&std::fs::read(
-            root(N, run_id).join("validation/observations.json"),
-        )?)?;
+        let evidence = observation
+            .deliverables
+            .iter()
+            .find(|deliverable| deliverable.id == "registry_evidence")
+            .and_then(|deliverable| deliverable.content.as_json())
+            .context("Registry evidence deliverable is missing")?;
+        let validation = json!({"observations": evidence["observations"], "error": evidence["validation_error"]});
         Ok(ObjectiveEvaluation {
             completion: if observation.metrics.complete {
                 CompletionState::Completed
@@ -758,7 +836,7 @@ mod tests {
     #[test]
     fn all_registry_criteria_are_atomic_and_use_catalog_weights() {
         for n in 1..=4 {
-            let scenario = scenario(n, "test");
+            let scenario = Registry(n).spec("test");
             scenario.validate().unwrap();
             assert_eq!(scenario.criteria.len(), metrics(n).len());
             assert!(scenario

@@ -24,9 +24,8 @@ use crate::report::{
 };
 use crate::scenarios::common;
 use crate::scenarios::{
-    CriterionAward, MaterializedScenario, ObjectiveEvaluation, ScenarioCase,
-    ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId, ScenarioObservation,
-    ScenarioSpec,
+    CriterionAward, MaterializedScenario, ObjectiveEvaluation, Scenario, ScenarioCase,
+    ScenarioExecutionKind, ScenarioId, ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
@@ -1161,11 +1160,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             return report;
         }
     };
-    let MaterializedScenario {
-        spec,
-        case,
-        capture,
-    } = materialized;
+    let MaterializedScenario { spec, case, module } = materialized;
     let expects_deliverables = !case.deliverable_contract.artifacts.is_empty();
     let mut report = E2eRunReport::new(
         run_id.to_string(),
@@ -1213,7 +1208,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
                 session_id: &session_id,
                 spec: &spec,
                 case: &case,
-                capture,
+                module,
                 progress_interval,
                 control,
                 output,
@@ -1267,8 +1262,8 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             ),
         );
     }
-    if let Some(cleanup) = spec.cleanup {
-        if let Err(error) = cleanup(context, &attempt_id).await {
+    if let Some(cleanup) = module.cleanup(context, &attempt_id) {
+        if let Err(error) = cleanup.await {
             report.push_failure(
                 RunStatus::InfrastructureError,
                 FailurePhase::Cleanup,
@@ -2205,7 +2200,7 @@ struct ExecutionRequest<'a> {
     session_id: &'a str,
     spec: &'a ScenarioSpec,
     case: &'a ScenarioCase,
-    capture: Option<ScenarioDeliverableCapture>,
+    module: &'static dyn Scenario,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
@@ -2251,15 +2246,15 @@ async fn execute(
         session_id,
         spec,
         case,
-        capture,
+        module,
         progress_interval,
         control,
         output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
-    if let Some(setup) = spec.setup {
-        setup(context, run_id)
+    if let Some(setup) = module.setup(context, run_id) {
+        setup
             .await
             .map_err(|error| scenario_setup_failure(error.to_string()))?;
     }
@@ -2364,7 +2359,7 @@ async fn execute(
                     let failure = subject_failure(FailurePhase::Execute, error.to_string());
                     capture_partial_observation(context, session_id, report).await;
                     capture_failed_subject_assets(
-                        context, capture, case, session_id, output, control, report,
+                        context, module, case, session_id, output, control, report,
                     )
                     .await;
                     return Err(failure);
@@ -2421,17 +2416,13 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
-    if let Some(capture) = capture {
-        let captured = capture_assets_before_cleanup(
-            context,
-            capture,
-            &observation,
-            spec.id,
-            run_id,
-            output,
-            report,
-        )
-        .await?;
+    let captured = match module.capture(context, &observation, run_id) {
+        Some(capture) => Some(
+            capture_assets_before_cleanup(capture, &observation, spec.id, output, report).await?,
+        ),
+        None => None,
+    };
+    if let Some(captured) = captured {
         report.scenario_measurements = captured_measurements(&captured).map_err(|error| {
             RunFailure::new(
                 RunStatus::InfrastructureError,
@@ -2451,7 +2442,8 @@ async fn execute(
         report,
     )
     .await;
-    let objective = (spec.evaluate)(context, &observation, run_id)
+    let objective = module
+        .evaluate(context, &observation, run_id)
         .await
         .map_err(|error| {
             RunFailure::new(
@@ -2624,15 +2616,13 @@ fn score_assessment_outcome(awarded: Option<u8>, possible: u8) -> AssessmentOutc
 }
 
 async fn capture_assets_before_cleanup(
-    context: &E2eContext,
-    capture: ScenarioDeliverableCapture,
+    capture: crate::scenarios::DeliverableCaptureFuture<'_>,
     observation: &ScenarioObservation,
     scenario_id: &str,
-    run_id: &str,
     output: &Path,
     report: &mut E2eRunReport,
 ) -> Result<Vec<crate::scenarios::CapturedDeliverable>, RunFailure> {
-    let captured = match capture(context, observation, run_id).await {
+    let captured = match capture.await {
         Ok(captured) => captured,
         Err(error) => {
             let mut message = format!(
@@ -2778,16 +2768,13 @@ async fn capture_partial_observation(
 
 async fn capture_failed_subject_assets(
     context: &E2eContext,
-    capture: Option<ScenarioDeliverableCapture>,
+    module: &'static dyn Scenario,
     case: &ScenarioCase,
     session_id: &str,
     output: &Path,
     control: Option<&SuiteControl>,
     report: &mut E2eRunReport,
 ) {
-    let Some(capture) = capture else {
-        return;
-    };
     if control.is_some_and(|control| *control.cancellation.borrow()) {
         return;
     }
@@ -2811,7 +2798,7 @@ async fn capture_failed_subject_assets(
     };
     capture_confirmed_failed_subject_assets(
         context,
-        capture,
+        module,
         case,
         &status,
         control.is_some_and(|control| *control.cancellation.borrow()),
@@ -2823,7 +2810,7 @@ async fn capture_failed_subject_assets(
 
 async fn capture_confirmed_failed_subject_assets(
     context: &E2eContext,
-    capture: ScenarioDeliverableCapture,
+    module: &'static dyn Scenario,
     case: &ScenarioCase,
     status: &StatusReport,
     cancelled: bool,
@@ -2835,12 +2822,13 @@ async fn capture_confirmed_failed_subject_assets(
     };
     report.terminal_status = Some(status.clone());
     let attempt_id = report.attempt_id.clone();
+    let Some(capture) = module.capture(context, &observation, &attempt_id) else {
+        return;
+    };
     if let Err(error) = capture_assets_before_cleanup(
-        context,
         capture,
         &observation,
         case.scenario_id.as_str(),
-        &attempt_id,
         output,
         report,
     )
@@ -3131,6 +3119,50 @@ mod tests {
         .sealed_for_tests()
     }
 
+    /// A scenario whose only behaviour is the capture hook under test.
+    struct CaptureOnly(
+        for<'a> fn(
+            &'a E2eContext,
+            &'a ScenarioObservation,
+            &'a str,
+        ) -> crate::scenarios::DeliverableCaptureFuture<'a>,
+    );
+
+    impl Scenario for CaptureOnly {
+        fn id(&self) -> &'static str {
+            "failed_capture"
+        }
+
+        fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+            unreachable!("the capture tests never materialize the case")
+        }
+
+        fn spec(&self, _run_id: &str) -> crate::scenarios::ScenarioSpec {
+            unreachable!("the capture tests never build the spec")
+        }
+
+        fn capture<'a>(
+            &'a self,
+            context: &'a E2eContext,
+            observation: &'a ScenarioObservation,
+            run_id: &'a str,
+        ) -> Option<crate::scenarios::DeliverableCaptureFuture<'a>> {
+            Some((self.0)(context, observation, run_id))
+        }
+
+        fn evaluate<'a>(
+            &'a self,
+            _context: &'a E2eContext,
+            _observation: &'a ScenarioObservation,
+            _run_id: &'a str,
+        ) -> crate::scenarios::EvaluationFuture<'a> {
+            unreachable!("the capture tests never evaluate")
+        }
+    }
+
+    static PARTIAL_ASSET_CAPTURE: CaptureOnly = CaptureOnly(partial_asset_capture);
+    static FAILED_ASSET_CAPTURE: CaptureOnly = CaptureOnly(failed_asset_capture);
+
     fn partial_asset_capture<'a>(
         _context: &'a E2eContext,
         observation: &'a ScenarioObservation,
@@ -3189,7 +3221,7 @@ mod tests {
 
         capture_confirmed_failed_subject_assets(
             &context,
-            partial_asset_capture,
+            &PARTIAL_ASSET_CAPTURE,
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3224,7 +3256,7 @@ mod tests {
 
         capture_confirmed_failed_subject_assets(
             &context,
-            failed_asset_capture,
+            &FAILED_ASSET_CAPTURE,
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3830,15 +3862,7 @@ mod tests {
             .to_string()
             .contains("fingerprint changed"));
     }
-    use crate::scenarios::{CriterionSpec, ExecutionPolicy, ScenarioEvaluator};
-
-    fn evaluator<'a>(
-        _context: &'a E2eContext,
-        _observation: &'a ScenarioObservation,
-        _run_id: &'a str,
-    ) -> crate::scenarios::EvaluationFuture<'a> {
-        unreachable!()
-    }
+    use crate::scenarios::{CriterionSpec, ExecutionPolicy};
 
     fn spec() -> ScenarioSpec {
         ScenarioSpec {
@@ -3859,9 +3883,6 @@ mod tests {
                 "objective",
                 EvaluationDimension::StructuralIntegrity,
             )],
-            setup: None,
-            evaluate: evaluator as ScenarioEvaluator,
-            cleanup: None,
         }
     }
 
