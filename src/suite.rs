@@ -2032,31 +2032,7 @@ pub(crate) fn populate_composite_report_with_terminal(
             reason: criterion.summary.clone(),
         })
         .collect();
-    let evaluated = workflow
-        .criteria
-        .iter()
-        .filter_map(|criterion| {
-            criterion
-                .score
-                .filter(|score| score.is_finite())
-                .map(|score| {
-                    (
-                        score.clamp(0.0, 1.0) * f64::from(criterion.weight),
-                        criterion.weight,
-                    )
-                })
-        })
-        .collect::<Vec<_>>();
-    let evaluated_weight = evaluated
-        .iter()
-        .map(|(_, weight)| u16::from(*weight))
-        .sum::<u16>();
-    report.score = (evaluated_weight > 0).then(|| {
-        (evaluated.iter().map(|(score, _)| score).sum::<f64>() / f64::from(evaluated_weight)
-            * 100.0)
-            .round()
-            .clamp(0.0, 100.0) as u8
-    });
+    report.score = crate::report::criteria_score(&report.criteria);
     report.cost = CostReport {
         subject_usd: workflow.aggregate_cost_usd,
         total_usd: workflow.aggregate_cost_usd,
@@ -2970,11 +2946,7 @@ fn scenario_setup_failure(message: String) -> RunFailure {
 }
 
 fn update_score(report: &mut E2eRunReport) {
-    report.score = report.criteria.iter().try_fold(0_u8, |score, criterion| {
-        criterion
-            .awarded
-            .and_then(|awarded| score.checked_add(awarded))
-    });
+    report.score = crate::report::criteria_score(&report.criteria);
 }
 
 fn validate_objective_evaluation(
@@ -3951,7 +3923,7 @@ mod tests {
     }
 
     #[test]
-    fn partial_native_assessment_preserves_observed_points_without_inventing_a_total() {
+    fn partial_native_assessment_sums_the_evaluated_points_only() {
         let spec = mixed_assessment_spec();
         let mut report = test_run_report();
         apply_objective_evaluation(
@@ -3988,8 +3960,9 @@ mod tests {
             report.assessment_results[1].outcome,
             AssessmentOutcome::NotEvaluated
         );
-        assert_eq!(report.score, None);
-        assert_eq!(report.objective_score, None);
+        // The unevaluated criterion adds nothing; the evaluated one awarded zero.
+        assert_eq!(report.score, Some(0));
+        assert_eq!(report.objective_score, Some(0));
     }
 
     #[test]

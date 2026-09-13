@@ -145,6 +145,20 @@ pub struct CriterionReport {
     pub reason: String,
 }
 
+/// The run score is the plain sum of the points the evaluated criteria
+/// awarded. A criterion nobody evaluated adds nothing, and a run with no
+/// evaluated criterion has no score at all; nothing is normalized or rescaled.
+pub fn criteria_score(criteria: &[CriterionReport]) -> Option<u8> {
+    let mut evaluated = false;
+    let total = criteria
+        .iter()
+        .filter_map(|criterion| criterion.awarded)
+        .inspect(|_| evaluated = true)
+        .map(u16::from)
+        .sum::<u16>();
+    evaluated.then(|| total.min(100) as u8)
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct ModelUsageReport {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -4033,6 +4047,39 @@ mod tests {
         assert_eq!(
             decoded.assessment_contract.runs[0].system_status,
             crate::assessment::SystemStatus::HardGateFailed
+        );
+    }
+
+    #[test]
+    fn score_is_the_plain_sum_of_evaluated_criteria() {
+        let criterion = |awarded: Option<u8>, possible: u8| CriterionReport {
+            id: format!("c{possible}"),
+            description: None,
+            possible,
+            awarded,
+            reason: "observed".into(),
+        };
+        // An unevaluated criterion adds nothing and does not null the score.
+        assert_eq!(
+            criteria_score(&[
+                criterion(Some(40), 40),
+                criterion(None, 30),
+                criterion(Some(10), 30)
+            ]),
+            Some(50)
+        );
+        // Nothing evaluated: no score, not zero.
+        assert_eq!(
+            criteria_score(&[criterion(None, 60), criterion(None, 40)]),
+            None
+        );
+        assert_eq!(criteria_score(&[]), None);
+        // Zero points awarded is a score of zero.
+        assert_eq!(criteria_score(&[criterion(Some(0), 100)]), Some(0));
+        // The sum never exceeds the hundred-point rubric.
+        assert_eq!(
+            criteria_score(&[criterion(Some(80), 80), criterion(Some(80), 80)]),
+            Some(100)
         );
     }
 

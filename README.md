@@ -4,6 +4,8 @@
 with correct deliverables, structural integrity, bounded work, and repeatable
 outcomes.
 
+A run's score is the plain sum of the points its evaluated criteria awarded; a
+criterion nobody evaluated adds nothing and nothing is normalized or rescaled.
 Objective scores preserve measured criterion points independently of completion
 or resource limits. Criteria do not veto the score or approve a run. Completion,
 technical validity, artifact evidence, and runtime controls are reported
