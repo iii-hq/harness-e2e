@@ -2,9 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use harness_e2e::analyzer::AnalyzerConfig;
 use harness_e2e::control::{scenarios_list, ScenariosListRequest};
 use harness_e2e::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
-use harness_e2e::judge::JudgeConfig;
 use harness_e2e::manifest;
 use harness_e2e::report::E2eReport;
 use harness_e2e::scenarios::{self, ScenarioId};
@@ -113,14 +113,6 @@ struct RunArgs {
 
     #[arg(long, env = "HARNESS_E2E_PROVIDER")]
     provider: String,
-
-    /// Auxiliary model for Registry planning.
-    /// Supply together with --judge-provider.
-    #[arg(long, env = "HARNESS_E2E_JUDGE_MODEL")]
-    judge_model: Option<String>,
-
-    #[arg(long, env = "HARNESS_E2E_JUDGE_PROVIDER")]
-    judge_provider: Option<String>,
 
     /// Opt-in behavioral audit analyzer over each run's transcript. Supply
     /// together with --audit-provider; omit both to keep the audit
@@ -351,24 +343,14 @@ async fn run(args: RunArgs) -> Result<()> {
         .map_or(args.output, |(runs_dir, execution_id)| {
             runs_dir.join(execution_id).join("results")
         });
-    if selected_scenarios.contains(&ScenarioId::RegistryPlanning)
-        && (args.judge_model.is_none() || args.judge_provider.is_none())
-    {
-        bail!("Registry planning requires explicit --judge-model and --judge-provider values");
-    }
-    let judge = args
-        .judge_model
-        .zip(args.judge_provider)
-        .map(|(model, provider)| JudgeConfig { model, provider });
     let audit_analyzer = args
         .audit_model
         .zip(args.audit_provider)
-        .map(|(model, provider)| JudgeConfig { model, provider });
+        .map(|(model, provider)| AnalyzerConfig { model, provider });
     let outcome = run_suite(SuiteRunConfig {
         url: args.url,
         execution_id,
         subject,
-        judge,
         audit_analyzer,
         output,
         scenarios: selected_scenarios,

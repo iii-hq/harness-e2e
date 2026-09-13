@@ -18,8 +18,6 @@ struct Defaults {
     url: String,
     model: String,
     provider: String,
-    judge_model: String,
-    judge_provider: String,
     runs: u32,
     technical_retries: u8,
     seed: Option<u64>,
@@ -38,10 +36,6 @@ struct RunRequest {
     url: String,
     model: String,
     provider: String,
-    #[serde(default)]
-    judge_model: String,
-    #[serde(default)]
-    judge_provider: String,
     scenarios: Vec<String>,
     runs: u32,
     technical_retries: u8,
@@ -148,8 +142,6 @@ pub(crate) mod tests {
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
             provider: "provider".into(),
-            judge_model: String::new(),
-            judge_provider: String::new(),
             scenarios: vec!["context_pressure".into()],
             runs: 1,
             technical_retries: 1,
@@ -202,7 +194,6 @@ pub(crate) mod tests {
                 supports_vision: Some(false),
             },
             None,
-            None,
             vec![E2eScenarioReport::aggregate(
                 "direct_answer",
                 1,
@@ -223,7 +214,6 @@ pub(crate) mod tests {
             execution: report.execution.clone(),
             system_under_test: report.system_under_test.clone(),
             subject: report.subject.clone(),
-            judge: report.judge.clone(),
             control_plane: ControlPlaneEvidence {
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
@@ -504,14 +494,6 @@ pub(crate) mod tests {
         .enumerate()
         {
             let mut value = report();
-            value.judge = Some(ModelArtifact {
-                model: "judge-model".into(),
-                provider: "judge-provider".into(),
-                context_window: 100,
-                max_output_tokens: 10,
-                supports_tools: Some(false),
-                supports_vision: Some(false),
-            });
             let execution = &mut value.execution;
             execution.execution_id = format!("execution-{index}");
             execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
@@ -647,9 +629,6 @@ pub(crate) mod tests {
         assert_eq!(history.subject_models.len(), 1);
         assert_eq!(history.subject_models[0].provider, "provider");
         assert_eq!(history.subject_models[0].models, vec!["model"]);
-        assert_eq!(history.judge_models.len(), 1);
-        assert_eq!(history.judge_models[0].provider, "judge-provider");
-        assert_eq!(history.judge_models[0].models, vec!["judge-model"]);
         assert_ne!(
             history.series[0].system_version_id,
             history.series[1].system_version_id
@@ -671,21 +650,11 @@ pub(crate) mod tests {
                 case_id: Some(history.observations[0].case_id.clone()),
                 subject_provider: Some("provider".into()),
                 subject_model: Some("model".into()),
-                judge_provider: Some("judge-provider".into()),
-                judge_model: Some("judge-model".into()),
                 result: Some("passed".into()),
                 ..super::read_model::TestHistoryRequest::default()
             })
             .unwrap();
         assert_eq!(filtered.total, 2);
-        let no_matching_judge = model
-            .test_history(super::read_model::TestHistoryRequest {
-                test_id: "direct_answer".into(),
-                judge_provider: Some("other-provider".into()),
-                ..super::read_model::TestHistoryRequest::default()
-            })
-            .unwrap();
-        assert_eq!(no_matching_judge.total, 0);
     }
 
     #[test]

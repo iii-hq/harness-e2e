@@ -72,7 +72,6 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "seed": 4404,
             "progress_interval_seconds": 15,
             "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-            "judge": {"provider": "zai", "model": "glm-5.3"},
             "groups": [
                 {
                     "id": "daily-core",
@@ -417,7 +416,6 @@ fail() {
         request = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
         self.assertEqual(request["scenarios"], ["direct_answer"])
         self.assertEqual(request["model"], "deepseek-v4-flash")
-        self.assertEqual(request["judge_model"], "glm-5.3")
         self.assertEqual(request["run_contract"]["mode"]["decision"], "observe_only")
         self.assertEqual(
             set(request["run_contract"]["plan"]),

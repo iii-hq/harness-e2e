@@ -365,18 +365,12 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           </span>
         ) : null}
       </td>
-      <td
-        data-label="Subject · judge"
-        title={modelNames(presentation.subjects)}
-      >
+      <td data-label="Subject" title={modelNames(presentation.subjects)}>
         <span className="block font-mono text-xs text-ink">
           {presentation.subjects[0]?.model ?? '—'}
         </span>
         <span className="block font-mono text-label text-ink-muted">
           {presentation.subjects[0]?.provider ?? ''}
-          {presentation.judges.length > 0
-            ? ` · judge ${presentation.judges[0].model}`
-            : ' · no judge'}
         </span>
       </td>
       <td data-label="Scope" className={numericCellClassName}>
@@ -440,7 +434,7 @@ function LedgerTable({
         <tr>
           <th scope="col">execution</th>
           <th scope="col">result</th>
-          <th scope="col">subject · judge</th>
+          <th scope="col">subject</th>
           <th scope="col" className={numericCellClassName}>
             scope
           </th>

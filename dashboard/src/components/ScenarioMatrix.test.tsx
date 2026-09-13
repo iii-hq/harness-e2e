@@ -244,7 +244,6 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Security Review v2')
     expect(html).toContain('Objective result')
     expect(html).not.toContain('Advisory')
-    expect(html).not.toContain('judge tokens')
     expect(html).toContain('Workflow · 2 steps')
     expect(html).toContain('Workflow duration profile')
     expect(html).toContain('Tokens')

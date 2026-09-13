@@ -439,7 +439,6 @@ function criterionPoints(
       .filter((scenario) => scenario.scenario_id === scenarioId)
       .flatMap((scenario) => {
         const subject = objectValue(report.subject)
-        const judge = objectValue(report.judge)
         const caseValue = objectValue(scenario.case)
         const policy = objectValue(scenario.execution_policy)
         const identity = [
@@ -449,7 +448,6 @@ function criterionPoints(
           caseValue.inputs_sha256,
           subject.model,
           subject.provider,
-          ...(report.judge == null ? [] : [judge.model, judge.provider]),
         ]
         return scenario.runs.flatMap((run, index) => {
           const round =

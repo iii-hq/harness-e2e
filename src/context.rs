@@ -29,7 +29,6 @@ const READ_TRANSPORT_RETRIES: u32 = 2;
 const READ_TRANSPORT_BACKOFF: Duration = Duration::from_millis(100);
 
 pub struct E2eContext {
-    pub(crate) auxiliary_model: Option<crate::judge::JudgeConfig>,
     client: IIIClient,
     hub: ObserveHub,
     binding: Mutex<Option<Trigger>>,
@@ -61,7 +60,6 @@ impl E2eContext {
             hub: ObserveHub::new(),
             binding: Mutex::new(None),
             execution_outputs: Mutex::new(HashMap::new()),
-            auxiliary_model: None,
         }
     }
 }
@@ -87,7 +85,6 @@ impl E2eContext {
             hub: ObserveHub::new(),
             binding: Mutex::new(None),
             execution_outputs: Mutex::new(HashMap::new()),
-            auxiliary_model: None,
         };
         context.wait_until_ready().await?;
         context.register_observation_sink();

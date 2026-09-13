@@ -462,7 +462,6 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
         ...reference.execution,
         plan: {
           subject: { provider: 'openai', model: 'subject' },
-          judge: { provider: 'openai', model: 'judge' },
         },
       },
       runs: [

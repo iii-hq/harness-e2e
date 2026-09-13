@@ -13,7 +13,6 @@ const sharedProps = {
   label: '',
   url: 'ws://127.0.0.1:49134',
   subject: 'openai\ngpt-5',
-  judge: '',
   modelGroups: [
     {
       provider: 'openai',
@@ -33,7 +32,6 @@ const sharedProps = {
   onLabelChange: () => undefined,
   onUrlChange: () => undefined,
   onSubjectChange: () => undefined,
-  onJudgeChange: () => undefined,
   onSelectedScenariosChange: () => undefined,
   onQueryChange: () => undefined,
   onRunsChange: () => undefined,
@@ -56,11 +54,8 @@ describe('execution setup sheet', () => {
     )
 
     for (const html of [plan, quick]) {
-      expect(html).toContain('Choose the model and judge')
-      // The selected tests do not use a judge, so the field is inert without one.
-      expect(html).toContain('Judge model')
-      expect(html).toContain('The selected tests do not use a judge')
-      expect(html).not.toContain('Default judge (automatic)')
+      expect(html).toContain('Choose the model')
+      expect(html).not.toContain('Judge')
       expect(html).toContain('Pick the tests')
       expect(html).toContain('Advanced · sampling, retries and seed')
       expect(html).toContain('Search by name or id')
@@ -145,11 +140,10 @@ describe('execution setup sheet', () => {
       technicalRetries: 1,
       seed: '',
       subject: 'anthropic / claude-fable-5',
-      judge: '',
       url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
-      '2 tests · 2 runs · anthropic / claude-fable-5 · no judge',
+      '2 tests · 2 runs · anthropic / claude-fable-5',
     )
     expect(summary.detail).toBe(
       '1 run per test · 1 retry · canonical seed · ws://127.0.0.1:49134',
@@ -163,7 +157,6 @@ describe('execution setup sheet', () => {
           technicalRetries: 0,
           seed: '7',
           subject: '',
-          judge: 'openai / gpt-5',
           url: 'ws://x',
         }}
         pending={['Add a plan label.', 'Select at least one test.']}
@@ -171,7 +164,7 @@ describe('execution setup sheet', () => {
         <button type="submit">create draft plan</button>
       </ExecutionSetupFooter>,
     )
-    expect(html).toContain('0 tests · 0 runs · no model · judge openai / gpt-5')
+    expect(html).toContain('0 tests · 0 runs · no model')
     expect(html).toContain('2 runs per test · 0 retries · seed 7 · ws://x')
     expect(html).toContain(
       'Before creating: Add a plan label. Select at least one test.',
@@ -191,7 +184,6 @@ describe('execution setup sheet', () => {
           technicalRetries: 0,
           seed: '',
           subject: 'openai / gpt-5',
-          judge: '',
           url: 'ws://x',
         }}
         error="Runner unavailable"

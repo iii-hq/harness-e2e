@@ -124,16 +124,6 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             url: String::new(),
             model: report.subject.model.clone(),
             provider: report.subject.provider.clone(),
-            judge_model: report
-                .judge
-                .as_ref()
-                .map(|judge| judge.model.clone())
-                .unwrap_or_default(),
-            judge_provider: report
-                .judge
-                .as_ref()
-                .map(|judge| judge.provider.clone())
-                .unwrap_or_default(),
             scenarios: report
                 .scenarios
                 .iter()

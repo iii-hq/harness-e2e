@@ -116,23 +116,14 @@ function parseModelSelection(value: string) {
   return null
 }
 
-function modelGroups(
-  history: TestHistoryResponse | null,
-  role: 'subject' | 'judge',
-): HistoryModelGroup[] {
-  const configured =
-    role === 'subject' ? history?.subject_models : history?.judge_models
-  if (configured?.length) return configured
+function modelGroups(history: TestHistoryResponse | null): HistoryModelGroup[] {
+  if (history?.subject_models.length) return history.subject_models
   if (!history) return []
 
   const groups = new Map<string, Set<string>>()
   for (const observation of history.observations) {
-    const provider =
-      role === 'subject'
-        ? observation.subject_provider
-        : observation.judge_provider
-    const model =
-      role === 'subject' ? observation.subject_model : observation.judge_model
+    const provider = observation.subject_provider
+    const model = observation.subject_model
     if (!provider || !model) continue
     const models = groups.get(provider) ?? new Set<string>()
     models.add(model)
@@ -647,7 +638,7 @@ export function ObservationComparisonPanel({
                 <StatusBadge status={verdict.status} label={verdict.title} />
               ) : null}
               <span className="text-ink-soft">
-                {verdict?.detail} · same contract, seed, cohort, model and judge
+                {verdict?.detail} · same contract, seed, cohort and model
               </span>
             </span>
           </Callout>
@@ -657,7 +648,7 @@ export function ObservationComparisonPanel({
             title="not comparable · values shown, deltas not interpreted"
           >
             {comparison.reasons.join(' · ')}. Choose two executions of the same
-            model, judge and cohort to read deltas.
+            model and cohort to read deltas.
           </Callout>
         )
       ) : (
@@ -774,7 +765,7 @@ function ExecutionDetailsDialog({
       }
     >
       <div className="grid gap-6">
-        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-4">
+        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-3">
           <div className="grid gap-1">
             <dt className="ds-label">result</dt>
             <dd className="m-0">
@@ -788,12 +779,6 @@ function ExecutionDetailsDialog({
                 observation.subject_provider,
                 observation.subject_model,
               )}
-            </dd>
-          </div>
-          <div className="grid gap-1">
-            <dt className="ds-label">judge</dt>
-            <dd className="m-0 font-mono text-ink">
-              {modelLabel(observation.judge_provider, observation.judge_model)}
             </dd>
           </div>
           <div className="grid gap-1">
@@ -859,7 +844,6 @@ function ExecutionDetailsDialog({
 type HistoryFilters = {
   version: number | undefined
   model: string
-  judge: string
   system: string
   result: string
 }
@@ -867,7 +851,6 @@ type HistoryFilters = {
 const EMPTY_FILTERS: HistoryFilters = {
   version: undefined,
   model: '',
-  judge: '',
   system: '',
   result: '',
 }
@@ -879,7 +862,6 @@ export function historyStateFromParams(params: URLSearchParams) {
     filters: {
       version: version && /^\d+$/.test(version) ? Number(version) : undefined,
       model: params.get('model') ?? '',
-      judge: params.get('judge') ?? '',
       system: params.get('system') ?? '',
       result: params.get('result') ?? '',
     } satisfies HistoryFilters,
@@ -899,7 +881,6 @@ export function historyStateToParams(
   if (filters.version !== undefined)
     params.set('version', String(filters.version))
   if (filters.model) params.set('model', filters.model)
-  if (filters.judge) params.set('judge', filters.judge)
   if (filters.system) params.set('system', filters.system)
   if (filters.result) params.set('result', filters.result)
   if (comparisonKeys[0]) params.set('a', comparisonKeys[0])
@@ -911,7 +892,7 @@ export function historyStateToParams(
 function filtersActive(filters: HistoryFilters) {
   return (
     filters.version !== undefined ||
-    Boolean(filters.model || filters.judge || filters.system || filters.result)
+    Boolean(filters.model || filters.system || filters.result)
   )
 }
 
@@ -1074,14 +1055,11 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       .then((next) => {
         if (cancelled) return
         const execution = parseModelSelection(filters.model)
-        const judge = parseModelSelection(filters.judge)
         return next.getTestHistory({
           test_id: testId,
           test_version: filters.version,
           subject_provider: execution?.provider,
           subject_model: execution?.model,
-          judge_provider: judge?.provider,
-          judge_model: judge?.model,
           system_version_id: filters.system || undefined,
           limit: 100,
         })
@@ -1099,7 +1077,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     return () => {
       cancelled = true
     }
-  }, [filters.model, filters.judge, filters.system, filters.version, testId])
+  }, [filters.model, filters.system, filters.version, testId])
 
   // Identity (complexity, realism, lifecycle) and the previous/next test come
   // from the catalog (audit T-14 / TH-06).
@@ -1142,14 +1120,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     candidateCase,
   ])
 
-  const executionModelGroups = useMemo(
-    () => modelGroups(history, 'subject'),
-    [history],
-  )
-  const judgeModelGroups = useMemo(
-    () => modelGroups(history, 'judge'),
-    [history],
-  )
+  const executionModelGroups = useMemo(() => modelGroups(history), [history])
 
   const allObservations = history?.observations ?? []
   // Audit TH-21: the result filter is applied here so the chips keep their
@@ -1659,17 +1630,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     clearLabel="all execution models"
                   />
                 </div>
-                <div className="w-full max-w-[16rem]">
-                  <ProviderModelDropdown
-                    groups={judgeModelGroups}
-                    value={filters.judge}
-                    onChange={(next) => setFilter('judge', next)}
-                    optionValue={modelSelection}
-                    placeholder="all judges"
-                    ariaLabel="Judge model"
-                    clearLabel="all judges"
-                  />
-                </div>
                 {(history?.systems.length ?? 0) > 0 ? (
                   <Select
                     aria-label="System revision"
@@ -1743,7 +1703,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : observations.length === 0 ? (
               <EmptyState
                 title="No executions match these filters"
-                description="Widen the version, model, judge or result filter."
+                description="Widen the version, model or result filter."
                 actions={
                   <button
                     className={buttonClassName({ variant: 'secondary' })}
@@ -1848,9 +1808,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                             )}
                           </span>
                           <span className="block font-mono text-label text-ink-muted">
-                            judge{' '}
-                            {modelLabel(item.judge_provider, item.judge_model)}{' '}
-                            · {systemSummary(item)}
+                            {systemSummary(item)}
                           </span>
                         </td>
                         <td data-label="Result">
@@ -1959,8 +1917,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                         baseline as TestObservation,
                         candidate,
                       ).compatible
-                    ? 'same model, judge and cohort · deltas interpreted'
-                    : 'different model, judge or cohort · deltas shown, not interpreted'}
+                    ? 'same model and cohort · deltas interpreted'
+                    : 'different model or cohort · deltas shown, not interpreted'}
             </span>
             <span className="ms-auto flex gap-2">
               <button

@@ -1,6 +1,6 @@
 //! Behavioral transcript auditor.
 //!
-//! The judge evaluates the deliverable; this module evaluates how the subject
+//! Scenario evaluators score the deliverable; this module evaluates how the subject
 //! behaved while producing it. Every flag is advisory evidence for a human
 //! reviewer: the auditor never changes a run's status, score, gates, or
 //! longitudinal comparison inputs, and it only reads execution artifacts the
@@ -12,9 +12,9 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+use crate::analyzer::AnalyzerConfig;
 use crate::assessment::{AnalyzerIdentity, AnalyzerUsage};
 use crate::context::E2eContext;
-use crate::judge::JudgeConfig;
 use crate::redaction::RedactionPolicy;
 use crate::report::E2eRunReport;
 use crate::scenarios::common::{function_invocations, function_result};
@@ -155,7 +155,7 @@ pub struct AuditReport {
 /// efficiency are final, and it only appends to `report.audit`.
 pub async fn run_audit(
     context: &E2eContext,
-    analyzer: Option<&JudgeConfig>,
+    analyzer: Option<&AnalyzerConfig>,
     spec: &ScenarioSpec,
     case: &ScenarioCase,
     report: &E2eRunReport,
@@ -178,7 +178,7 @@ pub async fn run_audit(
 
 async fn run_audit_inputs(
     context: &E2eContext,
-    analyzer: Option<&JudgeConfig>,
+    analyzer: Option<&AnalyzerConfig>,
     prompt: &str,
     denied_functions: &[String],
     case: Option<&ScenarioCase>,
@@ -433,7 +433,7 @@ struct AnalyzerOutcome {
 
 async fn analyze_inputs(
     context: &E2eContext,
-    config: &JudgeConfig,
+    config: &AnalyzerConfig,
     prompt_text: &str,
     denied_functions: &[String],
     transcript: &Value,
@@ -476,14 +476,14 @@ the behavior is unremarkable:\n{}",
     let mut usage_samples = Vec::new();
     for attempt in 1..=MAX_ANALYZER_ATTEMPTS {
         let response =
-            crate::judge::invoke(context, config, AUDIT_SYSTEM_PROMPT, &attempt_prompt, 2_048)
+            crate::analyzer::invoke(context, config, AUDIT_SYSTEM_PROMPT, &attempt_prompt, 2_048)
                 .await
                 .map_err(|error| anyhow!("invoke audit analyzer attempt {attempt}: {error:#}"))?;
-        usage_samples.push(crate::judge::response_usage(&response));
-        let text = crate::judge::assistant_text(&response);
+        usage_samples.push(crate::analyzer::response_usage(&response));
+        let text = crate::analyzer::assistant_text(&response);
         match parse_audit_response(&text) {
             Ok(flags) => {
-                let usage = crate::judge::aggregate_usage(&usage_samples);
+                let usage = crate::analyzer::aggregate_usage(&usage_samples);
                 return Ok(AnalyzerOutcome {
                     flags,
                     analyzer,

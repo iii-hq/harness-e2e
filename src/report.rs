@@ -39,7 +39,6 @@ pub enum FailurePhase {
 #[serde(rename_all = "snake_case")]
 pub enum FailureDomain {
     Subject,
-    Judge,
     Resource,
     E2eInfrastructure,
 }
@@ -227,7 +226,6 @@ pub enum RunStatus {
     Passed,
     HardGateFailed,
     SubjectError,
-    JudgeError,
     ResourceLimit,
     InfrastructureError,
 }
@@ -269,7 +267,7 @@ impl RunStatus {
     pub fn is_technical_failure(self) -> bool {
         matches!(
             self,
-            Self::SubjectError | Self::JudgeError | Self::ResourceLimit | Self::InfrastructureError
+            Self::SubjectError | Self::ResourceLimit | Self::InfrastructureError
         )
     }
 
@@ -278,7 +276,6 @@ impl RunStatus {
             Self::Passed => "PASS",
             Self::HardGateFailed => "HARD GATE FAIL",
             Self::SubjectError => "SUBJECT ERROR",
-            Self::JudgeError => "JUDGE ERROR",
             Self::ResourceLimit => "RESOURCE LIMIT",
             Self::InfrastructureError => "INFRA ERROR",
         }
@@ -287,7 +284,6 @@ impl RunStatus {
     fn failure_domain(self) -> FailureDomain {
         match self {
             Self::SubjectError => FailureDomain::Subject,
-            Self::JudgeError => FailureDomain::Judge,
             Self::ResourceLimit => FailureDomain::Resource,
             Self::Passed | Self::HardGateFailed | Self::InfrastructureError => {
                 FailureDomain::E2eInfrastructure
@@ -298,7 +294,6 @@ impl RunStatus {
 
 pub(crate) fn classify_failure(status: RunStatus, phase: FailurePhase) -> String {
     match status {
-        RunStatus::JudgeError => "judge_unavailable",
         RunStatus::ResourceLimit => "subject_budget_exhausted",
         RunStatus::SubjectError => "subject_execution_failed",
         RunStatus::InfrastructureError if phase == FailurePhase::Cleanup => "cleanup_failed",
@@ -596,18 +591,6 @@ impl E2eRunReport {
                 self.objective_score = self.score;
                 self.quality_score_completed = None;
                 self.evaluators.quality = EvaluatorAvailability::NotRequired;
-            }
-            RunStatus::JudgeError => {
-                self.technical = TechnicalState::Valid;
-                if self.evaluators.completion != EvaluatorAvailability::Available {
-                    self.completion = CompletionState::Undetermined;
-                    self.evaluators.completion = EvaluatorAvailability::Unavailable;
-                }
-                self.evaluators.quality = EvaluatorAvailability::Unavailable;
-                self.objective_score = None;
-                if self.completion != CompletionState::Completed {
-                    self.quality_score_completed = None;
-                }
             }
             RunStatus::SubjectError | RunStatus::InfrastructureError => {
                 self.technical = TechnicalState::TechnicalInvalid;
@@ -1974,8 +1957,6 @@ pub struct E2eManifest {
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     pub subject: ModelArtifact,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge: Option<ModelArtifact>,
     pub control_plane: ControlPlaneEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_contract: Option<ObservationRunContract>,
@@ -2051,8 +2032,6 @@ pub struct E2eReport {
     pub manifest: Option<ArtifactReference>,
     pub subject: ModelArtifact,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge: Option<ModelArtifact>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_contract: Option<ObservationRunContract>,
@@ -2082,7 +2061,6 @@ impl E2eReport {
         execution: ExecutionIdentity,
         system_under_test: SystemUnderTestIdentity,
         subject: ModelArtifact,
-        judge: Option<ModelArtifact>,
         engine_revision: Option<String>,
         scenarios: Vec<E2eScenarioReport>,
     ) -> Self {
@@ -2116,7 +2094,6 @@ impl E2eReport {
             system_under_test,
             manifest: None,
             subject,
-            judge,
             engine_revision,
             observation_contract: None,
             passed,
@@ -3161,7 +3138,6 @@ mod tests {
             execution: execution(),
             system_under_test: system(),
             subject: model(),
-            judge: None,
             control_plane: ControlPlaneEvidence {
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
@@ -3215,7 +3191,7 @@ mod tests {
     }
 
     fn report(scenarios: Vec<E2eScenarioReport>) -> E2eReport {
-        E2eReport::new(execution(), system(), model(), None, None, scenarios)
+        E2eReport::new(execution(), system(), model(), None, scenarios)
     }
 
     fn run(score: u8, passed: bool) -> E2eRunReport {
@@ -3283,7 +3259,7 @@ mod tests {
         unavailable.finish(RunStatus::ResourceLimit);
         assert_eq!(unavailable.objective_score, None);
         let mut evaluator_error = run(65, true);
-        evaluator_error.finish(RunStatus::JudgeError);
+        evaluator_error.finish(RunStatus::InfrastructureError);
         assert!(!report(vec![aggregate(vec![evaluator_error])]).execution_succeeded());
     }
 
@@ -3329,15 +3305,14 @@ mod tests {
             "prompt".into(),
         );
         error.push_failure(
-            RunStatus::JudgeError,
+            RunStatus::InfrastructureError,
             FailurePhase::Evaluate,
-            "judge unavailable",
+            "evaluator unavailable",
         );
         let report = aggregate(vec![run(90, true), run(90, true), error]);
         assert!(!report.passed);
         assert_eq!(report.aggregate.scored_runs, 2);
-        assert_eq!(report.aggregate.technical_invalid_runs, 0);
-        assert_eq!(report.aggregate.undetermined_runs, 1);
+        assert_eq!(report.aggregate.technical_invalid_runs, 1);
         assert_eq!(report.aggregate.median_score, Some(90.0));
     }
 
@@ -3412,11 +3387,7 @@ mod tests {
 
     #[test]
     fn secondary_infrastructure_failure_survives_sealing_and_aggregation() {
-        for primary in [
-            RunStatus::HardGateFailed,
-            RunStatus::ResourceLimit,
-            RunStatus::JudgeError,
-        ] {
+        for primary in [RunStatus::HardGateFailed, RunStatus::ResourceLimit] {
             for phase in [FailurePhase::Cleanup, FailurePhase::Collect] {
                 let mut failed = run(80, true);
                 failed.push_failure(primary, FailurePhase::Evaluate, "primary failure");

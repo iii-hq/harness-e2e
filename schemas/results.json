@@ -29,16 +29,6 @@
     "execution": {
       "$ref": "#/definitions/ExecutionIdentity"
     },
-    "judge": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ModelArtifact"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "manifest": {
       "anyOf": [
         {
@@ -1571,7 +1561,6 @@
       "type": "string",
       "enum": [
         "subject",
-        "judge",
         "resource",
         "e2e_infrastructure"
       ]
@@ -2347,7 +2336,6 @@
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error"
       ]
@@ -3136,7 +3124,6 @@
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error"
       ]

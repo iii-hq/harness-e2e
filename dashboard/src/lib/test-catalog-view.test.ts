@@ -39,7 +39,6 @@ function side(issue = false): TestSideSummary {
         passed: 1,
         hard_gate_failed: 0,
         subject_error: 0,
-        judge_error: 0,
         resource_limit: 0,
         infrastructure_error: 0,
       },

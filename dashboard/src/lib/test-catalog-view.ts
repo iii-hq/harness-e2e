@@ -42,7 +42,7 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
   cohort_changed: {
     title: 'Evaluation cohort changed',
     detail:
-      'Subject, judge, model, or lane identity differs. Cross-cohort deltas are not valid.',
+      'Subject model or lane identity differs. Cross-cohort deltas are not valid.',
   },
   missing_side: {
     title: 'Evidence is missing on one side',

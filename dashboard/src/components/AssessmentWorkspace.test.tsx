@@ -227,8 +227,8 @@ describe('assessment workspace component', () => {
   it('drops the filter bar and reports unavailable outcomes for a run without assessments', () => {
     const emptyRun = {
       ...model.runs[0],
-      key: 'judge-error',
-      systemStatus: 'judge_error' as const,
+      key: 'subject-error',
+      systemStatus: 'subject_error' as const,
       objectiveScore: null,
       assessments: [],
     }

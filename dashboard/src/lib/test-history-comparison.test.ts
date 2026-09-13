@@ -25,8 +25,6 @@ function observation(
     stack_mode: 'source',
     subject_provider: 'openai',
     subject_model: 'gpt-5',
-    judge_provider: 'openai',
-    judge_model: 'gpt-5-judge',
     median_cost_usd: 0.5,
     median_tokens: 1000,
     median_duration_seconds: 20,

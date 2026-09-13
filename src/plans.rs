@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::artifact;
 use crate::scenarios::ScenarioId;
 
-pub(crate) const PLAN_SCHEMA_VERSION: u32 = 3;
+pub(crate) const PLAN_SCHEMA_VERSION: u32 = 4;
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, JsonSchema, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -55,8 +55,6 @@ pub(crate) struct LocalPlan {
     pub url: String,
     pub model: String,
     pub provider: String,
-    pub judge_model: String,
-    pub judge_provider: String,
     pub scenarios: Vec<PlanScopeItem>,
     pub scenario_ids: Vec<String>,
     pub runs: u32,
@@ -92,10 +90,6 @@ pub(crate) struct PlanCreateRequest {
     pub url: String,
     pub model: String,
     pub provider: String,
-    #[serde(default)]
-    pub judge_model: String,
-    #[serde(default)]
-    pub judge_provider: String,
     pub scenarios: Vec<String>,
     #[serde(default)]
     pub template_id: Option<String>,
@@ -124,8 +118,6 @@ pub(crate) struct PlanUpdateRequest {
     pub url: Option<String>,
     pub model: Option<String>,
     pub provider: Option<String>,
-    pub judge_model: Option<String>,
-    pub judge_provider: Option<String>,
     pub scenarios: Option<Vec<String>>,
     pub runs: Option<u32>,
     pub technical_retries: Option<u8>,
@@ -167,8 +159,6 @@ pub(crate) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         url: request.url.trim().to_string(),
         model: request.model.trim().to_string(),
         provider: request.provider.trim().to_string(),
-        judge_model: request.judge_model.trim().to_string(),
-        judge_provider: request.judge_provider.trim().to_string(),
         scenario_ids: request.scenarios.clone(),
         scenarios,
         runs: request.runs,
@@ -207,12 +197,6 @@ pub(crate) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> 
     if let Some(value) = &update.provider {
         request.provider = value.clone();
     }
-    if let Some(value) = &update.judge_model {
-        request.judge_model = value.clone();
-    }
-    if let Some(value) = &update.judge_provider {
-        request.judge_provider = value.clone();
-    }
     if let Some(value) = &update.scenarios {
         request.scenarios = value.clone();
     }
@@ -232,8 +216,6 @@ pub(crate) fn apply_update(plan: &mut LocalPlan, update: &PlanUpdateRequest) -> 
     plan.url = request.url.trim().to_string();
     plan.model = request.model.trim().to_string();
     plan.provider = request.provider.trim().to_string();
-    plan.judge_model = request.judge_model.trim().to_string();
-    plan.judge_provider = request.judge_provider.trim().to_string();
     plan.scenario_ids = request.scenarios.clone();
     plan.scenarios = scenarios;
     plan.runs = request.runs;
@@ -280,8 +262,6 @@ pub(crate) fn plan_request(plan: &LocalPlan) -> PlanCreateRequest {
         url: plan.url.clone(),
         model: plan.model.clone(),
         provider: plan.provider.clone(),
-        judge_model: plan.judge_model.clone(),
-        judge_provider: plan.judge_provider.clone(),
         scenarios: plan.scenario_ids.clone(),
         template_id: plan.template_id.clone(),
         duplicate_of: None,
@@ -315,14 +295,8 @@ fn validate_values(request: &PlanCreateRequest) -> Result<()> {
     if ids.len() != request.scenarios.len() {
         bail!("plan scenarios must be unique");
     }
-    let selected = ids
-        .into_iter()
-        .map(|value| value.parse::<ScenarioId>())
-        .collect::<Result<Vec<_>>>()?;
-    if selected.contains(&ScenarioId::RegistryPlanning)
-        && (request.judge_model.trim().is_empty() || request.judge_provider.trim().is_empty())
-    {
-        bail!("Registry planning requires an explicit judge model and provider");
+    for id in ids {
+        id.parse::<ScenarioId>()?;
     }
     Ok(())
 }
@@ -365,8 +339,6 @@ pub(crate) fn scope_hash(
         "url": request.url.trim(),
         "model": request.model.trim(),
         "provider": request.provider.trim(),
-        "judge_model": request.judge_model.trim(),
-        "judge_provider": request.judge_provider.trim(),
         "scenarios": scenarios,
         "runs": request.runs,
         "technical_retries": request.technical_retries,
@@ -385,8 +357,6 @@ mod tests {
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
             provider: "provider".into(),
-            judge_model: "judge".into(),
-            judge_provider: "judge-provider".into(),
             scenarios: vec![ScenarioId::ContextPressure.as_str().into()],
             template_id: None,
             duplicate_of: None,

@@ -67,12 +67,7 @@ export type ExecutionModelGroup = {
   models: { label: string; value: string }[]
 }
 
-export type ExecutionSetupField =
-  | 'label'
-  | 'subject'
-  | 'judge'
-  | 'scenarios'
-  | 'url'
+export type ExecutionSetupField = 'label' | 'subject' | 'scenarios' | 'url'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
 /** Audit PN-05: validation runs on submit and names each pending item. */
@@ -82,22 +77,16 @@ export function validateExecutionSetup({
   subject,
   selectedScenarios,
   url,
-  judge,
-  judgeRequired,
 }: {
   mode: ExecutionSetupMode
   label: string
   subject: string
   selectedScenarios: string[]
   url: string
-  judge?: string
-  judgeRequired?: boolean
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
   if (mode === 'plan' && label.trim() === '') errors.label = 'Add a plan label.'
   if (!subject) errors.subject = 'Choose an execution model.'
-  if (judgeRequired && !judge)
-    errors.judge = 'Choose a judge model for the selected tests.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
   if (url.trim() === '') errors.url = 'The Harness endpoint is missing.'
@@ -112,7 +101,6 @@ export function focusFirstInvalid(
   const order: [ExecutionSetupField, string][] = [
     ['label', `${idPrefix}-label`],
     ['subject', `${idPrefix}-subject`],
-    ['judge', `${idPrefix}-judge`],
     ['scenarios', `${idPrefix}-scenario-search`],
     ['url', `${idPrefix}-url`],
   ]
@@ -168,8 +156,6 @@ type ExecutionSetupProps = {
   purpose?: string
   url: string
   subject: string
-  judge: string
-  judgeRequired?: boolean
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
   selectedScenarios: string[]
@@ -188,7 +174,6 @@ type ExecutionSetupProps = {
   onPurposeChange?: (value: string) => void
   onUrlChange: (value: string) => void
   onSubjectChange: (value: string) => void
-  onJudgeChange: (value: string) => void
   onSelectedScenariosChange: (value: string[]) => void
   onQueryChange: (value: string) => void
   onRunsChange: (value: string) => void
@@ -241,8 +226,6 @@ export function ExecutionSetup({
   purpose = '',
   url,
   subject,
-  judge,
-  judgeRequired = false,
   modelGroups,
   availableScenarios,
   selectedScenarios,
@@ -260,7 +243,6 @@ export function ExecutionSetup({
   onPurposeChange,
   onUrlChange,
   onSubjectChange,
-  onJudgeChange,
   onSelectedScenariosChange,
   onQueryChange,
   onRunsChange,
@@ -406,9 +388,11 @@ export function ExecutionSetup({
 
       <SetupSection
         id={`${idPrefix}-models`}
-        title="Choose the model and judge"
-        description="The execution model and any required judge are saved with the result."
+        title="Choose the model"
+        description="The execution model is saved with the result."
       >
+        {/* One field keeps the two-column rhythm of the label section, where
+            quick executions also leave the second cell empty. */}
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field
             label="Execution model"
@@ -428,31 +412,6 @@ export function ExecutionSetup({
                 modelGroups.length === 0
                   ? 'No models in the catalog'
                   : 'Choose a model'
-              }
-            />
-          </Field>
-          <Field
-            label="Judge model"
-            htmlFor={`${idPrefix}-judge`}
-            meta={judgeRequired ? 'required' : 'not used'}
-            hint={
-              judgeRequired
-                ? undefined
-                : 'The selected tests do not use a judge'
-            }
-            error={errors.judge}
-          >
-            <ProviderModelDropdown
-              invalid={Boolean(errors.judge)}
-              id={`${idPrefix}-judge`}
-              ariaLabel="Judge model"
-              value={judgeRequired ? judge : ''}
-              onChange={onJudgeChange}
-              disabled={disabled || !judgeRequired || modelGroups.length === 0}
-              groups={modelGroups}
-              clearLabel="Choose a judge"
-              placeholder={
-                judgeRequired ? 'Choose a judge' : 'No judge for these tests'
               }
             />
           </Field>
@@ -820,7 +779,6 @@ export type ExecutionSetupSummaryInput = {
   technicalRetries: number
   seed: string
   subject: string
-  judge: string
   url: string
 }
 
@@ -831,7 +789,6 @@ export function executionSetupSummary({
   technicalRetries,
   seed,
   subject,
-  judge,
   url,
 }: ExecutionSetupSummaryInput) {
   const runs = selectedScenarios * runsPerScenario
@@ -839,7 +796,6 @@ export function executionSetupSummary({
     `${selectedScenarios} test${selectedScenarios === 1 ? '' : 's'}`,
     `${runs} run${runs === 1 ? '' : 's'}`,
     subject || 'no model',
-    judge ? `judge ${judge}` : 'no judge',
   ].join(' · ')
   const detail = [
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,

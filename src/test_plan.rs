@@ -293,7 +293,7 @@ impl MasterPlan {
             };
             let admission: crate::control::RunRequest = serde_json::from_value(json!({
                 "idempotency_key": format!("plan-preview:{}:{id}", profile.id), "lane": profile.lane,
-                "model": "preview", "provider": "preview", "judge_model": "preview", "judge_provider": "preview",
+                "model": "preview", "provider": "preview",
                 "scenarios": [id], "runs": 1, "seed": seed, "technical_retries": retries,
             }))?;
             crate::control::validate_run_request(&admission)?;
@@ -319,7 +319,6 @@ impl MasterPlan {
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
-                "judge_required": *key == ScenarioId::RegistryPlanning,
             }));
             // Every repetition is a fresh invocation. This also obeys the
             // campaign parser's one-case, runs=1 adaptive-flow contract.
@@ -390,7 +389,7 @@ impl MasterPlan {
                 "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions) + fault_runs,
                 "session_turn_limit_sum": subject_turns, "subject_token_limit": subject_token_limit,
                 "unbounded_token_cases": unbounded_token_cases, "fault_budget_separate": fault_runs > 0,
-                "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional"}),
+                "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
             protected_supervisor_required: !profile.fault_groups.is_empty(),
         })
@@ -404,7 +403,6 @@ impl MasterPlan {
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
                 "technical_retries": profile.technical_retries, "budget": snapshot.budget,
                 "profile_sha256": snapshot.profile_sha256, "protected_supervisor_required": snapshot.protected_supervisor_required,
-                "judge_required": snapshot.protected_supervisor_required || snapshot.cases.iter().any(|c| c["judge_required"] == true),
                 "cases": snapshot.cases}));
         }
         Ok(
@@ -461,8 +459,7 @@ fn measurement_cohorts(paths: &[std::path::PathBuf]) -> Result<(MeasurementCohor
                 }
             }
             let identity = json!({"case": case, "execution_policy": scenario.execution_policy,
-                "system_under_test": report.system_under_test, "subject": report.subject,
-                "judge": report.judge});
+                "system_under_test": report.system_under_test, "subject": report.subject});
             let digest = artifact::sha256_value(&identity)?;
             if let Some((_, accumulated)) = cohorts.get_mut(&digest) {
                 let planned = accumulated
@@ -606,15 +603,6 @@ mod tests {
         );
         assert_eq!(snapshot.profile.repetitions, 1);
         assert_eq!(snapshot.profile.technical_retries, 0);
-        assert_eq!(
-            snapshot
-                .cases
-                .iter()
-                .filter(|case| case["judge_required"] == true)
-                .map(|case| &case["scenario_id"])
-                .collect::<Vec<_>>(),
-            vec![&json!("registry_planning")]
-        );
     }
 
     #[test]
@@ -662,21 +650,6 @@ mod tests {
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();
         assert!(changed.validate().is_err());
-    }
-
-    #[test]
-    fn registry_planning_requires_a_judge_in_console_catalog() {
-        let plan = embedded().unwrap();
-        let mut profile = plan.profiles[0].clone();
-        profile.modules.clear();
-        profile.scenarios = vec!["registry_planning".into(), "registry_implementation".into()];
-        let snapshot = plan.materialize_scope(profile, None).unwrap();
-        for case in snapshot.cases {
-            assert_eq!(
-                case["judge_required"],
-                case["scenario_id"] == "registry_planning"
-            );
-        }
     }
 
     #[test]

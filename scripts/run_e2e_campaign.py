@@ -142,7 +142,6 @@ class Campaign:
     failure_policy: str
     scoring_profile: str
     groups: tuple[CampaignGroup, ...]
-    judge_required: bool
 
 
 def _expect_object(value: Any, label: str) -> dict[str, Any]:
@@ -343,7 +342,6 @@ def parse_campaign(
         failure_policy=failure_policy,
         scoring_profile=scoring_profile,
         groups=tuple(groups),
-        judge_required=any(scenario == "registry_planning" for group in groups for scenario in group.scenarios),
     )
 
 
@@ -369,8 +367,6 @@ def build_group_command(
     output: pathlib.Path,
     model: str | None = None,
     provider: str | None = None,
-    judge_model: str | None = None,
-    judge_provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
 ) -> list[str]:
@@ -390,10 +386,6 @@ def build_group_command(
         command.extend(["--model", model])
     if provider:
         command.extend(["--provider", provider])
-    if judge_model:
-        command.extend(["--judge-model", judge_model])
-    if judge_provider:
-        command.extend(["--judge-provider", judge_provider])
     if url:
         command.extend(["--url", url])
     if progress_interval_seconds is not None:
@@ -886,8 +878,6 @@ def execute_campaign(
     advisory: bool,
     model: str | None = None,
     provider: str | None = None,
-    judge_model: str | None = None,
-    judge_provider: str | None = None,
     url: str | None = None,
     progress_interval_seconds: int | None = None,
     environ: Mapping[str, str] | None = None,
@@ -903,8 +893,6 @@ def execute_campaign(
         raise CampaignError(
             "fault injection execution requires Release Control Compose dispatch"
         )
-    if bool(judge_model) != bool(judge_provider):
-        raise CampaignError("judge_model and judge_provider must be supplied together")
     if not dry_run:
         if not model and not base_environment.get("HARNESS_E2E_MODEL"):
             raise CampaignError(
@@ -913,16 +901,6 @@ def execute_campaign(
         if not provider and not base_environment.get("HARNESS_E2E_PROVIDER"):
             raise CampaignError(
                 "provider is required via --provider or HARNESS_E2E_PROVIDER"
-            )
-        resolved_judge_model = judge_model or base_environment.get(
-            "HARNESS_E2E_JUDGE_MODEL"
-        )
-        resolved_judge_provider = judge_provider or base_environment.get(
-            "HARNESS_E2E_JUDGE_PROVIDER"
-        )
-        if campaign.judge_required and (not resolved_judge_model or not resolved_judge_provider):
-            raise CampaignError(
-                "Registry planning campaign groups require an explicit judge model and provider"
             )
 
     execution_root = output_root / campaign.campaign_id / execution_id
@@ -940,8 +918,6 @@ def execute_campaign(
                 output=group_output,
                 model=model,
                 provider=provider,
-                judge_model=judge_model,
-                judge_provider=judge_provider,
                 url=url,
                 progress_interval_seconds=progress_interval_seconds,
             )
@@ -983,10 +959,6 @@ def execute_campaign(
             "runner": str(e2e_bin),
             "model": model or child_environment.get("HARNESS_E2E_MODEL"),
             "provider": provider or child_environment.get("HARNESS_E2E_PROVIDER"),
-            "judge_model": judge_model
-            or child_environment.get("HARNESS_E2E_JUDGE_MODEL"),
-            "judge_provider": judge_provider
-            or child_environment.get("HARNESS_E2E_JUDGE_PROVIDER"),
             "url": url or child_environment.get("III_URL", "ws://127.0.0.1:49134"),
             "progress_interval_seconds": progress_interval_seconds,
         }
@@ -1274,8 +1246,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--model")
     parser.add_argument("--provider")
-    parser.add_argument("--judge-model")
-    parser.add_argument("--judge-provider")
     parser.add_argument("--url")
     parser.add_argument("--progress-interval-seconds", type=int)
     return parser
@@ -1331,8 +1301,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 advisory=advisory,
                 model=args.model,
                 provider=args.provider,
-                judge_model=args.judge_model,
-                judge_provider=args.judge_provider,
                 url=args.url,
                 progress_interval_seconds=args.progress_interval_seconds,
             )

@@ -1269,12 +1269,8 @@ export function TestsPage({
     setToVersionId(versionId)
   }
 
-  const cohortLabel = (cohort: CohortDescriptor) => {
-    const judge = cohort.judge_model
-      ? `judge ${compactModel(cohort.judge_model)}`
-      : 'no judge'
-    return `${compactModel(cohort.subject_model)} · lane ${cohort.lane} · ${judge}`
-  }
+  const cohortLabel = (cohort: CohortDescriptor) =>
+    `${compactModel(cohort.subject_model)} · lane ${cohort.lane}`
   const cohortsWithPairs = (evaluated?.cohorts ?? []).filter(
     (cohort) =>
       (evaluated?.versions.filter((version) => version.cohort_id === cohort.id)
@@ -1304,8 +1300,8 @@ export function TestsPage({
   const bLabel = bVersion ? bVersion.label.toLowerCase() : 'b'
   const headline =
     activeCohort && aVersion && bVersion
-      ? `${compactModel(activeCohort.subject_model)} judged by ${activeCohort.judge_model ? compactModel(activeCohort.judge_model) : 'no judge'} · ${aLabel} → ${bLabel}`
-      : 'two system versions, same model and judge'
+      ? `${compactModel(activeCohort.subject_model)} · ${aLabel} → ${bLabel}`
+      : 'two system versions, same model'
 
   const shareLink = () => {
     void navigator.clipboard?.writeText(window.location.href).then(() => {
@@ -1372,11 +1368,12 @@ export function TestsPage({
           }
         />
 
-        {/* Audit CP-02 / CP-06: the builder names who was judged by whom and
-            what each side holds; one sentence explains when deltas exist. */}
+        {/* Audit CP-02 / CP-06: the builder names which model ran in which
+            lane and what each side holds; one sentence explains when deltas
+            exist. */}
         <Panel className="mt-6" aria-labelledby="compare-builder-title">
           <h2 className="ds-label mb-3" id="compare-builder-title">
-            cohort · who was judged by whom
+            cohort · which model ran in which lane
           </h2>
           <div className="grid gap-4 @[840px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto_minmax(0,1fr)] @[840px]:items-start">
             <div className="grid gap-1">
@@ -1400,8 +1397,8 @@ export function TestsPage({
               </Select>
               <span className="font-mono text-label text-ink-muted">
                 {activeCohort
-                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · judge ${activeCohort.judge_provider ? `${activeCohort.judge_provider}/${activeCohort.judge_model}` : 'no judge'}`
-                  : 'system version = the workers under test · cohort = which model ran with which judge'}
+                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · lane ${activeCohort.lane}`
+                  : 'system version = the workers under test · cohort = which model ran in which lane'}
                 {evaluated
                   ? ` · ${cohortsWithPairs} of ${evaluated.cohorts.length} cohorts have ≥ 2 versions`
                   : ''}
@@ -1477,7 +1474,7 @@ export function TestsPage({
             </div>
           </div>
           <p className="mt-3 mb-0 text-xs text-ink-soft">
-            Deltas only between runs of the same model, judge and test contract.
+            Deltas only between runs of the same model and test contract.
           </p>
           {recommendation ? (
             <Callout tone="info" className="mt-3" data-recommendation>

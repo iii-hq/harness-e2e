@@ -223,7 +223,7 @@ describe('design system foundation primitives', () => {
   it('gives callouts a role that matches their urgency', () => {
     expect(
       renderToStaticMarkup(
-        <Callout title="Judge needs review">Two runs disagreed.</Callout>,
+        <Callout title="Run needs review">Two runs disagreed.</Callout>,
       ),
     ).toContain('class="ds-callout ds-callout-info" role="note"')
     expect(renderToStaticMarkup(<Callout tone="warning">x</Callout>)).toContain(

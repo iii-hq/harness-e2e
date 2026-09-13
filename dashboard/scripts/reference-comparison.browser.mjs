@@ -36,7 +36,6 @@ const reference = {
     plan: {
       name: 'Smoke',
       subject: { model: 'test', provider: 'test' },
-      judge: { model: 'judge', provider: 'test' },
     },
     request: {},
   },
@@ -244,7 +243,6 @@ async function route(id, payload) {
       cases: ['case-a'],
       subjects: [],
       subject_models: [],
-      judge_models: [],
       systems: [],
       series: [],
       observations: [
@@ -265,8 +263,6 @@ async function route(id, payload) {
           stack_mode: 'source',
           subject_provider: 'test',
           subject_model: 'test',
-          judge_provider: 'test',
-          judge_model: 'judge',
           median_cost_usd: 0.01,
           median_tokens: 10,
           median_duration_seconds: 1,

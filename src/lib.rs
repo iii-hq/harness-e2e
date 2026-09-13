@@ -1,3 +1,4 @@
+pub mod analyzer;
 pub mod artifact;
 pub mod assessment;
 pub mod asset;
@@ -12,7 +13,6 @@ pub mod fault;
 pub mod history;
 pub mod identity;
 pub mod journal;
-pub mod judge;
 pub mod longitudinal;
 pub mod manifest;
 mod observe;

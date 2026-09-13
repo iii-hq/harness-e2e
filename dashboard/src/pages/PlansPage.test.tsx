@@ -25,8 +25,6 @@ const plan: LocalPlan = {
   url: 'https://example.invalid/catalog',
   model: 'codex/gpt-5.6-terra',
   provider: 'openai-codex',
-  judge_model: 'codex/gpt-5.6-sol',
-  judge_provider: 'openai-codex',
   scenarios: [],
   scenario_ids: ['direct_answer'],
   runs: 1,

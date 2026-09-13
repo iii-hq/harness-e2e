@@ -246,44 +246,6 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertNotIn("--seed", command)
         self.assertNotIn("--rotating-seed", command)
 
-    def test_registry_planning_groups_require_and_freeze_an_explicit_auxiliary_model(self):
-        planning_campaign = parse_campaign(manifest([{
-            "id": "planning", "execution_kind": "harness_turn", "runs": 1,
-            "technical_retries": 1, "scenarios": ["registry_planning"],
-        }]))
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(CampaignError, "explicit judge"):
-                execute_campaign(
-                    planning_campaign,
-                    e2e_bin=pathlib.Path("bin/harness-e2e"),
-                    output_root=pathlib.Path(directory),
-                    execution_id="planning-no-judge",
-                    dry_run=False,
-                    advisory=True,
-                    model="model",
-                    provider="provider",
-                    environ={},
-                )
-
-            summary = execute_campaign(
-                planning_campaign,
-                e2e_bin=pathlib.Path("bin/harness-e2e"),
-                output_root=pathlib.Path(directory),
-                execution_id="planning-with-judge",
-                dry_run=False,
-                advisory=True,
-                model="model",
-                provider="provider",
-                judge_model="judge-model",
-                judge_provider="judge-provider",
-                environ={},
-                run_process=lambda *_args, **_kwargs: types.SimpleNamespace(returncode=0),
-            )
-        command = summary["groups"][0]["command"]
-        self.assertIn("--judge-model", command)
-        self.assertIn("judge-model", command)
-        self.assertTrue(summary["groups"][0]["materialized_group_sha256"].startswith("sha256:"))
-
     def test_advisory_runs_every_group_and_returns_zero_with_failed_objective(self):
         calls = []
         return_codes = iter([9, 0])

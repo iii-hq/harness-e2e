@@ -14,6 +14,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio::sync::{broadcast, mpsc, watch, Mutex, RwLock};
 
+use crate::analyzer::AnalyzerConfig;
 use crate::artifact::{self, ArtifactReference};
 use crate::context::E2eContext;
 use crate::durable::{
@@ -28,7 +29,6 @@ use crate::journal::{
     ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader, JournalProgress,
     JournalTerminalState, EXECUTION_JOURNAL_SCHEMA,
 };
-use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
 use crate::persistence::Persistence;
 use crate::report::{
@@ -189,12 +189,6 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
-    /// Auxiliary model for Registry planning; supply model and provider
-    /// together.
-    #[serde(default)]
-    pub judge_model: Option<String>,
-    #[serde(default)]
-    pub judge_provider: Option<String>,
     /// Opt-in behavioral audit analyzer; supply model and provider together.
     #[serde(default)]
     pub audit_model: Option<String>,
@@ -910,7 +904,6 @@ impl ControlPlane {
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = judge_config(&request);
         let audit_analyzer = audit_config(&request);
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
@@ -919,7 +912,6 @@ impl ControlPlane {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
             },
-            judge,
             audit_analyzer,
             output: output.clone(),
             scenarios,
@@ -2024,14 +2016,6 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             budget.max_declared_turns
         );
     }
-    if request.judge_model.is_some() != request.judge_provider.is_some() {
-        bail!("judge_model and judge_provider must be supplied together");
-    }
-    if scenarios.contains(&ScenarioId::RegistryPlanning)
-        && (request.judge_model.is_none() || request.judge_provider.is_none())
-    {
-        bail!("Registry planning requires an explicit judge_model and judge_provider");
-    }
     if request.audit_model.is_some() != request.audit_provider.is_some() {
         bail!("audit_model and audit_provider must be supplied together");
     }
@@ -2055,8 +2039,6 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         "lane": request.lane,
         "model": request.model,
         "provider": request.provider,
-        "judge_model": request.judge_model,
-        "judge_provider": request.judge_provider,
         "scenarios": request.scenarios,
         "runs": request.runs,
         "seed": request.seed,
@@ -2174,23 +2156,12 @@ fn lane_budget(lane: &str) -> LaneBudget {
     }
 }
 
-fn audit_config(request: &RunRequest) -> Option<JudgeConfig> {
+fn audit_config(request: &RunRequest) -> Option<AnalyzerConfig> {
     request
         .audit_model
         .clone()
         .zip(request.audit_provider.clone())
-        .map(|(model, provider)| JudgeConfig { model, provider })
-}
-
-/// The judge is the auxiliary model Registry planning uses to score the
-/// delivered plan. No other scenario uses it, so there is no default: it
-/// exists only when the request names it.
-fn judge_config(request: &RunRequest) -> Option<JudgeConfig> {
-    request
-        .judge_model
-        .clone()
-        .zip(request.judge_provider.clone())
-        .map(|(model, provider)| JudgeConfig { model, provider })
+        .map(|(model, provider)| AnalyzerConfig { model, provider })
 }
 
 fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
@@ -2740,8 +2711,6 @@ mod tests {
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
-            judge_model: None,
-            judge_provider: None,
             audit_model: None,
             audit_provider: None,
             scenarios: vec![ScenarioId::ContextPressure],
@@ -3102,7 +3071,6 @@ mod tests {
                 supports_tools: Some(true),
                 supports_vision: None,
             },
-            None,
             None,
             vec![crate::report::E2eScenarioReport::aggregate(
                 "direct_answer",

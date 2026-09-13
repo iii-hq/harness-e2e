@@ -94,7 +94,6 @@ def report(revision: str, scores: list[int]) -> dict:
     return {
         "execution": {"lane": "daily"},
         "subject": {"provider": "openai", "model": "subject"},
-        "judge": {"provider": "openai", "model": "judge"},
         "system_under_test": {
             "stack": {
                 "mode": "source",
@@ -239,8 +238,6 @@ class PublishDashboardTests(unittest.TestCase):
                 all("analyzer_profiles" not in side for side in sides.values())
             )
             cohort = catalog["evaluated_versions"]["cohorts"][0]
-            self.assertNotIn("judge_protocol", cohort)
-            self.assertEqual(cohort["judge_model"], "judge")
             shard_path = site / row["shards"]["3"].removeprefix("./")
             shard = json.loads(shard_path.read_text())
             self.assertEqual(len(shard["observations"]), 2)
@@ -296,7 +293,6 @@ class PublishDashboardTests(unittest.TestCase):
             "analyzer",
             "confidence",
             "qualitative_assessment",
-            "judge_protocol",
         ):
             self.assertFalse(contains_key(public, forbidden), forbidden)
 

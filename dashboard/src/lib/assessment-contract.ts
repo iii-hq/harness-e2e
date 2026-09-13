@@ -14,7 +14,6 @@ export type SystemStatus =
   | 'passed'
   | 'hard_gate_failed'
   | 'subject_error'
-  | 'judge_error'
   | 'resource_limit'
   | 'infrastructure_error'
 
@@ -139,7 +138,6 @@ function emptyAssessmentSummary(): AssessmentSummary {
       passed: 0,
       hard_gate_failed: 0,
       subject_error: 0,
-      judge_error: 0,
       resource_limit: 0,
       infrastructure_error: 0,
     },

@@ -48,8 +48,6 @@ export type LocalPlan = {
   url: string
   model: string
   provider: string
-  judge_model: string
-  judge_provider: string
   scenarios: Array<{
     scenario_id: string
     scenario_version: number
@@ -105,10 +103,8 @@ export type MasterTestProfile = {
   label: string
   purpose: string
   metrics: string[]
-  judge_required?: boolean
   cases?: Array<{
     scenario_id: string
-    judge_required: boolean
     requirements: string[]
   }>
   scenario_ids: string[]
@@ -160,7 +156,6 @@ export type DashboardModelIdentity = JsonObject & {
   id?: string
   model?: string
   provider?: string
-  judge?: DashboardModelIdentity | null
 }
 
 export type DashboardScenarioSummary = JsonObject & {
@@ -239,7 +234,6 @@ export type DashboardSubjectSummary = JsonObject & {
   id: string
   model?: string
   provider?: string
-  judge?: DashboardModelIdentity | null
   assessment_summary?: AssessmentSummary
   scenarios: DashboardScenarioSummary[]
 }

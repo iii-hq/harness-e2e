@@ -24,7 +24,6 @@ function assessment(
       passed: 2,
       hard_gate_failed: 0,
       subject_error: 0,
-      judge_error: 0,
       resource_limit: 0,
       infrastructure_error: 0,
     },
@@ -546,7 +545,6 @@ describe('retained criterion points', () => {
             result_contract_sha256: 'results-contract',
             scoring_profile_sha256: 'scoring-contract',
             subject: { model: 'subject', provider: 'provider' },
-            judge: { model: 'judge', provider: 'provider' },
             scenarios: [
               {
                 scenario_id: 'test',
@@ -611,34 +609,6 @@ describe('retained criterion points', () => {
       },
     })
   })
-
-  it.each([
-    [null, null, 1],
-    [null, { model: 'judge', provider: 'provider' }, 0],
-    [null, undefined, 1],
-    [undefined, undefined, 1],
-    [null, {}, 0],
-    [undefined, { model: 'judge' }, 0],
-  ])(
-    'pairs optional judge identity %j / %j with %i repetitions',
-    (leftJudge, rightJudge, paired) => {
-      const left = scored([25])
-      const right = scored([0])
-      Object.assign(left.reports[0].report!, { judge: leftJudge })
-      Object.assign(right.reports[0].report!, { judge: rightJudge })
-
-      expect(
-        buildScenarioComparisons(left, right)[0].metrics.find(
-          (metric) => metric.id === 'criterion:delivery:40',
-        ),
-      ).toMatchObject({
-        baseline: 25,
-        candidate: 0,
-        delta: paired ? -25 : null,
-        evidence: { paired },
-      })
-    },
-  )
 
   it('accepts compact plan execution summaries without slots', () => {
     const baseline = scored([10, 20])

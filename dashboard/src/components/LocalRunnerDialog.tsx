@@ -33,7 +33,6 @@ type RunnerForm = {
   label: string
   url: string
   subject: string
-  judge: string
   scenarios: string[]
   runs: string
   technicalRetries: string
@@ -44,7 +43,6 @@ const initialForm: RunnerForm = {
   label: '',
   url: '',
   subject: '',
-  judge: '',
   scenarios: [],
   runs: '1',
   technicalRetries: '1',
@@ -221,9 +219,6 @@ export function LocalRunnerDialog({
   const selectedSubject = catalog?.models.find(
     (model) => modelKey(model) === form.subject,
   )
-  const selectedJudge = catalog?.models.find(
-    (model) => modelKey(model) === form.judge,
-  )
   const groupedModels = useMemo(
     () => modelGroups(catalog?.models ?? []),
     [catalog],
@@ -237,7 +232,6 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  const needsJudge = form.scenarios.some((id) => id === 'registry_planning')
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length
   const runLabel = submitting
@@ -258,8 +252,6 @@ export function LocalRunnerDialog({
         subject: form.subject,
         selectedScenarios: form.scenarios,
         url: form.url,
-        judge: form.judge,
-        judgeRequired: needsJudge,
       })
     : {}
   const pending = Object.values(errors)
@@ -280,8 +272,6 @@ export function LocalRunnerDialog({
       subject: form.subject,
       selectedScenarios: form.scenarios,
       url: form.url,
-      judge: form.judge,
-      judgeRequired: needsJudge,
     })
     if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
       setAttempted(true)
@@ -292,7 +282,6 @@ export function LocalRunnerDialog({
     setSubmitting(true)
     setError(null)
     try {
-      const judge = needsJudge ? selectedJudge : null
       const response = await bridge.startRun({
         // RunRequest.label is intentionally a string: empty labels remain
         // compatible with persisted execution metadata.
@@ -300,8 +289,6 @@ export function LocalRunnerDialog({
         url: form.url,
         model: selectedSubject.model,
         provider: selectedSubject.provider,
-        judge_model: judge?.model || '',
-        judge_provider: judge?.provider || '',
         scenarios: form.scenarios,
         runs: Number(form.runs),
         technical_retries: Number(form.technicalRetries),
@@ -336,10 +323,6 @@ export function LocalRunnerDialog({
     subject: selectedSubject
       ? `${selectedSubject.provider} / ${selectedSubject.model}`
       : '',
-    judge:
-      needsJudge && selectedJudge
-        ? `${selectedJudge.provider} / ${selectedJudge.model}`
-        : '',
     url: form.url,
   }
   // statusLabel already ends its running states with an ellipsis.
@@ -452,8 +435,6 @@ export function LocalRunnerDialog({
           label={form.label}
           url={form.url}
           subject={form.subject}
-          judge={form.judge}
-          judgeRequired={needsJudge}
           modelGroups={modelOptions}
           availableScenarios={catalog?.scenarios ?? []}
           selectedScenarios={form.scenarios}
@@ -478,7 +459,6 @@ export function LocalRunnerDialog({
           onLabelChange={(value) => update('label', value)}
           onUrlChange={(value) => update('url', value)}
           onSubjectChange={(value) => update('subject', value)}
-          onJudgeChange={(value) => update('judge', value)}
           onSelectedScenariosChange={updateScenarios}
           onQueryChange={setScenarioQuery}
           onRunsChange={(value) => update('runs', value)}

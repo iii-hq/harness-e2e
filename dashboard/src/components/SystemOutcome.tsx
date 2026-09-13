@@ -13,7 +13,6 @@ const FAILING = new Set([
   'failed',
   'hard_gate_failed',
   'subject_error',
-  'judge_error',
   'resource_limit',
   'infrastructure_error',
   'error',

@@ -39,7 +39,6 @@ pub(super) struct StatusCounts {
     pub passed: usize,
     pub hard_gate_failed: usize,
     pub subject_error: usize,
-    pub judge_error: usize,
     pub resource_limit: usize,
     pub infrastructure_error: usize,
 }
@@ -212,7 +211,6 @@ fn increment_system_status(counts: &mut StatusCounts, value: SystemStatus) {
         SystemStatus::Passed => counts.passed += 1,
         SystemStatus::HardGateFailed => counts.hard_gate_failed += 1,
         SystemStatus::SubjectError => counts.subject_error += 1,
-        SystemStatus::JudgeError => counts.judge_error += 1,
         SystemStatus::ResourceLimit => counts.resource_limit += 1,
         SystemStatus::InfrastructureError => counts.infrastructure_error += 1,
     }

@@ -263,7 +263,6 @@ def build_contract(
         # it with, so the same slot is the same slot across executions.
         "seed": None,
         "subject": plan["subject"],
-        "judge": plan["judge"],
         "groups": suite_groups(campaign),
     }
     body = {

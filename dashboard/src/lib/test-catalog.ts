@@ -10,8 +10,6 @@ export type CohortDescriptor = {
   lane: string
   subject_provider: string
   subject_model: string
-  judge_provider: string | null
-  judge_model: string | null
 }
 
 export type EvaluatedVersion = {
@@ -62,8 +60,6 @@ export type TestHistoryInput = {
   case_id?: string
   subject_provider?: string
   subject_model?: string
-  judge_provider?: string
-  judge_model?: string
   system_version_id?: string
   result?: string
   cursor?: string
@@ -85,8 +81,6 @@ export type HistorySeries = {
   engine_revision: string | null
   subject_provider: string
   subject_model: string
-  judge_provider: string | null
-  judge_model: string | null
   cohort_id: string
   execution_count: number
   run_count: number
@@ -119,7 +113,6 @@ export type TestHistoryResponse = {
   cases: string[]
   subjects: string[]
   subject_models: HistoryModelGroup[]
-  judge_models: HistoryModelGroup[]
   systems: HistorySystem[]
   series: HistorySeries[]
   observations: TestObservation[]
@@ -153,8 +146,6 @@ export type TestObservation = {
   engine_revision?: string | null
   subject_provider?: string
   subject_model?: string
-  judge_provider?: string | null
-  judge_model?: string | null
   median_cost_usd?: number | null
   median_tokens?: number | null
   median_duration_seconds?: number | null

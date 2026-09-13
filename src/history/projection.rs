@@ -133,7 +133,7 @@ fn project_execution(metadata: &Value, execution: &Execution) -> Value {
         "availability": if execution.reports.is_empty() { "unavailable" } else { "aggregate" },
         "history_source": {"instance_id": metadata["source"]["instance_id"], "execution_id": record["id"], "captured_at": metadata["captured_at"]},
         "release_control": {"execution_id": record["id"], "attempt": record["attempt"], "profile": record["planKey"], "campaign_id": record["campaignId"], "group_id": null},
-        "subjects": if subject["model"].is_string() && subject["provider"].is_string() { json!([{"id": subject["model"], "model": subject["model"], "provider": subject["provider"], "judge": config["judge"], "scenarios": scenarios}]) } else { json!([]) },
+        "subjects": if subject["model"].is_string() && subject["provider"].is_string() { json!([{"id": subject["model"], "model": subject["model"], "provider": subject["provider"], "scenarios": scenarios}]) } else { json!([]) },
         "scenario_metrics": [],
         "totals": {"expected_reports": planned, "received_reports": execution.runs.len(), "missing_reports": planned.map(|n| n.saturating_sub(execution.runs.len() as u64)),
             "total_tokens": complete_sum(&execution.runs, "totalTokens"), "total_cost_usd": complete_sum(&execution.runs, "costSubjectUsd"),

@@ -64,7 +64,6 @@ PLAN = {
     "sha256": "b" * 64,
     "profile": {"plan_id": "harness", "id": "regression"},
     "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-    "judge": {"provider": "zai", "model": "glm-5.3"},
     "runner": {"revision": "a" * 40},
     "stack": {"policy": "latest"},
 }

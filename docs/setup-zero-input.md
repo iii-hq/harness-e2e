@@ -138,8 +138,6 @@ Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma pr
 | `HARNESS_ROOT` | Checkout do runner usado pelos scripts oficiais | Interno de build/CI; pacote independente de checkout |
 | `HISTORY_DATABASE` | Histórico durável; default `primary` | Configuração operacional coerente com o serviço de histórico |
 | `INCIDENT_FIXTURE_PATH` | Clone obrigatório do incidente | Fixture revisada e clone automático |
-| `JUDGE_MODEL` | Juiz para cenários que o exigem; também default do formulário de execução rápida | Configuração explícita do plano/execução |
-| `JUDGE_PROVIDER` | Provider do juiz | Configuração explícita do plano/execução |
 | `KANBAN_BOOTSTRAP` | Script de preparação usado pelo launcher | Preparação distribuída com o executor |
 | `KANBAN_FIXTURE_ROOT` | Checkout Kanban usado pelo launcher | Asset fixado e clone privado |
 | `KANBAN_RUNTIME` | JSON obrigatório do runtime Kanban | Contexto preparado automaticamente |

@@ -244,8 +244,6 @@ pub struct ExecutionCohortIdentity {
     pub stack_mode: String,
     pub subject_provider: String,
     pub subject_model: String,
-    pub judge_provider: Option<String>,
-    pub judge_model: Option<String>,
     pub e2e_repository: Option<String>,
 }
 
@@ -747,8 +745,6 @@ fn execution_identity(lane: &str, report: &E2eReport) -> ExecutionCohortIdentity
         .into(),
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
-        judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
-        judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
         e2e_repository: Some(report.system_under_test.e2e_repository.clone()),
     }
 }
@@ -764,10 +760,6 @@ fn identity_differences(
         (
             "subject model identity differs",
             from.subject_provider != to.subject_provider || from.subject_model != to.subject_model,
-        ),
-        (
-            "judge model identity differs",
-            from.judge_provider != to.judge_provider || from.judge_model != to.judge_model,
         ),
         (
             "E2E repository identity differs",
@@ -890,7 +882,7 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
                 .filter(|run| {
                     matches!(
                         run.status,
-                        RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::ResourceLimit
+                        RunStatus::SubjectError | RunStatus::ResourceLimit
                     )
                 })
                 .count(),
@@ -1826,7 +1818,6 @@ mod tests {
                 supports_tools: Some(true),
                 supports_vision: Some(false),
             },
-            None,
             None,
             vec![scenario],
         )

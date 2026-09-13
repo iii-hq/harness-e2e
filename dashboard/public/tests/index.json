@@ -6,9 +6,7 @@
         "id": "preview-cohort",
         "lane": "preview",
         "subject_provider": "zai",
-        "subject_model": "glm-5.2",
-        "judge_provider": "openai",
-        "judge_model": "gpt-5.4"
+        "subject_model": "glm-5.2"
       }
     ],
     "versions": [

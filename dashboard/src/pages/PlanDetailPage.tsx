@@ -488,12 +488,6 @@ export function PlanScope({
         : 'not set',
     ],
     [
-      'judge',
-      plan.judge_model
-        ? `${plan.judge_model}${plan.judge_provider ? ` · ${plan.judge_provider}` : ''}`
-        : 'automatic · default protocol',
-    ],
-    [
       'baseline captured',
       baselineCaptured
         ? formatDate(baselineCaptured)

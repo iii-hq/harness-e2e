@@ -40,15 +40,6 @@ function sameRequired(
   }
 }
 
-function sameOptional(
-  left: string | null | undefined,
-  right: string | null | undefined,
-  label: string,
-  reasons: string[],
-) {
-  if ((left ?? null) !== (right ?? null)) reasons.push(`${label} differs`)
-}
-
 function asMetric(value: number | null | undefined) {
   return value !== null && value !== undefined && Number.isFinite(value)
     ? value
@@ -133,18 +124,6 @@ export function compareTestObservations(
     baseline.subject_model,
     candidate.subject_model,
     'Execution model',
-    reasons,
-  )
-  sameOptional(
-    baseline.judge_provider,
-    candidate.judge_provider,
-    'Judge provider',
-    reasons,
-  )
-  sameOptional(
-    baseline.judge_model,
-    candidate.judge_model,
-    'Judge model',
     reasons,
   )
 

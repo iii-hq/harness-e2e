@@ -21,8 +21,6 @@ const configuration = {
   url: 'ws://localhost:49134',
   model: '',
   provider: '',
-  judge_model: '',
-  judge_provider: '',
 }
 const requirements = () => ({
   ready: !active,
@@ -203,7 +201,7 @@ try {
     .selectOption('smoke')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
   await page
-    .getByText('Choose a judge model for the selected tests.', { exact: true })
+    .getByText('Choose an execution model.', { exact: true })
     .first()
     .waitFor()
   async function select(label, model) {
@@ -217,7 +215,6 @@ try {
     await page.keyboard.press('Enter')
   }
   await select('Execution model', 'deepseek-v4-flash')
-  await select('Judge model', 'codex/gpt-5.6-terra')
   await page.getByRole('button', { name: 'Save plan', exact: true }).click()
   await page.locator('[data-plan-lifecycle]').waitFor()
   assert.equal(plans.length, 2)
@@ -234,21 +231,11 @@ try {
   await page
     .getByRole('button', { name: 'Execution model', exact: true })
     .waitFor()
-  await page
-    .getByRole('button', { name: 'Judge model', exact: true })
-    .getByText('codex/gpt-5.6-terra', { exact: true })
-    .waitFor()
   assert.match(
     await page
       .getByRole('button', { name: 'Execution model', exact: true })
       .innerText(),
     /Choose a model/,
-  )
-  assert.match(
-    await page
-      .getByRole('button', { name: 'Judge model', exact: true })
-      .innerText(),
-    /codex\/gpt-5.6-terra/,
   )
   await select('Execution model', 'codex/gpt-5.6-terra')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
@@ -262,7 +249,6 @@ try {
     .getByRole('button', { name: 'Execution model', exact: true })
     .waitFor()
   await select('Execution model', 'deepseek-v4-flash')
-  await select('Judge model', 'codex/gpt-5.6-terra')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
   await page.getByRole('link', { name: 'Follow active execution' }).waitFor()
   assert.equal(plans.length, 4)

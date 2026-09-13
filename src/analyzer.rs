@@ -1,8 +1,8 @@
-//! Invocation of the auxiliary ("judge") model.
+//! Invocation of the opt-in transcript audit analyzer model.
 //!
-//! The auxiliary model is used by Markdown scenarios, Registry planning,
-//! and the opt-in transcript audit; this module owns
-//! the one provider round trip they share and the usage bookkeeping around it.
+//! The analyzer never scores a run: it annotates transcripts for the advisory
+//! audit. This module owns the one provider round trip and the usage
+//! bookkeeping around it.
 
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -11,14 +11,14 @@ use crate::context::E2eContext;
 use crate::report::ModelUsageReport;
 
 #[derive(Debug, Clone)]
-pub struct JudgeConfig {
+pub struct AnalyzerConfig {
     pub model: String,
     pub provider: String,
 }
 
 pub(crate) async fn invoke(
     context: &E2eContext,
-    config: &JudgeConfig,
+    config: &AnalyzerConfig,
     system_prompt: &str,
     prompt: &str,
     max_output_tokens: u64,
@@ -26,13 +26,13 @@ pub(crate) async fn invoke(
     context
         .trigger_value(
             "router::complete",
-            judge_request(config, system_prompt, prompt, max_output_tokens),
+            analyzer_request(config, system_prompt, prompt, max_output_tokens),
         )
         .await
 }
 
-fn judge_request(
-    config: &JudgeConfig,
+fn analyzer_request(
+    config: &AnalyzerConfig,
     system_prompt: &str,
     prompt: &str,
     max_output_tokens: u64,
@@ -115,9 +115,9 @@ mod tests {
 
     #[test]
     fn portable_request_does_not_require_native_structured_output() {
-        let request = judge_request(
-            &JudgeConfig {
-                model: "judge".into(),
+        let request = analyzer_request(
+            &AnalyzerConfig {
+                model: "analyzer".into(),
                 provider: "provider".into(),
             },
             "You are an impartial evaluator.",
@@ -126,7 +126,7 @@ mod tests {
         );
         assert!(request.get("response_format").is_none());
         assert_eq!(request["max_output_tokens"], 2_048);
-        assert_eq!(request["model"], "judge");
+        assert_eq!(request["model"], "analyzer");
         assert_eq!(request["provider"], "provider");
     }
 

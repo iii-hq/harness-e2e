@@ -209,7 +209,6 @@ pub(super) fn execution_summary(
         "id": subject_id,
         "model": report.subject.model,
         "provider": report.subject.provider,
-        "judge": report.judge,
         "engine_revision": engine_revision,
         "passed": status == "passed",
         "expected_reports": expected,

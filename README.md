@@ -119,7 +119,7 @@ stripping, both by the public suite and by the runner-owned behavioral probe.
 resilience, endurance, and software-engineering. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
-execution model, plus the judge model when the scope includes Registry planning.
+execution model.
 **Save draft**, **Save and run**, and **Duplicate plan** use one shared lifecycle
 and retain native evidence. Fault-injection plans export
 to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
@@ -132,9 +132,9 @@ The `software-engineering` profile selects the seven incremental Kanban cases,
 four Registry cases, the trending-topics blog build and the Linkly tutorial,
 once each with no technical retries: 13 cases and 13 planned runs. Its twelve
 execution groups keep Registry implementation and verification together, in
-that order, so verification receives the implementation delivery. Registry
-planning requires an explicit auxiliary judge model. Trending topics runs in its
-own `case-trending-topics-build` group using the existing pinned fixture workflow.
+that order, so verification receives the implementation delivery. Trending
+topics runs in its own `case-trending-topics-build` group using the existing
+pinned fixture workflow.
 Linkly runs its eight exchanges in one `case-linkly-tutorial` group. The executor
 creates a fresh pinned `linkly-agentic` scaffold as that group's Compose project,
 with baseline worker versions taken from the resolved stack contract.
@@ -334,9 +334,9 @@ Contract compatibility is established at runtime from
 are parity fixtures, not a linked product API.
 
 The deterministic assessment boundary has one current payload shape, written
-only to `results.json`; scenario contracts are the only versioned domain. The
-judge model is auxiliary: Registry planning uses it to score the delivered
-plan, and only that test requires it.
+only to `results.json`; scenario contracts are the only versioned domain. No
+scenario uses a second model: every score is deterministic, and the opt-in
+transcript audit analyzer never contributes to it.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation

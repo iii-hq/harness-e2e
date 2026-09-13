@@ -15,16 +15,6 @@
     "execution": {
       "$ref": "#/definitions/ExecutionIdentity"
     },
-    "judge": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ModelArtifact"
-        },
-        {
-          "type": "null"
-        }
-      ]
-    },
     "observation_contract": {
       "anyOf": [
         {

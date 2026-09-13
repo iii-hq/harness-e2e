@@ -48,6 +48,7 @@ pub mod prompt_injection_resilience;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
 pub mod registry;
+mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;

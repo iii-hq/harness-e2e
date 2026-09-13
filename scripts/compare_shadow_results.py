@@ -140,7 +140,7 @@ def compare(primary: dict[str, Any], shadow: dict[str, Any]) -> dict[str, Any]:
         primary["system_under_test"].get("stack"),
         shadow["system_under_test"].get("stack"),
     )
-    for field in ["subject", "judge"]:
+    for field in ["subject"]:
         append_difference(mismatches, field, primary.get(field), shadow.get(field))
     primary_cases = report_cases(primary)
     shadow_cases = report_cases(shadow)

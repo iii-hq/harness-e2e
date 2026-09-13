@@ -121,7 +121,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     """
     require_keys(
         suite,
-        {"id", "label", "lane", "seed", "subject", "judge", "groups"},
+        {"id", "label", "lane", "seed", "subject", "groups"},
         "suite",
     )
     suite_id = require_text(suite.get("id"), "suite.id")
@@ -132,7 +132,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     if suite.get("seed") is not None:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
-    validate_identity(suite, "judge")
 
     groups = suite.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -440,8 +439,6 @@ def materialize_request(
         "lane": suite["lane"],
         "model": suite["subject"]["model"],
         "provider": suite["subject"]["provider"],
-        "judge_model": suite["judge"]["model"],
-        "judge_provider": suite["judge"]["provider"],
         "scenarios": group["scenarios"],
         "runs": group["runs"],
         "seed": suite["seed"],
@@ -491,8 +488,6 @@ def observation_idempotency_key(request: dict[str, Any]) -> str:
             "lane",
             "model",
             "provider",
-            "judge_model",
-            "judge_provider",
             "scenarios",
             "runs",
             "seed",

@@ -1368,7 +1368,6 @@ mod tests {
                 supports_tools: Some(true),
                 supports_vision: Some(false),
             },
-            judge: None,
             engine_revision: None,
             observation_contract: None,
             passed: true,

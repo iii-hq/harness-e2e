@@ -278,7 +278,6 @@ pub enum SystemStatus {
     Passed,
     HardGateFailed,
     SubjectError,
-    JudgeError,
     ResourceLimit,
     InfrastructureError,
 }
@@ -289,7 +288,6 @@ impl From<RunStatus> for SystemStatus {
             RunStatus::Passed => Self::Passed,
             RunStatus::HardGateFailed => Self::HardGateFailed,
             RunStatus::SubjectError => Self::SubjectError,
-            RunStatus::JudgeError => Self::JudgeError,
             RunStatus::ResourceLimit => Self::ResourceLimit,
             RunStatus::InfrastructureError => Self::InfrastructureError,
         }

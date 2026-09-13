@@ -71,10 +71,6 @@ pub(super) struct TestHistoryRequest {
     #[serde(default)]
     pub subject_model: Option<String>,
     #[serde(default)]
-    pub judge_provider: Option<String>,
-    #[serde(default)]
-    pub judge_model: Option<String>,
-    #[serde(default)]
     pub system_version_id: Option<String>,
     #[serde(default)]
     pub result: Option<String>,
@@ -90,8 +86,6 @@ pub(super) struct CohortDescriptor {
     pub lane: String,
     pub subject_provider: String,
     pub subject_model: String,
-    pub judge_provider: Option<String>,
-    pub judge_model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -185,8 +179,6 @@ pub(super) struct TestObservation {
     pub engine_revision: Option<String>,
     pub subject_provider: String,
     pub subject_model: String,
-    pub judge_provider: Option<String>,
-    pub judge_model: Option<String>,
     pub median_cost_usd: Option<f64>,
     pub median_tokens: Option<f64>,
     pub median_duration_seconds: Option<f64>,
@@ -211,8 +203,6 @@ pub(super) struct HistorySeries {
     pub engine_revision: Option<String>,
     pub subject_provider: String,
     pub subject_model: String,
-    pub judge_provider: Option<String>,
-    pub judge_model: Option<String>,
     pub cohort_id: String,
     pub execution_count: usize,
     pub run_count: usize,
@@ -250,7 +240,6 @@ pub(super) struct TestHistoryResponse {
     pub cases: Vec<String>,
     pub subjects: Vec<String>,
     pub subject_models: Vec<HistoryModelGroup>,
-    pub judge_models: Vec<HistoryModelGroup>,
     pub systems: Vec<HistorySystem>,
     pub series: Vec<HistorySeries>,
     pub observations: Vec<TestObservation>,
@@ -363,8 +352,6 @@ struct Observation {
     engine_revision: Option<String>,
     subject_provider: String,
     subject_model: String,
-    judge_provider: Option<String>,
-    judge_model: Option<String>,
     runs: Vec<RunMetrics>,
 }
 
@@ -531,15 +518,11 @@ impl ExecutionProjection {
             lane,
             subject_provider: report.subject.provider.clone(),
             subject_model: report.subject.model.clone(),
-            judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
-            judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
         };
         let cohort_id = artifact::sha256_value(&json!({
             "lane": cohort.lane,
             "subject_provider": cohort.subject_provider,
             "subject_model": cohort.subject_model,
-            "judge_provider": cohort.judge_provider,
-            "judge_model": cohort.judge_model,
         }))?;
         let cohort = CohortDescriptor {
             id: cohort_id.clone(),
@@ -618,8 +601,6 @@ impl ExecutionProjection {
                     engine_revision,
                     subject_provider: report.subject.provider.clone(),
                     subject_model: report.subject.model.clone(),
-                    judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
-                    judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
                     runs,
                 });
         }
@@ -881,7 +862,6 @@ impl DashboardReadModel {
             .collect::<BTreeSet<_>>();
         let mut subjects = BTreeSet::new();
         let mut subject_models = BTreeMap::<String, BTreeSet<String>>::new();
-        let mut judge_models = BTreeMap::<String, BTreeSet<String>>::new();
         let mut systems = BTreeMap::new();
         for observation in &version.observations {
             if history_matches(observation, &request) {
@@ -894,15 +874,6 @@ impl DashboardReadModel {
                     .entry(observation.subject_provider.clone())
                     .or_default()
                     .insert(observation.subject_model.clone());
-                if let (Some(provider), Some(model)) = (
-                    observation.judge_provider.as_ref(),
-                    observation.judge_model.as_ref(),
-                ) {
-                    judge_models
-                        .entry(provider.clone())
-                        .or_default()
-                        .insert(model.clone());
-                }
                 let id = observation
                     .evaluated_version_id
                     .clone()
@@ -924,7 +895,6 @@ impl DashboardReadModel {
             cases: cases.into_iter().collect(),
             subjects: subjects.into_iter().collect(),
             subject_models: history_model_groups(subject_models),
-            judge_models: history_model_groups(judge_models),
             systems: systems
                 .into_iter()
                 .map(|(id, label)| HistorySystem { id, label })
@@ -1351,7 +1321,7 @@ fn side_summary(
             .filter(|run| {
                 matches!(
                     run.status,
-                    RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::ResourceLimit
+                    RunStatus::SubjectError | RunStatus::ResourceLimit
                 )
             })
             .count(),
@@ -1512,8 +1482,6 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         engine_revision: observation.engine_revision.clone(),
         subject_provider: observation.subject_provider.clone(),
         subject_model: observation.subject_model.clone(),
-        judge_provider: observation.judge_provider.clone(),
-        judge_model: observation.judge_model.clone(),
         median_cost_usd: median(costs),
         median_tokens: median(tokens),
         median_duration_seconds: median(durations),
@@ -1536,14 +1504,6 @@ fn history_matches(observation: &Observation, request: &TestHistoryRequest) -> b
             .subject_model
             .as_deref()
             .is_none_or(|value| value == observation.subject_model)
-        && request
-            .judge_provider
-            .as_deref()
-            .is_none_or(|value| observation.judge_provider.as_deref() == Some(value))
-        && request
-            .judge_model
-            .as_deref()
-            .is_none_or(|value| observation.judge_model.as_deref() == Some(value))
         && request
             .system_version_id
             .as_deref()
@@ -1593,8 +1553,6 @@ fn history_series_key(observation: &Observation) -> String {
         observation.assessment_profile_sha256.as_str(),
         observation.subject_provider.as_str(),
         observation.subject_model.as_str(),
-        observation.judge_provider.as_deref().unwrap_or_default(),
-        observation.judge_model.as_deref().unwrap_or_default(),
     ]
     .join("::")
 }
@@ -1639,8 +1597,6 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
         engine_revision: first.engine_revision.clone(),
         subject_provider: first.subject_provider.clone(),
         subject_model: first.subject_model.clone(),
-        judge_provider: first.judge_provider.clone(),
-        judge_model: first.judge_model.clone(),
         cohort_id: first.cohort_id.clone(),
         execution_count: observations
             .iter()

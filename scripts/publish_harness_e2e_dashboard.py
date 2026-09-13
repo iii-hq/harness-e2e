@@ -593,7 +593,6 @@ def _public_subject_summary(value: Any) -> dict[str, Any] | None:
             "wall_time_seconds",
         ),
     )
-    subject["judge"] = _pick(value.get("judge"), ("model", "provider", "protocol"))
     subject["scenarios"] = [
         _pick(
             scenario,
@@ -662,7 +661,6 @@ def _public_report(value: Any) -> dict[str, Any] | None:
                 "system_under_test",
                 "manifest",
                 "subject",
-                "judge",
                 "engine_revision",
                 "passed",
                 "redaction",
@@ -1148,7 +1146,6 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error",
     )
@@ -1344,7 +1341,7 @@ def _side_summary(
             run["status"] == "hard_gate_failed" for run in runs
         ),
         "technical_failed": sum(
-            run["status"] in {"subject_error", "judge_error", "resource_limit"}
+            run["status"] in {"subject_error", "resource_limit"}
             for run in runs
         ),
         "infra_failed": sum(
@@ -1402,11 +1399,6 @@ def build_static_test_catalog(
             if not isinstance(report, dict):
                 continue
             subject = report.get("subject", {})
-            judge = report.get("judge", {})
-            if not isinstance(subject, dict):
-                continue
-            if not isinstance(judge, dict):
-                judge = {}
             report_execution = report.get("execution")
             lane = str(
                 (
@@ -1422,8 +1414,6 @@ def build_static_test_catalog(
                 "lane": lane,
                 "subject_provider": str(subject.get("provider") or ""),
                 "subject_model": str(subject.get("model") or ""),
-                "judge_provider": str(judge.get("provider") or "") or None,
-                "judge_model": str(judge.get("model") or "") or None,
             }
             cohort_id = _sha256_json(cohort_value)
             cohorts.setdefault(cohort_id, {"id": cohort_id, **cohort_value})

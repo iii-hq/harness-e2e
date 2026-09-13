@@ -10,6 +10,7 @@ use serde_json::json;
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
+use crate::analyzer::AnalyzerConfig;
 use crate::artifact;
 use crate::assessment::{
     AssessmentOutcome, AssessmentResult, AssessmentScore, AssessmentTarget, AssessmentTargetKind,
@@ -17,7 +18,6 @@ use crate::assessment::{
 use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
-use crate::judge::JudgeConfig;
 use crate::report::{
     CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
     FailurePhase, ModelArtifact, ObservationMetricOrigin, ObservationRunContract,
@@ -87,10 +87,9 @@ pub struct SuiteRunConfig {
     pub url: String,
     pub execution_id: Option<String>,
     pub subject: SubjectConfig,
-    pub judge: Option<JudgeConfig>,
     /// Model that audits subject behavior from the captured transcript.
     /// Opt-in: `None` keeps the audit deterministic-only.
-    pub audit_analyzer: Option<JudgeConfig>,
+    pub audit_analyzer: Option<AnalyzerConfig>,
     pub output: PathBuf,
     pub scenarios: Vec<ScenarioId>,
     pub runs: u32,
@@ -215,10 +214,9 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .or_else(|| config.execution_id.clone())
         .unwrap_or_else(|| Uuid::new_v4().simple().to_string());
     let started_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let mut context = E2eContext::connect(&config.url)
+    let context = E2eContext::connect(&config.url)
         .await
         .context("connect E2E runner")?;
-    context.auxiliary_model = config.judge.clone();
     context.initialize_execution_outputs(config.scenarios.iter().copied().map(ScenarioId::as_str));
     let context = Arc::new(context);
     let control_plane = context
@@ -239,23 +237,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;
-    let has_planning = config.scenarios.contains(&ScenarioId::RegistryPlanning);
-    let judge_model = match config.judge.as_ref() {
-        Some(judge) if has_planning => Some(
-            resolve_model(&context, &judge.model, &judge.provider)
-                .await
-                .context("resolve the explicit auxiliary model")?,
-        ),
-        Some(judge) => {
-            tracing::info!(
-                provider = judge.provider,
-                model = judge.model,
-                "judge model is configured but no scenario uses it"
-            );
-            None
-        }
-        None => None,
-    };
     let built_in_scenarios = config.scenarios.to_vec();
     if built_in_scenarios.contains(&ScenarioId::SecurityReview) {
         crate::workflow::security_scan::register_local_adapter_if_configured(context.as_ref())
@@ -496,12 +477,10 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         completed_at,
     };
     let subject = ModelArtifact::from(subject_model);
-    let judge = judge_model.map(ModelArtifact::from);
     let manifest = E2eManifest {
         execution: execution.clone(),
         system_under_test: system_under_test.clone(),
         subject: subject.clone(),
-        judge: judge.clone(),
         control_plane,
         observation_contract: config.observation_contract.clone(),
         worker_contracts,
@@ -510,7 +489,6 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         execution,
         system_under_test,
         subject,
-        judge,
         identity::nonempty_env("HARNESS_E2E_ENGINE_REVISION"),
         scenario_reports,
     );
@@ -1019,14 +997,6 @@ fn validate_config(config: &SuiteRunConfig) -> Result<()> {
     // Scenario materialization is slot-scoped. Keeping it out of request
     // validation lets one broken definition become an explicit deferred slot
     // instead of erasing the whole execution.
-    if config.scenarios.contains(&ScenarioId::RegistryPlanning) && config.judge.is_none() {
-        bail!("Registry planning requires an explicit auxiliary model and provider");
-    }
-    if let Some(judge) = &config.judge {
-        if judge.model.trim().is_empty() || judge.provider.trim().is_empty() {
-            bail!("judge model and provider cannot be empty");
-        }
-    }
     Ok(())
 }
 
@@ -1105,7 +1075,7 @@ struct AttemptRequest<'a> {
     run_id: &'a str,
     attempt_number: u32,
     subject: &'a SubjectConfig,
-    audit_analyzer: Option<&'a JudgeConfig>,
+    audit_analyzer: Option<&'a AnalyzerConfig>,
     seed: u64,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
@@ -2180,7 +2150,7 @@ fn workflow_failure_phase(phase: WorkflowFailurePhase) -> FailurePhase {
 struct RetryRequest<'a> {
     scenario_id: ScenarioId,
     subject: &'a SubjectConfig,
-    audit_analyzer: Option<&'a JudgeConfig>,
+    audit_analyzer: Option<&'a AnalyzerConfig>,
     seed: u64,
     technical_retries: u8,
     progress_interval: Option<Duration>,
@@ -2967,7 +2937,6 @@ fn is_retryable_technical_failure(report: &E2eRunReport) -> bool {
         && report.failures.iter().all(|failure| {
             failure.retry_scope == crate::report::RetryScope::SameSlot
                 && failure.contamination == crate::report::ContaminationScope::None
-                && failure.domain != crate::report::FailureDomain::Judge
         })
 }
 
@@ -3451,7 +3420,6 @@ mod tests {
             execution: execution.clone(),
             system_under_test: system.clone(),
             subject: subject.clone(),
-            judge: None,
             control_plane: ControlPlaneEvidence { functions: vec![] },
             observation_contract: None,
             worker_contracts: vec![],
@@ -3467,7 +3435,7 @@ mod tests {
             2,
             vec![run],
         );
-        let mut report = E2eReport::new(execution, system, subject, None, None, vec![scenario]);
+        let mut report = E2eReport::new(execution, system, subject, None, vec![scenario]);
         assert!(
             persist_report_preserving_observations(&mut report, &manifest, output.path())
                 .unwrap()
@@ -4292,9 +4260,9 @@ mod tests {
 
         let mut deterministic = test_run_report();
         deterministic.push_failure(
-            RunStatus::JudgeError,
+            RunStatus::InfrastructureError,
             FailurePhase::Evaluate,
-            "judge returned an invalid criterion set",
+            "evaluator returned an invalid criterion set",
         );
         assert!(!is_retryable_technical_failure(&deterministic));
 

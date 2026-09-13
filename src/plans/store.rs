@@ -42,8 +42,6 @@ pub(crate) enum Request {
         #[serde(default)]
         label: String,
         subject: ReferenceModel,
-        #[serde(default)]
-        judge: Option<ReferenceModel>,
         materialized: Value,
         #[serde(default)]
         shards: Vec<Value>,
@@ -203,13 +201,6 @@ impl Runner for ControlPlane {
             contains(&config.model, &config.provider),
             "Execution model must be available in this stack's catalog.",
         )];
-        if !config.judge_model.is_empty() {
-            checks.push(check(
-                "judge",
-                contains(&config.judge_model, &config.judge_provider),
-                "Evaluator must be available in this stack's catalog.",
-            ));
-        }
         let functions = self
             .client()
             .trigger(iii_sdk::protocol::TriggerRequest {
@@ -537,10 +528,8 @@ impl PlanStore {
                 plan.scenario_ids == original.scenario_ids
                     && plan.runs == original.runs
                     && plan.technical_retries == original.technical_retries
-                    && plan.seed == original.seed
-                    && plan.judge_model == original.judge_model
-                    && plan.judge_provider == original.judge_provider,
-                "A duplicate must preserve scope, evaluator and execution policy."
+                    && plan.seed == original.seed,
+                "A duplicate must preserve scope and execution policy."
             );
             plan.template_id = original.template_id;
             plan.scenarios = original.scenarios;
@@ -549,7 +538,7 @@ impl PlanStore {
             None
         };
         let prepared = prepared_plan(plan, snapshot)?;
-        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
+        validate_config(&prepared.plan, &self.url)?;
         self.write_plan(&prepared).await?;
         self.canonical(&prepared).await
     }
@@ -558,7 +547,6 @@ impl PlanStore {
         reference_execution_id: String,
         label: String,
         subject: ReferenceModel,
-        judge: Option<ReferenceModel>,
         materialized: Value,
         shards: Vec<Value>,
     ) -> Result<LocalPlan> {
@@ -689,22 +677,12 @@ impl PlanStore {
             "Release Control shards do not contain a seed for every materialized scenario."
         );
 
-        let judge_model = judge
-            .as_ref()
-            .map(|judge| judge.model.as_str())
-            .unwrap_or("");
-        let judge_provider = judge
-            .as_ref()
-            .map(|judge| judge.provider.as_str())
-            .unwrap_or("");
         let request: super::PlanCreateRequest = serde_json::from_value(json!({
             "label": if label.trim().is_empty() { format!("RC · {}", profile.get("label").and_then(Value::as_str).unwrap_or(profile_id)) } else { label },
             "purpose": format!("Local reproduction of Release Control execution {reference_execution_id}."),
             "url": self.url,
             "model": subject.model,
             "provider": subject.provider,
-            "judge_model": judge_model,
-            "judge_provider": judge_provider,
             "scenarios": scenario_ids,
             "runs": repetitions,
             "technical_retries": technical_retries,
@@ -762,11 +740,6 @@ impl PlanStore {
             .iter()
             .map(|scenario| {
                 let mut value = serde_json::to_value(scenario)?;
-                let scenario_id = scenario
-                    .scenario_id
-                    .parse::<crate::scenarios::ScenarioId>()?;
-                value["judge_required"] =
-                    json!(scenario_id == crate::scenarios::ScenarioId::RegistryPlanning);
                 value["requirements"] = json!([]);
                 Ok(value)
             })
@@ -795,7 +768,7 @@ impl PlanStore {
             protected_supervisor_required: false,
         };
         let prepared = prepared_plan(plan, Some(snapshot))?;
-        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
+        validate_config(&prepared.plan, &self.url)?;
         materialize_slots(&prepared, "reference-validation")?;
         self.write_plan(&prepared).await?;
         self.canonical(&prepared).await
@@ -814,7 +787,7 @@ impl PlanStore {
             plan.clone(),
             (old_scope == plan.scope_hash).then_some(saved.snapshot),
         )?;
-        validate_config(&prepared.plan, &prepared.snapshot, &self.url)?;
+        validate_config(&prepared.plan, &self.url)?;
         self.write_plan(&prepared).await?;
         self.canonical(&prepared).await
     }
@@ -883,7 +856,6 @@ impl PlanStore {
                 reference_execution_id,
                 label,
                 subject,
-                judge,
                 materialized,
                 shards,
             } => Ok(serde_json::to_value(
@@ -891,7 +863,6 @@ impl PlanStore {
                     reference_execution_id,
                     label,
                     subject,
-                    judge,
                     materialized,
                     shards,
                 )
@@ -910,7 +881,7 @@ impl PlanStore {
     async fn requirements(&self, plan: &SavedPlan) -> Result<Value> {
         let snapshot = &plan.snapshot;
         let config = &plan.plan;
-        let validation = validate_config(config, snapshot, &self.url);
+        let validation = validate_config(config, &self.url);
         let mut checks = vec![check(
             "configuration",
             validation.is_ok(),
@@ -1362,7 +1333,6 @@ fn configuration_digest(
     let mut value = json!({
         "label": config.label, "purpose": config.purpose, "url": config.url,
         "model": config.model, "provider": config.provider,
-        "judge_model": config.judge_model, "judge_provider": config.judge_provider,
         "scenarios": config.scenarios, "scenario_ids": config.scenario_ids,
         "runs": config.runs, "technical_retries": config.technical_retries, "seed": config.seed,
         "template_id": config.template_id, "scope_hash": config.scope_hash,
@@ -1382,11 +1352,7 @@ fn configuration_digest(
     }
     artifact::sha256_value(&value)
 }
-fn judge_required(snapshot: &ProfileSnapshot) -> bool {
-    snapshot.protected_supervisor_required
-        || snapshot.cases.iter().any(|c| c["judge_required"] == true)
-}
-fn validate_config(config: &LocalPlan, snapshot: &ProfileSnapshot, url: &str) -> Result<()> {
+fn validate_config(config: &LocalPlan, url: &str) -> Result<()> {
     ensure!(
         !config.label.trim().is_empty() && config.label.len() <= 160,
         "Enter a plan name (up to 160 characters)."
@@ -1394,14 +1360,6 @@ fn validate_config(config: &LocalPlan, snapshot: &ProfileSnapshot, url: &str) ->
     ensure!(
         !config.model.trim().is_empty() && !config.provider.trim().is_empty(),
         "Select an execution model."
-    );
-    ensure!(
-        config.judge_model.is_empty() == config.judge_provider.is_empty(),
-        "Select both evaluator model and provider."
-    );
-    ensure!(
-        !judge_required(snapshot) || !config.judge_model.trim().is_empty(),
-        "The selected work requires an evaluator."
     );
     ensure!(
         config.url == url,
@@ -1439,16 +1397,10 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
             let scenario_ids = group["scenarios"]
                 .as_array()
                 .context("Native scenarios required")?;
-            let group_judge_required = scenario_ids.iter().any(|id| {
-                plan.snapshot.cases.iter().any(|case| {
-                    case["scenario_id"].as_str() == id.as_str() && case["judge_required"] == true
-                })
-            });
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
             let c = &plan.plan;
             let request: RunRequest = serde_json::from_value(
                 json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, group_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
-                "judge_model": group_judge_required.then_some(&c.judge_model), "judge_provider": group_judge_required.then_some(&c.judge_provider),
                 "scenarios": scenario_ids, "runs": 1, "seed": c.seed, "technical_retries": group["technical_retries"]}),
             )?;
             crate::control::validate_run_request(&request)?;
@@ -1521,13 +1473,6 @@ fn update_slot(
         report.subject.model == config.model && report.subject.provider == config.provider,
         "Execution model identity differs"
     );
-    validate_evaluator_identity(
-        report
-            .judge
-            .as_ref()
-            .map(|judge| (judge.model.as_str(), judge.provider.as_str())),
-        &slot.request,
-    )?;
     let requested: Vec<_> = slot.request["scenarios"]
         .as_array()
         .context("Native request scenarios are absent")?
@@ -1584,17 +1529,6 @@ fn update_slot(
     Ok(())
 }
 
-fn validate_evaluator_identity(actual: Option<(&str, &str)>, admitted: &Value) -> Result<()> {
-    let model = admitted["judge_model"].as_str();
-    let provider = admitted["judge_provider"].as_str();
-    ensure!(
-        model.is_some() == provider.is_some(),
-        "Admitted evaluator identity is incomplete"
-    );
-    let expected = model.zip(provider);
-    ensure!(actual == expected, "Evaluator identity differs");
-    Ok(())
-}
 fn verify_system_identity(pinned: &mut Option<Value>, report: &E2eReport) -> Result<()> {
     let observed = serde_json::to_value(&report.system_under_test)?;
     if let Some(identity) = pinned.as_mut() {
@@ -1678,7 +1612,7 @@ pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
 fn export(plan: &SavedPlan) -> Result<Value> {
     let suites: Vec<_> = plan.snapshot.campaigns.iter().map(|campaign| {
         let groups: Vec<_> = campaign["groups"].as_array().into_iter().flatten().map(|g| { let mut g = g.clone(); if let Some(object) = g.as_object_mut() { if let Some(weight) = object.remove("difficulty_weight") { object.insert("weight".into(), weight); } } g }).collect();
-        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "judge": {"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}, "groups": groups})
+        json!({"id": campaign["campaign_id"], "label": plan.snapshot.profile.label, "lane": campaign["lane"], "seed": null, "subject": {"model": plan.plan.model, "provider": plan.plan.provider}, "groups": groups})
     }).collect();
     Ok(
         json!({"schema": "harness-e2e-profile-campaigns/v1", "plan_id": plan.snapshot.plan_id, "version": plan.snapshot.version, "definition_sha256": plan.snapshot.definition_sha256,
@@ -1784,16 +1718,10 @@ mod tests {
                 supports_vision: None,
             };
             let subject = model(request.model.clone(), request.provider.clone());
-            let judge = request
-                .judge_model
-                .clone()
-                .zip(request.judge_provider.clone())
-                .map(|(m, p)| model(m, p));
             let manifest = E2eManifest {
                 execution: execution.clone(),
                 system_under_test: system.clone(),
                 subject: subject.clone(),
-                judge: judge.clone(),
                 control_plane: crate::wire::ControlPlaneEvidence {
                     functions: vec![crate::wire::FunctionContractEvidence {
                         function_id: "harness::status".into(),
@@ -1805,7 +1733,7 @@ mod tests {
                 observation_contract: None,
                 worker_contracts: Vec::new(),
             };
-            let mut report = E2eReport::new(execution, system, subject, judge, None, scenarios);
+            let mut report = E2eReport::new(execution, system, subject, None, scenarios);
             let output = self.root.join(&id);
             fs::create_dir_all(&output)?;
             let path = report.write_to(&output, &manifest)?;
@@ -1917,7 +1845,7 @@ mod tests {
         let snapshot = test_plan::embedded().unwrap().materialize(profile).unwrap();
         serde_json::from_value(json!({"label": "Plan test", "purpose": snapshot.profile.purpose,
             "url": "ws://localhost:49134", "model": "model", "provider": "provider",
-            "judge_model": "judge", "judge_provider": "provider", "scenarios": snapshot.scenario_ids,
+            "scenarios": snapshot.scenario_ids,
             "runs": snapshot.profile.repetitions, "technical_retries": snapshot.profile.technical_retries,
             "template_id": profile})).unwrap()
     }
@@ -2056,7 +1984,6 @@ mod tests {
             "reference_execution_id": "1b8e60cc-7818-4dcb-8cbc-c76790c271af",
             "label": "RC smoke reference",
             "subject": {"model": "model", "provider": "provider"},
-            "judge": {"model": "judge", "provider": "provider"},
             "materialized": {
                 "profile": {
                     "id": "smoke",
@@ -2313,9 +2240,12 @@ mod tests {
         .unwrap();
         let saved = manager.read_plan(&plan.id).await.unwrap();
         let slots = materialize_slots(&saved, "reference-evaluator").unwrap();
-        assert!(slots
-            .iter()
-            .all(|slot| slot.request["judge_model"] == "judge"));
+        assert!(
+            slots
+                .iter()
+                .all(|slot| slot.request["model"] == "model"
+                    && slot.request["provider"] == "provider")
+        );
     }
 
     #[tokio::test]
@@ -2390,7 +2320,7 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
         let request = serde_json::from_value(json!({"label": "Edited Smoke", "purpose": "Custom scope from a template", "url": request("smoke").url,
-            "model": "model", "provider": "provider", "judge_model": "judge", "judge_provider": "provider",
+            "model": "model", "provider": "provider",
             "scenarios": ["minimal_path", "persistent_state"], "runs": 2, "technical_retries": 0, "template_id": "smoke"})).unwrap();
         let plan = manager.create_local(request).await.unwrap();
         assert_eq!(plan.scenario_ids.len(), 2);
@@ -2424,7 +2354,6 @@ mod tests {
             .unwrap();
         assert_eq!(detail["id"], baseline.id);
         assert_eq!(detail["assessment_summary"]["run_count"], 4);
-        assert_eq!(detail["subjects"][0]["judge"]["model"], plan.judge_model);
         assert_eq!(detail["native_execution_ids"].as_array().unwrap().len(), 4);
         let reports = detail["reports"].as_array().unwrap();
         assert_eq!(reports.len(), 4);
@@ -2636,7 +2565,6 @@ mod tests {
                 manager.read_plan(&copy.id).await.unwrap().snapshot_sha256,
                 plan.snapshot_sha256
             );
-            assert_eq!(copy.judge_model, "judge");
             assert!(copy.baseline_execution_id.is_none());
             assert!(copy.candidate_execution_ids.is_empty());
             let mut changed = plan.clone();
@@ -2650,10 +2578,6 @@ mod tests {
         }
         let mut missing = request("smoke");
         missing.model.clear();
-        assert!(manager.create_local(missing).await.is_err());
-        let mut missing = request("evolution");
-        missing.judge_model.clear();
-        missing.judge_provider.clear();
         assert!(manager.create_local(missing).await.is_err());
     }
     #[tokio::test]
@@ -2773,17 +2697,6 @@ mod tests {
             json!(["registry_implementation", "registry_verification"])
         );
         assert!(grouped[0].request["seed"].is_null());
-        assert!(grouped[0].request["judge_model"].is_null());
-        assert!(grouped[0].request["judge_provider"].is_null());
-        let planning = execution
-            .slots
-            .iter()
-            .find(|slot| slot.scenario_id == "registry_planning")
-            .unwrap();
-        assert_eq!(planning.request["judge_model"], "judge");
-        assert_eq!(planning.request["judge_provider"], "provider");
-        assert!(validate_evaluator_identity(None, &planning.request).is_err());
-        validate_evaluator_identity(None, &grouped[0].request).unwrap();
 
         let native_summaries = crate::dashboard::read_model::DashboardReadModel::load(root.path())
             .unwrap()
@@ -2811,10 +2724,6 @@ mod tests {
                 .iter()
                 .find(|scenario| scenario.scenario_id == slot.scenario_id)
                 .unwrap();
-            assert_eq!(
-                report.judge.is_some(),
-                slot.scenario_id == "registry_planning"
-            );
             let expected = snapshot
                 .cases
                 .iter()
@@ -2825,8 +2734,6 @@ mod tests {
 
         let mut partial = registry_request();
         partial.scenarios = vec!["registry_implementation".into()];
-        partial.judge_model.clear();
-        partial.judge_provider.clear();
         let partial = manager.create_local(partial).await.unwrap();
         let snapshot = &manager.read_plan(&partial.id).await.unwrap().snapshot;
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();

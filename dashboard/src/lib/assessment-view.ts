@@ -151,11 +151,7 @@ export function buildAssessmentWorkspace(
 function assessmentRunPriority(run: AssessmentRunView) {
   if (run.systemStatus === 'infrastructure_error') return 0
   if (run.systemStatus === 'resource_limit') return 0
-  if (
-    run.systemStatus === 'subject_error' ||
-    run.systemStatus === 'judge_error'
-  )
-    return 1
+  if (run.systemStatus === 'subject_error') return 1
   if (run.systemStatus === 'unavailable') return 3
   return 4
 }
@@ -186,9 +182,6 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
   }
   if (run.systemStatus === 'subject_error') {
     return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario.'
-  }
-  if (run.systemStatus === 'judge_error') {
-    return 'Fix the judge invocation or its schema path, validate the JSON contract, and rerun the scenario.'
   }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'

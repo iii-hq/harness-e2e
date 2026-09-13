@@ -400,7 +400,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         TEST_HISTORY_GET,
-        "Read local metric history for one test version, with provider-grouped execution and judge models, without comparison actions.",
+        "Read local metric history for one test version, with provider-grouped execution models, without comparison actions.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: TestHistoryRequest| {
