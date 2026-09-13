@@ -4,7 +4,6 @@ pub fn definition() -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
         schema_version: super::super::WORKFLOW_SCHEMA_VERSION,
         id: crate::scenarios::incident_response::ID.into(),
-        scenario_version: crate::scenarios::incident_response::VERSION,
         description: "Code-owned incident response: preflight, baseline, reproduction, parallel triage, diagnosis, bounded remediation, deterministic promotion or rollback, reconciliation, report, and mandatory cleanup.".into(),
         limits: WorkflowLimits {
             max_parallel: 3,

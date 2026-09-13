@@ -1,3 +1,4 @@
+import { shortDefinition } from '@/lib/definition-digest'
 import type { TestCatalogRow, TestVersionResult } from '@/lib/test-catalog'
 
 export type ResultFilter = 'all' | 'passed' | 'issues' | 'missing' | 'changed'
@@ -22,7 +23,7 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
   scenario_contract_changed: {
     title: 'Scenario contract changed',
     detail:
-      'The canonical cases, scenario schema/version, or execution policy differ between versions. Scores and deltas are not comparable.',
+      'The canonical cases, the scenario definition, or the execution policy differ between definitions. Scores and deltas are not comparable.',
   },
   scenario_contract_conflict: {
     title: 'Scenario contract conflict',
@@ -32,12 +33,12 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
   assessment_profile_changed: {
     title: 'Assessment profile changed',
     detail:
-      'The scenario version or assessment definition differs. Scenario version is the compatibility boundary for prompt and rubric changes.',
+      'The scenario definition or the assessment definition differs. The definition digest is the compatibility boundary for prompt and rubric changes.',
   },
   assessment_profile_conflict: {
     title: 'Assessment profile conflict',
     detail:
-      'At least one side contains multiple assessment definitions for the same scenario version.',
+      'At least one side contains multiple assessment definitions for the same scenario definition.',
   },
   cohort_changed: {
     title: 'Evaluation cohort changed',
@@ -52,7 +53,7 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
   contract_changed: {
     title: 'Scenario contract changed',
     detail:
-      'The canonical cases, scenario schema/version, or execution policy differ between versions. Scores and deltas are not comparable.',
+      'The canonical cases, the scenario definition, or the execution policy differ between definitions. Scores and deltas are not comparable.',
   },
   contract_conflict: {
     title: 'Scenario contract conflict',
@@ -62,12 +63,12 @@ const REASON_WARNINGS: Record<string, ComparisonWarning> = {
   assessment_changed: {
     title: 'Assessment profile changed',
     detail:
-      'The scenario version or assessment definition differs. Scenario version is the compatibility boundary for prompt and rubric changes.',
+      'The scenario definition or the assessment definition differs. The definition digest is the compatibility boundary for prompt and rubric changes.',
   },
   assessment_conflict: {
     title: 'Assessment profile conflict',
     detail:
-      'At least one side contains multiple assessment definitions for the same scenario version.',
+      'At least one side contains multiple assessment definitions for the same scenario definition.',
   },
 }
 
@@ -89,9 +90,10 @@ export function comparisonWarnings(
 }
 
 /**
- * Audit T-02: executions across every contract version, not only the
+ * Audit T-02: executions across every retained definition, not only the
  * current one, plus the most recent evidence date. An active test with
- * evidence on v1 no longer reads "0" because its contract moved to v3.
+ * evidence on an earlier definition no longer reads "0" because its
+ * definition moved on.
  */
 export function catalogExecutionSummary(row: TestCatalogRow) {
   const versions = row.available_versions
@@ -107,7 +109,10 @@ export function catalogExecutionSummary(row: TestCatalogRow) {
       .at(-1) ?? null
   const breakdown = versions
     .filter((version) => version.execution_count > 0)
-    .map((version) => `${version.execution_count} on v${version.version}`)
+    .map(
+      (version) =>
+        `${version.execution_count} on ${shortDefinition(version.version)}`,
+    )
     .join(' · ')
   return { total, lastSeen, breakdown }
 }

@@ -39,7 +39,8 @@ function createPlan(request) {
     schema_version: 3,
     scenarios: request.scenarios.map((scenario_id) => ({
       scenario_id,
-      scenario_version: 1,
+      behavior_sha256:
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       case_id: scenario_id,
     })),
     scenario_ids: request.scenarios,

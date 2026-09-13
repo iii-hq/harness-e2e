@@ -16,7 +16,6 @@ use super::{
 };
 
 pub const ID: &str = "timer_wake";
-const VERSION: u32 = 8;
 const DELIVERABLE_ID: &str = "timer_result";
 
 const RESULT_KEY: &str = "result";
@@ -118,7 +117,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "delay_ms": DELAY_MS,
@@ -154,7 +152,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Test the parent-owned timer control plane in isolated state scope `{scope}`.
 

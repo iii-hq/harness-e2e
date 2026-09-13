@@ -18,7 +18,6 @@ use super::{
 };
 
 pub const ID: &str = "database_migration_recovery";
-const VERSION: u32 = 3;
 const DATABASE: &str = "primary";
 const MIGRATION_ID: &str = "order-money-v2";
 const EXPECTED_REPORT: &str = "MIGRATION-RECOVERED 5/1 REPLAY-2";
@@ -168,7 +167,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": DATABASE,
@@ -308,7 +306,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let relations = Relations::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Recover the interrupted `{MIGRATION_ID}` migration in database `{DATABASE}`, then \
              prove it is idempotent by replaying the same migration once.\n\n\

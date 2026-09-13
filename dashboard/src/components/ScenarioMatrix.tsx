@@ -20,6 +20,7 @@ import type {
   SemanticTestReport,
   TechnicalState,
 } from '@/lib/dashboard-data-source'
+import { shortDefinition } from '@/lib/definition-digest'
 import { formatPercent, titleCase } from '@/lib/execution-view'
 import {
   buildScenarioMatrix,
@@ -286,8 +287,9 @@ function ScenarioRow({
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
   const panelId = `${safeId(item.key)}-scenario-panel`
+  const definition = shortDefinition(item.behaviorSha256)
   const scenarioTitle = `${titleCase(item.scenarioId)}${
-    item.scenarioVersion != null ? ` v${item.scenarioVersion}` : ''
+    definition ? ` · definition ${definition}` : ''
   }`
   const structure = item.workflowSteps.length
     ? `Workflow · ${item.workflowSteps.length} ${item.workflowSteps.length === 1 ? 'step' : 'steps'}`

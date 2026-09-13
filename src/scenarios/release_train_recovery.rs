@@ -13,7 +13,6 @@ use super::{
 };
 
 pub const ID: &str = "release_train_recovery";
-pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x7265_6c65_6173_0001;
 
 const IMMUTABLE_RECOVERY: CriterionSpec = CriterionSpec::scored(
@@ -58,7 +57,6 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: "Recover a partially published immutable Workers release, verify exact publication, then safely replan a promotion when the historical latest graph is incompatible. Preserve the original tag/version/run identity, use evidence-gated operations, never mutate latest directly, and reconcile the final state.".into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -83,7 +81,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let fixture_sha256 = crate::artifact::sha256_value(&initial)?;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "variant": "partial_publication_then_incompatible_latest",

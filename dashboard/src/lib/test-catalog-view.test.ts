@@ -75,12 +75,15 @@ function row(
   return {
     test_id: testId,
     lifecycle: from || to ? 'active' : 'never_run',
-    current_version: 1,
+    current_version:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     available_versions: [],
-    selected_version: 1,
+    selected_version:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     result: {
       test_id: testId,
-      test_version: 1,
+      test_version:
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       compatibility,
       compatibility_reasons: [],
       from,
@@ -97,7 +100,7 @@ function row(
   }
 }
 
-describe('versioned test catalog view', () => {
+describe('definition-scoped test catalog view', () => {
   const comparable = row('direct_answer', 'compatible', side(), side())
   const changed = row('persistent_state', 'contract_changed', side(), side())
   const oneSided = row('reactive_automation', 'missing_side', null, side(true))
@@ -125,7 +128,7 @@ describe('versioned test catalog view', () => {
     expect(hasRetainedEvidence(oneSided)).toBe(true)
   })
 
-  it('prefers the version pair with shared canonical evidence', () => {
+  it('prefers the system pair with shared canonical evidence', () => {
     const weak = comparisonUtility([changed, neverRun])
     const useful = comparisonUtility([comparable, oneSided])
     expect(isMoreUsefulComparison(useful, weak)).toBe(true)
@@ -156,19 +159,28 @@ describe('versioned test catalog view', () => {
 })
 
 describe('catalog execution summary', () => {
-  // Audit T-02: an active test whose contract moved to v3 still shows the
-  // evidence it gathered on v1.
-  it('sums executions across contract versions and keeps the latest date', () => {
+  // Audit T-02: an active test whose definition moved on still shows the
+  // evidence it gathered on the previous one.
+  it('sums executions across definitions and keeps the latest date', () => {
     const summary = catalogExecutionSummary({
       test_id: 'chess_play_ladder',
       lifecycle: 'active',
-      current_version: 3,
-      selected_version: 3,
+      current_version:
+        'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+      selected_version:
+        'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
       result: null,
       available_versions: [
-        { version: 3, execution_count: 0, run_count: 0, last_seen: null },
         {
-          version: 1,
+          version:
+            'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+          execution_count: 0,
+          run_count: 0,
+          last_seen: null,
+        },
+        {
+          version:
+            'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
           execution_count: 1,
           run_count: 2,
           last_seen: '2026-08-26T19:53:13.315Z',
@@ -178,7 +190,7 @@ describe('catalog execution summary', () => {
     expect(summary).toEqual({
       total: 1,
       lastSeen: '2026-08-26T19:53:13.315Z',
-      breakdown: '1 on v1',
+      breakdown: '1 on a1a1a1a1',
     })
   })
 
@@ -187,11 +199,19 @@ describe('catalog execution summary', () => {
       catalogExecutionSummary({
         test_id: 'fresh',
         lifecycle: 'never_run',
-        current_version: 1,
-        selected_version: 1,
+        current_version:
+          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+        selected_version:
+          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
         result: null,
         available_versions: [
-          { version: 1, execution_count: 0, run_count: 0, last_seen: null },
+          {
+            version:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+            execution_count: 0,
+            run_count: 0,
+            last_seen: null,
+          },
         ],
       } as never),
     ).toEqual({ total: 0, lastSeen: null, breakdown: '' })

@@ -38,7 +38,6 @@ use super::{
 };
 
 pub const ID: &str = "chess_play_ladder";
-const VERSION: u32 = 4;
 const GAME_RECORD_ID: &str = "game_record";
 
 /// The line the subject must end on: `CHESS-RESULT <win|draw|loss>`.
@@ -332,7 +331,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         // Nothing here is run-scoped: inputs are identical across namespaces
         // for a given seed, so canonical identity stays stable across attempts.
@@ -376,7 +374,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let move_function = move_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&move_function, rung.depth),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -774,7 +771,6 @@ mod tests {
         let materialized = materialize("chess", CANONICAL_SEED).unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.spec.id, ID);
-        assert_eq!(materialized.spec.version, VERSION);
         let weights: u16 = materialized
             .spec
             .criteria

@@ -65,7 +65,6 @@ pub fn adaptive_contract() -> Result<IncidentAdaptiveContract> {
     let policy = AdaptiveWorkflowPolicyV1 {
         schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
         id: source.id,
-        scenario_version: source.scenario_version,
         description: "Runner-bounded incident response with agent-owned investigation and remediation decomposition, one evidence-bound revision, and trusted mutation/reconciliation anchors.".into(),
         limits: source.limits,
         max_plan_nodes: 8,

@@ -13,7 +13,8 @@ const model: AssessmentWorkspaceModel = {
       key: 'subject:scenario:run:attempt',
       subjectId: 'codex/terra',
       scenarioId: 'direct_answer',
-      scenarioVersion: 4,
+      behaviorSha256:
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       runId: 'run-1',
       attemptId: 'attempt-1',
       metrics: {

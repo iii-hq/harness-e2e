@@ -49,7 +49,6 @@ const reference = {
     {
       attemptsComplete: true,
       scenarioId: 'alpha',
-      scenarioVersion: 1,
       caseId: 'case-a',
       seed: '42',
       repetition: 0,
@@ -85,8 +84,14 @@ const detail = (id) => ({
         scenarios: [
           {
             scenario_id: 'alpha',
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             case_id: 'case-a',
-            case: { seed: 42 },
+            case: {
+              seed: 42,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+            },
             runs: [
               {
                 run_id: 'r1',
@@ -238,7 +243,8 @@ async function route(id, payload) {
   if (id === 'test_history_get')
     return {
       test_id: 'alpha',
-      test_version: 1,
+      test_version:
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       available_versions: [],
       cases: ['case-a'],
       subjects: [],
@@ -258,7 +264,8 @@ async function route(id, payload) {
           median_score: 90,
           run_count: 1,
           scored_runs: 1,
-          scenario_version: 1,
+          behavior_sha256:
+            'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
           seed: 1,
           stack_mode: 'source',
           subject_provider: 'test',
@@ -280,7 +287,8 @@ async function route(id, payload) {
         {
           test_id: 'alpha',
           lifecycle: 'active',
-          current_version: 1,
+          current_version:
+            'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
           available_versions: [],
         },
       ],

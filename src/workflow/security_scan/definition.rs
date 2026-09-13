@@ -4,7 +4,6 @@ pub fn definition() -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
         schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
         id: SCENARIO_ID.into(),
-        scenario_version: 3,
         description: "Rust-defined local security review: immediate scans, deduplication, optional suggestions, GitHub reconciliation, final listing, and mandatory cleanup.".into(),
         limits: WorkflowLimits {
             max_parallel: 3,

@@ -27,7 +27,6 @@ use super::{
 };
 
 pub const ID: &str = "contention_ledger";
-const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "ledger_totals";
 
 const DATABASE: &str = "primary";
@@ -111,7 +110,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "writers": WRITERS,
@@ -162,7 +160,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {

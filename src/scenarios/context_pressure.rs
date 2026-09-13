@@ -38,7 +38,6 @@ use super::{
 };
 
 pub const ID: &str = "context_pressure";
-const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "context_report";
 const SEGMENT_CHARS: usize = 8_192;
 
@@ -226,7 +225,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "segments": rung.segments,
@@ -261,7 +259,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let last = rung.segments - 1;
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Complete a context-endurance run over {segments} large documents.
 

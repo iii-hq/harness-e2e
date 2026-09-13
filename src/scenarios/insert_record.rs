@@ -16,7 +16,6 @@ use super::{
 };
 
 pub const ID: &str = "insert_record";
-const VERSION: u32 = 3;
 const DATABASE: &str = "primary";
 const VALUE: &str = "harness-e2e-record";
 const MAX_TURNS_FOR_CREDIT: u64 = 10;
@@ -45,7 +44,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({ "database": DATABASE, "value": VALUE }),
         ComplexityProfile {
@@ -137,7 +135,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Use `database::execute` on the `{DATABASE}` database to add exactly one row to the \
              `{table}` table with the text value `{VALUE}`. Then respond with a short \

@@ -2,12 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { TestHistoryResponse, TestObservation } from '@/lib/test-catalog'
 import {
+  definitionStatement,
   historyStateFromParams,
   historyStateToParams,
   ObservationComparisonPanel,
   ScoreTrendChart,
   statusPresentation,
-  versionStatement,
 } from '@/pages/TestHistoryPage'
 
 function observation(
@@ -18,14 +18,15 @@ function observation(
     evaluated_version_id: 'system-a',
     cohort_id: 'same-cohort',
     completed_at: '2026-08-21T16:51:00Z',
-    case_id: 'direct_answer:v2:seed-1',
+    case_id: 'direct_answer:seed-0000000000000001',
     contract_sha256: 'contract',
     assessment_profile_sha256: 'assessment',
     status: 'passed',
     median_score: 100,
     run_count: 1,
     scored_runs: 1,
-    scenario_version: 2,
+    behavior_sha256:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     seed: 1,
     stack_mode: 'source',
     subject_provider: 'openai',
@@ -45,16 +46,25 @@ function history(
 ): TestHistoryResponse {
   return {
     test_id: 'chess_play_ladder',
-    test_version: 1,
-    current_version: 3,
+    test_version:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    current_version:
+      'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
     available_versions: [
       {
-        version: 1,
+        version:
+          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
         execution_count: 1,
         run_count: 1,
         last_seen: '2026-08-21T16:51:00Z',
       },
-      { version: 3, execution_count: 0, run_count: 0, last_seen: null },
+      {
+        version:
+          'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+        execution_count: 0,
+        run_count: 0,
+        last_seen: null,
+      },
     ],
     cases: [],
     subjects: [],
@@ -153,16 +163,21 @@ describe('test history comparison', () => {
 })
 
 describe('test history page state', () => {
-  // Audit TH-07: the shown version and the current contract are both named.
-  it('states which version is shown and whether the contract moved on', () => {
-    expect(versionStatement(history())).toBe(
-      'showing v1 (latest with executions) · current contract v3 has no executions yet',
+  // Audit TH-07: the shown definition and the current one are both named.
+  it('states which definition is shown and whether it moved on', () => {
+    expect(definitionStatement(history())).toBe(
+      'showing definition a1a1a1a1 (latest with executions) · current definition c3c3c3c3 has no executions yet',
     )
-    expect(versionStatement(history({ current_version: 1 }))).toBe(
-      'contract v1 · current',
-    )
-    expect(versionStatement(history({ current_version: undefined }))).toBe(
-      'contract v1',
+    expect(
+      definitionStatement(
+        history({
+          current_version:
+            'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+        }),
+      ),
+    ).toBe('definition a1a1a1a1 · current')
+    expect(definitionStatement(history({ current_version: undefined }))).toBe(
+      'definition a1a1a1a1',
     )
   })
 
@@ -182,10 +197,13 @@ describe('test history page state', () => {
   // Audit TH-19: filters, a/b and the open dialog round-trip through the hash.
   it('round-trips the page state through the hash params', () => {
     const state = historyStateFromParams(
-      new URLSearchParams('version=2&result=failed&a=k1&b=k2&open=k1'),
+      new URLSearchParams(
+        'definition=sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1&result=failed&a=k1&b=k2&open=k1',
+      ),
     )
     expect(state.filters).toMatchObject({
-      version: 2,
+      definition:
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       result: 'failed',
       model: '',
     })
@@ -197,7 +215,9 @@ describe('test history page state', () => {
         state.comparisonKeys,
         state.open,
       ).toString(),
-    ).toBe('version=2&result=failed&a=k1&b=k2&open=k1')
+    ).toBe(
+      'definition=sha256%3Aa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1&result=failed&a=k1&b=k2&open=k1',
+    )
   })
 })
 
@@ -232,4 +252,37 @@ it('shows descriptive RC deltas without requiring the same stack or exposing RC 
   )
   expect(html).not.toContain('execution/rc:')
   expect(html).not.toContain('team')
+})
+
+// Release Control has not shipped the definition digest yet. A ledger that
+// carries neither digest is reported as not comparable, never as an error.
+it('withholds RC deltas while the reference carries no scenario digest', () => {
+  const html = renderToStaticMarkup(
+    <ObservationComparisonPanel
+      baseline={observation({
+        execution_id: 'rc:reference',
+        source: 'release-control',
+        stack_mode: 'published',
+        cohort_id: '',
+        contract_sha256: '',
+        behavior_sha256: '',
+        median_score: 70,
+      })}
+      candidate={observation({
+        execution_id: 'local-candidate',
+        source: 'local',
+        contract_sha256: '',
+        median_score: 90,
+      })}
+      testId="direct_answer"
+      onClear={() => {}}
+      onSwap={() => {}}
+    />,
+  )
+  expect(html).toContain('Reference: Release Control')
+  expect(html).toContain('deltas withheld')
+  expect(html).toContain(
+    'Scenario definition is not recorded on both executions',
+  )
+  expect(html).not.toContain('20 pts')
 })

@@ -170,9 +170,6 @@ def scenario_contract(
         "case_id": scenario.get("case_id") or None,
         "execution_policy": execution_policy,
         "scenario_id": scenario_id,
-        "scenario_version": int(
-            optional_number(scenario.get("scenario_version")) or 1
-        ),
     }
     if isinstance(scenario.get("case"), dict):
         contract["case"] = scenario["case"]
@@ -254,7 +251,7 @@ def build_scenario_metrics(detail: dict[str, Any]) -> list[dict[str, Any]]:
             {
                 "subject_id": subject_id,
                 "scenario_id": scenario_id,
-                "scenario_version": contract["scenario_version"],
+                "behavior_sha256": entry["scenario"].get("behavior_sha256"),
                 "contract_fingerprint": contract_fingerprint(contract),
                 "run_count": len(runs),
                 "averages": averages,
@@ -536,7 +533,7 @@ def _public_scenario(
         return None
     scenario = _pick(
         value,
-        ("scenario_id", "scenario_version", "case_id", "passed"),
+        ("scenario_id", "behavior_sha256", "case_id", "passed"),
     )
     if isinstance(value.get("case"), dict):
         scenario["case"] = _bounded_json(value["case"])
@@ -1227,7 +1224,7 @@ def _assessment_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _assessment_profile_sha256(
-    scenario_version: int,
+    behavior_sha256: str | None,
     runs: list[dict[str, Any]],
 ) -> str:
     definitions: set[str] = set()
@@ -1255,7 +1252,7 @@ def _assessment_profile_sha256(
                     )
                 )
     return _sha256_json(
-        {"scenario_version": scenario_version, "assessments": sorted(definitions)}
+        {"behavior_sha256": behavior_sha256, "assessments": sorted(definitions)}
     )
 
 
@@ -1453,12 +1450,11 @@ def build_static_test_catalog(
                 )
                 if not test_id:
                     continue
-                test_version = int(optional_number(scenario.get("scenario_version")) or 1)
-                case_id = str(scenario.get("case_id") or f"{test_id}:v{test_version}")
+                test_version = str(scenario.get("behavior_sha256") or "unmaterialized")
+                case_id = str(scenario.get("case_id") or f"{test_id}:{test_version}")
                 contract_sha256 = _sha256_json(
                     {
                         "scenario_id": test_id,
-                        "scenario_version": test_version,
                         "case": scenario.get("case"),
                         "execution_policy": scenario.get("execution_policy", {}),
                     }

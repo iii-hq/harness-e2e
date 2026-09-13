@@ -251,7 +251,7 @@ pub struct ExecutionCohortIdentity {
 pub struct CaseCohortKey {
     pub execution: ExecutionCohortIdentity,
     pub scenario_id: String,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -796,14 +796,13 @@ fn case_key(
         .context("comparison requires a materialized v2 case")?;
     let contract_sha256 = artifact::sha256_value(&serde_json::json!({
         "scenario_id": scenario.scenario_id,
-        "scenario_version": scenario.scenario_version,
         "case": case,
         "execution_policy": scenario.execution_policy,
     }))?;
     Ok(CaseCohortKey {
         execution,
         scenario_id: scenario.scenario_id.clone(),
-        scenario_version: scenario.scenario_version,
+        behavior_sha256: case.behavior_sha256.clone(),
         case_id: scenario.case_id.clone(),
         seed: case.seed,
         inputs_sha256: case.inputs_sha256.clone(),
@@ -1755,7 +1754,6 @@ mod tests {
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {
         let case = ScenarioCase::new(
             "todo_worker_simple",
-            1,
             7,
             serde_json::json!({"variant": "canonical"}),
             ComplexityProfile {
@@ -1766,7 +1764,8 @@ mod tests {
             vec!["iii::state".into()],
             DeliverableContract::default(),
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let mut runs = (0..20)
             .map(|index| comparable_run(index, regress && index == 0, regress))
             .collect::<Vec<_>>();

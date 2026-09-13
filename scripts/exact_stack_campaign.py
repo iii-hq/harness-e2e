@@ -423,8 +423,8 @@ def materialize_request(
         selected_cases.append(
             {
                 "scenario_id": scenario_id,
-                "scenario_version": require_positive_integer(
-                    descriptor.get("scenario_version"), f"{scenario_id}.scenario_version"
+                "behavior_sha256": require_digest(
+                    descriptor.get("behavior_sha256"), f"{scenario_id}.behavior_sha256"
                 ),
                 "case_id": require_text(descriptor.get("case_id"), f"{scenario_id}.case_id"),
                 "seed": require_nonnegative_integer(descriptor.get("seed"), f"{scenario_id}.seed"),

@@ -28,7 +28,6 @@ use super::{
 
 pub const ID: &str = "cross_app_transaction";
 pub const CANONICAL_SEED: u64 = 0x6372_6f73_7361_7070;
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "cross_app_transaction_audit";
 const TARGET_ACCOUNT: &str = "acct-42";
 const SENTINEL_ACCOUNT: &str = "acct-99";
@@ -687,7 +686,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "account_id": TARGET_ACCOUNT,
@@ -726,7 +724,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let ids = FunctionIds::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Move account `{TARGET_ACCOUNT}` from `{INITIAL_TEAM}` to `{TARGET_TEAM}` consistently across CRM and billing, then close support ticket `{TARGET_TICKET}`.
 

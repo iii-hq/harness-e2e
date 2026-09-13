@@ -23,7 +23,8 @@ export type ScenarioMatrixItem = {
   scenarioIndex: number | null
   subjectId: string
   scenarioId: string
-  scenarioVersion: number | null
+  /** Digest of the definition that evaluated the scenario, when retained. */
+  behaviorSha256: string | null
   available: boolean
   objective: {
     status: OperationalStatus
@@ -208,7 +209,7 @@ function scenarioItem(
   const duration = scenarioDuration(detail, subjectId, scenario, runs)
 
   return {
-    key: `${subjectId}:${scenario.scenario_id}:v${scenario.scenario_version}:${reportIndex}:${scenarioIndex}`,
+    key: `${subjectId}:${scenario.scenario_id}:${scenario.behavior_sha256 ?? 'no-definition'}:${reportIndex}:${scenarioIndex}`,
     reason:
       objective.status === 'passed'
         ? null
@@ -218,7 +219,7 @@ function scenarioItem(
     scenarioIndex,
     subjectId,
     scenarioId: scenario.scenario_id,
-    scenarioVersion: scenario.scenario_version,
+    behaviorSha256: scenario.behavior_sha256 ?? null,
     available: true,
     objective,
     durationMs: duration.value,
@@ -268,7 +269,7 @@ function unavailableScenario(
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',
     scenarioId,
-    scenarioVersion: summary?.scenario_version ?? null,
+    behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
     objective: {
       status: 'unavailable',
@@ -349,7 +350,7 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
   return value as DashboardScenarioAggregate
 }
 
-// The version label and the contract fingerprint are not gates for now, in
+// The definition digest and the contract fingerprint are not gates for now, in
 // step with the Rust reader: a report the server accepted is shown, and the
 // contract it carries stays visible in the identity band.
 function validResultContract(report: DashboardReportProjection): boolean {

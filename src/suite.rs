@@ -684,16 +684,8 @@ async fn defer_planned_case(
         .find(|slot| slot.slot_id == slot_id(scenario, seed, 0))
         .map(|slot| slot.case_id.clone())
         .unwrap_or_else(|| format!("unresolved:{}:{seed}", scenario.as_str()));
-    let spec = scenario.spec("validation");
-    let (version, execution) = (spec.version, spec.execution);
-    E2eScenarioReport::deferred(
-        scenario.as_str().into(),
-        case_id,
-        version,
-        execution,
-        runs,
-        reason,
-    )
+    let execution = scenario.spec("validation").execution;
+    E2eScenarioReport::deferred(scenario.as_str().into(), case_id, execution, runs, reason)
 }
 
 fn round_robin_slots(runs: u32, cases: usize) -> impl Iterator<Item = (u32, usize)> {
@@ -3144,7 +3136,6 @@ mod tests {
         ScenarioCase::new(
             "failed_capture",
             1,
-            1,
             json!({}),
             crate::scenarios::ComplexityProfile::default(),
             vec![],
@@ -3165,6 +3156,7 @@ mod tests {
             },
         )
         .unwrap()
+        .sealed_for_tests()
     }
 
     fn partial_asset_capture<'a>(
@@ -3853,7 +3845,6 @@ mod tests {
     fn spec() -> ScenarioSpec {
         ScenarioSpec {
             id: "case",
-            version: 1,
             prompt: "prompt".into(),
             filesystem_root: None,
             execution: ExecutionPolicy {

@@ -29,7 +29,6 @@ use super::{
 };
 
 pub const ID: &str = "shell_coder_sandbox";
-const VERSION: u32 = 7;
 pub const CANONICAL_SEED: u64 = 2_051;
 const DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
@@ -231,7 +230,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "difficulty_profile": DIFFICULTY_PROFILE,
@@ -277,7 +275,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = workspace_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Repair the event reconciliation implementation in the isolated workspace `{root}`.
 
@@ -1224,10 +1221,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_only_case_has_a_distinct_version_and_cohort() {
+    fn host_only_case_has_a_stable_identity_and_cohort() {
         let materialized = materialize("catalog", CANONICAL_SEED).unwrap();
         let rotated = materialize("catalog", 7).unwrap();
-        assert_eq!(materialized.case.scenario_version, 7);
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(rotated.case.case_id, materialized.case.case_id);
         assert_eq!(

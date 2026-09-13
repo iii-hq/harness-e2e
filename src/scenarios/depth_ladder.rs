@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "depth_ladder";
-const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "relay_rows";
 const MAX_REPORT_CHARS: usize = 300;
 
@@ -111,7 +110,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "depth": rung.depth,
@@ -153,7 +151,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id, rung.depth),
         filesystem_root: None,
         execution: ExecutionPolicy {

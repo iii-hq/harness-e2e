@@ -28,7 +28,6 @@ use super::{
 };
 
 pub const ID: &str = "subagent_validation";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validated_child_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -61,7 +60,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let contract = deliverable_contract();
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "initial_rows": 4,
@@ -110,7 +108,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let child = child_session(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You orchestrate one validated sub-agent. You never poll and never judge its work \
              yourself: a validator gates every child reply and a verdict wake drives you. Follow \

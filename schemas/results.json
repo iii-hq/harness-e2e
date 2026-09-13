@@ -1221,6 +1221,13 @@
         "aggregate": {
           "$ref": "#/definitions/ScenarioAggregate"
         },
+        "behavior_sha256": {
+          "description": "Digest of the definition the case was materialized from. Absent only when no case could be materialized.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "case": {
           "anyOf": [
             {
@@ -1255,12 +1262,6 @@
         },
         "scenario_id": {
           "type": "string"
-        },
-        "scenario_version": {
-          "default": 1,
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         }
       }
     },
@@ -1845,14 +1846,17 @@
     "ObservationSelectedCase": {
       "type": "object",
       "required": [
+        "behavior_sha256",
         "case_id",
         "contract_sha256",
         "inputs_sha256",
         "scenario_id",
-        "scenario_version",
         "seed"
       ],
       "properties": {
+        "behavior_sha256": {
+          "type": "string"
+        },
         "case_id": {
           "type": "string"
         },
@@ -1864,11 +1868,6 @@
         },
         "scenario_id": {
           "$ref": "#/definitions/ScenarioId"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "seed": {
           "type": "integer",
@@ -2562,6 +2561,7 @@
     "ScenarioCase": {
       "type": "object",
       "required": [
+        "behavior_sha256",
         "case_id",
         "complexity",
         "deliverable_contract",
@@ -2569,11 +2569,14 @@
         "inputs_sha256",
         "required_capabilities",
         "scenario_id",
-        "scenario_version",
         "seed",
         "work"
       ],
       "properties": {
+        "behavior_sha256": {
+          "description": "Digest of the scenario definition this case was materialized from: prompt, execution policy, criteria, and the case-independent contract. Two cases with the same digest were evaluated by the same definition. Sealed by `ScenarioId::materialize`; empty only before sealing.",
+          "type": "string"
+        },
         "case_id": {
           "type": "string"
         },
@@ -2611,11 +2614,6 @@
         },
         "scenario_id": {
           "type": "string"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "seed": {
           "type": "integer",

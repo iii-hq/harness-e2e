@@ -331,7 +331,7 @@ pub struct ScenariosListRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioDescriptor {
     pub scenario_id: ScenarioId,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -2088,7 +2088,7 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
             let descriptor = materialize_scenario_descriptor(scenario, seed, "run-contract")?;
             expected.push(ObservationSelectedCase {
                 scenario_id: descriptor.scenario_id,
-                scenario_version: descriptor.scenario_version,
+                behavior_sha256: descriptor.behavior_sha256,
                 case_id: descriptor.case_id,
                 seed: descriptor.seed,
                 inputs_sha256: descriptor.inputs_sha256,
@@ -2217,7 +2217,7 @@ fn materialize_scenario_descriptor(
     };
     Ok(ScenarioDescriptor {
         scenario_id,
-        scenario_version: materialized.case.scenario_version,
+        behavior_sha256: materialized.case.behavior_sha256.clone(),
         case_id: materialized.case.case_id,
         seed: materialized.case.seed,
         inputs_sha256: materialized.case.inputs_sha256,
@@ -2368,7 +2368,7 @@ fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
                     .collect();
                 ObservationSample {
                     scenario_id: scenario.scenario_id.clone(),
-                    scenario_version: scenario.scenario_version,
+                    behavior_sha256: scenario.behavior_sha256.clone(),
                     case_id: scenario.case_id.clone(),
                     seed,
                     run_id: run.run_id.clone(),
@@ -2774,7 +2774,7 @@ mod tests {
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
                 scenario_id: scenario.scenario_id,
-                scenario_version: scenario.scenario_version,
+                behavior_sha256: scenario.behavior_sha256.clone(),
                 case_id: scenario.case_id.clone(),
                 seed: scenario.seed,
                 inputs_sha256: scenario.inputs_sha256.clone(),
@@ -2980,7 +2980,7 @@ mod tests {
                             if sql.contains("sqlite_master") {
                                 json!({"rows": []})
                             } else if sql.contains("SELECT version") {
-                                json!({"rows": [{"version": 3}]})
+                                json!({"rows": [{"version": 4}]})
                             } else if sql.contains("terminal = 0") {
                                 json!({"rows": []})
                             } else {
@@ -3074,7 +3074,6 @@ mod tests {
             None,
             vec![crate::report::E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -3214,7 +3213,7 @@ mod tests {
         .unwrap();
         let observed = ObservationSample {
             scenario_id: "direct_answer".into(),
-            scenario_version: 1,
+            behavior_sha256: None,
             case_id: "case".into(),
             seed: 1,
             run_id: "run".into(),

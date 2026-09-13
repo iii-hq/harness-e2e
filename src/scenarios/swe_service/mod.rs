@@ -15,7 +15,6 @@ use super::{
 };
 use crate::report::EvaluationDimension;
 
-pub const VERSION: u32 = 3;
 pub const REPORT_ID: &str = "swe_service_report";
 pub const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 pub const FIXTURE_REVISION: &str = "ab373b11ae167ef853f5b5c5184cdcd431a444ea";
@@ -125,7 +124,6 @@ pub fn spec(scenario: ScenarioId) -> ScenarioSpec {
     let case = Case::from_scenario(scenario).expect("SWE scenario identity");
     ScenarioSpec {
         id: case.id,
-        version: VERSION,
         prompt: case.description().into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -157,7 +155,6 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
     let selection = Case::from_scenario(scenario).expect("SWE scenario identity");
     let case = ScenarioCase::new(
         selection.id,
-        VERSION,
         super::stable_seed(selection.id),
         json!({
             "fixture_repository": FIXTURE_REPOSITORY,

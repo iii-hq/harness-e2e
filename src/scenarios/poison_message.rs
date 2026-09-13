@@ -35,7 +35,6 @@ use super::{
 };
 
 pub const ID: &str = "poison_message";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quarantine_record";
 const ITEMS: [&str; 3] = ["item-01", "item-02", "item-03"];
 const GOOD_ITEMS: [&str; 2] = ["item-01", "item-03"];
@@ -190,7 +189,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "items": ITEMS,
@@ -230,7 +228,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         .join(", ");
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Process a batch of three items — {items} — with the processing function that \
              is already registered: `{process}`. Call it with exactly \

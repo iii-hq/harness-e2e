@@ -584,10 +584,6 @@ export function buildScenarioComparisons(
     const rightRun = primaryScenarioRun(candidate, id)
     const leftGeneral = generalRunMetrics(leftRun)
     const rightGeneral = generalRunMetrics(rightRun)
-    const versionMismatch =
-      left?.scenario_version != null &&
-      right?.scenario_version != null &&
-      left.scenario_version !== right.scenario_version
     const caseMismatch =
       Boolean(left?.case_id && right?.case_id) &&
       left?.case_id !== right?.case_id
@@ -597,8 +593,9 @@ export function buildScenarioComparisons(
       ) &&
       leftMetrics?.contract_fingerprint !== rightMetrics?.contract_fingerprint
     const sideMissing = !left || !right
-    const compatible =
-      !sideMissing && !versionMismatch && !caseMismatch && !contractMismatch
+    // The scenario definition digest is folded into the contract fingerprint's
+    // inputs, so case identity plus fingerprint settle comparability.
+    const compatible = !sideMissing && !caseMismatch && !contractMismatch
     const metric = (
       metricId: PlanMetricId,
       label: string,
@@ -618,7 +615,7 @@ export function buildScenarioComparisons(
       compatible,
       reason: sideMissing
         ? 'One execution does not contain this test.'
-        : versionMismatch || caseMismatch || contractMismatch
+        : caseMismatch || contractMismatch
           ? 'The retained scenario contract differs between executions.'
           : null,
       metrics: [

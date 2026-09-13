@@ -44,7 +44,7 @@ node --test tests/dashboard/*.test.cjs
 HARNESS_E2E_BIN="$PWD/target/debug/harness-e2e" python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
-List the materialized scenarios and their scenario versions:
+List the materialized scenarios and their definition digests:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
@@ -230,7 +230,7 @@ this is a personal experiment, not an exact-stack certification. No build/Git
 tracking or matching remote stack is required. Fault-injection groups still
 require the protected executor; they are not silently omitted. References without
 shard seeds for every scenario cannot be reproduced. Differences in local
-scenario version or case identity are shown as advisory information.
+scenario definition or case identity are shown as advisory information.
 
 Results stay in the local plan store. The RC execution remains a reference,
 never a locally recreated official execution. Native result validation remains
@@ -372,7 +372,7 @@ the source repository, revision, E2E ref, and credential boundary are approved.
 ## Comparison
 
 Every completed execution records the subject and E2E revisions, observed wire
-contracts, scenario version, materialized inputs, seed, policies, artifacts,
+contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence. `e2e::compare` accepts two distinct completed
 execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 `comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric

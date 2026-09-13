@@ -19,7 +19,8 @@ export type ScenarioChatTarget = {
 export type ScenarioChatSource = {
   executionId: string
   scenarioId: string
-  scenarioVersion?: number | null
+  /** Digest of the scenario definition the transcript belongs to. */
+  behaviorSha256?: string | null
   subjectId?: string | null
   runId?: string | null
 }
@@ -33,7 +34,7 @@ export function scenarioChatTargets(
   scenarioId: string,
   subjectId?: string | null,
   runId?: string | null,
-  scenarioVersion?: number | null,
+  behaviorSha256?: string | null,
 ): ScenarioChatTarget[] {
   const targets: ScenarioChatTarget[] = []
   const seen = new Set<string>()
@@ -43,8 +44,8 @@ export function scenarioChatTargets(
     for (const scenario of record.report?.scenarios ?? []) {
       if (scenario.scenario_id !== scenarioId) continue
       if (
-        scenarioVersion !== undefined &&
-        (scenario.scenario_version ?? null) !== scenarioVersion
+        behaviorSha256 !== undefined &&
+        (scenario.behavior_sha256 ?? null) !== behaviorSha256
       )
         continue
       for (const run of [...(scenario.runs ?? [])].reverse()) {
@@ -96,7 +97,7 @@ export function scenarioChatTargets(
 export async function loadScenarioChatTargets({
   executionId,
   scenarioId,
-  scenarioVersion,
+  behaviorSha256,
   subjectId,
   runId,
 }: ScenarioChatSource): Promise<ScenarioChatTarget[]> {
@@ -107,6 +108,6 @@ export async function loadScenarioChatTargets({
     scenarioId,
     subjectId,
     runId,
-    scenarioVersion,
+    behaviorSha256,
   )
 }

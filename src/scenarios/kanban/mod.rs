@@ -87,7 +87,7 @@ pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
         setup_c1, setup_c2, setup_c3, setup_c4, setup_c5, setup_c6, setup_c7,
     ];
     ScenarioSpec {
-        id: case.id.as_str(), version: 1,
+        id: case.id.as_str(),
         prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
             catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
         filesystem_root: None,
@@ -137,7 +137,6 @@ pub fn materialize(index: usize, run_id: &str) -> Result<MaterializedScenario> {
     };
     let case = ScenarioCase::new(
         IDS[index],
-        1,
         super::stable_seed(IDS[index]),
         json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
             "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),

@@ -13,6 +13,7 @@ import {
   type PrimaryMetrics,
   type PrimaryTestValues,
 } from '@/lib/primary-metrics'
+import { scenarioContractFingerprint } from '@/lib/scenario-contract'
 import type { TestObservation } from '@/lib/test-catalog'
 
 export type RcExecutionSummary = {
@@ -40,7 +41,12 @@ export type RcRun = {
   id?: string
   attemptsComplete: boolean
   scenarioId: string
-  scenarioVersion: number | null
+  /** Digest of the scenario definition. Release Control ledgers do not carry
+   *  one yet, so it is set only when a local Result is projected here. */
+  behaviorSha256?: string | null
+  /** Contract fingerprint computed from a local Result, mirroring the harness
+   *  projection; Release Control ledgers do not carry one. */
+  contractFingerprint?: string
   caseId?: string | null
   seed?: string | null
   repetition?: number | null
@@ -66,8 +72,9 @@ export type RcRun = {
   } | null
   cohortSha256?: string
   capturedAt?: string
-  /** Release Control payloads may carry extra identity fields (a legacy
-   *  judge among them); only the ones declared here are read. */
+  /** Release Control payloads may carry extra identity fields (a legacy judge
+   *  and a numeric scenario version among them); only the ones declared here
+   *  are read. */
   identity?: {
     definitionSha256?: string | null
     harnessVersion?: string | null
@@ -155,7 +162,7 @@ function metrics(runs: RcRun[]): DashboardScenarioMetricSummary[] {
     groups.set(run.scenarioId, [...(groups.get(run.scenarioId) ?? []), run])
   return [...groups].map(([scenario_id, values]) => ({
     scenario_id,
-    scenario_version: values[0]?.scenarioVersion ?? undefined,
+    behavior_sha256: values[0]?.behaviorSha256 ?? undefined,
     run_count: values.length,
     averages: {
       tokens: completeMean(
@@ -308,7 +315,7 @@ export function referencePrimaryMetrics(
 ): PrimaryMetrics {
   const groups = new Map<string, RcRun[]>()
   for (const run of reference.runs) {
-    const key = JSON.stringify([run.scenarioId, run.scenarioVersion])
+    const key = JSON.stringify([run.scenarioId])
     groups.set(key, [...(groups.get(key) ?? []), run])
   }
   const planned = plannedRepetitions(reference)
@@ -349,7 +356,7 @@ export function referencePrimaryMetrics(
       return {
         key,
         label: runs[0]?.scenarioId ?? key,
-        version: runs[0]?.scenarioVersion ?? null,
+        definition: runs[0]?.behaviorSha256 ?? null,
         expected: expected ?? runs.length,
         scopeKnown,
         identity: scopeKnown ? JSON.stringify([...identities].sort()) : null,
@@ -375,11 +382,7 @@ export function localReferencePrimaryMetrics(
         const reportSubject = record(entry.report?.subject)
         return (
           entry.report?.scenarios.flatMap((scenario) => {
-            if (
-              scenario.scenario_id !== test.label ||
-              scenario.scenario_version !== test.version
-            )
-              return []
+            if (scenario.scenario_id !== test.label) return []
             const scenarioCase = record(scenario.case)
             return scenario.runs.map((run, index) =>
               primaryIdentity({
@@ -471,7 +474,7 @@ export function referenceSummary(view: {
               provider: subject.provider,
               scenarios: metrics(runs).map((metric) => ({
                 id: metric.scenario_id,
-                scenario_version: metric.scenario_version,
+                behavior_sha256: metric.behavior_sha256,
                 case_id:
                   runs.find((run) => run.scenarioId === metric.scenario_id)
                     ?.caseId ?? undefined,
@@ -584,7 +587,8 @@ function localRuns(detail: DashboardExecutionDetail): RcRun[] {
               id,
               attemptsComplete,
               scenarioId: scenario.scenario_id,
-              scenarioVersion: scenario.scenario_version,
+              behaviorSha256: scenario.behavior_sha256 ?? null,
+              contractFingerprint: scenarioContractFingerprint(scenario),
               caseId,
               seed:
                 typeof seed === 'string' || typeof seed === 'number'
@@ -670,7 +674,7 @@ function observation(
     scored_runs: scores.filter(
       (score) => typeof score === 'number' && Number.isFinite(score),
     ).length,
-    scenario_version: complete[0]?.scenarioVersion ?? undefined,
+    behavior_sha256: complete[0]?.behaviorSha256 ?? '',
     seed: seedNumber(complete[0]?.seed),
     system_version_id: null,
     system_label:
@@ -705,10 +709,9 @@ export function referenceScenarioObservations(
   reference.runs
     .filter((run) => run.scenarioId === scenarioId)
     .forEach((run, index) => {
-      const identified =
-        run.caseId != null && run.scenarioVersion != null && run.seed != null
+      const identified = run.caseId != null && run.seed != null
       const key = identified
-        ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+        ? JSON.stringify([run.caseId, run.seed])
         : `unknown:${run.id ?? index}`
       groups.set(key, [...(groups.get(key) ?? []), run])
     })
@@ -741,10 +744,9 @@ export function localScenarioObservations(
   for (const run of localRuns(detail).filter(
     (candidate) => candidate.scenarioId === scenarioId,
   )) {
-    const identified =
-      run.caseId != null && run.scenarioVersion != null && run.seed != null
+    const identified = run.caseId != null && run.seed != null
     const identity = identified
-      ? JSON.stringify([run.caseId, run.scenarioVersion, run.seed])
+      ? JSON.stringify([run.caseId, run.seed])
       : `unknown:${run.id}`
     groups.set(identity, [...(groups.get(identity) ?? []), run])
   }
@@ -761,7 +763,10 @@ export function localScenarioObservations(
       sourceUrl: null,
       subjectProvider: subject?.provider ?? '',
       subjectModel: subject?.model ?? '',
-      contractSha256: text(metric?.contract_fingerprint) ?? '',
+      contractSha256:
+        text(metric?.contract_fingerprint) ??
+        runs[0]?.contractFingerprint ??
+        '',
     }),
   )
 }

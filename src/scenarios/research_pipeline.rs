@@ -25,7 +25,6 @@ use super::{
 };
 
 pub const ID: &str = "research_pipeline";
-const VERSION: u32 = 7;
 pub const CANONICAL_SEED: u64 = 0x7265_7365_6172_0005;
 const EVIDENCE_KEY: &str = "evidence";
 const CONFLICTS_KEY: &str = "conflicts";
@@ -339,7 +338,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
         .collect::<Vec<_>>();
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "corpus": source_manifest,
@@ -380,7 +378,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {

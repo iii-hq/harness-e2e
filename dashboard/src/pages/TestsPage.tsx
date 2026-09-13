@@ -42,6 +42,7 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import type {
   CohortDescriptor,
   EvaluatedVersion,
@@ -554,33 +555,41 @@ export function RowDetails({
 
 /* ------------------------------------------------------------------ rows */
 
-function TestVersionSelect({
+function TestDefinitionSelect({
   row,
   disabled,
-  onVersion,
+  onDefinition,
 }: {
   row: TestCatalogRow
   disabled: boolean
-  onVersion: (row: TestCatalogRow, version: number) => void
+  onDefinition: (row: TestCatalogRow, definition: string) => void
 }) {
+  const selected = row.selected_version ?? row.current_version
   if (row.available_versions.length <= 1) {
     return (
-      <span className="font-mono text-label text-ink-muted">
-        v{row.selected_version ?? row.current_version ?? '—'}
+      <span
+        className="font-mono text-label text-ink-muted"
+        title={definitionTitle(selected)}
+      >
+        {shortDefinition(selected) ?? '—'}
       </span>
     )
   }
   return (
     <Select
       className="max-w-[9rem] text-label"
-      aria-label={`Test version for ${row.test_id}`}
+      aria-label={`Scenario definition for ${row.test_id}`}
       value={row.selected_version ?? ''}
       disabled={disabled}
-      onChange={(event) => onVersion(row, Number(event.target.value))}
+      onChange={(event) => onDefinition(row, event.target.value)}
     >
       {row.available_versions.map((version) => (
-        <option key={version.version} value={version.version}>
-          v{version.version} · {version.run_count} runs
+        <option
+          key={version.version}
+          value={version.version}
+          title={definitionTitle(version.version)}
+        >
+          {shortDefinition(version.version)} · {version.run_count} runs
         </option>
       ))}
     </Select>
@@ -595,7 +604,7 @@ function CompareRow({
   loading,
   error,
   showDeltas,
-  onVersion,
+  onDefinition,
   onToggle,
 }: {
   row: TestCatalogRow
@@ -607,7 +616,7 @@ function CompareRow({
   /** Audit CP-22: with nothing comparable both delta columns are dashes on
    *  every row. Two columns of nothing are not a comparison. */
   showDeltas: boolean
-  onVersion: (row: TestCatalogRow, version: number) => void
+  onDefinition: (row: TestCatalogRow, definition: string) => void
   onToggle: (row: TestCatalogRow) => void
 }) {
   const state = rowState(row)
@@ -632,10 +641,10 @@ function CompareRow({
             >
               {row.test_id}
             </a>
-            <TestVersionSelect
+            <TestDefinitionSelect
               row={row}
               disabled={loading}
-              onVersion={onVersion}
+              onDefinition={onDefinition}
             />
           </span>
           {runsEachSide ? (
@@ -756,7 +765,7 @@ function CompareRow({
                     type="button"
                     onClick={() =>
                       row.selected_version &&
-                      onVersion(row, row.selected_version)
+                      onDefinition(row, row.selected_version)
                     }
                   >
                     retry
@@ -779,7 +788,7 @@ const GROUPS: Array<{ key: RowState[]; label: string; hint: string }> = [
   {
     key: ['regressed', 'improved', 'unchanged'],
     label: 'comparable',
-    hint: 'same test version, cases and contracts',
+    hint: 'same scenario definition, cases and contracts',
   },
   {
     key: ['changed'],
@@ -801,7 +810,7 @@ export function TestsPage({
   initialTo?: string | null
 }) {
   const bridgeRef = useRef<DashboardDataBridge | null>(null)
-  const versionOverrides = useRef(new Map<string, number>())
+  const definitionOverrides = useRef(new Map<string, string>())
   const rowRequestCounter = useRef(0)
   const rowRequestSequences = useRef(new Map<string, number>())
   const prefetchedCatalog = useRef(new Map<string, TestsListResponse>())
@@ -959,8 +968,8 @@ export function TestsPage({
     }
   }, [evaluated?.revision])
 
-  const loadVersionResult = useCallback(
-    async (testId: string, version: number, markDetails = false) => {
+  const loadDefinitionResult = useCallback(
+    async (testId: string, definition: string, markDetails = false) => {
       const bridge = bridgeRef.current
       if (!bridge || !cohortId || !fromVersionId || !toVersionId) return null
       const requestSequence = ++rowRequestCounter.current
@@ -975,7 +984,7 @@ export function TestsPage({
       try {
         const result = await bridge.getTestVersion({
           test_id: testId,
-          test_version: version,
+          test_version: definition,
           cohort_id: cohortId,
           from_version_id: fromVersionId,
           to_version_id: toVersionId,
@@ -989,7 +998,7 @@ export function TestsPage({
         setRows((current) =>
           current.map((row) =>
             row.test_id === testId
-              ? { ...row, selected_version: version, result }
+              ? { ...row, selected_version: definition, result }
               : row,
           ),
         )
@@ -1052,12 +1061,12 @@ export function TestsPage({
         to_version_id: toId || undefined,
       })
 
-    const applyVersionOverrides = async (response: TestsListResponse) => {
+    const applyDefinitionOverrides = async (response: TestsListResponse) => {
       let next = response.rows
       if (!fromVersionId || !toVersionId) return next
       next = await Promise.all(
         next.map(async (row) => {
-          const override = versionOverrides.current.get(row.test_id)
+          const override = definitionOverrides.current.get(row.test_id)
           if (
             !override ||
             override === row.selected_version ||
@@ -1139,7 +1148,7 @@ export function TestsPage({
         }
       }
 
-      const next = await applyVersionOverrides(response)
+      const next = await applyDefinitionOverrides(response)
       if (active) setRows(next)
     }
 
@@ -1218,7 +1227,7 @@ export function TestsPage({
     )
     setToVersionId(nextVersions?.[0]?.id ?? '')
     setFromVersionId(nextVersions?.[1]?.id ?? '')
-    versionOverrides.current.clear()
+    definitionOverrides.current.clear()
     setDetailsLoaded(new Set())
   }
 
@@ -1233,14 +1242,14 @@ export function TestsPage({
     )
   }
 
-  const selectTestVersion = (row: TestCatalogRow, version: number) => {
-    versionOverrides.current.set(row.test_id, version)
+  const selectTestDefinition = (row: TestCatalogRow, definition: string) => {
+    definitionOverrides.current.set(row.test_id, definition)
     setDetailsLoaded((current) => {
       const next = new Set(current)
       next.delete(row.test_id)
       return next
     })
-    void loadVersionResult(row.test_id, version, true)
+    void loadDefinitionResult(row.test_id, definition, true)
   }
 
   const toggleDetails = (row: TestCatalogRow) => {
@@ -1253,7 +1262,7 @@ export function TestsPage({
       return next
     })
     if (opening && !detailsLoaded.has(row.test_id) && row.selected_version) {
-      void loadVersionResult(row.test_id, row.selected_version, true)
+      void loadDefinitionResult(row.test_id, row.selected_version, true)
     }
   }
 
@@ -1647,7 +1656,7 @@ export function TestsPage({
                   active={filter === 'comparable'}
                   count={comparableCount}
                   onClick={() => setFilter('comparable')}
-                  title="same test version, cases and contracts on both sides"
+                  title="same scenario definition, cases and contracts on both sides"
                 >
                   comparable
                 </FilterChip>
@@ -1854,7 +1863,7 @@ export function TestsPage({
                         loading={rowLoading.has(row.test_id)}
                         error={rowErrors[row.test_id]}
                         showDeltas={showDeltas}
-                        onVersion={selectTestVersion}
+                        onDefinition={selectTestDefinition}
                         onToggle={toggleDetails}
                       />
                     ))}

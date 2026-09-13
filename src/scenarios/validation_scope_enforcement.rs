@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "validation_scope_enforcement";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "scope_enforcement_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -63,7 +62,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "foreign_session": "someone-elses-session-1",
@@ -92,7 +90,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let scope = scope(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are testing the security boundaries of self-registered validators. Follow the \
              steps exactly and report what actually happens.\n\n\

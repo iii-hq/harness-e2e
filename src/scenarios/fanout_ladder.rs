@@ -28,7 +28,6 @@ use super::{
 };
 
 pub const ID: &str = "fanout_ladder";
-const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "worker_rows";
 const REPORT_DELIVERABLE_ID: &str = "fanout_report";
 
@@ -105,7 +104,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "fan_out": rung.fan_out,
@@ -151,7 +149,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id, rung.fan_out),
         filesystem_root: None,
         execution: ExecutionPolicy {

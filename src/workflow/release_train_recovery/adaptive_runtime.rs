@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use super::{
     ReleaseAction, ReleaseFixture, ReleaseRecoveryGates, ReleaseTrainSimulator, RunStatus,
-    INVALIDATION_EVIDENCE_ID, SCENARIO_ID, SCENARIO_VERSION,
+    INVALIDATION_EVIDENCE_ID, SCENARIO_ID,
 };
 use crate::workflow::{
     ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow,
@@ -143,7 +143,6 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
     AdaptiveWorkflowPolicyV1 {
         schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
         id: SCENARIO_ID.into(),
-        scenario_version: SCENARIO_VERSION,
         description: "Bounded recovery of a partial immutable release followed by evidence-gated promotion and convergence.".into(),
         limits: WorkflowLimits {
             max_parallel: 1,

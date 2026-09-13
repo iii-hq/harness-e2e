@@ -23,7 +23,6 @@ use super::{
 };
 
 pub const ID: &str = "validation_loop";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validation_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -54,7 +53,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": "primary",
@@ -78,7 +76,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are testing a self-installed validation loop. Follow these steps exactly.\n\n\
              Step 1 — prepare the goal table. Call database::execute (db \"primary\") twice: first \

@@ -1272,7 +1272,7 @@ mod tests {
             deferral_reason: None,
             scenario_id: "todo_worker_simple".into(),
             case_id: "case-1".into(),
-            scenario_version: 1,
+            behavior_sha256: None,
             case: None,
             execution_policy: ExecutionPolicy {
                 max_turns: 10,

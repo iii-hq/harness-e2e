@@ -71,7 +71,8 @@ export function executionMetricsFixture(
           scenarios: [
             {
               scenario_id: `scenario-${index}`,
-              scenario_version: 1,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               case_id: `case-${index}`,
               runs,
               aggregate: {

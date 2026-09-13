@@ -777,7 +777,6 @@ mod tests {
         let policy = AdaptiveWorkflowPolicyV1 {
             schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
             id: "scenario-1".into(),
-            scenario_version: 1,
             description: "fixture".into(),
             limits: WorkflowLimits {
                 max_parallel: 1,

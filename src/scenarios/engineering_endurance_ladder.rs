@@ -32,7 +32,9 @@ use super::{
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
-const VERSION: u32 = 3;
+/// Version of the ladder report the scenario delivers; part of its
+/// deliverable schema, not a harness identity.
+const REPORT_VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x656e_6475_7261_0001;
 const DELIVERABLE_ID: &str = "engineering_endurance_report";
 const BRANCH: &str = "endurance-run";
@@ -971,7 +973,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let checkpoint = checkpoint_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"You are the sole implementer in a cumulative engineering endurance run. Work in the
 isolated Git repository `{}`. Read `{MANIFEST_PATH}`, the source, and the public tests before
@@ -1026,7 +1027,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "cumulative-durable-queue-engineering",
@@ -1284,7 +1284,7 @@ fn capture<'a>(
             id: DELIVERABLE_ID.into(),
             kind: "engineering_endurance_report".into(),
             content: json!({
-                "scenario_version": VERSION,
+                "scenario_version": REPORT_VERSION,
                 "initial_head": snapshot.initial_head,
                 "accepted_head": snapshot.accepted_head,
                 "accepted_rungs": snapshot.accepted_rungs,
@@ -1341,7 +1341,7 @@ fn deliverable_contract() -> DeliverableContract {
                     "accepted_patch", "github_handoff", "measurements"
                 ],
                 "properties": {
-                    "scenario_version": {"const": VERSION},
+                    "scenario_version": {"const": REPORT_VERSION},
                     "initial_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_rungs": {"type": "integer", "minimum": 0, "maximum": 10},

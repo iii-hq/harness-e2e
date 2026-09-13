@@ -71,7 +71,7 @@ def runs_from_results(results: dict[str, Any]) -> list[dict[str, Any]]:
                 prune(
                     {
                         "scenario_id": scenario_id,
-                        "scenario_version": scenario.get("scenario_version"),
+                        "behavior_sha256": scenario.get("behavior_sha256"),
                         "case_id": scenario.get("case_id"),
                         "seed": None if seed is None else str(seed),
                         "repetition": repetition,

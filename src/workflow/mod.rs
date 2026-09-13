@@ -303,7 +303,6 @@ pub const LOCAL_MAX_NODES: u16 = 256;
 pub struct WorkflowDefinitionV1 {
     pub schema_version: u32,
     pub id: String,
-    pub scenario_version: u32,
     pub description: String,
     #[serde(default)]
     pub limits: WorkflowLimits,
@@ -326,9 +325,6 @@ impl WorkflowDefinitionV1 {
                 self.schema_version,
                 WORKFLOW_SCHEMA_VERSION
             );
-        }
-        if self.scenario_version == 0 {
-            bail!("workflow '{}' scenario_version must be positive", self.id);
         }
         if self.description.trim().is_empty() {
             bail!("workflow '{}' description cannot be empty", self.id);
@@ -1066,7 +1062,6 @@ mod tests {
         WorkflowDefinitionV1 {
             schema_version: 1,
             id: "test.workflow".into(),
-            scenario_version: 1,
             description: "test workflow".into(),
             limits: WorkflowLimits::default(),
             nodes,

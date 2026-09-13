@@ -457,7 +457,6 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 "case_id": if scenario.case_id.is_empty() { Value::Null } else { json!(scenario.case_id) },
                 "execution_policy": scenario.execution_policy,
                 "scenario_id": scenario.scenario_id,
-                "scenario_version": scenario.scenario_version,
             });
             if let Some(case) = &scenario.case {
                 contract["case"] = json!(case);
@@ -465,7 +464,7 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
             json!({
                 "subject_id": subject_id,
                 "scenario_id": scenario.scenario_id,
-                "scenario_version": scenario.scenario_version,
+                "behavior_sha256": scenario.behavior_sha256,
                 "contract_fingerprint": contract_fingerprint(&contract),
                 "run_count": scenario.runs.len(),
                 "averages": averages,

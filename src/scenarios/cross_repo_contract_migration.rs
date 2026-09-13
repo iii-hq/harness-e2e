@@ -13,7 +13,6 @@ use super::{
 };
 
 pub const ID: &str = "cross_repo_contract_migration";
-pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 0x6372_6f73_7372_0001;
 
 const VISIBLE_MIGRATION: CriterionSpec = CriterionSpec::scored(
@@ -58,7 +57,6 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: "Migrate a versioned producer contract across the repositories currently available to you while preserving backwards compatibility. Treat trusted canary evidence as authoritative, replan when a later consumer is revealed, validate the full compatibility matrix, and leave repository cleanup to the runner.".into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -90,7 +88,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     });
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "variant": "producer_two_consumers_hidden_canary",

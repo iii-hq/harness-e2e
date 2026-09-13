@@ -142,7 +142,7 @@ class ReportPayloadTests(unittest.TestCase):
                 {
                     "scenario_id": "tool_contract_recovery",
                     "case_id": "tool_contract_recovery@1",
-                    "scenario_version": 1,
+                    "behavior_sha256": "sha256:" + "b" * 64,
                     "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64, "complexity": {"tier": "t3"}},
                     "runs": [{"run_id": "run-a", "status": "passed"}, {"run_id": "run-b", "status": "failed"}],
                 }

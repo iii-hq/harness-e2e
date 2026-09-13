@@ -33,7 +33,6 @@ use super::{
 };
 
 pub const ID: &str = "quorum_fan_in";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quorum_record";
 
 const MEMBER_COUNT: u8 = 3;
@@ -140,7 +139,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "members": MEMBER_COUNT,
@@ -191,7 +189,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id),
         filesystem_root: None,
         execution: ExecutionPolicy {

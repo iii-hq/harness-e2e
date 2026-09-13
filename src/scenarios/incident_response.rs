@@ -20,7 +20,6 @@ use super::{
 };
 
 pub const ID: &str = "incident_response";
-pub const VERSION: u32 = 4;
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_INCIDENT_FIXTURE_PATH";
 pub const KNOWN_GOOD_REF: &str = "refs/tags/known_good";
 pub const INCIDENT_REF: &str = "refs/tags/incident";
@@ -164,7 +163,6 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         // Adaptive scenarios retain a purpose prompt for the common scenario
         // contract. The workflow sends bounded node-specific prompts.
         prompt: "Investigate, reproduce, diagnose, remediate, validate, and safely resolve an isolated synthetic software incident in an environment-prepared disposable repository. Preserve deterministic evidence, choose exactly one safe terminal action, and leave fixture restoration to mandatory cleanup.".into(),
@@ -188,7 +186,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let spec = scenario(namespace);
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         materialized_inputs()?,
         complexity_profile(),
@@ -322,7 +319,6 @@ mod tests {
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.case.case_id, rotated.case.case_id);
-        assert_eq!(first.case.scenario_version, VERSION);
         assert_eq!(
             first.case.complexity.tier,
             crate::scenarios::ComplexityTier::L5Adaptive

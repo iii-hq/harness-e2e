@@ -108,7 +108,7 @@ def catalog():
         "scenarios": [
             {
                 "scenario_id": "direct_answer",
-                "scenario_version": 2,
+                "behavior_sha256": "sha256:" + "c" * 64,
                 "case_id": "direct_answer:4404",
                 "seed": 4404,
                 "inputs_sha256": f"sha256:{'1' * 64}",

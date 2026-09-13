@@ -21,7 +21,8 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
   return {
     test_id: 'incident_response',
     lifecycle: 'active',
-    current_version: 3,
+    current_version:
+      'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
     complexity: {
       method: 'capability_v2',
       tier: 'l5_adaptive',
@@ -42,7 +43,8 @@ function row(overrides: Partial<TestCatalogRow> = {}): TestCatalogRow {
       compatible_sample_count: 4,
     },
     available_versions: [],
-    selected_version: 3,
+    selected_version:
+      'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
     result: null,
     ...overrides,
   }
@@ -149,7 +151,8 @@ describe('test catalog L5 dimensions', () => {
         test_id: 'a',
         available_versions: [
           {
-            version: 3,
+            version:
+              'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
             execution_count: 2,
             run_count: 2,
             last_seen: '2026-08-23T00:00:00Z',

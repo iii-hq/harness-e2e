@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 use crate::scenarios::todo_worker::{
     self, CompiledValidationPlan, TodoProbeRunner, TodoTaskContract, ValidationEvidenceBundle,
-    PLANNED_CRITERIA, PLANNED_ID, RAW_PLAN_FILE, VERSION,
+    PLANNED_CRITERIA, PLANNED_ID, RAW_PLAN_FILE,
 };
 
 use super::{
@@ -49,7 +49,6 @@ pub fn definition() -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
         schema_version: super::WORKFLOW_SCHEMA_VERSION,
         id: PLANNED_ID.into(),
-        scenario_version: VERSION,
         description: "Plan a run-scoped Todo Worker, compile its closed validation plan, build it in a separate Harness session, and execute every compiled hard gate independently.".into(),
         limits: WorkflowLimits {
             max_parallel: 1,

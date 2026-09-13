@@ -61,7 +61,8 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'security_review',
-            scenario_version: 2,
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             passed: true,
             aggregate: aggregate(),
             runs: [
@@ -135,7 +136,8 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'persistent_state',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
             passed: true,
             aggregate: aggregate({
               completed_runs: 0,
@@ -185,7 +187,8 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'research_pipeline',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
             passed: false,
             aggregate: aggregate({
               observed_runs: 0,
@@ -228,7 +231,8 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('4 scenarios')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
-    // Audit ED-30: the version keeps its own casing; title case is for words.
+    // Audit ED-30: the schema version keeps its own casing; title case is
+    // for words.
     expect(html).toContain(`Results v${RESULTS_SCHEMA_VERSION}`)
     expect(html).not.toContain('Sha256:')
     expect(html).toContain('Completion and evidence yield')
@@ -241,7 +245,7 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('hard gate')
     expect(html).toContain('1 inconclusive')
     expect(html).toContain('1 unavailable')
-    expect(html).toContain('Security Review v2')
+    expect(html).toContain('Security Review · definition a1a1a1a1')
     expect(html).toContain('Objective result')
     expect(html).not.toContain('Advisory')
     expect(html).toContain('Workflow · 2 steps')
@@ -287,7 +291,7 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('>Standard<')
     expect(html).toContain('Inspect scenario evidence')
     expect(html).toMatch(/<details[^>]*open/)
-    expect(html).toContain('title="Persistent State v1"')
+    expect(html).toContain('title="Persistent State · definition b2b2b2b2"')
     expect(html).toContain('Task Incomplete')
     expect(html).toContain('Not Required')
   })

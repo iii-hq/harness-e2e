@@ -39,7 +39,6 @@ use super::{
 };
 
 pub const ID: &str = "moving_target";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "adaptation_receipt";
 const REPORT_BUDGET_CHARS: usize = 300;
 
@@ -273,7 +272,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "task": "manifest-with-revision",
@@ -307,7 +305,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let submit_function = submit_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Deliver one manifest to a submission service whose requirements may be revised
 while you work. Two functions are already registered:

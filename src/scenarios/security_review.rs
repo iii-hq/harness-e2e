@@ -10,12 +10,10 @@ use super::{
 };
 
 pub const ID: &str = "security_review";
-pub const VERSION: u32 = 5;
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         // Composite scenarios do not send this text to Harness. It is retained as
         // the code-owned scenario purpose in the ordinary scenario contract.
         prompt: "Exercise the complete on-demand security-scan lifecycle against the manually prepared local fixture, including scan deduplication, optional suggestions, GitHub reconciliation, a second immediate exact-SHA scan, final listing, and repository integrity.".into(),
@@ -58,7 +56,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let spec = scenario(namespace);
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "variant": "full_local_security_scan",
@@ -118,7 +115,6 @@ mod tests {
         let retry = materialize("attempt-b", 42).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert_eq!(first.case.scenario_version, VERSION);
         assert!(first
             .case
             .required_capabilities

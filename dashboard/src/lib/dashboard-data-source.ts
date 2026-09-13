@@ -50,7 +50,7 @@ export type LocalPlan = {
   provider: string
   scenarios: Array<{
     scenario_id: string
-    scenario_version: number
+    behavior_sha256: string
     case_id: string
     seed: number
     inputs_sha256: string
@@ -160,7 +160,7 @@ export type DashboardModelIdentity = JsonObject & {
 
 export type DashboardScenarioSummary = JsonObject & {
   id: string
-  scenario_version?: number
+  behavior_sha256?: string
   case_id?: string
   status?: string
   passed?: boolean
@@ -174,7 +174,7 @@ export type DashboardScenarioSummary = JsonObject & {
 
 export type DashboardScenarioMetricSummary = JsonObject & {
   scenario_id: string
-  scenario_version?: number
+  behavior_sha256?: string
   subject_id?: string
   contract_fingerprint?: string
   run_count?: number
@@ -439,7 +439,6 @@ export type ScenarioFlowEvidence = JsonObject & {
   snapshot: JsonObject & {
     executable: false
     scenario_id?: string
-    scenario_version?: number
   }
   checkpoint: JsonObject & { path: string; sha256?: string }
   cleanup: JsonObject & {
@@ -501,7 +500,11 @@ export type DashboardReportProjection = JsonObject & {
   scenarios: Array<
     JsonObject & {
       scenario_id: string
-      scenario_version: number
+      /** Digest of the definition the case was materialized from; absent only
+       *  when no case could be materialized for the slot. */
+      behavior_sha256?: string
+      case_id?: string
+      case?: JsonObject | null
       assessment_summary?: AssessmentSummary
       status?: string
       passed?: boolean

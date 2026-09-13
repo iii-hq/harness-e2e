@@ -215,9 +215,9 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, native_sum
             "technical_failures": aggregate["technical_failures"],
             "median_score": aggregate["median_score"], "total_cost_usd": aggregate["cost"]["total_usd"]}));
         let contract = json!({"case_id": cohort["identity"]["case"]["case_id"], "case": cohort["identity"]["case"],
-            "scenario_id": id, "scenario_version": cohort["identity"]["case"]["scenario_version"], "execution_policy": cohort["identity"]["execution_policy"]});
+            "scenario_id": id, "execution_policy": cohort["identity"]["execution_policy"]});
         metrics.push(json!({"subject_id": value["subjects"][0]["id"], "scenario_id": id,
-            "scenario_version": cohort["identity"]["case"]["scenario_version"], "contract_fingerprint": super::presenter::contract_fingerprint(&contract), "run_count": count,
+            "behavior_sha256": cohort["identity"]["case"]["behavior_sha256"], "contract_fingerprint": super::presenter::contract_fingerprint(&contract), "run_count": count,
             "averages": {"tokens": aggregate["total_tokens_consumed"].as_f64().filter(|_| count > 0.0).map(|tokens| tokens / count), "tokens_per_completion": aggregate["tokens_per_completion"]},
             "samples": {"tokens": if aggregate["total_tokens_consumed"].is_number() { count } else { 0.0 }, "tokens_per_completion": aggregate["completed_runs"]}}));
     }

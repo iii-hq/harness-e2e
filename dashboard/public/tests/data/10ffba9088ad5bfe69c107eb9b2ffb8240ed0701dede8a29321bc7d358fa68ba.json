@@ -1,0 +1,30 @@
+{
+  "observations": [
+    {
+      "behavior_sha256": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba",
+      "case_id": "minimal_path:seed-0000000000000008",
+      "completed_at": "2026-08-14T12:00:00Z",
+      "contract_sha256": "preview-contract",
+      "evaluated_version_id": "preview-system-a",
+      "execution_id": "preview-execution-a",
+      "median_score": 84,
+      "run_count": 3,
+      "scored_runs": 3,
+      "status": "hard_gate_failed"
+    },
+    {
+      "behavior_sha256": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba",
+      "case_id": "minimal_path:seed-0000000000000008",
+      "completed_at": "2026-08-15T12:00:00Z",
+      "contract_sha256": "preview-contract",
+      "evaluated_version_id": "preview-system-b",
+      "execution_id": "preview-execution-b",
+      "median_score": 92,
+      "run_count": 3,
+      "scored_runs": 3,
+      "status": "passed"
+    }
+  ],
+  "test_id": "minimal_path",
+  "test_version": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba"
+}

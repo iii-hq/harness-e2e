@@ -18,7 +18,8 @@ describe('SemanticTestFlow', () => {
             scenarios: [
               {
                 scenario_id: 'future_asset_refinement',
-                scenario_version: 1,
+                behavior_sha256:
+                  'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
                 runs: [
                   {
                     run_id: 'run-1',

@@ -16,7 +16,6 @@ use super::{
 };
 
 pub const ID: &str = "minimal_path";
-const VERSION: u32 = 4;
 const KEY: &str = "minimal_result";
 const OWNER: &str = "efficiency-suite";
 const DONE_MARKER: &str = "MIN-DONE";
@@ -80,7 +79,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "key": KEY,
@@ -172,7 +170,6 @@ fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
     let expected = serde_json::to_string(&expected(seed)).expect("serialize expected value");
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Store exactly `{expected}` in scope `{scope}` under key `{KEY}` using a single \
              `state::set` call. Then reply with one short confirmation line containing \

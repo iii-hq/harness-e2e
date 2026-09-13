@@ -49,14 +49,17 @@ function row(
   return {
     test_id: 'direct_answer',
     lifecycle: 'active',
-    current_version: 2,
+    current_version:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     available_versions: [],
-    selected_version: 2,
+    selected_version:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     result:
       from || to
         ? {
             test_id: 'direct_answer',
-            test_version: 2,
+            test_version:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             compatibility,
             compatibility_reasons: [],
             from,
@@ -81,7 +84,7 @@ function row(
   }
 }
 
-describe('versioned test side presentation', () => {
+describe('definition-scoped test side presentation', () => {
   // Audit CP-04 / CP-16: one line per side; nothing is invented for legacy
   // summaries without assessments.
   it('renders retained legacy summaries as one status line', () => {

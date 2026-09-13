@@ -102,7 +102,9 @@ impl CompiledValidationPlan {
     }
 
     pub fn validate_integrity(&self) -> Result<()> {
-        if self.scenario_version != VERSION || !self.ready_for_build || !self.diagnostics.is_empty()
+        if self.scenario_version != CONTRACT_VERSION
+            || !self.ready_for_build
+            || !self.diagnostics.is_empty()
         {
             bail!("compiled Todo validation plan is not ready for construction");
         }
@@ -207,7 +209,7 @@ pub fn compile_validation_plan(
 
     let ready_for_build = diagnostics.is_empty();
     let mut compiled = CompiledValidationPlan {
-        scenario_version: VERSION,
+        scenario_version: CONTRACT_VERSION,
         raw_plan_sha256,
         compiled_plan_sha256: String::new(),
         task_contract: contract.clone(),
@@ -227,12 +229,12 @@ fn validate_plan_fields(
     implementation_tasks: &mut Vec<TodoImplementationTask>,
     compiled_checks: &mut Vec<TodoValidationCheck>,
 ) {
-    if plan.scenario_version != VERSION {
+    if plan.scenario_version != CONTRACT_VERSION {
         plan_diagnostic(
             diagnostics,
             "scenario_version_mismatch",
             format!(
-                "plan scenario_version={} but expected {VERSION}",
+                "plan scenario_version={} but expected {CONTRACT_VERSION}",
                 plan.scenario_version
             ),
         );
@@ -393,7 +395,7 @@ pub(super) fn bounded_text(value: &str, limit: usize) -> String {
 
 impl TodoTaskContract {
     pub fn validate(&self) -> Result<()> {
-        if self.scenario_version != VERSION
+        if self.scenario_version != CONTRACT_VERSION
             || self.worker_name.trim().is_empty()
             || !Path::new(&self.workspace_root).is_absolute()
         {
@@ -498,7 +500,7 @@ pub(super) fn contract_for_identity(
         "todo.invalid_inputs".into(),
     ];
     let unsigned = json!({
-        "scenario_version": VERSION,
+        "scenario_version": CONTRACT_VERSION,
         "worker_name": worker_name,
         "workspace_root": workspace_root,
         "function_ids": function_ids,
@@ -506,7 +508,7 @@ pub(super) fn contract_for_identity(
         "required_capabilities": required_capabilities,
     });
     Ok(TodoTaskContract {
-        scenario_version: VERSION,
+        scenario_version: CONTRACT_VERSION,
         contract_sha256: crate::artifact::sha256_value(&unsigned)?,
         worker_name: worker_name.into(),
         workspace_root,

@@ -19,12 +19,12 @@ const DATABASE_QUERY: &str = "database::query";
 const DATABASE_TRANSACTION: &str = "database::transaction";
 
 const SCHEMA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS harness_e2e_schema (version INTEGER PRIMARY KEY CHECK (version = 3))",
+    "CREATE TABLE IF NOT EXISTS harness_e2e_schema (version INTEGER PRIMARY KEY CHECK (version = 4))",
     "CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, phase TEXT NOT NULL, requested_at TEXT NOT NULL, updated_at TEXT NOT NULL, lane TEXT NOT NULL, subject_provider TEXT NOT NULL, subject_model TEXT NOT NULL, terminal INTEGER NOT NULL CHECK (terminal IN (0, 1)), result_path TEXT NULL, result_sha256 TEXT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS executions_requested_at_idx ON executions(requested_at DESC)",
     "CREATE INDEX IF NOT EXISTS executions_phase_idx ON executions(terminal, updated_at)",
     "CREATE TABLE IF NOT EXISTS attempts (execution_id TEXT NOT NULL, attempt_id TEXT NOT NULL, run_id TEXT NOT NULL, session_id TEXT NULL, phase TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT NULL, resume_state_path TEXT NULL, resume_state_sha256 TEXT NULL, failure_reason TEXT NULL, payload_json TEXT NOT NULL, PRIMARY KEY (execution_id, attempt_id))",
-    "CREATE TABLE IF NOT EXISTS runs (execution_id TEXT NOT NULL, run_id TEXT NOT NULL, scenario_id TEXT NOT NULL, scenario_version INTEGER NULL, case_id TEXT NULL, seed TEXT NULL, selected_attempt_id TEXT NULL, status TEXT NULL, completion TEXT NULL, technical TEXT NULL, objective_score REAL NULL, quality_score_completed REAL NULL, wall_time_ms INTEGER NULL, total_tokens INTEGER NULL, cost_total_usd REAL NULL, function_calls INTEGER NULL, function_call_errors INTEGER NULL, technical_attempts INTEGER NOT NULL DEFAULT 0, telemetry_json TEXT NOT NULL DEFAULT '{}', payload_json TEXT NOT NULL, PRIMARY KEY (execution_id, run_id))",
+    "CREATE TABLE IF NOT EXISTS runs (execution_id TEXT NOT NULL, run_id TEXT NOT NULL, scenario_id TEXT NOT NULL, behavior_sha256 TEXT NULL, case_id TEXT NULL, seed TEXT NULL, selected_attempt_id TEXT NULL, status TEXT NULL, completion TEXT NULL, technical TEXT NULL, objective_score REAL NULL, quality_score_completed REAL NULL, wall_time_ms INTEGER NULL, total_tokens INTEGER NULL, cost_total_usd REAL NULL, function_calls INTEGER NULL, function_call_errors INTEGER NULL, technical_attempts INTEGER NOT NULL DEFAULT 0, telemetry_json TEXT NOT NULL DEFAULT '{}', payload_json TEXT NOT NULL, PRIMARY KEY (execution_id, run_id))",
     "CREATE INDEX IF NOT EXISTS runs_execution_scenario_idx ON runs(execution_id, scenario_id, case_id)",
     "CREATE TABLE IF NOT EXISTS artifacts (execution_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT NOT NULL, available INTEGER NOT NULL CHECK (available IN (0, 1)), archive_uri TEXT NULL, PRIMARY KEY (execution_id, artifact_id, sha256))",
     "CREATE TABLE IF NOT EXISTS archives (execution_id TEXT PRIMARY KEY, archive_id TEXT NOT NULL UNIQUE, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, expires_at TEXT NULL, payload_json TEXT NOT NULL)",
@@ -58,7 +58,7 @@ impl Persistence {
             let versions = self
                 .query("SELECT version FROM harness_e2e_schema", json!([]))
                 .await?;
-            if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(3)
+            if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(4)
             {
                 bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --config <worker config>` before starting this version")
             }
@@ -68,7 +68,7 @@ impl Persistence {
             .chain(crate::history::store::SQL.iter())
             .map(|sql| json!({"sql": sql, "params": []}))
             .chain(std::iter::once(json!({
-                "sql": "INSERT INTO harness_e2e_schema(version) SELECT 3 WHERE NOT EXISTS (SELECT 1 FROM harness_e2e_schema)",
+                "sql": "INSERT INTO harness_e2e_schema(version) SELECT 4 WHERE NOT EXISTS (SELECT 1 FROM harness_e2e_schema)",
                 "params": []
             })))
             .collect();
@@ -76,7 +76,7 @@ impl Persistence {
         let versions = self
             .query("SELECT version FROM harness_e2e_schema", json!([]))
             .await?;
-        if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(3) {
+        if versions.len() != 1 || versions[0].get("version").and_then(Value::as_i64) != Some(4) {
             bail!("incompatible Harness E2E persistence schema; stop the E2E worker and run `harness-e2e migrate-storage --config <worker config>` before starting this version")
         }
         Ok(())
@@ -91,8 +91,8 @@ impl Persistence {
             bail!("expected one Harness E2E storage version");
         }
         match versions[0]["version"].as_u64() {
-            Some(3) => return Ok(json!({"version": 3, "migrated": 0, "already_current": true})),
-            Some(1 | 2) => {}
+            Some(4) => return Ok(json!({"version": 4, "migrated": 0, "already_current": true})),
+            Some(1..=3) => {}
             _ => bail!("unsupported Harness E2E storage version"),
         }
         if self.active_count().await? > 0 {
@@ -114,12 +114,17 @@ impl Persistence {
         }
         let records = self.executions().await?;
         let (plans, plan_executions) = load_plan_store(output_root)?;
-        let mut statements: Vec<Value> = SCHEMA
-            .iter()
-            .skip(1)
-            .chain(crate::history::store::SQL.iter())
-            .map(|sql| json!({"sql": sql, "params": []}))
-            .collect();
+        // `runs` is a projection rebuilt by later executions; its columns changed
+        // with the definition digest, so recreate it rather than alter it.
+        let mut statements: Vec<Value> =
+            vec![json!({"sql": "DROP TABLE IF EXISTS runs", "params": []})];
+        statements.extend(
+            SCHEMA
+                .iter()
+                .skip(1)
+                .chain(crate::history::store::SQL.iter())
+                .map(|sql| json!({"sql": sql, "params": []})),
+        );
         let mut unavailable = Vec::new();
         for mut record in records.iter().cloned() {
             if record.dashboard_projection.is_none() {
@@ -162,13 +167,13 @@ impl Persistence {
                 .map(|sql| json!({"sql": sql, "params": []})),
         );
         statements.push(
-            json!({"sql": "INSERT INTO harness_e2e_schema(version) VALUES (3)", "params": []}),
+            json!({"sql": "INSERT INTO harness_e2e_schema(version) VALUES (4)", "params": []}),
         );
         if apply {
             self.transaction(statements).await?;
         }
         Ok(
-            json!({"version": if apply { 3 } else { versions[0]["version"].as_u64().unwrap_or_default() }, "target_version": 3, "executions": records.len(), "plans": plans.len(), "plan_executions": plan_executions.len(), "apply": apply, "unavailable_evidence": unavailable}),
+            json!({"version": if apply { 4 } else { versions[0]["version"].as_u64().unwrap_or_default() }, "target_version": 4, "executions": records.len(), "plans": plans.len(), "plan_executions": plan_executions.len(), "apply": apply, "unavailable_evidence": unavailable}),
         )
     }
 
@@ -459,8 +464,8 @@ fn run_projection(
     });
     let efficiency = run.efficiency.as_ref();
     let mut statements = vec![json!({
-        "sql": "INSERT INTO runs(execution_id, run_id, scenario_id, scenario_version, case_id, seed, selected_attempt_id, status, completion, technical, objective_score, quality_score_completed, wall_time_ms, total_tokens, cost_total_usd, function_calls, function_call_errors, technical_attempts, telemetry_json, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(execution_id, run_id) DO UPDATE SET selected_attempt_id=excluded.selected_attempt_id, status=excluded.status, completion=excluded.completion, technical=excluded.technical, objective_score=excluded.objective_score, quality_score_completed=excluded.quality_score_completed, wall_time_ms=excluded.wall_time_ms, total_tokens=excluded.total_tokens, cost_total_usd=excluded.cost_total_usd, function_calls=excluded.function_calls, function_call_errors=excluded.function_call_errors, technical_attempts=excluded.technical_attempts, telemetry_json=excluded.telemetry_json, payload_json=excluded.payload_json",
-        "params": [execution_id, run.run_id, scenario.scenario_id, scenario.scenario_version, scenario.case_id, scenario.case.as_ref().map(|case| case.seed.to_string()), run.attempt_id, format!("{:?}", run.status).to_ascii_lowercase(), format!("{:?}", run.completion).to_ascii_lowercase(), format!("{:?}", run.technical).to_ascii_lowercase(), run.objective_score, run.quality_score_completed, run.wall_time_ms, efficiency.and_then(|value| value.total_tokens), run.cost.total_usd, efficiency.and_then(|value| value.function_calls), efficiency.and_then(|value| value.function_call_errors), efficiency.map(|value| value.technical_attempts).unwrap_or(1), serde_json::to_string(&payload)?, serde_json::to_string(&payload)?]
+        "sql": "INSERT INTO runs(execution_id, run_id, scenario_id, behavior_sha256, case_id, seed, selected_attempt_id, status, completion, technical, objective_score, quality_score_completed, wall_time_ms, total_tokens, cost_total_usd, function_calls, function_call_errors, technical_attempts, telemetry_json, payload_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(execution_id, run_id) DO UPDATE SET selected_attempt_id=excluded.selected_attempt_id, status=excluded.status, completion=excluded.completion, technical=excluded.technical, objective_score=excluded.objective_score, quality_score_completed=excluded.quality_score_completed, wall_time_ms=excluded.wall_time_ms, total_tokens=excluded.total_tokens, cost_total_usd=excluded.cost_total_usd, function_calls=excluded.function_calls, function_call_errors=excluded.function_call_errors, technical_attempts=excluded.technical_attempts, telemetry_json=excluded.telemetry_json, payload_json=excluded.payload_json",
+        "params": [execution_id, run.run_id, scenario.scenario_id, scenario.behavior_sha256, scenario.case_id, scenario.case.as_ref().map(|case| case.seed.to_string()), run.attempt_id, format!("{:?}", run.status).to_ascii_lowercase(), format!("{:?}", run.completion).to_ascii_lowercase(), format!("{:?}", run.technical).to_ascii_lowercase(), run.objective_score, run.quality_score_completed, run.wall_time_ms, efficiency.and_then(|value| value.total_tokens), run.cost.total_usd, efficiency.and_then(|value| value.function_calls), efficiency.and_then(|value| value.function_call_errors), efficiency.map(|value| value.technical_attempts).unwrap_or(1), serde_json::to_string(&payload)?, serde_json::to_string(&payload)?]
     })];
     statements.extend(attempt_projection(execution_id, scenario, run, false)?);
     for retry in &run.retry_attempts {
@@ -704,7 +709,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(dry["version"], 2);
-        assert_eq!(dry["target_version"], 3);
+        assert_eq!(dry["target_version"], 4);
         assert_eq!(
             persistence
                 .query("SELECT version FROM harness_e2e_schema", json!([]))
@@ -716,7 +721,7 @@ mod tests {
             .migrate_storage(root.path(), true)
             .await
             .unwrap();
-        assert_eq!(applied["version"], 3);
+        assert_eq!(applied["version"], 4);
         assert_eq!(applied["plans"], 0);
         assert_eq!(
             persistence

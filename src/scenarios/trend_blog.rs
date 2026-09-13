@@ -38,7 +38,6 @@ use super::{
 };
 
 pub const ID: &str = "trend_blog";
-const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;
@@ -231,7 +230,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "edition": EDITION,
@@ -267,7 +265,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(),
         filesystem_root: Some(workspace_root(run_id)),
         execution: ExecutionPolicy {

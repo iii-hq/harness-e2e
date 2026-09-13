@@ -35,7 +35,9 @@ export type AssessmentRunView = {
   key: string
   subjectId: string
   scenarioId: string
-  scenarioVersion: number
+  /** Digest of the definition that evaluated the run, when the report carries
+   *  one; an unmaterialized slot produces no assessment at all. */
+  behaviorSha256: string | null
   runId: string
   attemptId: string
   metrics: AssessmentRunMetrics
@@ -128,7 +130,7 @@ export function buildAssessmentWorkspace(
           assessmentRunView(
             record.subject_id,
             scenario.scenario_id,
-            scenario.scenario_version,
+            scenario.behavior_sha256 ?? null,
             contract,
             projectedRun,
             projectedRun.transcript,
@@ -192,7 +194,7 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
 function assessmentRunView(
   subjectId: string,
   scenarioId: string,
-  scenarioVersion: number,
+  behaviorSha256: string | null,
   contract: RunAssessmentContract,
   projectedRun: DashboardRunProjection,
   transcript?: { messages?: unknown },
@@ -228,7 +230,7 @@ function assessmentRunView(
     key: `${subjectId}:${scenarioId}:${contract.run_id}:${contract.attempt_id}`,
     subjectId,
     scenarioId,
-    scenarioVersion,
+    behaviorSha256,
     runId: contract.run_id,
     attemptId: contract.attempt_id,
     metrics: assessmentRunMetrics(projectedRun),

@@ -858,7 +858,6 @@ mod tests {
     fn case(max_size_bytes: u64) -> ScenarioCase {
         ScenarioCase::new(
             "asset_capture",
-            1,
             7,
             serde_json::json!({}),
             ComplexityProfile::default(),
@@ -880,6 +879,7 @@ mod tests {
             },
         )
         .unwrap()
+        .sealed_for_tests()
     }
 
     fn captured(id: &str, content: Value) -> CapturedDeliverable {

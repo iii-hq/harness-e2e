@@ -165,7 +165,7 @@ pub fn scenario(test: u8, run_id: &str) -> ScenarioSpec {
 fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
     let id = IDS[usize::from(N - 1)];
     ScenarioSpec {
-        id, version: 1,
+        id,
         prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
         filesystem_root: None,
         execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
@@ -186,7 +186,6 @@ pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<Materialized
         spec: scenario(test, namespace),
         case: ScenarioCase::new(
             IDS[usize::from(test - 1)],
-            1,
             super::stable_seed(IDS[usize::from(test - 1)]),
             json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":test}),
             ComplexityProfile {

@@ -105,7 +105,7 @@ fn project_execution(metadata: &Value, execution: &Execution) -> Value {
         }
     }
     let scenarios = by_scenario.iter().map(|(id, runs)| json!({
-        "id": id, "scenario_version": runs[0]["scenarioVersion"], "case_id": runs[0]["caseId"],
+        "id": id, "behavior_sha256": runs[0]["behaviorSha256"], "case_id": runs[0]["caseId"],
         "runs": runs.len(), "passed": runs.iter().all(|r| r["status"] == "passed"),
         "pass_rate": ratio(runs.iter().filter(|r| r["status"] == "passed").count(), runs.len()),
     })).collect::<Vec<_>>();

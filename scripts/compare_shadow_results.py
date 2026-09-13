@@ -65,7 +65,7 @@ def deliverable_projection(run: dict[str, Any]) -> list[dict[str, Any]]:
 def scenario_projection(scenario: dict[str, Any]) -> dict[str, Any]:
     contract = {
         "scenario_id": scenario.get("scenario_id"),
-        "scenario_version": scenario.get("scenario_version"),
+        "behavior_sha256": scenario.get("behavior_sha256"),
         "case_id": scenario.get("case_id"),
         "case": scenario.get("case"),
         "execution_policy": scenario.get("execution_policy"),

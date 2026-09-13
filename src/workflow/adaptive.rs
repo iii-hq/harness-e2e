@@ -22,7 +22,6 @@ const DEFAULT_MAX_INSTRUCTION_BYTES: u32 = 8 * 1024;
 pub struct AdaptiveWorkflowPolicyV1 {
     pub schema_version: u32,
     pub id: String,
-    pub scenario_version: u32,
     pub description: String,
     pub limits: WorkflowLimits,
     pub max_plan_nodes: u16,
@@ -263,7 +262,7 @@ impl AdaptiveWorkflowPolicyV1 {
             );
         }
         validate_identifier(&self.id, "adaptive policy id")?;
-        if self.scenario_version == 0 || self.description.trim().is_empty() {
+        if self.description.trim().is_empty() {
             bail!(
                 "adaptive policy '{}' requires a version and description",
                 self.id
@@ -599,7 +598,6 @@ impl AdaptiveWorkflowPolicyV1 {
         let definition = WorkflowDefinitionV1 {
             schema_version: WORKFLOW_SCHEMA_VERSION,
             id: self.id.clone(),
-            scenario_version: self.scenario_version,
             description: self.description.clone(),
             limits: self.limits,
             nodes,
@@ -852,7 +850,6 @@ mod tests {
         let policy = AdaptiveWorkflowPolicyV1 {
             schema_version: 1,
             id: "adaptive.test".into(),
-            scenario_version: 1,
             description: "adaptive test".into(),
             limits: WorkflowLimits {
                 max_nodes: 8,

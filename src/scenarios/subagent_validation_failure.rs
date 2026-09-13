@@ -26,7 +26,6 @@ use super::{
 };
 
 pub const ID: &str = "subagent_validation_failure";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "bounded_failure_record";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -62,7 +61,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": "primary",
@@ -114,7 +112,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let child = child_session(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You orchestrate one validated sub-agent whose goal may be unreachable; your job is \
              to bound the attempt and report honestly. You never poll; wakes drive you. Follow \

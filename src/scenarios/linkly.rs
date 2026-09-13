@@ -28,7 +28,6 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 pub const ID: &str = "linkly_tutorial";
-pub const VERSION: u32 = 1;
 const EVIDENCE_ID: &str = "linkly_evidence";
 const HTTP_BASE: &str = "http://127.0.0.1:3111";
 const PROXY_ADDR: &str = "127.0.0.1:3110";
@@ -122,7 +121,6 @@ fn now_ms() -> u128 {
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: PROMPTS[0].trim_end().to_string(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -168,7 +166,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
         spec: scenario(namespace),
         case: ScenarioCase::new(
             ID,
-            VERSION,
             super::stable_seed(ID),
             json!({
                 "template": TEMPLATE_SOURCE,

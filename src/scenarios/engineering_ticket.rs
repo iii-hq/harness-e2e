@@ -40,10 +40,8 @@ use super::{
 };
 
 pub const ID: &str = "engineering_ticket";
-pub const VERSION: u32 = 4;
 pub const CANONICAL_SEED: u64 = 1005;
 pub const GIT_HANDOFF_ID: &str = "engineering_ticket_git_handoff";
-pub const GIT_HANDOFF_VERSION: u32 = 4;
 const GIT_HANDOFF_DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
 const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH";
@@ -538,7 +536,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
     });
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         inputs,
         task.complexity_profile,
@@ -628,7 +625,6 @@ fn scenario_for_case(run_id: &str, task: &'static TaskCase) -> ScenarioSpec {
     let auditor = auditor_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are assigned engineering ticket ET-{} in the current repository.\n\n\
              {} Investigate the repository, reproduce the reported behavior, implement the \
@@ -2315,7 +2311,6 @@ pub fn git_handoff_materialize(namespace: &str, _seed: u64) -> Result<Materializ
     });
     let case = ScenarioCase::new(
         GIT_HANDOFF_ID,
-        GIT_HANDOFF_VERSION,
         CANONICAL_SEED,
         inputs,
         ComplexityProfile {
@@ -2390,7 +2385,6 @@ fn git_handoff_scenario_for_case(run_id: &str, task: &'static TaskCase) -> Scena
     );
     ScenarioSpec {
         id: GIT_HANDOFF_ID,
-        version: GIT_HANDOFF_VERSION,
         prompt: format!(
             "You are the root Harness orchestrator for a two-phase engineering workflow. You coordinate only: never call shell or coder, never inspect or edit the workspace yourself, never poll, and never forward a child's prose. Wakes carry checkpoint metadata; Git is the only work handoff. Follow these steps exactly.\n\n\
              PLAN PHASE\n\
@@ -3812,9 +3806,10 @@ struct HandoffEfficiencyScore {
 /// canonical campaigns no longer execute the single-session reference case.
 /// Hard gates and run status are deliberately left untouched.
 pub(crate) fn apply_handoff_efficiency(scenarios: &mut [E2eScenarioReport]) {
-    for scenario in scenarios.iter_mut().filter(|scenario| {
-        scenario.scenario_id == GIT_HANDOFF_ID && scenario.scenario_version == GIT_HANDOFF_VERSION
-    }) {
+    for scenario in scenarios
+        .iter_mut()
+        .filter(|scenario| scenario.scenario_id == GIT_HANDOFF_ID)
+    {
         for run in &mut scenario.runs {
             let outcome = handoff_efficiency_score(run);
             apply_handoff_efficiency_to_run(run, outcome);
@@ -4350,12 +4345,10 @@ mod tests {
     }
 
     #[test]
-    fn engineering_ticket_v4_remains_the_single_session_baseline() {
+    fn engineering_ticket_remains_the_single_session_baseline() {
         let baseline = scenario("regression");
         let materialized = materialize("regression", CANONICAL_SEED).unwrap();
         assert_eq!(baseline.id, ID);
-        assert_eq!(baseline.version, VERSION);
-        assert_eq!(VERSION, 4);
         assert!(!baseline.prompt.contains("harness::spawn"));
         assert!(!materialized
             .case
@@ -4365,11 +4358,9 @@ mod tests {
     }
 
     #[test]
-    fn git_handoff_v4_materializes_a_distinct_ten_asset_contract() {
+    fn git_handoff_materializes_a_distinct_ten_asset_contract() {
         let materialized = git_handoff_materialize("catalog", 42).unwrap();
         assert_eq!(materialized.spec.id, GIT_HANDOFF_ID);
-        assert_eq!(materialized.spec.version, GIT_HANDOFF_VERSION);
-        assert_eq!(GIT_HANDOFF_VERSION, 4);
         assert_eq!(
             materialized.case.inputs["difficulty_profile"],
             GIT_HANDOFF_DIFFICULTY_PROFILE

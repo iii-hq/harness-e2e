@@ -32,7 +32,6 @@ use super::{
 };
 
 pub const ID: &str = "validation_self_repair";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "repaired_dataset";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -171,7 +170,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": "primary",
@@ -207,7 +205,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are testing a validation loop where the validator only DIAGNOSES — fixing is \
              your decision. Follow the setup steps exactly; after that, think for yourself.\n\n\

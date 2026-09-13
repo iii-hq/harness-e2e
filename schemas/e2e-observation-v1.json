@@ -509,13 +509,18 @@
         "origin",
         "run_id",
         "scenario_id",
-        "scenario_version",
         "seed",
         "status"
       ],
       "properties": {
         "attempt_id": {
           "type": "string"
+        },
+        "behavior_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "case_id": {
           "type": "string"
@@ -554,11 +559,6 @@
         },
         "scenario_id": {
           "type": "string"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "seed": {
           "type": "integer",

@@ -196,7 +196,6 @@ pub(crate) mod tests {
             None,
             vec![E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -455,9 +454,8 @@ pub(crate) mod tests {
             "case_id": "direct_answer:canonical",
             "execution_policy": {},
             "scenario_id": "direct_answer",
-            "scenario_version": 1,
         });
-        assert_eq!(contract_fingerprint(&value), "fnv1a32:7fdd620a");
+        assert_eq!(contract_fingerprint(&value), "fnv1a32:51327792");
     }
 
     #[test]
@@ -523,7 +521,6 @@ pub(crate) mod tests {
                 .collect();
             value.scenarios = vec![E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -592,7 +589,7 @@ pub(crate) mod tests {
         let detail = model
             .test_version_get(super::read_model::TestVersionGetRequest {
                 test_id: "direct_answer".into(),
-                test_version: 1,
+                test_version: E2eScenarioReport::canonical_test_behavior_sha256(),
                 cohort_id,
                 from_version_id: from,
                 to_version_id: to,
@@ -621,7 +618,10 @@ pub(crate) mod tests {
                 ..super::read_model::TestHistoryRequest::default()
             })
             .unwrap();
-        assert_eq!(history.test_version, 1);
+        assert_eq!(
+            history.test_version,
+            E2eScenarioReport::canonical_test_behavior_sha256()
+        );
         assert_eq!(history.total, 2);
         assert_eq!(history.observations.len(), 1);
         assert!(history.next_cursor.is_some());
@@ -646,7 +646,7 @@ pub(crate) mod tests {
         let filtered = model
             .test_history(super::read_model::TestHistoryRequest {
                 test_id: "direct_answer".into(),
-                test_version: Some(1),
+                test_version: Some(E2eScenarioReport::canonical_test_behavior_sha256()),
                 case_id: Some(history.observations[0].case_id.clone()),
                 subject_provider: Some("provider".into()),
                 subject_model: Some("model".into()),

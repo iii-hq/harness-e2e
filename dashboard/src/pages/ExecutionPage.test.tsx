@@ -44,7 +44,8 @@ const run: AssessmentRunView = {
   key: 'security-review',
   subjectId: 'terra',
   scenarioId: 'security_review',
-  scenarioVersion: 2,
+  behaviorSha256:
+    'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
   runId: 'run-1',
   attemptId: 'attempt-1',
   metrics: {
@@ -209,19 +210,21 @@ describe('execution layers', () => {
     const items = [
       {
         scenarioId: 'minimal_path',
-        scenarioVersion: 2,
+        behaviorSha256:
+          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
         durationMs: 167_000,
       },
       {
         scenarioId: 'persistent_state',
-        scenarioVersion: 1,
+        behaviorSha256:
+          'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
         durationMs: 128_000,
       },
       {
         scenarioId: 'research_pipeline',
-        scenarioVersion: null,
+        behaviorSha256: null,
         objective: {
           label: 'Unavailable',
           status: 'unavailable',
@@ -234,8 +237,8 @@ describe('execution layers', () => {
     // inside each one.
     expect(resultsScent(items)).toBe(
       [
-        'minimal path v2 passed · 2m 47s',
-        'persistent state v1 passed · 2m 08s',
+        'minimal path · definition a1a1a1a1 passed · 2m 47s',
+        'persistent state · definition b2b2b2b2 passed · 2m 08s',
         'research pipeline unavailable',
       ].join(' \u00a0·\u00a0 '),
     )

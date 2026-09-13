@@ -10,7 +10,6 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: SIMPLE_ID,
-        version: VERSION,
         prompt: format!(
             "Create a todo worker and make it live.\n\n<todo_task_contract>\n{}\n</todo_task_contract>\n\nCreate the worker only inside the supplied workspace. Declare it in the root worker-compose.yaml, validate with compose::validate, start its local stack with compose::up and wait=false, poll worker::status until it is running, inspect all four function contracts, and test the behavior before reporting completion.",
             serde_json::to_string_pretty(&contract).expect("serialize Todo contract")
@@ -34,7 +33,6 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
 pub fn simple_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         SIMPLE_ID,
-        VERSION,
         seed,
         materialized_case_inputs()?,
         ComplexityProfile {
@@ -74,7 +72,6 @@ pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: PLANNED_ID,
-        version: VERSION,
         prompt: "Plan the creation of a Todo Worker, then execute the compiled plan in a separate Harness session and validate it independently.".into(),
         filesystem_root: Some(PathBuf::from(contract.workspace_root)),
         execution: ExecutionPolicy {
@@ -95,7 +92,6 @@ pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
 pub fn planned_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         PLANNED_ID,
-        VERSION,
         seed,
         materialized_case_inputs()?,
         ComplexityProfile {
@@ -146,7 +142,7 @@ fn materialized_case_inputs() -> Result<Value> {
         Path::new("/run-dir/scenario-workspaces/todo-e2e-attempt_id"),
     )?;
     Ok(json!({
-        "scenario_version": VERSION,
+        "scenario_version": CONTRACT_VERSION,
         "worker_name_template": "todo-e2e-<attempt_id>",
         "function_prefix_template": "<worker_name>::",
         "workspace_root_template": "<run-dir>/scenario-workspaces/<worker_name>",

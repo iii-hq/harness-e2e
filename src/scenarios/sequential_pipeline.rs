@@ -20,7 +20,6 @@ use super::{
 };
 
 pub const ID: &str = "sequential_pipeline";
-const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "pipeline_record";
 
 const START_TOKEN: &str = "SEQ-START-7D1A";
@@ -115,7 +114,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "contracts": contracts().iter().map(|(key, value)| json!({ "key": key, "value": value })).collect::<Vec<_>>(),
@@ -203,7 +201,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let scope = scope(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Complete a strictly sequential three-stage pipeline in state scope `{scope}`. The \
              stage contracts are hidden from this session and must be read at runtime.\n\n\

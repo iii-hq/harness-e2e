@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "browser_cross_site";
-const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x6272_6f77_7365_0001;
 const DELIVERABLE_ID: &str = "browser_cross_site_evidence";
 const TARGET_TICKET: &str = "TCK-42";
@@ -878,7 +877,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "cross-site-ui-policy-reconciliation",
@@ -916,7 +914,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let info = fixture_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Resolve support ticket `{TARGET_TICKET}` using only the real browser UI.
 

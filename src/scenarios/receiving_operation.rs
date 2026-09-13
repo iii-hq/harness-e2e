@@ -14,7 +14,6 @@ use super::{
 };
 
 pub const ID: &str = "receiving_operation";
-const VERSION: u32 = 7;
 const DATABASE_DELIVERABLE_ID: &str = "receiving_database";
 const COORDINATION_DELIVERABLE_ID: &str = "receiving_coordination";
 
@@ -73,7 +72,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": DATABASE,
@@ -114,7 +112,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {

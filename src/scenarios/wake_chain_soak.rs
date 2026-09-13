@@ -42,7 +42,6 @@ use super::{
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";
@@ -125,7 +124,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "ticks": rung.ticks,
@@ -172,7 +170,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, rung.ticks),
         filesystem_root: None,
         execution: ExecutionPolicy {

@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "performance_regression";
-pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 1041;
 
 const DELIVERABLE_ID: &str = "performance_audit";
@@ -243,7 +242,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "stable-unique-quadratic-regression",
@@ -284,7 +282,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = fixture_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Fix the performance regression in this isolated fixture: `{}`.
 

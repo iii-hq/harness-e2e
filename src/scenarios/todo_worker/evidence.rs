@@ -180,7 +180,7 @@ pub(super) fn validation_deliverable_contract(
                 "type": "object",
                 "required": ["scenario_version", "contract_sha256", "validator", "subject", "coverage", "attempts", "nudges", "repeatability", "limitations"],
                 "properties": {
-                    "scenario_version": {"const": VERSION},
+                    "scenario_version": {"const": CONTRACT_VERSION},
                     "contract_sha256": {"type": "string"},
                     "plan_sha256": {"type": "string"},
                     "validator": {"type": "object"},

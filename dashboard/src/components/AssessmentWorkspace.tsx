@@ -29,6 +29,7 @@ import {
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import { formatDuration } from '@/lib/execution-view'
 import type { TestCriterion, TestSpec } from '@/lib/test-catalog'
 
@@ -659,7 +660,11 @@ export function AssessmentDetailDialog({
       size="lg"
       tall
       kicker="Evidence record"
-      title={`${titleCase(run.scenarioId)} · scenario v${run.scenarioVersion}`}
+      title={`${titleCase(run.scenarioId)}${
+        shortDefinition(run.behaviorSha256)
+          ? ` · definition ${shortDefinition(run.behaviorSha256)}`
+          : ''
+      }`}
       description={
         <span className="break-all font-mono text-label">
           {run.subjectId} · run {run.runId}
@@ -746,8 +751,14 @@ function RunAssessment({
           <h3 className="mt-1 mb-0 text-lg font-semibold tracking-[-0.025em] text-ink">
             {titleCase(run.scenarioId)}
           </h3>
-          <p className="mt-1 mb-0 break-all font-mono text-label text-ink-muted">
-            v{run.scenarioVersion} · {run.subjectId} · run {run.runId}
+          <p
+            className="mt-1 mb-0 break-all font-mono text-label text-ink-muted"
+            title={definitionTitle(run.behaviorSha256)}
+          >
+            {shortDefinition(run.behaviorSha256)
+              ? `definition ${shortDefinition(run.behaviorSha256)} · `
+              : ''}
+            {run.subjectId} · run {run.runId}
           </p>
         </div>
         <RunStatusBadges run={run} />

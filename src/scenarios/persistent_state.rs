@@ -17,7 +17,6 @@ use super::{
 };
 
 pub const ID: &str = "persistent_state";
-const VERSION: u32 = 2;
 const KEY: &str = "migration_record";
 const OWNER: &str = "quality-suite";
 const DELIVERABLE_ID: &str = "migration_record";
@@ -91,7 +90,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "key": KEY,
@@ -171,7 +169,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let scope = scope(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Use `state::get` to read key `{KEY}` from scope `{scope}`. Migrate the stored \
              object with exactly one successful `state::set`: preserve `owner`, preserve the \

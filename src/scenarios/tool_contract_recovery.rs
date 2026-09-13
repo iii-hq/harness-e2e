@@ -40,7 +40,6 @@ use super::{
 };
 
 pub const ID: &str = "tool_contract_recovery";
-const VERSION: u32 = 4;
 pub const CANONICAL_SEED: u64 = 0x746f_6f6c_0000_0001;
 const DELIVERABLE_ID: &str = "contract_recovery_receipt";
 const PROFILE_KEY: &str = "primary-owner";
@@ -524,7 +523,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "recover-stale-calendar-contract",
@@ -566,7 +564,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let resolver = resolver_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"The runbook says to schedule a release-readiness review with `{legacy}`, but that
 legacy v1 function has been retired and is intentionally not registered. Recover through the

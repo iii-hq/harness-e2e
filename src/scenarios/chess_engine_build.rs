@@ -46,7 +46,6 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-const VERSION: u32 = 4;
 
 /// One-paragraph editorial description of what this test asks for, shown above
 /// the prompt on the dashboard's test page. Written by hand: the prompt states
@@ -188,7 +187,6 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     });
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         inputs,
         PROFILE,
@@ -216,7 +214,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let public_legalmoves = root.join("tests/public_legalmoves.py");
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"A pinned chess fixture repository has been copied into your workspace at `{root}`.
 
@@ -1045,7 +1042,6 @@ mod tests {
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.scenario_id, ID);
-        assert_eq!(first.case.scenario_version, VERSION);
         assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
 
         // Contract/capture/profile coherence.

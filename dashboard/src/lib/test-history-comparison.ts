@@ -69,7 +69,7 @@ export function testObservationKey(observation: TestObservation) {
     observation.execution_id,
     observation.case_id,
     observation.contract_sha256,
-    observation.scenario_version ?? 'unknown-version',
+    observation.behavior_sha256,
     observation.seed ?? 'unknown-seed',
   ].join('::')
   return observation.observation_id
@@ -78,29 +78,59 @@ export function testObservationKey(observation: TestObservation) {
 }
 
 /**
+ * The scenario the two observations answer to. The retained contract digest
+ * settles it; a source that only carries the definition digest — a Release
+ * Control ledger, say — is settled by that instead. Neither on both sides
+ * means no delta, not an error.
+ */
+function sameScenario(
+  baseline: TestObservation,
+  candidate: TestObservation,
+  reasons: string[],
+) {
+  if (present(baseline.contract_sha256) && present(candidate.contract_sha256)) {
+    if (baseline.contract_sha256 !== candidate.contract_sha256)
+      reasons.push('Scenario contract differs')
+    return
+  }
+  if (present(baseline.behavior_sha256) && present(candidate.behavior_sha256)) {
+    if (baseline.behavior_sha256 !== candidate.behavior_sha256)
+      reasons.push('Scenario definition differs')
+    return
+  }
+  reasons.push('Scenario definition is not recorded on both executions')
+}
+
+/**
+ * Whether both observations describe the same scenario. A Release Control
+ * reference is read against a local candidate even when the stack, cohort and
+ * system differ on purpose; the scenario itself still has to match, and a
+ * ledger that carries no digest at all is simply not comparable.
+ */
+export function sameScenarioDefinition(
+  baseline: TestObservation,
+  candidate: TestObservation,
+) {
+  const reasons: string[] = []
+  sameRequired(baseline.case_id, candidate.case_id, 'Case', reasons)
+  sameRequired(baseline.seed, candidate.seed, 'Seed', reasons)
+  sameScenario(baseline, candidate, reasons)
+  return { matches: reasons.length === 0, reasons }
+}
+
+/**
  * Compare two retained observations without pooling them. A different system
- * revision is deliberate: that is the change under inspection. The test
- * contract, case, seed, cohort, and assessment protocol must still match.
+ * revision is deliberate: that is the change under inspection. The scenario
+ * definition, case, seed, cohort, and assessment protocol must still match.
  */
 export function compareTestObservations(
   baseline: TestObservation,
   candidate: TestObservation,
 ): ObservationComparison {
   const reasons: string[] = []
-  sameRequired(
-    baseline.scenario_version,
-    candidate.scenario_version,
-    'Test version',
-    reasons,
-  )
   sameRequired(baseline.case_id, candidate.case_id, 'Case', reasons)
   sameRequired(baseline.seed, candidate.seed, 'Seed', reasons)
-  sameRequired(
-    baseline.contract_sha256,
-    candidate.contract_sha256,
-    'Scenario contract',
-    reasons,
-  )
+  sameScenario(baseline, candidate, reasons)
   sameRequired(
     baseline.assessment_profile_sha256,
     candidate.assessment_profile_sha256,

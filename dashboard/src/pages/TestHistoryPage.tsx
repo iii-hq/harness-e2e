@@ -76,6 +76,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import type {
   HistoryModelGroup,
   TestCatalogRow,
@@ -85,6 +86,7 @@ import type {
 } from '@/lib/test-catalog'
 import {
   compareTestObservations,
+  sameScenarioDefinition,
   testObservationKey,
 } from '@/lib/test-history-comparison'
 import {
@@ -534,6 +536,10 @@ export function ObservationComparisonPanel({
   const personal =
     baseline?.source === 'release-control' ||
     candidate?.source === 'release-control'
+  // A Release Control reference keeps its own stack, cohort and system; only
+  // the scenario has to match before its descriptive deltas mean anything.
+  const scenario =
+    baseline && candidate ? sameScenarioDefinition(baseline, candidate) : null
   const verdict =
     comparison?.compatible && !personal ? comparisonVerdict(comparison) : null
   return (
@@ -550,7 +556,9 @@ export function ObservationComparisonPanel({
       }
       metrics={comparison?.metrics ?? {}}
       interpretDeltas={Boolean(comparison?.compatible && !personal)}
-      showDeltas={Boolean(personal || comparison?.compatible)}
+      showDeltas={Boolean(
+        personal ? scenario?.matches : comparison?.compatible,
+      )}
       metricLabels={
         personal
           ? {
@@ -622,13 +630,18 @@ export function ObservationComparisonPanel({
       }
     >
       {personal ? (
-        <Callout tone="info">
-          Descriptive comparison of this scenario. Scored runs:{' '}
-          {baseline?.scored_runs}/{baseline?.run_count} →{' '}
+        <Callout tone={scenario?.matches ? 'info' : 'warning'}>
+          {scenario?.matches
+            ? 'Descriptive comparison of this scenario.'
+            : 'Not comparable · values shown, deltas withheld.'}{' '}
+          Scored runs: {baseline?.scored_runs}/{baseline?.run_count} →{' '}
           {candidate?.scored_runs}/{candidate?.run_count}.{' '}
-          {comparison?.reasons
-            .filter((reason) => reason.endsWith('differs'))
-            .join(' · ')}
+          {(scenario?.matches
+            ? (comparison?.reasons ?? []).filter((reason) =>
+                reason.endsWith('differs'),
+              )
+            : (scenario?.reasons ?? [])
+          ).join(' · ')}
         </Callout>
       ) : comparison ? (
         comparison.compatible ? (
@@ -664,13 +677,13 @@ export function ObservationComparisonPanel({
 
 function ExecutionDetailsDialog({
   observation,
-  testVersion,
+  testDefinition,
   testId,
   spec,
   onClose,
 }: {
   observation: TestObservation
-  testVersion: number | undefined
+  testDefinition: string | undefined
   testId: string
   spec: TestSpec | null
   onClose: () => void
@@ -713,7 +726,9 @@ function ExecutionDetailsDialog({
         : null,
     [detail, testId],
   )
-  const version = observation.scenario_version ?? testVersion
+  const definition = shortDefinition(
+    observation.behavior_sha256 || testDefinition,
+  )
   const availableReports = scopedDetail?.reports.filter(
     (report) => report.available,
   ).length
@@ -735,7 +750,7 @@ function ExecutionDetailsDialog({
       tall
       kicker="execution"
       title={testId}
-      description={`${formatDate(observation.completed_at)} · ${version ? `test v${version}` : 'test version unknown'} · ${runLabel(observation.run_count)}`}
+      description={`${formatDate(observation.completed_at)} · ${definition ? `definition ${definition}` : 'definition not recorded'} · ${runLabel(observation.run_count)}`}
       closeLabel="Close execution details"
       className="ds-root"
       footer={
@@ -842,14 +857,15 @@ function ExecutionDetailsDialog({
 /* ----------------------------------------------------------------- page */
 
 type HistoryFilters = {
-  version: number | undefined
+  /** Definition digest, or the server's `unmaterialized` marker. */
+  definition: string | undefined
   model: string
   system: string
   result: string
 }
 
 const EMPTY_FILTERS: HistoryFilters = {
-  version: undefined,
+  definition: undefined,
   model: '',
   system: '',
   result: '',
@@ -857,10 +873,9 @@ const EMPTY_FILTERS: HistoryFilters = {
 
 /** Audit TH-19: filters, the a/b selection and the open dialog live in the hash. */
 export function historyStateFromParams(params: URLSearchParams) {
-  const version = params.get('version')
   return {
     filters: {
-      version: version && /^\d+$/.test(version) ? Number(version) : undefined,
+      definition: params.get('definition') || undefined,
       model: params.get('model') ?? '',
       system: params.get('system') ?? '',
       result: params.get('result') ?? '',
@@ -878,8 +893,8 @@ export function historyStateToParams(
   open: string | null,
 ) {
   const params = new URLSearchParams()
-  if (filters.version !== undefined)
-    params.set('version', String(filters.version))
+  if (filters.definition !== undefined)
+    params.set('definition', filters.definition)
   if (filters.model) params.set('model', filters.model)
   if (filters.system) params.set('system', filters.system)
   if (filters.result) params.set('result', filters.result)
@@ -891,21 +906,22 @@ export function historyStateToParams(
 
 function filtersActive(filters: HistoryFilters) {
   return (
-    filters.version !== undefined ||
+    filters.definition !== undefined ||
     Boolean(filters.model || filters.system || filters.result)
   )
 }
 
-/** Audit TH-07: says which version is shown and whether the contract moved on. */
-export function versionStatement(history: TestHistoryResponse) {
+/** Audit TH-07: says which definition is shown and whether it moved on. */
+export function definitionStatement(history: TestHistoryResponse) {
   const current = history.current_version ?? null
+  const shown = shortDefinition(history.test_version)
   if (current === null || current === history.test_version)
-    return `contract v${history.test_version}${current === null ? '' : ' · current'}`
-  const currentVersion = history.available_versions.find(
+    return `definition ${shown}${current === null ? '' : ' · current'}`
+  const currentDefinition = history.available_versions.find(
     (item) => item.version === current,
   )
-  const currentRuns = currentVersion?.execution_count ?? 0
-  return `showing v${history.test_version} (latest with executions) · current contract v${current} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
+  const currentRuns = currentDefinition?.execution_count ?? 0
+  return `showing definition ${shown} (latest with executions) · current definition ${shortDefinition(current)} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
 }
 
 export function TestHistoryPage({ testId }: { testId: string }) {
@@ -1057,7 +1073,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         const execution = parseModelSelection(filters.model)
         return next.getTestHistory({
           test_id: testId,
-          test_version: filters.version,
+          test_version: filters.definition,
           subject_provider: execution?.provider,
           subject_model: execution?.model,
           system_version_id: filters.system || undefined,
@@ -1077,7 +1093,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     return () => {
       cancelled = true
     }
-  }, [filters.model, filters.system, filters.version, testId])
+  }, [filters.definition, filters.model, filters.system, testId])
 
   // Identity (complexity, realism, lifecycle) and the previous/next test come
   // from the catalog (audit T-14 / TH-06).
@@ -1209,7 +1225,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   }
 
   const identity = [
-    history ? versionStatement(history) : null,
+    history ? definitionStatement(history) : null,
     contract?.short ?? null,
     complexity?.value ? `complexity ${complexity.value}` : null,
     realism?.value ? `realism ${realism.value}` : null,
@@ -1427,8 +1443,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   key={testObservationKey(item)}
                   value={testObservationKey(item)}
                 >
-                  {item.case_id || 'Case unavailable'} · v
-                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                  {item.case_id || 'Case unavailable'} ·{' '}
+                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
+                  seed {item.seed ?? '—'}
                 </option>
               ))}
             </Select>
@@ -1445,8 +1462,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   key={testObservationKey(item)}
                   value={testObservationKey(item)}
                 >
-                  {item.case_id || 'Case unavailable'} · v
-                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                  {item.case_id || 'Case unavailable'} ·{' '}
+                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
+                  seed {item.seed ?? '—'}
                 </option>
               ))}
             </Select>
@@ -1592,26 +1610,28 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
             <section className="grid gap-3" aria-label="History filters">
               <div className="flex flex-wrap items-center gap-2">
-                <label className="ds-visually-hidden" htmlFor="history-version">
-                  Test version
+                <label
+                  className="ds-visually-hidden"
+                  htmlFor="history-definition"
+                >
+                  Scenario definition
                 </label>
                 <Select
-                  id="history-version"
+                  id="history-definition"
                   className="max-w-[16rem]"
-                  value={filters.version ?? ''}
+                  value={filters.definition ?? ''}
                   onChange={(event) =>
-                    setFilter(
-                      'version',
-                      event.target.value
-                        ? Number(event.target.value)
-                        : undefined,
-                    )
+                    setFilter('definition', event.target.value || undefined)
                   }
                 >
-                  <option value="">version: latest with executions</option>
+                  <option value="">definition: latest with executions</option>
                   {(history?.available_versions ?? []).map((item) => (
-                    <option key={item.version} value={item.version}>
-                      v{item.version}
+                    <option
+                      key={item.version}
+                      value={item.version}
+                      title={definitionTitle(item.version)}
+                    >
+                      {shortDefinition(item.version)}
                       {item.version === history?.current_version
                         ? ' · current'
                         : ''}
@@ -1703,7 +1723,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : observations.length === 0 ? (
               <EmptyState
                 title="No executions match these filters"
-                description="Widen the version, model or result filter."
+                description="Widen the definition, model or result filter."
                 actions={
                   <button
                     className={buttonClassName({ variant: 'secondary' })}
@@ -1792,11 +1812,14 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                           <span className="block font-mono text-xs text-ink">
                             {formatDate(item.completed_at)}
                           </span>
-                          <span className="block font-mono text-label text-ink-muted">
+                          <span
+                            className="block font-mono text-label text-ink-muted"
+                            title={definitionTitle(item.behavior_sha256)}
+                          >
                             {runLabel(item.run_count)} ·{' '}
                             {item.execution_id.slice(0, 8)}…
-                            {item.scenario_version
-                              ? ` · v${item.scenario_version}`
+                            {shortDefinition(item.behavior_sha256)
+                              ? ` · ${shortDefinition(item.behavior_sha256)}`
                               : ''}
                           </span>
                         </td>
@@ -1972,7 +1995,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       {openObservation ? (
         <ExecutionDetailsDialog
           observation={openObservation}
-          testVersion={history?.test_version}
+          testDefinition={history?.test_version}
           testId={testId}
           spec={catalogRow?.spec ?? null}
           onClose={() => setOpenKey(null)}

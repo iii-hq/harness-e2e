@@ -251,14 +251,17 @@
     "ObservationSelectedCase": {
       "type": "object",
       "required": [
+        "behavior_sha256",
         "case_id",
         "contract_sha256",
         "inputs_sha256",
         "scenario_id",
-        "scenario_version",
         "seed"
       ],
       "properties": {
+        "behavior_sha256": {
+          "type": "string"
+        },
         "case_id": {
           "type": "string"
         },
@@ -270,11 +273,6 @@
         },
         "scenario_id": {
           "$ref": "#/definitions/ScenarioId"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "seed": {
           "type": "integer",

@@ -641,7 +641,7 @@ impl PlanStore {
                 expected_scope = Some(campaign_scope);
             }
         }
-        let mut reference_cases: BTreeMap<String, (u64, Option<u64>, Option<String>)> =
+        let mut reference_cases: BTreeMap<String, (u64, Option<String>, Option<String>)> =
             BTreeMap::new();
         for run in shards
             .iter()
@@ -659,7 +659,7 @@ impl PlanStore {
                 })?;
             let observed = (
                 seed,
-                run["scenario_version"].as_u64(),
+                run["behavior_sha256"].as_str().map(str::to_owned),
                 run["case_id"].as_str().map(str::to_owned),
             );
             if let Some(previous) = reference_cases.insert(scenario_id.to_owned(), observed.clone())
@@ -689,16 +689,17 @@ impl PlanStore {
         }))?;
         let mut plan = super::new_plan(&request, id)?;
         for scenario in &mut plan.scenarios {
-            let (seed, reference_version, reference_case_id) =
+            let (seed, reference_definition, reference_case_id) =
                 &reference_cases[&scenario.scenario_id];
             *scenario =
                 super::resolve_scope(std::slice::from_ref(&scenario.scenario_id), Some(*seed))?
                     .remove(0);
-            if reference_version
-                .is_some_and(|version| version != u64::from(scenario.scenario_version))
+            if reference_definition
+                .as_ref()
+                .is_some_and(|digest| digest != &scenario.behavior_sha256)
             {
                 plan.reference_differences.push(format!(
-                    "{}: scenario version differs from the Release Control reference",
+                    "{}: scenario definition differs from the Release Control reference",
                     scenario.scenario_id
                 ));
             }
@@ -2002,7 +2003,7 @@ mod tests {
             },
             "shards": [{"runs": [{
                 "scenario_id": scenario_id,
-                "scenario_version": 0,
+                "behavior_sha256": format!("sha256:{}", "0".repeat(64)),
                 "case_id": "remote-case",
                 "seed": seed.to_string()
             }]}]
@@ -2044,7 +2045,7 @@ mod tests {
         assert!(plan
             .reference_differences
             .iter()
-            .any(|difference| difference.contains("scenario version")));
+            .any(|difference| difference.contains("scenario definition")));
         assert!(plan
             .reference_differences
             .iter()
@@ -2079,12 +2080,8 @@ mod tests {
         let original: LocalPlan =
             serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
         let mut historical = manager.read_plan(&original.id).await.unwrap();
-        historical.snapshot.cases[0]["scenario_version"] = json!(
-            historical.snapshot.cases[0]["scenario_version"]
-                .as_u64()
-                .unwrap()
-                + 1
-        );
+        historical.snapshot.cases[0]["behavior_sha256"] =
+            json!(format!("sha256:{}", "9".repeat(64)));
         historical.snapshot.cases[0]["contract_sha256"] = json!("historical-contract");
         historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
         historical.configuration_sha256 =

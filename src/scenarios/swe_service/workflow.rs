@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 
-use super::{runtime, Case, VERSION};
+use super::{runtime, Case};
 use crate::context::E2eContext;
 use crate::scenarios::ScenarioId;
 use crate::workflow::{
@@ -22,7 +22,6 @@ pub fn definition(scenario: ScenarioId) -> WorkflowDefinitionV1 {
     WorkflowDefinitionV1 {
         schema_version: crate::workflow::WORKFLOW_SCHEMA_VERSION,
         id: case.id.into(),
-        scenario_version: VERSION,
         description: case.description().into(),
         limits: WorkflowLimits {
             max_parallel: 1,
@@ -71,7 +70,8 @@ pub fn descriptors() -> Vec<StepTypeDescriptor> {
     [PREPARE, SUBJECT, CAPTURE].into_iter().map(|id| {
         let capture = id == CAPTURE;
         StepTypeDescriptor {
-            id: id.into(), version: 1,
+            id: id.into(),
+            version: 1,
             description: match id {
                 PREPARE => "Export and verify the selected SWE entry snapshot and execution boundary.",
                 SUBJECT => "Run one continuing Harness session with optional delegation and aggregate resource limits.",

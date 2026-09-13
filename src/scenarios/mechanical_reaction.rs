@@ -11,7 +11,6 @@ use super::{
 };
 
 pub const ID: &str = "mechanical_reaction";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "mechanical_mirror";
 
 const SOURCE_KEY: &str = "source";
@@ -51,7 +50,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let source = source_value(seed);
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "source_key": SOURCE_KEY,
@@ -88,7 +86,6 @@ fn scenario_for_case(run_id: &str, seed: u64) -> ScenarioSpec {
     let source = source_value(seed);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Test a zero-token mechanical reaction in isolated state scope `{scope}`.
 

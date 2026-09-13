@@ -27,6 +27,7 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import { formatDate } from '@/lib/execution-view'
 import type { TestCatalogRow, TestsListResponse } from '@/lib/test-catalog'
 import { catalogExecutionSummary } from '@/lib/test-catalog-view'
@@ -406,7 +407,11 @@ const COLUMNS = [
     label: 'test',
     title: 'Test id',
   },
-  { key: 'version', label: 'version', title: 'Current contract version' },
+  {
+    key: 'definition',
+    label: 'definition',
+    title: 'Digest of the current scenario definition',
+  },
   {
     key: 'complexity',
     label: 'complexity',
@@ -426,7 +431,7 @@ const COLUMNS = [
   {
     key: 'runs',
     label: 'runs',
-    title: 'Executions retained across every contract version',
+    title: 'Executions retained across every scenario definition',
     numeric: true,
   },
   {
@@ -458,7 +463,7 @@ function CatalogRows({
         const calibration = catalogCalibrationPresentation(row)
         const executions = catalogExecutionSummary(row)
         const historyHref = hashForTestHistory(row.test_id)
-        const versions = row.available_versions.length
+        const definitions = row.available_versions.length
         return (
           // Audit T-01: the whole row opens the history; the id link keeps
           // the keyboard and screen-reader path. T-13: the link exists
@@ -493,12 +498,15 @@ function CatalogRows({
                 ) : null}
               </span>
             </td>
-            <td data-label="Version">
+            <td data-label="Definition">
               <span
                 className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label leading-4 text-ink-soft"
-                title={`${versions} contract version${versions === 1 ? '' : 's'}`}
+                title={
+                  definitionTitle(row.current_version) ??
+                  `${definitions} retained definition${definitions === 1 ? '' : 's'}`
+                }
               >
-                {row.current_version ? `v${row.current_version}` : '—'}
+                {shortDefinition(row.current_version) ?? '—'}
               </span>
             </td>
             <td data-label="Complexity">

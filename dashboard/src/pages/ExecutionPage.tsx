@@ -45,6 +45,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { shortDefinition } from '@/lib/definition-digest'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import {
   type ExecutionVerdict,
@@ -193,8 +194,9 @@ export function resultsScent(items: ScenarioMatrixItem[]): string {
   if (items.length === 0) return 'no scenario report retained'
   return items
     .map((item) => {
+      const definition = shortDefinition(item.behaviorSha256)
       const name = `${item.scenarioId.replace(/_/g, ' ')}${
-        item.scenarioVersion == null ? '' : ` v${item.scenarioVersion}`
+        definition === null ? '' : ` · definition ${definition}`
       }`
       const runtime =
         item.durationMs == null

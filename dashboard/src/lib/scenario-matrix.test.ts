@@ -55,8 +55,16 @@ function executionDetail() {
       {
         id: 'terra',
         scenarios: [
-          { id: 'security_review', scenario_version: 2 },
-          { id: 'missing_report', scenario_version: 1 },
+          {
+            id: 'security_review',
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+          },
+          {
+            id: 'missing_report',
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
+          },
         ],
       },
     ],
@@ -79,7 +87,8 @@ function executionDetail() {
           scenarios: [
             {
               scenario_id: 'security_review',
-              scenario_version: 2,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               passed: true,
               aggregate: aggregate(),
               runs: [
@@ -164,7 +173,8 @@ function executionDetail() {
           scenarios: [
             {
               scenario_id: 'persistent_state',
-              scenario_version: 1,
+              behavior_sha256:
+                'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
               passed: true,
               aggregate: aggregate({
                 completed_runs: 0,
@@ -215,7 +225,8 @@ function executionDetail() {
           scenarios: [
             {
               scenario_id: 'research_pipeline',
-              scenario_version: 1,
+              behavior_sha256:
+                'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
               passed: false,
               aggregate: aggregate({
                 observed_runs: 0,
@@ -359,7 +370,7 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
-  it('reads other version labels and fingerprints but not another scoring profile', () => {
+  it('reads other schema versions and fingerprints but not another scoring profile', () => {
     for (const [key, value] of [
       ['schema_version', 3],
       ['result_contract_sha256', `sha256:${'0'.repeat(64)}`],

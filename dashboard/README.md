@@ -44,8 +44,8 @@ overview receives at most 25 compact
 summaries; filters, search, and subsequent pages execute on the server. An
 execution page fetches one summary plus one report. Tests first loads immutable
 system-version and cohort descriptors, then one compact row per test. Changing
-a row's test version calls `e2e::dashboard::test-version-get`; retained
-observations load only when that row is expanded. The backend builds one cached
+a row's scenario definition calls `e2e::dashboard::test-version-get` with the
+definition digest; retained observations load only when that row is expanded. The backend builds one cached
 read model from retained reports, pools raw run scores, and invalidates it on run
 changes. There is no alternate HTTP or static-data transport.
 
@@ -71,8 +71,10 @@ The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable
 source revision or registry stack lock captured in `results.json`. Tests compares
 system version A with B inside one exact evaluation cohort. Each row keeps its
-own scenario-version selector. Changed case sets and contracts remain visible
-side by side, but their numeric deltas are disabled.
+own scenario-definition selector, which lists the `behavior_sha256` digest of
+every retained definition shortened to its first eight hex characters. Changed
+case sets and contracts remain visible side by side, but their numeric deltas
+are disabled.
 
 Test the React page and its data contracts with:
 
@@ -91,8 +93,9 @@ The execution index retains 100 workflow attempts. The latest 30 also retain the
 complete execution report: per-run prompts, transcripts, criteria, metrics,
 costs, retries, runtime checks, traces, and failure evidence. Each publish updates
 the retained report metadata and removes unreferenced run files before deploying
-Pages. It also emits `tests/index.json` for compact version/test metadata and one
-`tests/data/<digest>.json` evidence shard per retained test version.
+Pages. It also emits `tests/index.json` for compact definition/test metadata and
+one `tests/data/<digest>.json` evidence shard per retained scenario definition,
+named after that definition's digest without the `sha256:` prefix.
 
 Each full execution summary also carries compact per-scenario averages for
 tokens, wall time, cost, function calls, function-call errors, sessions, and
@@ -103,7 +106,7 @@ total tokens and function calls for every retained diagnostic report.
 Operational health remains the primary overview. Quality is never collapsed
 into a suite-wide score. The Tests view is the comparison surface: it shows
 pooled raw-run score, sample size, pass rate, outcome classes, cost, tokens, and
-runtime for each test/version/system-version tuple. Technical and infrastructure
+runtime for each test/definition/system-version tuple. Technical and infrastructure
 failures remain explicit outcomes and are never converted into zero scores.
 
 ## UI guard-rails

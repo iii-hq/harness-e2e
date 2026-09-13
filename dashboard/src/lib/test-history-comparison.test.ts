@@ -13,14 +13,15 @@ function observation(
     evaluated_version_id: 'system-a',
     cohort_id: 'same-cohort',
     completed_at: '2026-08-17T10:00:00Z',
-    case_id: 'direct_answer:v2:seed-1',
+    case_id: 'direct_answer:seed-0000000000000001',
     contract_sha256: 'contract',
     assessment_profile_sha256: 'assessment',
     status: 'passed',
     median_score: 80,
     run_count: 1,
     scored_runs: 1,
-    scenario_version: 2,
+    behavior_sha256:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     seed: 1,
     stack_mode: 'source',
     subject_provider: 'openai',
@@ -80,6 +81,45 @@ describe('test history execution comparison', () => {
         'Cohort differs',
       ]),
     )
+  })
+
+  // Point 7 of the definition-digest contract: a Release Control ledger that
+  // carries neither digest is not comparable, not an error.
+  it('settles the scenario by contract digest, then by definition digest', () => {
+    const withoutContract = (overrides = {}) =>
+      observation({ contract_sha256: '', ...overrides })
+
+    expect(
+      compareTestObservations(
+        withoutContract(),
+        withoutContract({ execution_id: 'candidate' }),
+      ).compatible,
+    ).toBe(true)
+
+    expect(
+      compareTestObservations(
+        withoutContract(),
+        withoutContract({
+          execution_id: 'candidate',
+          behavior_sha256:
+            'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+        }),
+      ).reasons,
+    ).toEqual(['Scenario definition differs'])
+
+    const reference = compareTestObservations(
+      withoutContract({
+        execution_id: 'rc:reference',
+        source: 'release-control',
+        behavior_sha256: '',
+      }),
+      withoutContract({ execution_id: 'local-candidate', source: 'local' }),
+    )
+    expect(reference.compatible).toBe(false)
+    expect(reference.reasons).toEqual([
+      'Scenario definition is not recorded on both executions',
+    ])
+    expect(reference.metrics.score.delta).toBe(0)
   })
 
   it('keeps missing metrics unknown and makes the selected observation key stable', () => {

@@ -56,7 +56,8 @@ export type TestSideSummary = {
 
 export type TestHistoryInput = {
   test_id: string
-  test_version?: number
+  /** The definition digest whose executions are requested. */
+  test_version?: string
   case_id?: string
   subject_provider?: string
   subject_model?: string
@@ -69,7 +70,7 @@ export type TestHistoryInput = {
 export type HistorySeries = {
   id: string
   case_id: string
-  scenario_version: number
+  behavior_sha256: string
   seed: number | null
   contract_sha256: string
   assessment_profile_sha256: string
@@ -105,10 +106,10 @@ export type HistoryModelGroup = {
 
 export type TestHistoryResponse = {
   test_id: string
-  /** The version whose executions are shown. */
-  test_version: number
-  /** The contract's current version; absent on older responses (audit TH-07). */
-  current_version?: number | null
+  /** The definition whose executions are shown. */
+  test_version: string
+  /** The current definition's digest; absent when no definition is sealed. */
+  current_version?: string | null
   available_versions: TestCatalogRow['available_versions']
   cases: string[]
   subjects: string[]
@@ -136,7 +137,9 @@ export type TestObservation = {
   run_count: number
   scored_runs: number
   assessment_summary?: AssessmentSummary
-  scenario_version?: number
+  /** Digest of the definition that evaluated the observation; empty when the
+   *  source (a Release Control ledger, say) does not carry one. */
+  behavior_sha256: string
   seed?: number | null
   system_version_id?: string | null
   system_label?: string
@@ -156,7 +159,7 @@ export type TestObservation = {
 
 export type TestVersionResult = {
   test_id: string
-  test_version: number
+  test_version: string
   compatibility:
     | 'compatible'
     | 'missing_side'
@@ -208,7 +211,7 @@ export type TestSpec = {
 export type TestCatalogRow = {
   test_id: string
   lifecycle: 'active' | 'retired' | 'never_run'
-  current_version: number | null
+  current_version: string | null
   complexity?: {
     method?: 'capability_v2'
     tier:
@@ -240,13 +243,14 @@ export type TestCatalogRow = {
     compatible_sample_count?: number
   } | null
   spec?: TestSpec | null
+  /** The current definition first, then the most recently observed ones. */
   available_versions: Array<{
-    version: number
+    version: string
     execution_count: number
     run_count: number
     last_seen: string | null
   }>
-  selected_version: number | null
+  selected_version: string | null
   result: TestVersionResult | null
 }
 
@@ -268,7 +272,7 @@ export type TestsListInput = {
 
 export type TestVersionInput = {
   test_id: string
-  test_version: number
+  test_version: string
   cohort_id: string
   from_version_id: string
   to_version_id: string

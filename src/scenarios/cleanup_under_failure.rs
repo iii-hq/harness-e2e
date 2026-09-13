@@ -28,7 +28,6 @@ use super::{
 };
 
 pub const ID: &str = "cleanup_under_failure";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "teardown_report";
 
 const MARKER_KEY: &str = "work-marker";
@@ -140,7 +139,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "task": "approval-with-teardown",
@@ -177,7 +175,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let approve = approve_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Run a task whose approval may be refused, and prove that you tear down every piece
 of standing machinery before reporting. Work in the isolated state scope `{scope}`.

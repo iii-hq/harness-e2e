@@ -127,7 +127,6 @@ fn full_workflow_is_valid_against_the_registered_catalog() {
     }
     let definition = definition();
     let materialized = definition.validate(&catalog).unwrap();
-    assert_eq!(materialized.definition.scenario_version, 3);
     assert_eq!(materialized.definition.nodes.len(), 5);
     let scan_b = materialized
         .definition

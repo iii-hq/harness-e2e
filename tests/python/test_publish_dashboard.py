@@ -108,7 +108,7 @@ def report(revision: str, scores: list[int]) -> dict:
         "scenarios": [
             {
                 "scenario_id": "coordination.parallel",
-                "scenario_version": 3,
+                "behavior_sha256": "sha256:" + "d" * 64,
                 "case_id": "coordination.parallel:v3:seed-8",
                 "case": {"seed": 8},
                 "execution_policy": {"max_turns": 4},
@@ -177,7 +177,7 @@ class PublishDashboardTests(unittest.TestCase):
         expected = fixture["dashboard_projection"]
         self.assertEqual(_assessment_summary(runs), expected["summary"])
         self.assertEqual(
-            _assessment_profile_sha256(expected["scenario_version"], runs),
+            _assessment_profile_sha256(expected["behavior_sha256"], runs),
             expected["assessment_profile_sha256"],
         )
 
@@ -224,7 +224,7 @@ class PublishDashboardTests(unittest.TestCase):
             row = catalog["tests"]["rows"][0]
             self.assertEqual(row["test_id"], "coordination.parallel")
             self.assertEqual(row["available_versions"][0]["run_count"], 5)
-            sides = row["version_results"]["3"]["sides"]
+            sides = row["version_results"]["sha256:" + "d" * 64]["sides"]
             medians = sorted(side["summary"]["median_score"] for side in sides.values())
             self.assertEqual(medians, [85.0, 100.0])
             self.assertTrue(all("::" in side_id for side_id in sides))
@@ -238,7 +238,7 @@ class PublishDashboardTests(unittest.TestCase):
                 all("analyzer_profiles" not in side for side in sides.values())
             )
             cohort = catalog["evaluated_versions"]["cohorts"][0]
-            shard_path = site / row["shards"]["3"].removeprefix("./")
+            shard_path = site / row["shards"]["sha256:" + "d" * 64].removeprefix("./")
             shard = json.loads(shard_path.read_text())
             self.assertEqual(len(shard["observations"]), 2)
             self.assertNotIn("runs", shard["observations"][0])

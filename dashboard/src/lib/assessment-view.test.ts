@@ -89,7 +89,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
           scenarios: [
             {
               scenario_id: 'direct_answer',
-              scenario_version: 4,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               assessment_summary: {} as never,
               aggregate: {
                 planned_runs: 1,

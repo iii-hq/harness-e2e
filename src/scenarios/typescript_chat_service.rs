@@ -43,7 +43,6 @@ use super::{
 };
 
 pub const ID: &str = "typescript_chat_service";
-pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 7_311;
 
 /// One-paragraph editorial description shown above the prompt on the dashboard.
@@ -185,7 +184,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "streaming-typescript-chat-service",
@@ -229,7 +227,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = workspace_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Build a streaming chat service in TypeScript inside the isolated workspace `{root}`.
 

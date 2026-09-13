@@ -194,7 +194,7 @@ impl TodoProbeRunner {
         };
         let contract_sha256 = self.contract.contract_sha256.clone();
         Ok(ValidationEvidenceBundle {
-            scenario_version: VERSION,
+            scenario_version: CONTRACT_VERSION,
             contract_sha256: contract_sha256.clone(),
             plan_sha256,
             validator: ValidatorIdentity {

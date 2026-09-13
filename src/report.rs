@@ -1299,17 +1299,15 @@ fn failed_attempt_tokens(run: &E2eRunReport) -> Option<u64> {
     retry_tokens.checked_add(terminal_tokens)
 }
 
-fn default_scenario_version() -> u32 {
-    1
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct E2eScenarioReport {
     pub scenario_id: String,
     #[serde(default)]
     pub case_id: String,
-    #[serde(default = "default_scenario_version")]
-    pub scenario_version: u32,
+    /// Digest of the definition the case was materialized from. Absent only
+    /// when no case could be materialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case: Option<ScenarioCase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1324,21 +1322,27 @@ impl E2eScenarioReport {
     #[cfg(test)]
     pub fn aggregate(
         scenario_id: impl Into<String>,
-        scenario_version: u32,
         execution_policy: ExecutionPolicy,
         runs: Vec<E2eRunReport>,
     ) -> Self {
         let case = ScenarioCase::new(
             scenario_id,
-            scenario_version,
             0,
             serde_json::json!({ "variant": "canonical" }),
             ComplexityProfile::default(),
             Vec::new(),
             DeliverableContract::default(),
         )
-        .expect("canonical scenario case is valid");
+        .expect("canonical scenario case is valid")
+        .seal(Self::canonical_test_behavior_sha256())
+        .expect("canonical scenario case seals");
         Self::aggregate_case(case, execution_policy, runs)
+    }
+
+    /// The definition digest `aggregate` seals into its canonical test case.
+    #[cfg(test)]
+    pub(crate) fn canonical_test_behavior_sha256() -> String {
+        artifact::sha256_bytes(b"canonical scenario definition")
     }
 
     pub fn aggregate_case(
@@ -1359,7 +1363,7 @@ impl E2eScenarioReport {
         Self::aggregate_with_planned(
             case.scenario_id.clone(),
             case.case_id.clone(),
-            case.scenario_version,
+            Some(case.behavior_sha256.clone()),
             Some(case),
             execution_policy,
             planned_runs,
@@ -1368,11 +1372,10 @@ impl E2eScenarioReport {
     }
 
     /// Preserve requested slots even when no executable case could be materialized.
-    /// Version zero denotes an unknown version, not a fabricated case identity.
+    /// The definition digest stays absent rather than fabricating a case identity.
     pub fn deferred(
         scenario_id: String,
         case_id: String,
-        scenario_version: u32,
         execution_policy: ExecutionPolicy,
         planned_runs: u32,
         reason: String,
@@ -1380,7 +1383,7 @@ impl E2eScenarioReport {
         let mut report = Self::aggregate_with_planned(
             scenario_id,
             case_id,
-            scenario_version,
+            None,
             None,
             execution_policy,
             planned_runs,
@@ -1393,7 +1396,7 @@ impl E2eScenarioReport {
     fn aggregate_with_planned(
         scenario_id: String,
         case_id: String,
-        scenario_version: u32,
+        behavior_sha256: Option<String>,
         case: Option<ScenarioCase>,
         execution_policy: ExecutionPolicy,
         planned_runs: u32,
@@ -1458,7 +1461,7 @@ impl E2eScenarioReport {
         Self {
             case_id,
             scenario_id,
-            scenario_version,
+            behavior_sha256,
             case,
             deferral_reason: None,
             execution_policy,
@@ -1512,7 +1515,7 @@ impl E2eScenarioReport {
         *self = Self::aggregate_with_planned(
             self.scenario_id.clone(),
             self.case_id.clone(),
-            self.scenario_version,
+            self.behavior_sha256.clone(),
             case,
             self.execution_policy,
             planned_runs,
@@ -1623,7 +1626,7 @@ pub struct ObservationMode {
 #[serde(deny_unknown_fields)]
 pub struct ObservationSelectedCase {
     pub scenario_id: crate::scenarios::ScenarioId,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -1670,9 +1673,10 @@ impl ObservationRunContract {
         }
         let mut identities = HashSet::new();
         for case in &self.selected_cases {
-            if case.scenario_version == 0 || case.case_id.trim().is_empty() {
+            if case.case_id.trim().is_empty() {
                 bail!("run_contract contains an invalid selected case identity");
             }
+            validate_observation_sha256(&case.behavior_sha256, "selected case definition")?;
             validate_observation_sha256(&case.inputs_sha256, "selected case inputs")?;
             validate_observation_sha256(&case.contract_sha256, "selected case contract")?;
             if !identities.insert((case.scenario_id.as_str(), case.case_id.as_str())) {
@@ -1768,7 +1772,8 @@ pub struct ObservationMetric {
 #[serde(deny_unknown_fields)]
 pub struct ObservationSample {
     pub scenario_id: String,
-    pub scenario_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_sha256: Option<String>,
     pub case_id: String,
     pub seed: u64,
     pub run_id: String,
@@ -2221,7 +2226,7 @@ impl E2eReport {
                 case.validate()?;
                 if scenario.case_id != case.case_id
                     || scenario.scenario_id != case.scenario_id
-                    || scenario.scenario_version != case.scenario_version
+                    || scenario.behavior_sha256.as_deref() != Some(case.behavior_sha256.as_str())
                 {
                     bail!("scenario identity differs from its materialized case");
                 }
@@ -2303,7 +2308,7 @@ impl E2eReport {
             let expected = E2eScenarioReport::aggregate_with_planned(
                 scenario.scenario_id.clone(),
                 scenario.case_id.clone(),
-                scenario.scenario_version,
+                scenario.behavior_sha256.clone(),
                 scenario.case.clone(),
                 scenario.execution_policy,
                 scenario.aggregate.planned_runs,
@@ -3176,7 +3181,7 @@ mod tests {
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
                 scenario_id: crate::scenarios::ScenarioId::ContextPressure,
-                scenario_version: 4,
+                behavior_sha256: format!("sha256:{}", "d".repeat(64)),
                 case_id: "context_pressure:v4:seed-0000000000000001".into(),
                 seed: 1,
                 inputs_sha256: format!("sha256:{}", "b".repeat(64)),
@@ -3220,7 +3225,6 @@ mod tests {
     fn aggregate(runs: Vec<E2eRunReport>) -> E2eScenarioReport {
         E2eScenarioReport::aggregate(
             "case",
-            1,
             ExecutionPolicy {
                 max_turns: 1,
                 max_output_tokens: Some(1),
@@ -3326,14 +3330,14 @@ mod tests {
         );
         let case = ScenarioCase::new(
             "case",
-            1,
             0,
             serde_json::json!({ "variant": "canonical" }),
             ComplexityProfile::default(),
             Vec::new(),
             DeliverableContract::default(),
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let report = E2eScenarioReport::aggregate_case_with_planned(
             case,
             ExecutionPolicy {
@@ -3488,10 +3492,12 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            let materialized = crate::scenarios::swe_service::materialize(
-                crate::scenarios::ScenarioId::SweConfigIsolation,
-            )
-            .unwrap();
+            let materialized = crate::scenarios::ScenarioId::SweConfigIsolation
+                .materialize(
+                    "swe-test",
+                    crate::scenarios::ScenarioId::SweConfigIsolation.canonical_seed(),
+                )
+                .unwrap();
             let mut run = E2eRunReport::new(
                 "run".into(),
                 attempt.clone(),
@@ -3579,7 +3585,6 @@ mod tests {
         let mut deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             3,
             "scenario materialization failed".into(),
@@ -3587,7 +3592,7 @@ mod tests {
         deferred.refresh_aggregate().unwrap();
         assert!(deferred.case.is_none());
         assert!(deferred.runs.is_empty());
-        assert_eq!(deferred.scenario_version, 0);
+        assert!(deferred.behavior_sha256.is_none());
         assert_eq!(deferred.case_id, "requested-case");
         assert_eq!(deferred.aggregate.planned_runs, 3);
         assert_eq!(deferred.aggregate.observed_runs, 0);
@@ -3618,7 +3623,6 @@ mod tests {
             let mut deferred = E2eScenarioReport::deferred(
                 "unmaterialized".into(),
                 "requested-case".into(),
-                0,
                 policy,
                 planned,
                 reason.into(),
@@ -3628,7 +3632,6 @@ mod tests {
         let mut deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             policy,
             2,
             "materialization failed".into(),
@@ -3645,7 +3648,6 @@ mod tests {
         let deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             2,
             "materialization failed".into(),
@@ -3688,7 +3690,6 @@ mod tests {
         let deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             2,
             format!("materialization failed: {secret}"),
@@ -4134,7 +4135,6 @@ mod tests {
         };
         let case = ScenarioCase::new(
             "case",
-            2,
             7,
             serde_json::json!({ "status": "ready" }),
             ComplexityProfile {
@@ -4146,7 +4146,8 @@ mod tests {
             vec!["iii::state".into()],
             contract,
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
@@ -4229,14 +4230,14 @@ mod tests {
         };
         let case = ScenarioCase::new(
             "case",
-            2,
             7,
             serde_json::json!({ "status": "ready" }),
             ComplexityProfile::default(),
             vec![],
             contract,
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
@@ -4333,7 +4334,6 @@ mod tests {
         let case = ScenarioCase::new(
             "case",
             1,
-            1,
             serde_json::json!({}),
             ComplexityProfile::default(),
             vec![],
@@ -4353,7 +4353,8 @@ mod tests {
                 capture_before_cleanup: true,
             },
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let reports = evaluate_deliverables(
             &case,
             vec![CapturedDeliverable {

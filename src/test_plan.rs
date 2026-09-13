@@ -313,7 +313,7 @@ impl MasterPlan {
                 .zip(tokens)
                 .and_then(|(sum, cap)| cap.checked_mul(attempts).and_then(|n| sum.checked_add(n)));
             cases.push(json!({
-                "scenario_id": id, "scenario_version": case.scenario_version, "case_id": case.case_id,
+                "scenario_id": id, "behavior_sha256": case.behavior_sha256, "case_id": case.case_id,
                 "seed": case.seed, "inputs_sha256": case.inputs_sha256, "contract_sha256": case.contract_sha256,
                 "execution_kind": execution_kind(key), "difficulty_weight": weight(case.classification.tier),
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,

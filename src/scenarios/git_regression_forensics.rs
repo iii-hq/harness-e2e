@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "git_regression_forensics";
-const VERSION: u32 = 4;
 
 const ACQUISITION_ID: &str = "repository_acquisition";
 const TRACE_ID: &str = "investigation_trace";
@@ -243,7 +242,6 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     validate_public_manifest(&inputs)?;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         inputs,
         ComplexityProfile {
@@ -282,7 +280,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let report = root.join(REPORT_RELATIVE_PATH);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Investigate a regression in the supplied immutable snapshot of the real repository
 `coderefinery/git-bisect-exercise`.

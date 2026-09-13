@@ -52,7 +52,7 @@ pub(super) struct TestsListRequest {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(super) struct TestVersionGetRequest {
     pub test_id: String,
-    pub test_version: u32,
+    pub test_version: String,
     pub cohort_id: String,
     pub from_version_id: String,
     pub to_version_id: String,
@@ -63,7 +63,7 @@ pub(super) struct TestHistoryRequest {
     #[serde(default)]
     pub test_id: String,
     #[serde(default)]
-    pub test_version: Option<u32>,
+    pub test_version: Option<String>,
     #[serde(default)]
     pub case_id: Option<String>,
     #[serde(default)]
@@ -107,7 +107,7 @@ pub(super) struct EvaluatedVersionsResponse {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct VersionDescriptor {
-    pub version: u32,
+    pub version: String,
     pub execution_count: usize,
     pub run_count: usize,
     pub last_seen: Option<String>,
@@ -169,7 +169,7 @@ pub(super) struct TestObservation {
     pub run_count: usize,
     pub scored_runs: usize,
     pub assessment_summary: AssessmentSummary,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub seed: Option<u64>,
     pub system_version_id: Option<String>,
     pub system_label: String,
@@ -191,7 +191,7 @@ pub(super) struct TestObservation {
 pub(super) struct HistorySeries {
     pub id: String,
     pub case_id: String,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub seed: Option<u64>,
     pub contract_sha256: String,
     pub assessment_profile_sha256: String,
@@ -232,10 +232,10 @@ pub(super) struct HistoryModelGroup {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestHistoryResponse {
     pub test_id: String,
-    /// The version whose executions are shown (the latest with evidence by default).
-    pub test_version: u32,
-    /// The contract's current version, which may have no executions yet.
-    pub current_version: Option<u32>,
+    /// The definition whose executions are shown (the latest with evidence by default).
+    pub test_version: String,
+    /// The current definition's digest, which may have no executions yet.
+    pub current_version: Option<String>,
     pub available_versions: Vec<VersionDescriptor>,
     pub cases: Vec<String>,
     pub subjects: Vec<String>,
@@ -250,7 +250,7 @@ pub(super) struct TestHistoryResponse {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub(super) struct TestVersionResult {
     pub test_id: String,
-    pub test_version: u32,
+    pub test_version: String,
     pub compatibility: String,
     pub compatibility_reasons: Vec<String>,
     pub from: Option<TestSideSummary>,
@@ -264,7 +264,7 @@ pub(super) struct TestVersionResult {
 pub(super) struct TestCatalogRow {
     pub test_id: String,
     pub lifecycle: String,
-    pub current_version: Option<u32>,
+    pub current_version: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub complexity: Option<ComplexityClassification>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -274,7 +274,7 @@ pub(super) struct TestCatalogRow {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub spec: Option<TestSpecProjection>,
     pub available_versions: Vec<VersionDescriptor>,
-    pub selected_version: Option<u32>,
+    pub selected_version: Option<String>,
     pub result: Option<TestVersionResult>,
 }
 
@@ -343,7 +343,7 @@ struct Observation {
     contract_sha256: String,
     assessment_profile_sha256: String,
     status: String,
-    scenario_version: u32,
+    behavior_sha256: String,
     seed: Option<u64>,
     system_label: String,
     stack_mode: String,
@@ -363,7 +363,7 @@ pub(crate) struct ExecutionProjection {
     pub(crate) summary: Value,
     cohort: Option<CohortDescriptor>,
     evaluated_version: Option<EvaluatedVersionDescriptor>,
-    tests: BTreeMap<String, BTreeMap<u32, Vec<Observation>>>,
+    tests: BTreeMap<String, BTreeMap<String, Vec<Observation>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -373,12 +373,12 @@ struct TestVersionEntry {
 
 #[derive(Debug, Clone, Default)]
 struct TestEntry {
-    current_version: Option<u32>,
+    current_version: Option<String>,
     current_classification: Option<ComplexityClassification>,
     current_characterization: Option<ScenarioCharacterization>,
     current_spec: Option<TestSpecProjection>,
     current_reference_verified: bool,
-    versions: BTreeMap<u32, TestVersionEntry>,
+    versions: BTreeMap<String, TestVersionEntry>,
 }
 
 #[derive(Debug, Clone)]
@@ -535,7 +535,7 @@ impl ExecutionProjection {
             let contract_sha256 = scenario_contract_sha256(scenario)?;
             let contracts = contracts_for_scenario(report, scenario);
             let assessment_profile_sha256 =
-                assessment_profile_sha256(scenario.scenario_version, &contracts)?;
+                assessment_profile_sha256(scenario.behavior_sha256.as_deref(), &contracts)?;
             let contract_by_run = contracts
                 .iter()
                 .map(|contract| {
@@ -581,7 +581,7 @@ impl ExecutionProjection {
             tests
                 .entry(scenario.scenario_id.clone())
                 .or_insert_with(BTreeMap::new)
-                .entry(scenario.scenario_version)
+                .entry(definition_key(scenario))
                 .or_insert_with(Vec::new)
                 .push(Observation {
                     execution_id: stored.metadata.id.clone(),
@@ -592,7 +592,7 @@ impl ExecutionProjection {
                     contract_sha256,
                     assessment_profile_sha256,
                     status: scenario_status(scenario).into(),
-                    scenario_version: scenario.scenario_version,
+                    behavior_sha256: definition_key(scenario),
                     seed: scenario.case.as_ref().map(|case| case.seed),
                     system_label,
                     stack_mode,
@@ -703,17 +703,26 @@ impl DashboardReadModel {
         entry: &TestEntry,
         request: &TestsListRequest,
     ) -> Result<TestCatalogRow> {
+        let current = entry.current_version.as_deref();
         let mut available_versions = entry
             .versions
             .iter()
             .map(|(version, value)| {
-                version_descriptor(*version, value, request.cohort_id.as_deref())
+                version_descriptor(version.clone(), value, request.cohort_id.as_deref())
             })
             .filter(|descriptor| {
-                descriptor.execution_count > 0 || entry.current_version == Some(descriptor.version)
+                descriptor.execution_count > 0 || current == Some(descriptor.version.as_str())
             })
             .collect::<Vec<_>>();
-        available_versions.sort_by_key(|entry| std::cmp::Reverse(entry.version));
+        // The current definition first, then the most recently observed ones.
+        available_versions.sort_by(|left, right| {
+            let left_current = current == Some(left.version.as_str());
+            let right_current = current == Some(right.version.as_str());
+            right_current
+                .cmp(&left_current)
+                .then_with(|| right.last_seen.cmp(&left.last_seen))
+                .then_with(|| left.version.cmp(&right.version))
+        });
         let selected_version = select_version(
             entry,
             request.cohort_id.as_deref(),
@@ -721,7 +730,7 @@ impl DashboardReadModel {
             request.to_version_id.as_deref(),
         );
         let result = match (
-            selected_version,
+            selected_version.as_deref(),
             request.cohort_id.as_deref(),
             request.from_version_id.as_deref(),
             request.to_version_id.as_deref(),
@@ -751,11 +760,11 @@ impl DashboardReadModel {
         Ok(TestCatalogRow {
             test_id: test_id.into(),
             lifecycle: lifecycle.into(),
-            current_version: entry.current_version,
+            current_version: entry.current_version.clone(),
             complexity: entry.current_classification.clone(),
             characterization: entry.current_characterization,
-            calibration: entry.current_version.and_then(|version| {
-                entry.versions.get(&version).map(|version| {
+            calibration: entry.current_version.as_ref().and_then(|version| {
+                entry.versions.get(version).map(|version| {
                     calibration_projection(version, entry.current_reference_verified)
                 })
             }),
@@ -770,7 +779,7 @@ impl DashboardReadModel {
         &self,
         request: TestVersionGetRequest,
     ) -> Result<TestVersionResult> {
-        if request.test_id.trim().is_empty() || request.test_version == 0 {
+        if request.test_id.trim().is_empty() || request.test_version.trim().is_empty() {
             bail!("test id and version are required");
         }
         if request.from_version_id == request.to_version_id {
@@ -783,7 +792,7 @@ impl DashboardReadModel {
         )?;
         self.test_version_result(
             &request.test_id,
-            request.test_version,
+            &request.test_version,
             &request.cohort_id,
             &request.from_version_id,
             &request.to_version_id,
@@ -800,24 +809,18 @@ impl DashboardReadModel {
             .with_context(|| format!("unknown test '{}'", request.test_id))?;
         let test_version = request
             .test_version
+            .clone()
             .or_else(|| {
-                entry.current_version.filter(|version| {
+                entry.current_version.clone().filter(|version| {
                     entry
                         .versions
                         .get(version)
                         .is_some_and(|value| !value.observations.is_empty())
                 })
             })
-            .or_else(|| {
-                entry
-                    .versions
-                    .iter()
-                    .rev()
-                    .find(|(_, value)| !value.observations.is_empty())
-                    .map(|(version, _)| *version)
-            })
-            .or(entry.current_version)
-            .or_else(|| entry.versions.keys().max().copied())
+            .or_else(|| latest_observed_version(entry))
+            .or_else(|| entry.current_version.clone())
+            .or_else(|| entry.versions.keys().next().cloned())
             .context("test has no version")?;
         let version = entry.versions.get(&test_version).with_context(|| {
             format!("unknown test '{}' version {test_version}", request.test_id)
@@ -886,11 +889,11 @@ impl DashboardReadModel {
         Ok(TestHistoryResponse {
             test_id: request.test_id,
             test_version,
-            current_version: entry.current_version,
+            current_version: entry.current_version.clone(),
             available_versions: entry
                 .versions
                 .iter()
-                .map(|(version, value)| version_descriptor(*version, value, None))
+                .map(|(version, value)| version_descriptor(version.clone(), value, None))
                 .collect(),
             cases: cases.into_iter().collect(),
             subjects: subjects.into_iter().collect(),
@@ -929,7 +932,7 @@ impl DashboardReadModel {
     fn test_version_result(
         &self,
         test_id: &str,
-        test_version: u32,
+        test_version: &str,
         cohort_id: &str,
         from_version_id: &str,
         to_version_id: &str,
@@ -940,7 +943,7 @@ impl DashboardReadModel {
             .with_context(|| format!("unknown test '{test_id}'"))?;
         let version = entry
             .versions
-            .get(&test_version)
+            .get(test_version)
             .with_context(|| format!("unknown test '{test_id}' version {test_version}"))?;
         let from_observations = matching_observations(version, cohort_id, from_version_id);
         let to_observations = matching_observations(version, cohort_id, to_version_id);
@@ -973,7 +976,7 @@ impl DashboardReadModel {
         };
         Ok(TestVersionResult {
             test_id: test_id.into(),
-            test_version,
+            test_version: test_version.into(),
             compatibility: compatibility.into(),
             compatibility_reasons,
             from,
@@ -993,7 +996,7 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
             Ok((
                 id.as_str().to_string(),
                 TestEntry {
-                    current_version: Some(materialized.spec.version),
+                    current_version: Some(materialized.case.behavior_sha256.clone()),
                     current_classification: Some(materialized.case.complexity),
                     current_characterization: Some(materialized.case.characterization),
                     current_spec: Some(spec_projection(*id, &materialized.spec)),
@@ -1004,7 +1007,7 @@ fn current_tests() -> Result<BTreeMap<String, TestEntry>> {
                             | ScenarioId::CrossRepoContractMigration
                     ),
                     versions: BTreeMap::from([(
-                        materialized.spec.version,
+                        materialized.case.behavior_sha256.clone(),
                         TestVersionEntry::default(),
                     )]),
                 },
@@ -1140,10 +1143,21 @@ fn evaluated_version(
     }))
 }
 
+/// History groups executions by the definition that evaluated them. A slot
+/// whose case never materialized has no definition digest and is grouped
+/// under this marker instead of being merged into a real definition.
+pub(super) const UNMATERIALIZED_DEFINITION: &str = "unmaterialized";
+
+fn definition_key(scenario: &E2eScenarioReport) -> String {
+    scenario
+        .behavior_sha256
+        .clone()
+        .unwrap_or_else(|| UNMATERIALIZED_DEFINITION.to_string())
+}
+
 fn scenario_contract_sha256(scenario: &E2eScenarioReport) -> Result<String> {
     artifact::sha256_value(&json!({
         "scenario_id": scenario.scenario_id,
-        "scenario_version": scenario.scenario_version,
         "case": scenario.case,
         "execution_policy": scenario.execution_policy,
     }))
@@ -1216,7 +1230,7 @@ fn scenario_status(scenario: &E2eScenarioReport) -> &'static str {
 }
 
 fn version_descriptor(
-    version: u32,
+    version: String,
     entry: &TestVersionEntry,
     cohort_id: Option<&str>,
 ) -> VersionDescriptor {
@@ -1243,26 +1257,53 @@ fn version_descriptor(
     }
 }
 
+/// The definition digest whose observations were completed most recently.
+fn latest_observed_version(entry: &TestEntry) -> Option<String> {
+    entry
+        .versions
+        .iter()
+        .filter(|(_, value)| !value.observations.is_empty())
+        .max_by(|(left_version, left), (right_version, right)| {
+            latest_seen(left)
+                .cmp(&latest_seen(right))
+                .then_with(|| right_version.cmp(left_version))
+        })
+        .map(|(version, _)| version.clone())
+}
+
+fn latest_seen(entry: &TestVersionEntry) -> Option<&str> {
+    entry
+        .observations
+        .iter()
+        .map(|observation| observation.completed_at.as_str())
+        .max()
+}
+
 fn select_version(
     entry: &TestEntry,
     cohort_id: Option<&str>,
     from_version_id: Option<&str>,
     to_version_id: Option<&str>,
-) -> Option<u32> {
-    let mut versions = entry.versions.keys().copied().collect::<Vec<_>>();
-    versions.sort_by(|left, right| right.cmp(left));
+) -> Option<String> {
+    let mut versions = entry.versions.keys().cloned().collect::<Vec<_>>();
+    // Most recently observed definitions first, then the digest for stability.
+    versions.sort_by(|left, right| {
+        latest_seen(&entry.versions[right])
+            .cmp(&latest_seen(&entry.versions[left]))
+            .then_with(|| left.cmp(right))
+    });
     if let (Some(cohort_id), Some(from), Some(to)) = (cohort_id, from_version_id, to_version_id) {
-        if let Some(version) = versions.iter().copied().find(|version| {
-            let entry = &entry.versions[version];
+        if let Some(version) = versions.iter().find(|version| {
+            let entry = &entry.versions[*version];
             !matching_observations(entry, cohort_id, from).is_empty()
                 && !matching_observations(entry, cohort_id, to).is_empty()
         }) {
-            return Some(version);
+            return Some(version.clone());
         }
-        if let Some(version) = versions.iter().copied().find(|version| {
-            !matching_observations(&entry.versions[version], cohort_id, to).is_empty()
+        if let Some(version) = versions.iter().find(|version| {
+            !matching_observations(&entry.versions[*version], cohort_id, to).is_empty()
         }) {
-            return Some(version);
+            return Some(version.clone());
         }
     }
     versions.into_iter().next()
@@ -1472,7 +1513,7 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         run_count: observation.runs.len(),
         scored_runs: scores.len(),
         assessment_summary: summarize(observation.runs.iter().map(|run| &run.assessment)),
-        scenario_version: observation.scenario_version,
+        behavior_sha256: observation.behavior_sha256.clone(),
         seed: observation.seed,
         system_version_id: observation.evaluated_version_id.clone(),
         system_label: observation.system_label.clone(),
@@ -1531,13 +1572,12 @@ fn history_series_key(observation: &Observation) -> String {
     // capture that distinction. Likewise, retaining the optional seed and
     // report identity fields prevents an unknown value from being silently
     // merged with a known one when older reports are mixed in.
-    let scenario_version = observation.scenario_version.to_string();
     let seed = observation
         .seed
         .map(|seed| seed.to_string())
         .unwrap_or_else(|| "unknown-seed".into());
     [
-        scenario_version.as_str(),
+        observation.behavior_sha256.as_str(),
         observation.case_id.as_str(),
         observation.contract_sha256.as_str(),
         seed.as_str(),
@@ -1585,7 +1625,7 @@ fn history_series(id: String, observations: &[&Observation]) -> HistorySeries {
     HistorySeries {
         id,
         case_id: first.case_id.clone(),
-        scenario_version: first.scenario_version,
+        behavior_sha256: first.behavior_sha256.clone(),
         seed: first.seed,
         contract_sha256: first.contract_sha256.clone(),
         assessment_profile_sha256: first.assessment_profile_sha256.clone(),

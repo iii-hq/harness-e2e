@@ -54,13 +54,16 @@ function comparisonCandidate(
         scenarios: [
           {
             scenario_id: row.scenario,
-            scenario_version: 2,
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             case_id:
               row.caseId ??
-              `${row.scenario}:v2:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
+              `${row.scenario}:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
             case: {
               seed: row.seed,
               inputs_sha256: `definition-${row.scenario}`,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             },
             aggregate: {
               planned_runs: 1,
@@ -125,11 +128,12 @@ function comparisonReference(
       ...reference.runs[0],
       id: `rc-${index}`,
       scenarioId: row.scenario,
+      // Release Control still ships this; the console never reads it.
       scenarioVersion: 2,
       seed: row.seed,
       repetition: row.repetition ?? 0,
       objectiveScore: row.score,
-      caseId: `${row.scenario}:v2:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
+      caseId: `${row.scenario}:seed-${BigInt(row.seed).toString(16).padStart(16, '0')}`,
       identity: {
         definitionSha256: `definition-${row.scenario}`,
         resultContractSha256: 'result-contract',
@@ -176,7 +180,6 @@ const reference: RcReference = {
     {
       attemptsComplete: true,
       scenarioId: 'alpha',
-      scenarioVersion: 2,
       status: 'passed',
       completion: 'completed',
       technical: 'valid',
@@ -190,7 +193,6 @@ const reference: RcReference = {
     {
       attemptsComplete: true,
       scenarioId: 'alpha',
-      scenarioVersion: 2,
       status: 'passed',
       completion: 'completed',
       technical: 'valid',
@@ -299,18 +301,6 @@ describe('shared primary metrics projection', () => {
         false,
       ).deltas.score,
     ).toBeNull()
-
-    const changedVersion = structuredClone(localDetail)
-    const versionedScenario = changedVersion.reports[0]?.report?.scenarios[0]
-    if (!versionedScenario) throw new Error('fixture must contain a scenario')
-    versionedScenario.scenario_version = 3
-    expect(
-      comparePrimaryMetrics(
-        remote,
-        localReferencePrimaryMetrics(changedVersion, true),
-        false,
-      ),
-    ).toMatchObject({ totalTests: 2, deltas: { score: null } })
 
     const report = localDetail.reports[0]?.report
     if (!report) throw new Error('fixture must contain a report')
@@ -482,7 +472,7 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
     execution_id: 'e-1',
     source: 'release-control',
     case_id: 'case-a',
-    scenario_version: 2,
+    behavior_sha256: '',
     seed: 7,
     run_count: 3,
     median_score: 30,
@@ -498,7 +488,8 @@ it('groups RC repetitions by frozen case identity and uses true medians', () => 
 it('normalizes local objective, cache-inclusive tokens and subject cost once', () => {
   const scenario = {
     scenario_id: 'alpha',
-    scenario_version: 2,
+    behavior_sha256:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     case_id: 'case-a',
     case: { seed: 7 },
     runs: [

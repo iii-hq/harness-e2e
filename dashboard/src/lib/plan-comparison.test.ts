@@ -195,7 +195,8 @@ describe('local plan comparison view model', () => {
             scenarios: [
               {
                 id: 'direct_answer',
-                scenario_version: 1,
+                behavior_sha256:
+                  'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
                 pass_rate: 100,
                 assessment_summary: assessment(),
               },
@@ -205,7 +206,8 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'direct_answer',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             run_count: 2,
             averages: { turns },
             samples: { turns: 2 },
@@ -331,7 +333,8 @@ describe('local plan comparison view model', () => {
           scenarios: [
             {
               id: 'direct_answer',
-              scenario_version: 2,
+              behavior_sha256:
+                'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
               pass_rate: 100,
               assessment_summary: assessment(),
             },
@@ -341,7 +344,8 @@ describe('local plan comparison view model', () => {
       scenario_metrics: [
         {
           scenario_id: 'direct_answer',
-          scenario_version: 2,
+          behavior_sha256:
+            'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
           contract_fingerprint: contract,
           averages: { tokens: 1000, duration_seconds: 4 },
         },
@@ -370,7 +374,8 @@ describe('local plan comparison view model', () => {
               scenarios: [
                 {
                   scenario_id: 'security_review',
-                  scenario_version: 3,
+                  behavior_sha256:
+                    'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
                   runs: [
                     {
                       run_id: `${id}-run`,
@@ -407,7 +412,8 @@ describe('local plan comparison view model', () => {
             scenarios: [
               {
                 id: 'security_review',
-                scenario_version: 3,
+                behavior_sha256:
+                  'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
                 pass_rate: 100,
                 assessment_summary: assessment(),
               },
@@ -417,8 +423,9 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'security_review',
-            scenario_version: 3,
-            contract_fingerprint: 'security-v3',
+            behavior_sha256:
+              'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+            contract_fingerprint: 'security-contract',
           },
         ],
       }) as unknown as DashboardExecutionDetail
@@ -447,8 +454,9 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'minimal_path',
-            scenario_version: 2,
-            contract_fingerprint: 'minimal-v2',
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
+            contract_fingerprint: 'minimal-contract',
             run_count: 1,
             averages: {
               tokens: perCompletion,
@@ -460,7 +468,13 @@ describe('local plan comparison view model', () => {
         subjects: [
           {
             id: 'subject',
-            scenarios: [{ id: 'minimal_path', scenario_version: 2 }],
+            scenarios: [
+              {
+                id: 'minimal_path',
+                behavior_sha256:
+                  'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
+              },
+            ],
           },
         ] as never,
       })
@@ -529,7 +543,8 @@ describe('retained criterion points', () => {
           scenarios: [
             {
               id: 'test',
-              scenario_version: 1,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               passed: false,
               runs: awards.length,
             },

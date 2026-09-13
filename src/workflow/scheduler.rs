@@ -287,7 +287,6 @@ impl WorkflowStepReport {
 #[serde(deny_unknown_fields)]
 pub struct WorkflowAttemptReport {
     pub workflow_id: String,
-    pub workflow_scenario_version: u32,
     pub workflow_sha256: String,
     pub run_id: String,
     pub attempt_id: String,
@@ -1369,7 +1368,6 @@ async fn execute_materialized_workflow(
     Ok(MaterializedRunOutcome::Completed(Box::new(
         WorkflowAttemptReport {
             workflow_id: materialized.definition.id,
-            workflow_scenario_version: materialized.definition.scenario_version,
             workflow_sha256: materialized.sha256,
             run_id: request.run_id.clone(),
             attempt_id,
@@ -2048,7 +2046,6 @@ fn evidence_snapshot(materialized: &MaterializedWorkflow) -> Value {
         "kind": "rust_flow_evidence",
         "executable": false,
         "scenario_id": materialized.definition.id,
-        "scenario_version": materialized.definition.scenario_version,
         "sha256": materialized.sha256,
         "tests": tests,
     })
@@ -2318,7 +2315,6 @@ mod tests {
         let definition = WorkflowDefinitionV1 {
             schema_version: 1,
             id: "parallel.test".into(),
-            scenario_version: 1,
             description: "parallel scheduler".into(),
             limits: WorkflowLimits {
                 max_parallel: 2,
@@ -2369,7 +2365,6 @@ mod tests {
         let definition = WorkflowDefinitionV1 {
             schema_version: 1,
             id: "branch.test".into(),
-            scenario_version: 1,
             description: "branch scheduler".into(),
             limits: WorkflowLimits::default(),
             nodes: vec![root, branch, join],
@@ -2400,7 +2395,6 @@ mod tests {
         let definition = WorkflowDefinitionV1 {
             schema_version: 1,
             id: "cancel.test".into(),
-            scenario_version: 1,
             description: "cancel active workflow".into(),
             limits: WorkflowLimits::default(),
             nodes: vec![active],
@@ -2452,7 +2446,6 @@ mod tests {
         let definition = WorkflowDefinitionV1 {
             schema_version: 1,
             id: "budget.test".into(),
-            scenario_version: 1,
             description: "aggregate budget enforcement".into(),
             limits: WorkflowLimits {
                 max_cost_usd: Some(1.0),
@@ -2488,7 +2481,6 @@ mod tests {
         let token_definition = WorkflowDefinitionV1 {
             schema_version: 1,
             id: "token_budget.test".into(),
-            scenario_version: 1,
             description: "aggregate token budget enforcement".into(),
             limits: WorkflowLimits {
                 max_total_tokens: Some(100),
@@ -2621,7 +2613,6 @@ mod tests {
         WorkflowDefinitionV1 {
             schema_version: 1,
             id: "resume.test".into(),
-            scenario_version: 1,
             description: "resumable workflow".into(),
             limits: WorkflowLimits::default(),
             nodes: vec![node("work", vec![], true)],

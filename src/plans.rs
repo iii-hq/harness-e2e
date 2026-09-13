@@ -33,7 +33,7 @@ pub(crate) enum PlanRunRole {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, PartialEq)]
 pub(crate) struct PlanScopeItem {
     pub scenario_id: String,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -314,13 +314,12 @@ pub(crate) fn resolve_scope(
             let (case, execution) = (materialized.case, materialized.spec.execution);
             let contract_sha256 = artifact::sha256_value(&json!({
                 "scenario_id": case.scenario_id,
-                "scenario_version": case.scenario_version,
                 "case": case,
                 "execution_policy": execution,
             }))?;
             Ok(PlanScopeItem {
                 scenario_id: id.as_str().into(),
-                scenario_version: case.scenario_version,
+                behavior_sha256: case.behavior_sha256.clone(),
                 case_id: case.case_id,
                 seed: case.seed,
                 inputs_sha256: case.inputs_sha256,
@@ -374,8 +373,12 @@ mod tests {
         assert_eq!(plan.runs, 1);
         assert_eq!(plan.scenarios.len(), 1);
         assert_eq!(
-            plan.scenarios[0].scenario_version,
-            ScenarioId::ContextPressure.spec("version-check").version
+            plan.scenarios[0].behavior_sha256,
+            ScenarioId::ContextPressure
+                .materialize("digest-check", ScenarioId::ContextPressure.canonical_seed())
+                .unwrap()
+                .case
+                .behavior_sha256
         );
         assert_eq!(
             plan.scenarios[0].seed,

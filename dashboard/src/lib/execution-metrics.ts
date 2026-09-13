@@ -78,7 +78,7 @@ export function buildExecutionMetrics(
       detail.reports[item.reportIndex]?.native_execution_id,
       item.subjectId,
       item.scenarioId,
-      item.scenarioVersion,
+      item.behaviorSha256,
       scenario?.case_id ?? [...keys].sort(),
     ])
     // Repeated report projections must not double usage or outcomes.
