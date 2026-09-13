@@ -2,11 +2,11 @@
 """Validate and materialize the exact-stack campaign contract.
 
 Release Control owns every campaign decision — the suite, the models, the
-weights, the policy — and states each one exactly once in the contract it
-dispatches. This repository owns the runtime: which scenarios a pinned runner
-release can execute, how the stack boots, and what evidence comes back. No
-campaign configuration is read from this repository, and nothing is verified
-twice: unknown fields are ignored so either side can add one and ship alone.
+policy — and states each one exactly once in the contract it dispatches. This
+repository owns the runtime: which scenarios a pinned runner release can
+execute, how the stack boots, and what evidence comes back. No campaign
+configuration is read from this repository, and nothing is verified twice:
+unknown fields are ignored so either side can add one and ship alone.
 """
 
 from __future__ import annotations
@@ -121,7 +121,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     """
     require_keys(
         suite,
-        {"id", "label", "lane", "seed", "subject", "judge", "groups"},
+        {"id", "label", "lane", "seed", "subject", "groups"},
         "suite",
     )
     suite_id = require_text(suite.get("id"), "suite.id")
@@ -132,7 +132,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     if suite.get("seed") is not None:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
-    validate_identity(suite, "judge")
 
     groups = suite.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -142,7 +141,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         label = f"suite.groups[{index}]"
         group = require_keys(
             group,
-            {"id", "execution_kind", "runs", "technical_retries", "weight"},
+            {"id", "execution_kind", "runs", "technical_retries"},
             label,
         )
         group_id = require_text(group.get("id"), f"{label}.id")
@@ -154,9 +153,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
             raise ValueError(f"{label}.execution_kind is unsupported")
         require_positive_integer(group.get("runs"), f"{label}.runs")
         require_nonnegative_integer(group.get("technical_retries"), f"{label}.technical_retries")
-        weight = group.get("weight")
-        if weight not in {1, 2, 3, 4, 5}:
-            raise ValueError(f"{label}.weight must be 1-5")
         if kind == "fault_injection":
             require_text(group.get("fault_profile"), f"{label}.fault_profile")
             require_text(group.get("fault_scenario"), f"{label}.fault_scenario")
@@ -374,7 +370,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "difficulty_weight": group["weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {
@@ -390,7 +385,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
         "campaign_id": suite["id"],
         "lane": suite["lane"],
         "failure_policy": "advisory",
-        "scoring_profile": "difficulty-weighted-v1",
         "groups": groups,
     }
 
@@ -424,8 +418,8 @@ def materialize_request(
         selected_cases.append(
             {
                 "scenario_id": scenario_id,
-                "scenario_version": require_positive_integer(
-                    descriptor.get("scenario_version"), f"{scenario_id}.scenario_version"
+                "behavior_sha256": require_digest(
+                    descriptor.get("behavior_sha256"), f"{scenario_id}.behavior_sha256"
                 ),
                 "case_id": require_text(descriptor.get("case_id"), f"{scenario_id}.case_id"),
                 "seed": require_nonnegative_integer(descriptor.get("seed"), f"{scenario_id}.seed"),
@@ -440,8 +434,6 @@ def materialize_request(
         "lane": suite["lane"],
         "model": suite["subject"]["model"],
         "provider": suite["subject"]["provider"],
-        "judge_model": suite["judge"]["model"],
-        "judge_provider": suite["judge"]["provider"],
         "scenarios": group["scenarios"],
         "runs": group["runs"],
         "seed": suite["seed"],
@@ -491,8 +483,6 @@ def observation_idempotency_key(request: dict[str, Any]) -> str:
             "lane",
             "model",
             "provider",
-            "judge_model",
-            "judge_provider",
             "scenarios",
             "runs",
             "seed",
@@ -738,7 +728,7 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
 def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
     files = _package_files(root)
     return {
-        "schema": "e2e-observation-bundle/v1",
+        "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
         "execution_id": contract["execution_id"],
         "attempt": contract["attempt"],

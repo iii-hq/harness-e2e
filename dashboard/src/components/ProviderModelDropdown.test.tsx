@@ -38,21 +38,21 @@ describe('provider model menu', () => {
     expect(html).toContain('aria-selected="true"')
   })
 
-  // Audit PN-08: a chosen judge can go back to the default.
+  // Audit PN-08: a chosen filter value can go back to the default.
   it('offers a clear option first when asked', () => {
     const html = renderToStaticMarkup(
       <ProviderModelMenu
         id="menu"
-        ariaLabel="Judge model"
+        ariaLabel="Execution model"
         groups={groups}
         value=""
-        clearLabel="All judges"
+        clearLabel="All models"
         collapsedProviders={new Set(['anthropic'])}
         onToggleProvider={() => undefined}
         onSelect={() => undefined}
       />,
     )
-    expect(html.indexOf('All judges')).toBeLessThan(
+    expect(html.indexOf('All models')).toBeLessThan(
       html.indexOf('claude') === -1 ? html.length : html.indexOf('claude'),
     )
     expect(html).toContain('aria-selected="true"')

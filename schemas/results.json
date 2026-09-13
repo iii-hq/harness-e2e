@@ -11,8 +11,6 @@
     "report_state",
     "result_contract_sha256",
     "scenarios",
-    "schema_version",
-    "scoring_profile_sha256",
     "subject",
     "system_under_test"
   ],
@@ -28,16 +26,6 @@
     },
     "execution": {
       "$ref": "#/definitions/ExecutionIdentity"
-    },
-    "judge": {
-      "anyOf": [
-        {
-          "$ref": "#/definitions/ModelArtifact"
-        },
-        {
-          "type": "null"
-        }
-      ]
     },
     "manifest": {
       "anyOf": [
@@ -94,17 +82,6 @@
       "items": {
         "$ref": "#/definitions/E2eScenarioReport"
       }
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "enum": [
-        6
-      ],
-      "minimum": 0.0
-    },
-    "scoring_profile_sha256": {
-      "type": "string"
     },
     "slot_start_deadline_seconds": {
       "description": "Soft scheduling deadline: prevents starting slots after this interval.",
@@ -183,112 +160,6 @@
           }
         }
       ]
-    },
-    "AdherenceAvailability": {
-      "type": "string",
-      "enum": [
-        "available",
-        "unavailable",
-        "failed"
-      ]
-    },
-    "AdherenceRequirement": {
-      "type": "object",
-      "required": [
-        "confidence",
-        "followed",
-        "id",
-        "instruction",
-        "reason"
-      ],
-      "properties": {
-        "confidence": {
-          "type": "number",
-          "format": "double"
-        },
-        "evidence": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "followed": {
-          "type": "boolean"
-        },
-        "id": {
-          "type": "string"
-        },
-        "instruction": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        }
-      }
-    },
-    "AnalyzerIdentity": {
-      "type": "object",
-      "required": [
-        "analyzer",
-        "input_sha256"
-      ],
-      "properties": {
-        "analyzer": {
-          "type": "string"
-        },
-        "input_sha256": {
-          "type": "string"
-        },
-        "model": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "provider": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "additionalProperties": false
-    },
-    "AnalyzerUsage": {
-      "type": "object",
-      "properties": {
-        "cost_usd": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "input_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "latency_ms": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "output_tokens": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
     },
     "ArtifactExpectation": {
       "type": "object",
@@ -522,31 +393,6 @@
         }
       }
     },
-    "AuditAnalyzerStatus": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "completed",
-            "failed"
-          ]
-        },
-        {
-          "description": "No audit analyzer model was configured; only deterministic rules ran.",
-          "type": "string",
-          "enum": [
-            "not_configured"
-          ]
-        },
-        {
-          "description": "No transcript was captured, so there was nothing to analyze.",
-          "type": "string",
-          "enum": [
-            "no_transcript"
-          ]
-        }
-      ]
-    },
     "AuditEvidence": {
       "type": "object",
       "required": [
@@ -639,59 +485,21 @@
           "enum": [
             "destructive_action"
           ]
-        },
-        {
-          "description": "Observed work exceeded the scenario's expectation by an anomalous factor.",
-          "type": "string",
-          "enum": [
-            "anomalous_work"
-          ]
         }
       ]
     },
     "AuditFlagSource": {
       "type": "string",
       "enum": [
-        "deterministic",
-        "analyzer"
+        "deterministic"
       ]
     },
     "AuditReport": {
       "type": "object",
       "required": [
-        "analyzer_status",
         "flags"
       ],
       "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_error": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "analyzer_status": {
-          "$ref": "#/definitions/AuditAnalyzerStatus"
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "flags": {
           "type": "array",
           "items": {
@@ -753,141 +561,6 @@
         "completed",
         "task_incomplete",
         "undetermined"
-      ]
-    },
-    "ComplexityClassification": {
-      "type": "object",
-      "required": [
-        "method",
-        "profile",
-        "tier"
-      ],
-      "properties": {
-        "method": {
-          "$ref": "#/definitions/ComplexityMethod"
-        },
-        "profile": {
-          "$ref": "#/definitions/ComplexityProfile"
-        },
-        "tier": {
-          "$ref": "#/definitions/ComplexityTier"
-        }
-      }
-    },
-    "ComplexityMethod": {
-      "type": "string",
-      "enum": [
-        "capability_v2"
-      ]
-    },
-    "ComplexityProfile": {
-      "type": "object",
-      "required": [
-        "ambiguity_level",
-        "artifact_count",
-        "coordination_edges",
-        "dependency_depth",
-        "external_systems",
-        "parallel_branches",
-        "planning_depth",
-        "state_transitions",
-        "validation_loops",
-        "wake_cycles"
-      ],
-      "properties": {
-        "agent_owned_decomposition": {
-          "default": false,
-          "type": "boolean"
-        },
-        "ambiguity_level": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "artifact_count": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "coherent_long_horizon": {
-          "default": false,
-          "type": "boolean"
-        },
-        "compensable_mutations": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "coordination_edges": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "dependency_depth": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "durable_resume_cycles": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "external_systems": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "material_invalidation_events": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "parallel_branches": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "planning_depth": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "replan_loops": {
-          "default": 0,
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "state_transitions": {
-          "type": "integer",
-          "format": "uint16",
-          "minimum": 0.0
-        },
-        "validation_loops": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "wake_cycles": {
-          "type": "integer",
-          "format": "uint8",
-          "minimum": 0.0
-        }
-      }
-    },
-    "ComplexityTier": {
-      "type": "string",
-      "enum": [
-        "l0_atomic",
-        "l1_sequential",
-        "l2_stateful",
-        "l3_concurrent",
-        "l4_coordinated",
-        "l5_adaptive"
       ]
     },
     "ContaminationScope": {
@@ -1166,26 +839,6 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
-        "instruction_adherence": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InstructionAdherenceReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "markdown_execution": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MarkdownExecutionReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "metrics": {
           "anyOf": [
             {
@@ -1196,24 +849,8 @@
             }
           ]
         },
-        "objective_score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
         "prompt": {
           "type": "string"
-        },
-        "quality_score_completed": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
         },
         "retry_attempts": {
           "type": "array",
@@ -1266,15 +903,6 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
-        "validation_score": {
-          "description": "Explicit Markdown validation score. Mirrors `score` for Markdown-authored scenarios while keeping the legacy aggregate field compatible.",
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -1301,6 +929,13 @@
       "properties": {
         "aggregate": {
           "$ref": "#/definitions/ScenarioAggregate"
+        },
+        "behavior_sha256": {
+          "description": "Digest of the definition the case was materialized from. Absent only when no case could be materialized.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "case": {
           "anyOf": [
@@ -1336,19 +971,12 @@
         },
         "scenario_id": {
           "type": "string"
-        },
-        "scenario_version": {
-          "default": 1,
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         }
       }
     },
     "EfficiencyReport": {
       "type": "object",
       "required": [
-        "minimum_expected_work",
         "observed_complexity",
         "technical_attempts",
         "wall_time_ms"
@@ -1414,11 +1042,6 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "minimum_expected_work": {
-          "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
@@ -1496,13 +1119,6 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        },
-        "work_amplification": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
         }
       }
     },
@@ -1528,14 +1144,10 @@
     "EvaluatorStates": {
       "type": "object",
       "required": [
-        "completion",
-        "quality"
+        "completion"
       ],
       "properties": {
         "completion": {
-          "$ref": "#/definitions/EvaluatorAvailability"
-        },
-        "quality": {
           "$ref": "#/definitions/EvaluatorAvailability"
         }
       }
@@ -1642,7 +1254,6 @@
       "type": "string",
       "enum": [
         "subject",
-        "judge",
         "resource",
         "e2e_infrastructure"
       ]
@@ -1742,55 +1353,6 @@
         "measured"
       ]
     },
-    "InstructionAdherenceReport": {
-      "type": "object",
-      "required": [
-        "availability",
-        "summary"
-      ],
-      "properties": {
-        "analyzer": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerIdentity"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "analyzer_usage": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/AnalyzerUsage"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "availability": {
-          "$ref": "#/definitions/AdherenceAvailability"
-        },
-        "requirements": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/AdherenceRequirement"
-          }
-        },
-        "score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "summary": {
-          "type": "string"
-        }
-      }
-    },
     "InvariantSpec": {
       "type": "object",
       "required": [
@@ -1805,93 +1367,6 @@
           "type": "string"
         }
       }
-    },
-    "MarkdownExecutionReport": {
-      "type": "object",
-      "required": [
-        "behavior_sha256",
-        "compiled_sha256",
-        "phases",
-        "pipeline_complete",
-        "prompt_sha256",
-        "source_path",
-        "source_sha256"
-      ],
-      "properties": {
-        "behavior_sha256": {
-          "type": "string"
-        },
-        "compiled_sha256": {
-          "type": "string"
-        },
-        "materialized_plan_sha256": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "phases": {
-          "type": "array",
-          "items": {
-            "$ref": "#/definitions/MarkdownPhaseReport"
-          }
-        },
-        "pipeline_complete": {
-          "type": "boolean"
-        },
-        "prompt_sha256": {
-          "type": "string"
-        },
-        "source_path": {
-          "type": "string"
-        },
-        "source_sha256": {
-          "type": "string"
-        }
-      }
-    },
-    "MarkdownPhaseReport": {
-      "type": "object",
-      "required": [
-        "input_sha256",
-        "phase",
-        "status"
-      ],
-      "properties": {
-        "input_sha256": {
-          "type": "string"
-        },
-        "phase": {
-          "type": "string"
-        },
-        "reason": {
-          "type": "string"
-        },
-        "session_id": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "status": {
-          "$ref": "#/definitions/MarkdownPhaseStatus"
-        },
-        "transcript_sha256": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      }
-    },
-    "MarkdownPhaseStatus": {
-      "type": "string",
-      "enum": [
-        "pending",
-        "completed",
-        "failed",
-        "skipped"
-      ]
     },
     "ModelArtifact": {
       "type": "object",
@@ -2063,14 +1538,17 @@
     "ObservationSelectedCase": {
       "type": "object",
       "required": [
+        "behavior_sha256",
         "case_id",
         "contract_sha256",
         "inputs_sha256",
         "scenario_id",
-        "scenario_version",
         "seed"
       ],
       "properties": {
+        "behavior_sha256": {
+          "type": "string"
+        },
         "case_id": {
           "type": "string"
         },
@@ -2081,12 +1559,7 @@
           "type": "string"
         },
         "scenario_id": {
-          "$ref": "#/definitions/ScenarioKey"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
+          "$ref": "#/definitions/ScenarioId"
         },
         "seed": {
           "type": "integer",
@@ -2356,26 +1829,6 @@
             "$ref": "#/definitions/FailureRecord"
           }
         },
-        "instruction_adherence": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/InstructionAdherenceReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "markdown_execution": {
-          "anyOf": [
-            {
-              "$ref": "#/definitions/MarkdownExecutionReport"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
         "metrics": {
           "anyOf": [
             {
@@ -2385,22 +1838,6 @@
               "type": "null"
             }
           ]
-        },
-        "objective_score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
-        "quality_score_completed": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
         },
         "run_id": {
           "type": "string"
@@ -2414,6 +1851,15 @@
               "type": "null"
             }
           ]
+        },
+        "score": {
+          "description": "The points the attempt's evaluated criteria awarded, as on the run.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0.0
         },
         "semantic_tests": {
           "type": "array",
@@ -2431,14 +1877,6 @@
           "$ref": "#/definitions/TechnicalState"
         },
         "transcript": true,
-        "validation_score": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "format": "uint8",
-          "minimum": 0.0
-        },
         "wall_time_ms": {
           "type": "integer",
           "format": "uint64",
@@ -2582,7 +2020,6 @@
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error"
       ]
@@ -2613,15 +2050,12 @@
         "completed_runs",
         "cost",
         "deferred_runs",
-        "objective_scored_runs",
         "observed_runs",
         "pass_rate",
         "passed_runs",
         "planned_runs",
-        "quality_scored_completed_runs",
         "required_passes",
         "robustness",
-        "runs",
         "scored_runs",
         "task_incomplete_runs",
         "technical_failures",
@@ -2672,32 +2106,13 @@
           "format": "uint64",
           "minimum": 0.0
         },
-        "median_score": {
-          "description": "Compatibility alias for `objective_median_score`.",
+        "mean_score": {
+          "description": "Mean score of the technically valid runs that have one; null when none.",
           "type": [
             "number",
             "null"
           ],
           "format": "double"
-        },
-        "objective_median_score": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "objective_score_coverage": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "objective_scored_runs": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "observed_runs": {
           "type": "integer",
@@ -2718,25 +2133,6 @@
           "format": "uint32",
           "minimum": 0.0
         },
-        "quality_coverage": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "quality_score_completed": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
-        },
-        "quality_scored_completed_runs": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "required_passes": {
           "type": "integer",
           "format": "uint32",
@@ -2745,14 +2141,8 @@
         "robustness": {
           "$ref": "#/definitions/RobustnessReport"
         },
-        "runs": {
-          "description": "Compatibility alias for `observed_runs`.",
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "scored_runs": {
-          "description": "Compatibility alias for `objective_scored_runs`.",
+          "description": "Technically valid runs that have a score.",
           "type": "integer",
           "format": "uint32",
           "minimum": 0.0
@@ -2809,18 +2199,20 @@
     "ScenarioCase": {
       "type": "object",
       "required": [
+        "behavior_sha256",
         "case_id",
-        "complexity",
         "deliverable_contract",
         "inputs",
         "inputs_sha256",
         "required_capabilities",
         "scenario_id",
-        "scenario_version",
-        "seed",
-        "work"
+        "seed"
       ],
       "properties": {
+        "behavior_sha256": {
+          "description": "Digest of the scenario definition this case was materialized from: prompt, execution policy, criteria, and the case-independent contract. Two cases with the same digest were evaluated by the same definition. Sealed by `ScenarioId::materialize`; empty only before sealing.",
+          "type": "string"
+        },
         "case_id": {
           "type": "string"
         },
@@ -2840,9 +2232,6 @@
             }
           ]
         },
-        "complexity": {
-          "$ref": "#/definitions/ComplexityClassification"
-        },
         "deliverable_contract": {
           "$ref": "#/definitions/DeliverableContract"
         },
@@ -2859,18 +2248,10 @@
         "scenario_id": {
           "type": "string"
         },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
-        },
         "seed": {
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        },
-        "work": {
-          "$ref": "#/definitions/WorkExpectation"
         }
       }
     },
@@ -2922,8 +2303,78 @@
       },
       "additionalProperties": false
     },
-    "ScenarioKey": {
-      "type": "string"
+    "ScenarioId": {
+      "type": "string",
+      "enum": [
+        "registry_planning",
+        "registry_implementation",
+        "registry_environment",
+        "registry_verification",
+        "kanban_c1_foundation",
+        "kanban_c2_persistence",
+        "kanban_c3_board",
+        "kanban_c4_ticket_flow",
+        "kanban_c5_edit_move",
+        "kanban_c6_discussion",
+        "kanban_c7_live",
+        "linkly_tutorial",
+        "context_pressure",
+        "minimal_path",
+        "persistent_state",
+        "insert_record",
+        "sequential_pipeline",
+        "database_migration_recovery",
+        "shell_coder_sandbox",
+        "research_pipeline",
+        "fanout_ladder",
+        "security_review",
+        "incident_response",
+        "todo_worker_simple",
+        "todo_worker_planned",
+        "engineering_ticket",
+        "engineering_ticket_git_handoff",
+        "engineering_endurance_ladder",
+        "git_regression_forensics",
+        "mechanical_reaction",
+        "timer_wake",
+        "receiving_operation",
+        "validation_loop",
+        "subagent_validation",
+        "subagent_validation_failure",
+        "validation_self_repair",
+        "validation_scope_enforcement",
+        "validation_chain",
+        "secret_hygiene",
+        "prompt_injection_resilience",
+        "moving_target",
+        "poison_message",
+        "cleanup_under_failure",
+        "depth_ladder",
+        "quorum_fan_in",
+        "contention_ledger",
+        "wake_chain_soak",
+        "chess_engine_build",
+        "chess_play_ladder",
+        "trend_blog",
+        "trending_topics_build",
+        "typescript_chat_service",
+        "tool_contract_recovery",
+        "policy_bound_action",
+        "cross_app_transaction",
+        "performance_regression",
+        "browser_cross_site",
+        "release_train_recovery",
+        "cross_repo_contract_migration",
+        "swe_config_isolation",
+        "swe_cache_invalidation",
+        "swe_batch_replay",
+        "swe_replay_recovery",
+        "swe_contract_migration",
+        "swe_tenant_isolation",
+        "swe_replay_performance",
+        "swe_release_handoff",
+        "swe_service_journey"
+      ]
     },
     "ScenarioMeasurement": {
       "type": "object",
@@ -3301,7 +2752,6 @@
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error"
       ]
@@ -3366,19 +2816,6 @@
         "value": true
       },
       "additionalProperties": false
-    },
-    "WorkExpectation": {
-      "type": "object",
-      "required": [
-        "minimum_expected_work"
-      ],
-      "properties": {
-        "minimum_expected_work": {
-          "type": "integer",
-          "format": "uint64",
-          "minimum": 0.0
-        }
-      }
     },
     "WorkflowAssetReport": {
       "type": "object",
@@ -3567,8 +3004,7 @@
         "node_id",
         "required",
         "status",
-        "step_type",
-        "step_version"
+        "step_type"
       ],
       "properties": {
         "activation": {
@@ -3673,11 +3109,6 @@
         },
         "step_type": {
           "type": "string"
-        },
-        "step_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "transcript": true
       },

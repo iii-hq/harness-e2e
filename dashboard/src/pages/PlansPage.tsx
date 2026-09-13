@@ -577,6 +577,7 @@ export function PlansPage() {
   const [comparisonError, setComparisonError] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
+  const [importWarnings, setImportWarnings] = useState<string[]>([])
   const [importOpen, setImportOpen] = useState(false)
   const [remotePlans, setRemotePlans] = useState<RcHistoryPlan[]>([])
   const [remotePlanKey, setRemotePlanKey] = useState('')
@@ -584,6 +585,7 @@ export function PlansPage() {
   const importHistory = async (file: File) => {
     setImporting(true)
     setImportError(null)
+    setImportWarnings([])
     try {
       const json = await file.text()
       const bytes = new Uint8Array(
@@ -591,10 +593,17 @@ export function PlansPage() {
       )
       const sha256 = `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
       const bridge = await getDashboardDataBridge()
-      await bridge.planControl({
+      const imported = await bridge.planControl({
         action: 'import_history',
         history: { json, sha256 },
       })
+      setImportWarnings(
+        Array.isArray(imported.warnings)
+          ? imported.warnings.filter(
+              (warning): warning is string => typeof warning === 'string',
+            )
+          : [],
+      )
       await load({ silent: true })
     } catch (cause) {
       setImportError(cause instanceof Error ? cause.message : String(cause))
@@ -763,6 +772,19 @@ export function PlansPage() {
             title="History import failed"
           >
             {importError}
+          </Callout>
+        ) : null}
+        {importWarnings.length > 0 ? (
+          <Callout
+            className="mt-4"
+            tone="warning"
+            title="History imported with warnings"
+          >
+            <ul className="m-0 list-disc pl-4">
+              {importWarnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
           </Callout>
         ) : null}
 

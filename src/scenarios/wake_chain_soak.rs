@@ -36,13 +36,12 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "wake_chain_soak";
-const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "soak_trace";
 
 const COUNTER_KEY: &str = "chain-counter";
@@ -125,7 +124,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "ticks": rung.ticks,
@@ -133,7 +131,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "counter_key": COUNTER_KEY,
             "report_marker": report_marker(rung.ticks),
         }),
-        complexity_profile(rung.ticks),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -141,10 +138,7 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "iii::triggers".to_string(),
         ],
         deliverable_contract(rung.ticks),
-    )?
-    // Two calls per tick (the counter write and the next arm) plus the
-    // initial write and the final report: the chain itself is the workload.
-    .with_minimum_expected_work(2 + 2 * u64::from(rung.ticks))?;
+    )?;
     Ok(MaterializedScenario {
         spec: scenario_for_case(namespace, rung),
         case,
@@ -152,27 +146,10 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-/// The rung scales the profile, but never its tier: the ladder tops out at
-/// 50 ticks (well inside `u8`), `wake_cycles` alone never lifts a profile
-/// past L2Stateful, and `ambiguity_level` stays 0 so the L5Adaptive branch
-/// is unreachable by construction. Every rung derives L2Stateful.
-fn complexity_profile(ticks: u8) -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 1,
-        dependency_depth: 1,
-        external_systems: 1,
-        state_transitions: u16::from(ticks) + 1,
-        wake_cycles: ticks,
-        artifact_count: 1,
-        ..ComplexityProfile::default()
-    }
-}
-
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, rung.ticks),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -1022,19 +999,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_scaled_to_maximum_ticks() {
-        use super::super::ComplexityTier;
-
         let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
         let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
-        assert_eq!(
-            first.case.work.minimum_expected_work,
-            2 + 2 * u64::from(RUNG.ticks)
-        );
         assert_eq!(
             first.spec.execution.max_turns,
             8 + 2 * u32::from(RUNG.ticks)
@@ -1046,10 +1016,6 @@ mod tests {
         );
         assert!(first.case.inputs.get("ladder_rungs").is_none());
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
     }
 
     #[test]

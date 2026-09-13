@@ -2,17 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 
 const resultContract = {
-  schema_version: RESULTS_SCHEMA_VERSION,
   result_contract_sha256: RESULT_CONTRACT_SHA256,
-  scoring_profile_sha256: SCORING_PROFILE_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
@@ -30,12 +24,8 @@ function aggregate(overrides: Record<string, unknown> = {}) {
     execution_reliability: 1,
     completion_evidence_coverage: 1,
     completion_rate: 1,
-    objective_scored_runs: 1,
-    objective_median_score: 100,
-    objective_score_coverage: 1,
-    quality_scored_completed_runs: 1,
-    quality_score_completed: 88,
-    quality_coverage: 1,
+    scored_runs: 1,
+    mean_score: 100,
     total_tokens_consumed: 1200,
     tokens_completed_p50: 1200,
     failed_attempt_tokens: 0,
@@ -61,7 +51,8 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'security_review',
-            scenario_version: 2,
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             passed: true,
             aggregate: aggregate(),
             runs: [
@@ -73,10 +64,8 @@ const detail = {
                 technical: 'valid',
                 evaluators: {
                   completion: 'available',
-                  quality: 'available',
                 },
-                objective_score: 100,
-                quality_score_completed: 88,
+                score: 100,
                 wall_time_ms: 3_000,
                 assessment: {
                   run_id: 'run-security',
@@ -88,7 +77,6 @@ const detail = {
                   {
                     node_id: 'scan',
                     step_type: 'security.scan',
-                    step_version: 1,
                     required: true,
                     dependencies: [],
                     status: 'succeeded',
@@ -108,7 +96,6 @@ const detail = {
                   {
                     node_id: 'report',
                     step_type: 'security.report',
-                    step_version: 1,
                     required: true,
                     dependencies: ['scan'],
                     status: 'succeeded',
@@ -135,16 +122,14 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'persistent_state',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
             passed: true,
             aggregate: aggregate({
               completed_runs: 0,
               task_incomplete_runs: 1,
               completion_rate: 0,
-              objective_median_score: 65,
-              quality_scored_completed_runs: 0,
-              quality_score_completed: null,
-              quality_coverage: null,
+              mean_score: 65,
               total_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
@@ -159,10 +144,8 @@ const detail = {
                 technical: 'valid',
                 evaluators: {
                   completion: 'available',
-                  quality: 'not_required',
                 },
-                objective_score: 65,
-                quality_score_completed: null,
+                score: 65,
                 assessment: {
                   system_status: 'passed',
                   assessments: [],
@@ -185,7 +168,8 @@ const detail = {
         scenarios: [
           {
             scenario_id: 'research_pipeline',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
             passed: false,
             aggregate: aggregate({
               observed_runs: 0,
@@ -195,12 +179,8 @@ const detail = {
               execution_reliability: 0,
               completion_evidence_coverage: 0,
               completion_rate: null,
-              objective_scored_runs: 0,
-              objective_median_score: null,
-              objective_score_coverage: 0,
-              quality_scored_completed_runs: 0,
-              quality_score_completed: null,
-              quality_coverage: null,
+              scored_runs: 0,
+              mean_score: null,
               total_tokens_consumed: null,
               tokens_completed_p50: null,
               failed_attempt_tokens: null,
@@ -228,12 +208,17 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('4 scenarios')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
-    // Audit ED-30: the version keeps its own casing; title case is for words.
-    expect(html).toContain(`Results v${RESULTS_SCHEMA_VERSION}`)
+    // The report is identified by its results contract digest, shortened as
+    // every other digest in the Console and never title cased (audit ED-30).
+    expect(html).toContain('results contract')
+    expect(html).toContain(
+      RESULT_CONTRACT_SHA256.replace('sha256:', '').slice(0, 12),
+    )
     expect(html).not.toContain('Sha256:')
     expect(html).toContain('Completion and evidence yield')
     expect(html).toContain('execution reliability')
-    expect(html).toContain('quality score completed')
+    expect(html).toContain('mean score')
+    expect(html).not.toContain('quality')
     expect(html).toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
     expect(html).toContain('1 passed')
@@ -241,10 +226,9 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('hard gate')
     expect(html).toContain('1 inconclusive')
     expect(html).toContain('1 unavailable')
-    expect(html).toContain('Security Review v2')
+    expect(html).toContain('Security Review · definition a1a1a1a1')
     expect(html).toContain('Objective result')
     expect(html).not.toContain('Advisory')
-    expect(html).not.toContain('judge tokens')
     expect(html).toContain('Workflow · 2 steps')
     expect(html).toContain('Workflow duration profile')
     expect(html).toContain('Tokens')
@@ -288,9 +272,9 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('>Standard<')
     expect(html).toContain('Inspect scenario evidence')
     expect(html).toMatch(/<details[^>]*open/)
-    expect(html).toContain('title="Persistent State v1"')
+    expect(html).toContain('title="Persistent State · definition b2b2b2b2"')
     expect(html).toContain('Task Incomplete')
-    expect(html).toContain('Not Required')
+    expect(html).toContain('completion evaluator')
   })
 })
 

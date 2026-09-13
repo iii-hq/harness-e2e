@@ -32,8 +32,8 @@ The Console page can execute one or more scenarios against the Harness already
 running at `III_URL`. It discovers registered provider/model pairs from that
 stack and scenario ids from the same E2E binary only when the execution dialog
 opens. The primary form only asks for an optional label, a subject model, and
-scenarios; URL, the judge model Markdown tests need, run count, and technical
-retries remain under **Advanced options** with safe defaults. Use **Refresh
+scenarios; URL, run count, and technical retries remain under **Advanced
+options** with safe defaults. Use **Refresh
 catalog** after restarting the Harness or changing its URL. The binary runs only
 one experiment at a time, streams incremental log chunks, indexes the resulting
 `results.json`, and keeps run metadata and logs under the worker's configured
@@ -44,8 +44,8 @@ overview receives at most 25 compact
 summaries; filters, search, and subsequent pages execute on the server. An
 execution page fetches one summary plus one report. Tests first loads immutable
 system-version and cohort descriptors, then one compact row per test. Changing
-a row's test version calls `e2e::dashboard::test-version-get`; retained
-observations load only when that row is expanded. The backend builds one cached
+a row's scenario definition calls `e2e::dashboard::test-version-get` with the
+definition digest; retained observations load only when that row is expanded. The backend builds one cached
 read model from retained reports, pools raw run scores, and invalidates it on run
 changes. There is no alternate HTTP or static-data transport.
 
@@ -71,8 +71,10 @@ The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable
 source revision or registry stack lock captured in `results.json`. Tests compares
 system version A with B inside one exact evaluation cohort. Each row keeps its
-own scenario-version selector. Changed case sets and contracts remain visible
-side by side, but their numeric deltas are disabled.
+own scenario-definition selector, which lists the `behavior_sha256` digest of
+every retained definition shortened to its first eight hex characters. Changed
+case sets and contracts remain visible side by side, but their numeric deltas
+are disabled.
 
 Test the React page and its data contracts with:
 
@@ -91,8 +93,9 @@ The execution index retains 100 workflow attempts. The latest 30 also retain the
 complete execution report: per-run prompts, transcripts, criteria, metrics,
 costs, retries, runtime checks, traces, and failure evidence. Each publish updates
 the retained report metadata and removes unreferenced run files before deploying
-Pages. It also emits `tests/index.json` for compact version/test metadata and one
-`tests/data/<digest>.json` evidence shard per retained test version.
+Pages. It also emits `tests/index.json` for compact definition/test metadata and
+one `tests/data/<digest>.json` evidence shard per retained scenario definition,
+named after that definition's digest without the `sha256:` prefix.
 
 Each full execution summary also carries compact per-scenario averages for
 tokens, wall time, cost, function calls, function-call errors, sessions, and
@@ -103,7 +106,7 @@ total tokens and function calls for every retained diagnostic report.
 Operational health remains the primary overview. Quality is never collapsed
 into a suite-wide score. The Tests view is the comparison surface: it shows
 pooled raw-run score, sample size, pass rate, outcome classes, cost, tokens, and
-runtime for each test/version/system-version tuple. Technical and infrastructure
+runtime for each test/definition/system-version tuple. Technical and infrastructure
 failures remain explicit outcomes and are never converted into zero scores.
 
 ## UI guard-rails
@@ -144,9 +147,9 @@ The dashboard has one kind of plan and one baseline/candidate lifecycle. Plan ex
 plans** uses the existing plan table and detail visualization for every plan.
 **New plan** opens the same form for a blank scope, a starting profile or a copy.
 The profiles are templates: they populate coverage, purpose, repetitions and
-retry policy. Users may edit the scope and explicitly select the execution model,
-plus the judge model when the scope includes a Markdown test. The saved plan owns
-that configuration; later template changes do not change it or prevent execution.
+retry policy. Users may edit the scope and explicitly select the execution
+model. The saved plan owns that configuration; later template changes do not
+change it or prevent execution.
 
 **Save plan** keeps the configuration editable. **Save and run** saves it,
 checks requirements and starts the baseline. Busy admission preserves the draft
@@ -161,14 +164,14 @@ reserves admission across the whole execution. It cancels active work before
 releasing admission, retains finished evidence and marks remaining slots. Restart
 reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
-No synthetic Results v4 report is created. Missing telemetry stays unavailable.
+No synthetic results report is created. Missing telemetry stays unavailable.
 
-Saved plans (`schema_version: 3`) and composed receipts live in the local SQL
-store (storage schema 3), accessed only through the database worker. Run the
-explicit `migrate-storage` dry-run and apply before switching from storage schema
-1 or 2. Existing PlanStore files are migration inputs, never runtime authority.
-The migration preserves IDs, baseline/candidate relationships, slots and native
-child references; corrupt or active records block the cutover.
+Saved plans and composed receipts live in the local SQL store, accessed only
+through the database worker. The store carries no version: the worker refuses a
+database whose layout fingerprint differs from its own, and the explicit
+`rebuild-storage` dry-run and apply recreate it, keeping every execution, plan
+and receipt the current binary can still read. Plans written by another binary
+are deleted, never migrated; active records block the rebuild.
 
 The plans list combines local plans and imported RC plans, marked `remote`.
 Import history accepts the versioned JSON transport or explicitly discovers and

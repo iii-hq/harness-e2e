@@ -1,12 +1,11 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "WorkflowCheckpointV1",
+  "title": "WorkflowCheckpoint",
   "type": "object",
   "required": [
     "active_nodes",
     "attempt_id",
     "run_id",
-    "schema_version",
     "steps",
     "terminal_nodes",
     "updated_at",
@@ -29,11 +28,6 @@
     },
     "run_id": {
       "type": "string"
-    },
-    "schema_version": {
-      "type": "integer",
-      "format": "uint32",
-      "minimum": 0.0
     },
     "steps": {
       "type": "array",
@@ -385,8 +379,7 @@
         "node_id",
         "required",
         "status",
-        "step_type",
-        "step_version"
+        "step_type"
       ],
       "properties": {
         "activation": {
@@ -491,11 +484,6 @@
         },
         "step_type": {
           "type": "string"
-        },
-        "step_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "transcript": true
       },

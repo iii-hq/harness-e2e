@@ -134,7 +134,7 @@ export function ExecutionOverview({
 
           <div className="grid min-w-0 gap-2">
             <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <span className="ds-label">completion and quality</span>
+              <span className="ds-label">completion and score</span>
               <span className="font-mono text-label text-ink-muted">
                 {metrics.includedScenarios}/{metrics.scenarios} scenarios ·{' '}
                 {metrics.observed} runs ·{' '}
@@ -142,7 +142,7 @@ export function ExecutionOverview({
               </span>
             </div>
             <div
-              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${trivial ? '@[960px]:grid-cols-3' : '@[960px]:grid-cols-5'}`}
+              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${trivial ? '@[960px]:grid-cols-2' : '@[960px]:grid-cols-4'}`}
               data-completion={trivial ? 'trivial' : 'detailed'}
             >
               {trivial ? (
@@ -172,28 +172,14 @@ export function ExecutionOverview({
                 </>
               )}
               <MetricCard
-                label="quality on completed tasks"
+                label="score"
                 value={
-                  metrics.qualityMedian === null
+                  metrics.scoreMean === null
                     ? '—'
-                    : `${number(metrics.qualityMedian)}/100`
+                    : `${number(metrics.scoreMean)}/100`
                 }
-                detail={`median · ${metrics.qualitySamples}/${metrics.completed} completed runs scored`}
-                tone={
-                  metrics.qualityMedian === null ? 'unavailable' : 'neutral'
-                }
-              />
-              <MetricCard
-                label="objective score"
-                value={
-                  metrics.objectiveMedian === null
-                    ? '—'
-                    : `${number(metrics.objectiveMedian)}/100`
-                }
-                detail={`median · ${metrics.objectiveSamples}/${metrics.planned} planned runs scored`}
-                tone={
-                  metrics.objectiveMedian === null ? 'unavailable' : 'neutral'
-                }
+                detail={`mean · ${metrics.scoreSamples}/${metrics.planned} planned runs scored`}
+                tone={metrics.scoreMean === null ? 'unavailable' : 'neutral'}
               />
             </div>
           </div>

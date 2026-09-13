@@ -13,7 +13,6 @@ const sharedProps = {
   label: '',
   url: 'ws://127.0.0.1:49134',
   subject: 'openai\ngpt-5',
-  judge: '',
   modelGroups: [
     {
       provider: 'openai',
@@ -33,7 +32,6 @@ const sharedProps = {
   onLabelChange: () => undefined,
   onUrlChange: () => undefined,
   onSubjectChange: () => undefined,
-  onJudgeChange: () => undefined,
   onSelectedScenariosChange: () => undefined,
   onQueryChange: () => undefined,
   onRunsChange: () => undefined,
@@ -56,11 +54,8 @@ describe('execution setup sheet', () => {
     )
 
     for (const html of [plan, quick]) {
-      expect(html).toContain('Choose the model and judge')
-      // The selected tests do not use a judge, so the field is inert without one.
-      expect(html).toContain('Judge model')
-      expect(html).toContain('The selected tests do not use a judge')
-      expect(html).not.toContain('Default judge (automatic)')
+      expect(html).toContain('Choose the model')
+      expect(html).not.toContain('Judge')
       expect(html).toContain('Pick the tests')
       expect(html).toContain('Advanced · sampling, retries and seed')
       expect(html).toContain('Search by name or id')
@@ -145,11 +140,10 @@ describe('execution setup sheet', () => {
       technicalRetries: 1,
       seed: '',
       subject: 'anthropic / claude-fable-5',
-      judge: '',
       url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
-      '2 tests · 2 runs · anthropic / claude-fable-5 · no judge',
+      '2 tests · 2 runs · anthropic / claude-fable-5',
     )
     expect(summary.detail).toBe(
       '1 run per test · 1 retry · canonical seed · ws://127.0.0.1:49134',
@@ -163,7 +157,6 @@ describe('execution setup sheet', () => {
           technicalRetries: 0,
           seed: '7',
           subject: '',
-          judge: 'openai / gpt-5',
           url: 'ws://x',
         }}
         pending={['Add a plan label.', 'Select at least one test.']}
@@ -171,7 +164,7 @@ describe('execution setup sheet', () => {
         <button type="submit">create draft plan</button>
       </ExecutionSetupFooter>,
     )
-    expect(html).toContain('0 tests · 0 runs · no model · judge openai / gpt-5')
+    expect(html).toContain('0 tests · 0 runs · no model')
     expect(html).toContain('2 runs per test · 0 retries · seed 7 · ws://x')
     expect(html).toContain(
       'Before creating: Add a plan label. Select at least one test.',
@@ -191,7 +184,6 @@ describe('execution setup sheet', () => {
           technicalRetries: 0,
           seed: '',
           subject: 'openai / gpt-5',
-          judge: '',
           url: 'ws://x',
         }}
         error="Runner unavailable"
@@ -224,38 +216,35 @@ describe('execution setup sheet', () => {
     expect(html).toContain('bg-danger')
   })
 
-  // Audit PN-09 / PN-06: families group the rows; local tests are their own
-  // group and can be listed as not available.
-  it('groups tests by family with local tests first', () => {
+  // Audit PN-09: families group the rows; singletons gather under "other".
+  it('groups tests by family and gathers singletons under other tests', () => {
     expect(
-      groupScenarios(
-        ['chess_build', 'chess_play', 'engineering_review', 'markdown_x'],
-        ['markdown_x'],
-      ),
+      groupScenarios([
+        'chess_build',
+        'chess_play',
+        'engineering_review',
+        'minimal_path',
+      ]),
     ).toEqual([
-      { key: 'local', label: 'local', items: ['markdown_x'] },
       { key: 'chess', label: 'chess', items: ['chess_build', 'chess_play'] },
-      { key: 'other', label: 'other tests', items: ['engineering_review'] },
+      {
+        key: 'other',
+        label: 'other tests',
+        items: ['engineering_review', 'minimal_path'],
+      },
     ])
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
         mode="plan"
-        availableScenarios={['security_review.scan_commit']}
-        localScenarioIds={['markdown_console_draft']}
-        scenarioTitles={{ markdown_console_draft: 'Markdown Console Draft' }}
-        unavailableScenarios={{
-          ids: ['markdown_console_draft'],
-          reason: 'Local Markdown tests are not available in plans.',
-        }}
+        availableScenarios={['chess_build', 'chess_play', 'minimal_path']}
         selectedScenarios={[]}
       />,
     )
-    expect(html).toContain('Markdown Console Draft')
-    expect(html).toContain('>local<')
-    expect(html).toContain('not available in plans')
-    expect(html).toContain('disabled=""')
-    expect(html).toContain('data-scenario-group="local"')
+    expect(html).toContain('data-scenario-group="chess"')
+    expect(html).toContain('data-scenario-group="other"')
+    expect(html).toContain('minimal_path')
+    expect(html).not.toContain('>local<')
   })
 
   // Audit RS-15: when something else holds the form it is parked, not dead —

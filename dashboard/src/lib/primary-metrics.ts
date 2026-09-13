@@ -27,7 +27,9 @@ export type MetricValue = {
 export type PrimaryTest = {
   key: string
   label: string
-  version: number | null
+  /** The definition digest the retained runs were evaluated by, or null when
+   *  the pooled runs do not agree on one. */
+  definition: string | null
   metrics: Record<MetricId, MetricValue>
   /** Stable case and execution-policy identity used only to control deltas. */
   identity: string | null
@@ -46,7 +48,7 @@ export type PrimaryMetricsComparison = {
   tests: Array<{
     key: string
     label: string
-    version: number | null
+    definition: string | null
     baseline: PrimaryTest | null
     candidate: PrimaryTest | null
   }>
@@ -58,7 +60,7 @@ export type PrimaryMetricsComparison = {
 export type PrimaryTestValues = {
   key: string
   label: string
-  version: number | null
+  definition: string | null
   expected: number
   identity: string | null
   scopeKnown: boolean
@@ -85,7 +87,7 @@ type AttemptValues = Record<Exclude<MetricId, 'score'>, number | null>
 type TestAccumulator = {
   key: string
   label: string
-  version: number | null
+  definitions: Set<string>
   expected: number
   identities: Set<string>
   identityKnown: boolean
@@ -104,10 +106,10 @@ export function buildPrimaryMetrics(
   for (const [reportIndex, record] of detail.reports.entries()) {
     const subject = string(record.subject_id) ?? ''
     if (!record.available || !record.report) {
-      const version =
-        integer(field(record, 'scenario_version')) ??
-        subjectScenarioVersion(detail, subject, record.scenario_id)
-      const key = testKey(record.scenario_id, version)
+      const definition =
+        string(field(record, 'behavior_sha256')) ??
+        subjectDefinition(detail, subject, record.scenario_id)
+      const key = testKey(record.scenario_id)
       const sourceIdentity = [
         field(record, 'native_execution_id'),
         field(record, 'group_id'),
@@ -122,15 +124,15 @@ export function buildPrimaryMetrics(
       ])
       if (seenUnavailable.has(source)) continue
       seenUnavailable.add(source)
-      const test = accumulator(tests, key, record.scenario_id, version)
+      const test = accumulator(tests, key, record.scenario_id, definition)
       test.expected += 1
       test.identityKnown = false
       continue
     }
 
     for (const scenario of record.report.scenarios) {
-      const version = integer(scenario.scenario_version)
-      const key = testKey(scenario.scenario_id, version)
+      const definition = string(scenario.behavior_sha256)
+      const key = testKey(scenario.scenario_id)
       const runKeys = scenario.runs.map((run) => stable([subject, run.run_id]))
       const source = stable([
         field(record, 'native_execution_id'),
@@ -148,7 +150,7 @@ export function buildPrimaryMetrics(
       seenScenarios.add(source)
       for (const runKey of runKeys) seenRuns.add(runKey)
 
-      const test = accumulator(tests, key, scenario.scenario_id, version)
+      const test = accumulator(tests, key, scenario.scenario_id, definition)
       const planned = counter(scenario.aggregate?.planned_runs)
       const observed = counter(scenario.aggregate?.observed_runs)
       const deferred = counter(scenario.aggregate?.deferred_runs)
@@ -168,7 +170,7 @@ export function buildPrimaryMetrics(
       else test.identities.add(identity)
 
       for (const run of scenario.runs) {
-        test.values.score.push(score(run.objective_score))
+        test.values.score.push(score(run.score))
         const values = primaryRunValues(run)
         for (const metric of metricIds) {
           if (metric !== 'score') test.values[metric].push(values[metric])
@@ -212,7 +214,7 @@ export function comparePrimaryMetrics(
       return {
         key,
         label: baseline?.label ?? candidate?.label ?? key,
-        version: baseline?.version ?? candidate?.version ?? null,
+        definition: baseline?.definition ?? candidate?.definition ?? null,
         baseline,
         candidate,
       }
@@ -296,14 +298,17 @@ function accumulator(
   tests: Map<string, TestAccumulator>,
   key: string,
   label: string,
-  version: number | null,
+  definition: string | null,
 ): TestAccumulator {
   const existing = tests.get(key)
-  if (existing) return existing
+  if (existing) {
+    if (definition) existing.definitions.add(definition)
+    return existing
+  }
   const created: TestAccumulator = {
     key,
     label,
-    version,
+    definitions: new Set(definition ? [definition] : []),
     expected: 0,
     identities: new Set(),
     identityKnown: true,
@@ -319,6 +324,7 @@ function accumulator(
 function projectTest(test: TestAccumulator): PrimaryTest {
   return projectValues({
     ...test,
+    definition: test.definitions.size === 1 ? [...test.definitions][0] : null,
     identity:
       test.identityKnown && test.identities.size > 0
         ? stable([...test.identities].sort())
@@ -343,7 +349,7 @@ function projectValues(test: PrimaryTestValues): PrimaryTest {
   return {
     key: test.key,
     label: test.label,
-    version: test.version,
+    definition: test.definition,
     metrics,
     identity: test.identity,
     repetitions: expected,
@@ -464,38 +470,38 @@ function sum(values: number[], safeInteger: boolean): number | null {
 function caseIdentity(scenario: unknown, report: unknown): string | null {
   const caseId = string(field(scenario, 'case_id'))
   const inputs = string(field(field(scenario, 'case'), 'inputs_sha256'))
+  const definition = string(field(field(scenario, 'case'), 'behavior_sha256'))
   const resultContract = string(field(report, 'result_contract_sha256'))
-  const scoringProfile = string(field(report, 'scoring_profile_sha256'))
   const executionPolicy = field(scenario, 'execution_policy')
   if (
     !caseId ||
     !inputs ||
+    !definition ||
     !resultContract ||
-    !scoringProfile ||
     !isObject(executionPolicy)
   )
     return null
-  return stable([
-    caseId,
-    inputs,
-    executionPolicy,
-    resultContract,
-    scoringProfile,
-  ])
+  return stable([caseId, inputs, definition, executionPolicy, resultContract])
 }
 
-function subjectScenarioVersion(
+function subjectDefinition(
   detail: DashboardExecutionDetail,
   subjectId: string,
   scenarioId: string,
-): number | null {
+): string | null {
   const subject = detail.subjects.find((item) => item.id === subjectId)
   const scenario = subject?.scenarios.find((item) => item.id === scenarioId)
-  return integer(scenario?.scenario_version)
+  return string(scenario?.behavior_sha256)
 }
 
-function testKey(label: string, version: number | null): string {
-  return stable([label, version])
+/**
+ * A test pools by scenario id alone. The definition digest gates comparability
+ * through `caseIdentity`, not through the key: a Release Control ledger has no
+ * digest to key on, and dropping the pair would hide the test instead of
+ * reporting it as not comparable.
+ */
+function testKey(label: string): string {
+  return stable([label])
 }
 
 function stable(value: unknown): string {
@@ -531,10 +537,6 @@ function counter(value: unknown): number | null {
   return nonnegative(value) !== null && Number.isSafeInteger(value)
     ? (value as number)
     : null
-}
-
-function integer(value: unknown): number | null {
-  return counter(value)
 }
 
 function score(value: unknown): number | null {

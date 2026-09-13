@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::artifact::{self, ArtifactReference};
@@ -13,12 +13,12 @@ use crate::assessment::{
     EvidenceReference,
 };
 use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
+#[cfg(test)]
+use crate::scenarios::DeliverableContract;
 use crate::scenarios::{
     CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, ExecutionPolicy,
-    ProvenanceEvidence, ScenarioCase, WorkExpectation,
+    ProvenanceEvidence, ScenarioCase,
 };
-#[cfg(test)]
-use crate::scenarios::{ComplexityProfile, DeliverableContract};
 use crate::schema;
 use crate::wire::{ControlPlaneEvidence, Model, SessionMetricsResponse, StatusReport};
 use crate::workflow::{WorkflowCleanupReport, WorkflowStepReport};
@@ -39,7 +39,6 @@ pub enum FailurePhase {
 #[serde(rename_all = "snake_case")]
 pub enum FailureDomain {
     Subject,
-    Judge,
     Resource,
     E2eInfrastructure,
 }
@@ -146,72 +145,18 @@ pub struct CriterionReport {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum MarkdownPhaseStatus {
-    Pending,
-    Completed,
-    Failed,
-    Skipped,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MarkdownPhaseReport {
-    pub phase: String,
-    pub status: MarkdownPhaseStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
-    pub input_sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub transcript_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub reason: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MarkdownExecutionReport {
-    pub source_path: String,
-    pub source_sha256: String,
-    pub behavior_sha256: String,
-    pub compiled_sha256: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub materialized_plan_sha256: Option<String>,
-    pub prompt_sha256: String,
-    pub pipeline_complete: bool,
-    pub phases: Vec<MarkdownPhaseReport>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum AdherenceAvailability {
-    Available,
-    Unavailable,
-    Failed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct AdherenceRequirement {
-    pub id: String,
-    pub instruction: String,
-    pub followed: bool,
-    pub reason: String,
-    pub confidence: f64,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct InstructionAdherenceReport {
-    pub availability: AdherenceAvailability,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub score: Option<u8>,
-    pub summary: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub requirements: Vec<AdherenceRequirement>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analyzer: Option<crate::assessment::AnalyzerIdentity>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub analyzer_usage: Option<crate::assessment::AnalyzerUsage>,
+/// The run score is the plain sum of the points the evaluated criteria
+/// awarded. A criterion nobody evaluated adds nothing, and a run with no
+/// evaluated criterion has no score at all; nothing is normalized or rescaled.
+pub fn criteria_score(criteria: &[CriterionReport]) -> Option<u8> {
+    let mut evaluated = false;
+    let total = criteria
+        .iter()
+        .filter_map(|criterion| criterion.awarded)
+        .inspect(|_| evaluated = true)
+        .map(u16::from)
+        .sum::<u16>();
+    evaluated.then(|| total.min(100) as u8)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -278,9 +223,7 @@ pub struct EfficiencyReport {
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
     pub cost_usd: Option<f64>,
-    pub minimum_expected_work: u64,
     pub observed_work: Option<u64>,
-    pub work_amplification: Option<f64>,
     pub technical_attempts: u32,
     pub observed_complexity: ObservedComplexityReport,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -295,7 +238,6 @@ pub enum RunStatus {
     Passed,
     HardGateFailed,
     SubjectError,
-    JudgeError,
     ResourceLimit,
     InfrastructureError,
 }
@@ -330,14 +272,13 @@ pub enum EvaluatorAvailability {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct EvaluatorStates {
     pub completion: EvaluatorAvailability,
-    pub quality: EvaluatorAvailability,
 }
 
 impl RunStatus {
     pub fn is_technical_failure(self) -> bool {
         matches!(
             self,
-            Self::SubjectError | Self::JudgeError | Self::ResourceLimit | Self::InfrastructureError
+            Self::SubjectError | Self::ResourceLimit | Self::InfrastructureError
         )
     }
 
@@ -346,7 +287,6 @@ impl RunStatus {
             Self::Passed => "PASS",
             Self::HardGateFailed => "HARD GATE FAIL",
             Self::SubjectError => "SUBJECT ERROR",
-            Self::JudgeError => "JUDGE ERROR",
             Self::ResourceLimit => "RESOURCE LIMIT",
             Self::InfrastructureError => "INFRA ERROR",
         }
@@ -355,7 +295,6 @@ impl RunStatus {
     fn failure_domain(self) -> FailureDomain {
         match self {
             Self::SubjectError => FailureDomain::Subject,
-            Self::JudgeError => FailureDomain::Judge,
             Self::ResourceLimit => FailureDomain::Resource,
             Self::Passed | Self::HardGateFailed | Self::InfrastructureError => {
                 FailureDomain::E2eInfrastructure
@@ -366,7 +305,6 @@ impl RunStatus {
 
 pub(crate) fn classify_failure(status: RunStatus, phase: FailurePhase) -> String {
     match status {
-        RunStatus::JudgeError => "judge_unavailable",
         RunStatus::ResourceLimit => "subject_budget_exhausted",
         RunStatus::SubjectError => "subject_execution_failed",
         RunStatus::InfrastructureError if phase == FailurePhase::Cleanup => "cleanup_failed",
@@ -388,10 +326,9 @@ pub struct RetryAttemptReport {
     pub completion: CompletionState,
     pub technical: TechnicalState,
     pub evaluators: EvaluatorStates,
+    /// The points the attempt's evaluated criteria awarded, as on the run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective_score: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality_score_completed: Option<u8>,
+    pub score: Option<u8>,
     pub cost: CostReport,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
@@ -410,12 +347,6 @@ pub struct RetryAttemptReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub efficiency: Option<EfficiencyReport>,
     pub failures: Vec<FailureRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation_score: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub markdown_execution: Option<MarkdownExecutionReport>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instruction_adherence: Option<InstructionAdherenceReport>,
     #[serde(skip)]
     #[schemars(skip)]
     pub assessment_results: Vec<AssessmentResult>,
@@ -442,8 +373,7 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             completion: report.completion,
             technical: report.technical,
             evaluators: report.evaluators.clone(),
-            objective_score: report.objective_score,
-            quality_score_completed: report.quality_score_completed,
+            score: report.score,
             cost: report.cost.clone(),
             transcript: report.transcript.clone(),
             metrics: report.metrics.clone(),
@@ -454,9 +384,6 @@ impl From<&E2eRunReport> for RetryAttemptReport {
             dimensions: report.dimensions.clone(),
             efficiency: report.efficiency.clone(),
             failures: report.failures.clone(),
-            validation_score: report.validation_score,
-            markdown_execution: report.markdown_execution.clone(),
-            instruction_adherence: report.instruction_adherence.clone(),
             assessment_results: report.assessment_results.clone(),
             asset_assessments: report.asset_assessments.clone(),
             asset_capture_manifest: report.asset_capture_manifest.clone(),
@@ -474,18 +401,10 @@ pub struct E2eRunReport {
     pub prompt: String,
     pub wall_time_ms: u64,
     pub score: Option<u8>,
-    /// Explicit Markdown validation score. Mirrors `score` for Markdown-authored
-    /// scenarios while keeping the legacy aggregate field compatible.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub validation_score: Option<u8>,
     pub status: RunStatus,
     pub completion: CompletionState,
     pub technical: TechnicalState,
     pub evaluators: EvaluatorStates,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub objective_score: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub quality_score_completed: Option<u8>,
     pub criteria: Vec<CriterionReport>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<Value>,
@@ -519,10 +438,6 @@ pub struct E2eRunReport {
     pub retry_attempts: Vec<RetryAttemptReport>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failures: Vec<FailureRecord>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub markdown_execution: Option<MarkdownExecutionReport>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub instruction_adherence: Option<InstructionAdherenceReport>,
     /// Advisory behavioral audit over the captured transcript and metrics.
     /// Never contributes to score, status, gates, or longitudinal inputs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -560,13 +475,10 @@ impl E2eRunReport {
             prompt,
             wall_time_ms: 0,
             score: None,
-            validation_score: None,
             status: RunStatus::InfrastructureError,
             completion: CompletionState::Undetermined,
             technical: TechnicalState::TechnicalInvalid,
             evaluators: EvaluatorStates::default(),
-            objective_score: None,
-            quality_score_completed: None,
             criteria: Vec::new(),
             transcript: None,
             metrics: None,
@@ -581,8 +493,6 @@ impl E2eRunReport {
             efficiency: None,
             retry_attempts: Vec::new(),
             failures: Vec::new(),
-            markdown_execution: None,
-            instruction_adherence: None,
             audit: None,
             terminal_status: None,
             assessment_results: Vec::new(),
@@ -650,6 +560,10 @@ impl E2eRunReport {
 
     /// Seal the independent result axes while keeping `status` as a compatibility
     /// projection for existing scenario implementations.
+    /// Seal the independent result axes while keeping `status` as a compatibility
+    /// projection for existing scenario implementations. The score is never
+    /// touched here: it is what the evaluated criteria awarded, and `technical`
+    /// says whether that measurement can be trusted.
     pub fn seal_outcome_from_status(&mut self) {
         match self.status {
             RunStatus::Passed => {
@@ -658,43 +572,15 @@ impl E2eRunReport {
                     self.completion = CompletionState::Completed;
                     self.evaluators.completion = EvaluatorAvailability::Available;
                 }
-                self.objective_score = self.score;
-                self.quality_score_completed = (self.completion == CompletionState::Completed)
-                    .then_some(self.score)
-                    .flatten();
-                self.evaluators.quality =
-                    if self.completion == CompletionState::Completed && self.score.is_some() {
-                        EvaluatorAvailability::Available
-                    } else {
-                        EvaluatorAvailability::NotRequired
-                    };
             }
             RunStatus::HardGateFailed => {
                 self.technical = TechnicalState::Valid;
-                self.objective_score = self.score;
-                self.quality_score_completed = None;
-                self.evaluators.quality = EvaluatorAvailability::NotRequired;
             }
             RunStatus::ResourceLimit => {
                 self.technical = TechnicalState::Valid;
                 if self.evaluators.completion != EvaluatorAvailability::Available {
                     self.completion = CompletionState::TaskIncomplete;
                     self.evaluators.completion = EvaluatorAvailability::Available;
-                }
-                self.objective_score = self.score;
-                self.quality_score_completed = None;
-                self.evaluators.quality = EvaluatorAvailability::NotRequired;
-            }
-            RunStatus::JudgeError => {
-                self.technical = TechnicalState::Valid;
-                if self.evaluators.completion != EvaluatorAvailability::Available {
-                    self.completion = CompletionState::Undetermined;
-                    self.evaluators.completion = EvaluatorAvailability::Unavailable;
-                }
-                self.evaluators.quality = EvaluatorAvailability::Unavailable;
-                self.objective_score = None;
-                if self.completion != CompletionState::Completed {
-                    self.quality_score_completed = None;
                 }
             }
             RunStatus::SubjectError | RunStatus::InfrastructureError => {
@@ -703,16 +589,10 @@ impl E2eRunReport {
                     self.completion = CompletionState::Undetermined;
                     self.evaluators.completion = EvaluatorAvailability::Unavailable;
                 }
-                self.objective_score = None;
-                if self.completion != CompletionState::Completed {
-                    self.quality_score_completed = None;
-                }
             }
         }
         // The compatibility status retains the first failure, but subsequent
         // infrastructure/cleanup failures still invalidate the technical axis.
-        // Derive this from durable evidence rather than the previous axis value:
-        // newly created reports start invalid and must become valid on success.
         if self.failures.iter().any(|failure| {
             failure.phase == FailurePhase::Cleanup
                 || matches!(
@@ -721,7 +601,6 @@ impl E2eRunReport {
                 )
         }) {
             self.technical = TechnicalState::TechnicalInvalid;
-            self.objective_score = None;
         }
     }
 
@@ -736,7 +615,7 @@ impl E2eRunReport {
         };
     }
 
-    pub fn update_efficiency(&mut self, work: WorkExpectation) {
+    pub fn update_efficiency(&mut self) {
         let mut unavailable = BTreeMap::new();
         let Some(metrics) = self.metrics.as_ref() else {
             for field in [
@@ -755,7 +634,6 @@ impl E2eRunReport {
                 "cost_usd",
                 "critical_path_ms",
                 "observed_work",
-                "work_amplification",
             ] {
                 unavailable.insert(field.into(), "terminal Harness metrics unavailable".into());
             }
@@ -775,9 +653,7 @@ impl E2eRunReport {
                 output_tokens: None,
                 total_tokens: None,
                 cost_usd: self.cost.total_usd,
-                minimum_expected_work: work.minimum_expected_work,
                 observed_work: None,
-                work_amplification: None,
                 technical_attempts: 1,
                 observed_complexity: unavailable_complexity(),
                 unavailable,
@@ -900,13 +776,7 @@ impl E2eRunReport {
                 "observed_work".into(),
                 "validation retry count is required by the work formula".into(),
             );
-            unavailable.insert(
-                "work_amplification".into(),
-                "observed work is unavailable".into(),
-            );
         }
-        let work_amplification = observed_work
-            .map(|observed| observed as f64 / work.minimum_expected_work.max(1) as f64);
         let observed_complexity = observed_complexity(
             metrics,
             self.transcript.as_ref(),
@@ -931,9 +801,7 @@ impl E2eRunReport {
             output_tokens: metrics.totals.output_tokens,
             total_tokens,
             cost_usd: self.cost.total_usd,
-            minimum_expected_work: work.minimum_expected_work,
             observed_work,
-            work_amplification,
             technical_attempts: 1,
             observed_complexity,
             unavailable,
@@ -1001,9 +869,6 @@ impl E2eRunReport {
         aggregate.total_tokens = sum_optional(&attempts, |value| value.total_tokens);
         aggregate.cost_usd = self.cost.total_usd;
         aggregate.observed_work = sum_optional(&attempts, |value| value.observed_work);
-        aggregate.work_amplification = aggregate
-            .observed_work
-            .map(|observed| observed as f64 / aggregate.minimum_expected_work.max(1) as f64);
         aggregate.technical_attempts = attempts.len().try_into().unwrap_or(u32::MAX);
         if !all_present {
             aggregate.unavailable.insert(
@@ -1273,25 +1138,17 @@ pub struct ScenarioAggregate {
     pub execution_reliability: Option<f64>,
     pub completion_evidence_coverage: Option<f64>,
     pub completion_rate: Option<f64>,
-    pub objective_scored_runs: u32,
-    pub objective_median_score: Option<f64>,
-    pub objective_score_coverage: Option<f64>,
-    pub quality_scored_completed_runs: u32,
-    pub quality_score_completed: Option<f64>,
-    pub quality_coverage: Option<f64>,
+    /// Technically valid runs that have a score.
+    pub scored_runs: u32,
+    /// Mean score of the technically valid runs that have one; null when none.
+    pub mean_score: Option<f64>,
     pub total_tokens_consumed: Option<u64>,
     pub tokens_completed_p50: Option<f64>,
     pub failed_attempt_tokens: Option<u64>,
     pub tokens_per_completion: Option<f64>,
-    /// Compatibility alias for `observed_runs`.
-    pub runs: u32,
-    /// Compatibility alias for `objective_scored_runs`.
-    pub scored_runs: u32,
     pub passed_runs: u32,
     pub required_passes: u32,
     pub pass_rate: f64,
-    /// Compatibility alias for `objective_median_score`.
-    pub median_score: Option<f64>,
     pub technical_failures: u32,
     pub cost: CostReport,
     pub robustness: RobustnessReport,
@@ -1319,10 +1176,8 @@ impl ScenarioAggregate {
         {
             bail!("scenario aggregate violates observed = technical_valid + technical_invalid");
         }
-        if self.objective_scored_runs > self.observed_runs
-            || self.quality_scored_completed_runs > self.completed_runs
-        {
-            bail!("scenario aggregate score counts exceed their eligible populations");
+        if self.scored_runs > self.technical_valid_runs {
+            bail!("scenario aggregate scored runs exceed the technically valid runs");
         }
         for (name, value) in [
             ("execution_reliability", self.execution_reliability),
@@ -1331,16 +1186,13 @@ impl ScenarioAggregate {
                 self.completion_evidence_coverage,
             ),
             ("completion_rate", self.completion_rate),
-            ("objective_score_coverage", self.objective_score_coverage),
-            ("quality_coverage", self.quality_coverage),
         ] {
             if value.is_some_and(|value| !value.is_finite() || !(0.0..=1.0).contains(&value)) {
                 bail!("scenario aggregate {name} must be null or a finite ratio");
             }
         }
         for (name, value) in [
-            ("objective_median_score", self.objective_median_score),
-            ("quality_score_completed", self.quality_score_completed),
+            ("mean_score", self.mean_score),
             ("tokens_completed_p50", self.tokens_completed_p50),
             ("tokens_per_completion", self.tokens_per_completion),
         ] {
@@ -1404,17 +1256,15 @@ fn failed_attempt_tokens(run: &E2eRunReport) -> Option<u64> {
     retry_tokens.checked_add(terminal_tokens)
 }
 
-fn default_scenario_version() -> u32 {
-    1
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct E2eScenarioReport {
     pub scenario_id: String,
     #[serde(default)]
     pub case_id: String,
-    #[serde(default = "default_scenario_version")]
-    pub scenario_version: u32,
+    /// Digest of the definition the case was materialized from. Absent only
+    /// when no case could be materialized.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub case: Option<ScenarioCase>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1429,21 +1279,26 @@ impl E2eScenarioReport {
     #[cfg(test)]
     pub fn aggregate(
         scenario_id: impl Into<String>,
-        scenario_version: u32,
         execution_policy: ExecutionPolicy,
         runs: Vec<E2eRunReport>,
     ) -> Self {
         let case = ScenarioCase::new(
             scenario_id,
-            scenario_version,
             0,
             serde_json::json!({ "variant": "canonical" }),
-            ComplexityProfile::default(),
             Vec::new(),
             DeliverableContract::default(),
         )
-        .expect("canonical scenario case is valid");
+        .expect("canonical scenario case is valid")
+        .seal(Self::canonical_test_behavior_sha256())
+        .expect("canonical scenario case seals");
         Self::aggregate_case(case, execution_policy, runs)
+    }
+
+    /// The definition digest `aggregate` seals into its canonical test case.
+    #[cfg(test)]
+    pub(crate) fn canonical_test_behavior_sha256() -> String {
+        artifact::sha256_bytes(b"canonical scenario definition")
     }
 
     pub fn aggregate_case(
@@ -1464,7 +1319,7 @@ impl E2eScenarioReport {
         Self::aggregate_with_planned(
             case.scenario_id.clone(),
             case.case_id.clone(),
-            case.scenario_version,
+            Some(case.behavior_sha256.clone()),
             Some(case),
             execution_policy,
             planned_runs,
@@ -1473,11 +1328,10 @@ impl E2eScenarioReport {
     }
 
     /// Preserve requested slots even when no executable case could be materialized.
-    /// Version zero denotes an unknown version, not a fabricated case identity.
+    /// The definition digest stays absent rather than fabricating a case identity.
     pub fn deferred(
         scenario_id: String,
         case_id: String,
-        scenario_version: u32,
         execution_policy: ExecutionPolicy,
         planned_runs: u32,
         reason: String,
@@ -1485,7 +1339,7 @@ impl E2eScenarioReport {
         let mut report = Self::aggregate_with_planned(
             scenario_id,
             case_id,
-            scenario_version,
+            None,
             None,
             execution_policy,
             planned_runs,
@@ -1498,7 +1352,7 @@ impl E2eScenarioReport {
     fn aggregate_with_planned(
         scenario_id: String,
         case_id: String,
-        scenario_version: u32,
+        behavior_sha256: Option<String>,
         case: Option<ScenarioCase>,
         execution_policy: ExecutionPolicy,
         planned_runs: u32,
@@ -1519,16 +1373,13 @@ impl E2eScenarioReport {
             run.technical == TechnicalState::TechnicalInvalid
         });
         let deferred_runs = planned_runs.saturating_sub(run_count);
-        let objective_scored_runs = count_runs(&runs, |run| run.objective_score.is_some());
-        let quality_scored_completed_runs = count_runs(&runs, |run| {
-            run.completion == CompletionState::Completed && run.quality_score_completed.is_some()
-        });
-        let objective_median_score = median(runs.iter().filter_map(|run| run.objective_score));
-        let quality_score_completed = median(
-            runs.iter()
-                .filter(|run| run.completion == CompletionState::Completed)
-                .filter_map(|run| run.quality_score_completed),
-        );
+        let scores = runs
+            .iter()
+            .filter(|run| run.technical == TechnicalState::Valid)
+            .filter_map(|run| run.score)
+            .collect::<Vec<_>>();
+        let scored_runs = scores.len() as u32;
+        let mean_score = mean(&scores);
         let total_tokens_consumed =
             sum_u64(runs.iter().map(|run| run.efficiency.as_ref()?.total_tokens));
         let completed_token_values = runs
@@ -1563,7 +1414,7 @@ impl E2eScenarioReport {
         Self {
             case_id,
             scenario_id,
-            scenario_version,
+            behavior_sha256,
             case,
             deferral_reason: None,
             execution_policy,
@@ -1579,18 +1430,12 @@ impl E2eScenarioReport {
                 execution_reliability: ratio(technical_valid_runs, planned_runs),
                 completion_evidence_coverage: ratio(determined_runs, planned_runs),
                 completion_rate: ratio(completed_runs, determined_runs),
-                objective_scored_runs,
-                objective_median_score,
-                objective_score_coverage: ratio(objective_scored_runs, planned_runs),
-                quality_scored_completed_runs,
-                quality_score_completed,
-                quality_coverage: ratio(quality_scored_completed_runs, completed_runs),
+                scored_runs,
+                mean_score,
                 total_tokens_consumed,
                 tokens_completed_p50,
                 failed_attempt_tokens,
                 tokens_per_completion,
-                runs: run_count,
-                scored_runs: objective_scored_runs,
                 passed_runs,
                 required_passes,
                 pass_rate: if run_count == 0 {
@@ -1598,7 +1443,6 @@ impl E2eScenarioReport {
                 } else {
                     f64::from(passed_runs) / f64::from(run_count)
                 },
-                median_score: objective_median_score,
                 technical_failures,
                 cost,
                 robustness,
@@ -1617,7 +1461,7 @@ impl E2eScenarioReport {
         *self = Self::aggregate_with_planned(
             self.scenario_id.clone(),
             self.case_id.clone(),
-            self.scenario_version,
+            self.behavior_sha256.clone(),
             case,
             self.execution_policy,
             planned_runs,
@@ -1657,11 +1501,9 @@ pub struct ModelArtifact {
     pub supports_vision: Option<bool>,
 }
 
-pub const OBSERVATION_SCHEMA: &str = "e2e-observation/v1";
-pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog/v4";
-pub use crate::result_contract::{
-    RESULTS_SCHEMA_VERSION, RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256,
-};
+pub const OBSERVATION_SCHEMA: &str = "e2e-observation";
+pub const CATALOG_SCHEMA: &str = "e2e-scenario-catalog";
+pub use crate::result_contract::RESULT_CONTRACT_SHA256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -1727,8 +1569,8 @@ pub struct ObservationMode {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ObservationSelectedCase {
-    pub scenario_id: crate::markdown::ScenarioKey,
-    pub scenario_version: u32,
+    pub scenario_id: crate::scenarios::ScenarioId,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -1775,9 +1617,10 @@ impl ObservationRunContract {
         }
         let mut identities = HashSet::new();
         for case in &self.selected_cases {
-            if case.scenario_version == 0 || case.case_id.trim().is_empty() {
+            if case.case_id.trim().is_empty() {
                 bail!("run_contract contains an invalid selected case identity");
             }
+            validate_observation_sha256(&case.behavior_sha256, "selected case definition")?;
             validate_observation_sha256(&case.inputs_sha256, "selected case inputs")?;
             validate_observation_sha256(&case.contract_sha256, "selected case contract")?;
             if !identities.insert((case.scenario_id.as_str(), case.case_id.as_str())) {
@@ -1873,7 +1716,8 @@ pub struct ObservationMetric {
 #[serde(deny_unknown_fields)]
 pub struct ObservationSample {
     pub scenario_id: String,
-    pub scenario_version: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub behavior_sha256: Option<String>,
     pub case_id: String,
     pub seed: u64,
     pub run_id: String,
@@ -2062,8 +1906,6 @@ pub struct E2eManifest {
     pub execution: ExecutionIdentity,
     pub system_under_test: SystemUnderTestIdentity,
     pub subject: ModelArtifact,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge: Option<ModelArtifact>,
     pub control_plane: ControlPlaneEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observation_contract: Option<ObservationRunContract>,
@@ -2123,9 +1965,7 @@ pub enum ObjectiveOutcome {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct E2eReport {
-    pub schema_version: u32,
     pub result_contract_sha256: String,
-    pub scoring_profile_sha256: String,
     pub report_state: ReportState,
     pub objective_outcome: ObjectiveOutcome,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -2138,8 +1978,6 @@ pub struct E2eReport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest: Option<ArtifactReference>,
     pub subject: ModelArtifact,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge: Option<ModelArtifact>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine_revision: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2170,7 +2008,6 @@ impl E2eReport {
         execution: ExecutionIdentity,
         system_under_test: SystemUnderTestIdentity,
         subject: ModelArtifact,
-        judge: Option<ModelArtifact>,
         engine_revision: Option<String>,
         scenarios: Vec<E2eScenarioReport>,
     ) -> Self {
@@ -2183,9 +2020,7 @@ impl E2eReport {
                 || scenario.aggregate.technical_invalid_runs > 0
         });
         let mut report = Self {
-            schema_version: RESULTS_SCHEMA_VERSION,
             result_contract_sha256: RESULT_CONTRACT_SHA256.into(),
-            scoring_profile_sha256: SCORING_PROFILE_SHA256.into(),
             report_state: if partial {
                 ReportState::Partial
             } else {
@@ -2204,7 +2039,6 @@ impl E2eReport {
             system_under_test,
             manifest: None,
             subject,
-            judge,
             engine_revision,
             observation_contract: None,
             passed,
@@ -2224,7 +2058,6 @@ impl E2eReport {
     }
 
     pub fn write_to(&mut self, output: &Path, manifest: &E2eManifest) -> Result<PathBuf> {
-        self.schema_version = RESULTS_SCHEMA_VERSION;
         fs::create_dir_all(output)
             .with_context(|| format!("create report directory {}", output.display()))?;
         manifest.validate().context("validate E2E manifest")?;
@@ -2258,13 +2091,13 @@ impl E2eReport {
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
         let value: Value = serde_json::from_slice(&bytes)
             .with_context(|| format!("decode E2E report {}", path.display()))?;
-        let version = value.get("schema_version").and_then(Value::as_u64);
-        if version != Some(u64::from(RESULTS_SCHEMA_VERSION)) {
-            bail!(
-                "unsupported results schema_version {}; expected {} with result contract {}",
-                version.map_or_else(|| "missing".into(), |value| value.to_string()),
-                RESULTS_SCHEMA_VERSION,
-                RESULT_CONTRACT_SHA256
+        let contract = value.get("result_contract_sha256").and_then(Value::as_str);
+        if contract != Some(RESULT_CONTRACT_SHA256) {
+            tracing::warn!(
+                path = %path.display(),
+                contract = contract.unwrap_or("missing"),
+                current = RESULT_CONTRACT_SHA256,
+                "reading a results report written under another results contract"
             );
         }
         let report: Self = serde_json::from_value(value)
@@ -2287,14 +2120,14 @@ impl E2eReport {
     }
 
     fn validate(&self, manifest: &E2eManifest, output: &Path) -> Result<()> {
-        if self.schema_version != RESULTS_SCHEMA_VERSION {
-            bail!("results schema_version must be {RESULTS_SCHEMA_VERSION}");
-        }
+        // Contract drift is a warning: the report says which contract and
+        // scoring profile it was written under, and both stay visible.
         if self.result_contract_sha256 != RESULT_CONTRACT_SHA256 {
-            bail!("results contract fingerprint is unsupported");
-        }
-        if self.scoring_profile_sha256 != SCORING_PROFILE_SHA256 {
-            bail!("results scoring profile fingerprint is unsupported");
+            tracing::warn!(
+                contract = %self.result_contract_sha256,
+                current = RESULT_CONTRACT_SHA256,
+                "results report was written under another results contract"
+            );
         }
         if self.execution.execution_id != manifest.execution.execution_id {
             bail!("results and manifest execution identities differ");
@@ -2332,30 +2165,13 @@ impl E2eReport {
                 case.validate()?;
                 if scenario.case_id != case.case_id
                     || scenario.scenario_id != case.scenario_id
-                    || scenario.scenario_version != case.scenario_version
+                    || scenario.behavior_sha256.as_deref() != Some(case.behavior_sha256.as_str())
                 {
                     bail!("scenario identity differs from its materialized case");
                 }
             }
             for run in &scenario.runs {
                 validate_attempt_identity(run)?;
-                if (run.technical == TechnicalState::TechnicalInvalid
-                    || run.completion == CompletionState::Undetermined)
-                    && run.objective_score.is_some()
-                {
-                    bail!(
-                        "run '{}' has an objective score without valid determined evidence",
-                        run.run_id
-                    );
-                }
-                if run.completion != CompletionState::Completed
-                    && run.quality_score_completed.is_some()
-                {
-                    bail!(
-                        "run '{}' has a completed-task quality score without completion",
-                        run.run_id
-                    );
-                }
                 let mut measurement_ids = HashSet::new();
                 for measurement in &run.scenario_measurements {
                     if measurement.id.trim().is_empty()
@@ -2414,7 +2230,7 @@ impl E2eReport {
             let expected = E2eScenarioReport::aggregate_with_planned(
                 scenario.scenario_id.clone(),
                 scenario.case_id.clone(),
-                scenario.scenario_version,
+                scenario.behavior_sha256.clone(),
                 scenario.case.clone(),
                 scenario.execution_policy,
                 scenario.aggregate.planned_runs,
@@ -2503,18 +2319,6 @@ impl E2eReport {
                     &mut run.scenario_flow,
                     &mut run.semantic_tests,
                 );
-                redact_optional_report_value(
-                    &policy,
-                    &mut redaction,
-                    &mut run.markdown_execution,
-                    "Markdown execution",
-                )?;
-                redact_optional_report_value(
-                    &policy,
-                    &mut redaction,
-                    &mut run.instruction_adherence,
-                    "instruction adherence",
-                )?;
                 for retry in &mut run.retry_attempts {
                     redaction.merge(retry.asset_redaction.clone());
                     if let Some(transcript) = &mut retry.transcript {
@@ -2541,18 +2345,6 @@ impl E2eReport {
                         &mut retry.scenario_flow,
                         &mut retry.semantic_tests,
                     );
-                    redact_optional_report_value(
-                        &policy,
-                        &mut redaction,
-                        &mut retry.markdown_execution,
-                        "retry Markdown execution",
-                    )?;
-                    redact_optional_report_value(
-                        &policy,
-                        &mut redaction,
-                        &mut retry.instruction_adherence,
-                        "retry instruction adherence",
-                    )?;
                 }
             }
         }
@@ -2573,14 +2365,11 @@ impl E2eReport {
                 for attempt in &run.retry_attempts {
                     validate_retry_identity(run, attempt)?;
                 }
-                let preserved_evidence = if run.markdown_execution.is_some() {
-                    std::mem::take(&mut run.evidence)
-                } else {
-                    run.evidence
-                        .drain(..)
-                        .filter(|reference| reference.kind == "runtime_diagnostics")
-                        .collect()
-                };
+                let preserved_evidence = run
+                    .evidence
+                    .drain(..)
+                    .filter(|reference| reference.kind == "runtime_diagnostics")
+                    .collect::<Vec<_>>();
                 run.evidence.clear();
                 materialize_attempt_evidence(
                     output,
@@ -2602,15 +2391,11 @@ impl E2eReport {
                 append_verified_references(output, &mut run.evidence, preserved_evidence)?;
                 bind_assessment_evidence(&mut run.assessment_results, &run.evidence);
                 for attempt in &mut run.retry_attempts {
-                    let preserved_evidence = if attempt.markdown_execution.is_some() {
-                        std::mem::take(&mut attempt.evidence)
-                    } else {
-                        attempt
-                            .evidence
-                            .drain(..)
-                            .filter(|reference| reference.kind == "runtime_diagnostics")
-                            .collect()
-                    };
+                    let preserved_evidence = attempt
+                        .evidence
+                        .drain(..)
+                        .filter(|reference| reference.kind == "runtime_diagnostics")
+                        .collect::<Vec<_>>();
                     attempt.evidence.clear();
                     materialize_attempt_evidence(
                         output,
@@ -2638,27 +2423,6 @@ impl E2eReport {
     }
 }
 
-fn redact_optional_report_value<T>(
-    policy: &crate::redaction::RedactionPolicy,
-    redaction: &mut crate::redaction::RedactionReport,
-    field: &mut Option<T>,
-    label: &str,
-) -> Result<()>
-where
-    T: Serialize + DeserializeOwned,
-{
-    let Some(current) = field.as_ref() else {
-        return Ok(());
-    };
-    let mut value = serde_json::to_value(current)
-        .with_context(|| format!("serialize {label} before redaction"))?;
-    redaction.merge(policy.redact_value(&mut value));
-    *field = Some(
-        serde_json::from_value(value).with_context(|| format!("decode {label} after redaction"))?,
-    );
-    Ok(())
-}
-
 fn append_verified_references(
     output: &Path,
     references: &mut Vec<ArtifactReference>,
@@ -2674,7 +2438,7 @@ fn append_verified_references(
             .any(|existing| existing.id == reference.id || existing.path == reference.path)
         {
             bail!(
-                "Markdown evidence conflicts with an existing artifact reference: {}",
+                "preserved evidence conflicts with an existing artifact reference: {}",
                 reference.path
             );
         }
@@ -3208,18 +2972,11 @@ fn required_passes(runs: u32) -> u32 {
     runs.saturating_mul(2).saturating_add(2) / 3
 }
 
-fn median(values: impl IntoIterator<Item = u8>) -> Option<f64> {
-    let mut values: Vec<_> = values.into_iter().collect();
+fn mean(values: &[u8]) -> Option<f64> {
     if values.is_empty() {
         return None;
     }
-    values.sort_unstable();
-    let middle = values.len() / 2;
-    if values.len() % 2 == 1 {
-        Some(f64::from(values[middle]))
-    } else {
-        Some((f64::from(values[middle - 1]) + f64::from(values[middle])) / 2.0)
-    }
+    Some(values.iter().map(|value| f64::from(*value)).sum::<f64>() / values.len() as f64)
 }
 
 fn sum_cost(values: impl IntoIterator<Item = Option<f64>>) -> Option<f64> {
@@ -3249,18 +3006,6 @@ mod tests {
 
     const TEST_DIGEST: &str =
         "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-    #[test]
-    fn scoring_profile_fingerprint_tracks_checked_in_bytes() {
-        let profile: Value = serde_json::from_slice(include_bytes!(
-            "../config/scoring/difficulty-weighted-v1.json"
-        ))
-        .unwrap();
-        assert_eq!(
-            artifact::sha256_value(&profile).unwrap(),
-            SCORING_PROFILE_SHA256
-        );
-    }
 
     #[test]
     fn result_contract_fingerprint_tracks_checked_in_schema() {
@@ -3301,7 +3046,6 @@ mod tests {
             execution: execution(),
             system_under_test: system(),
             subject: model(),
-            judge: None,
             control_plane: ControlPlaneEvidence {
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
@@ -3339,8 +3083,8 @@ mod tests {
             },
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
-                scenario_id: crate::scenarios::ScenarioId::ContextPressure.into(),
-                scenario_version: 4,
+                scenario_id: crate::scenarios::ScenarioId::ContextPressure,
+                behavior_sha256: format!("sha256:{}", "d".repeat(64)),
                 case_id: "context_pressure:v4:seed-0000000000000001".into(),
                 seed: 1,
                 inputs_sha256: format!("sha256:{}", "b".repeat(64)),
@@ -3355,7 +3099,7 @@ mod tests {
     }
 
     fn report(scenarios: Vec<E2eScenarioReport>) -> E2eReport {
-        E2eReport::new(execution(), system(), model(), None, None, scenarios)
+        E2eReport::new(execution(), system(), model(), None, scenarios)
     }
 
     fn run(score: u8, passed: bool) -> E2eRunReport {
@@ -3384,7 +3128,6 @@ mod tests {
     fn aggregate(runs: Vec<E2eRunReport>) -> E2eScenarioReport {
         E2eScenarioReport::aggregate(
             "case",
-            1,
             ExecutionPolicy {
                 max_turns: 1,
                 max_output_tokens: Some(1),
@@ -3406,13 +3149,12 @@ mod tests {
                 EvaluatorAvailability::Available,
             );
             measured.finish(status);
-            assert_eq!(measured.objective_score, Some(65));
-            assert_eq!(measured.quality_score_completed, None);
+            assert_eq!(measured.score, Some(65));
             let mut result = report(vec![aggregate(vec![measured])]);
             assert_eq!(result.execution_succeeded(), status == RunStatus::Passed);
             let path = result.write_to(output.path(), &manifest()).unwrap();
             let (restored, _) = E2eReport::read_from(&path).unwrap();
-            assert_eq!(restored.scenarios[0].runs[0].objective_score, Some(65));
+            assert_eq!(restored.scenarios[0].runs[0].score, Some(65));
             assert_eq!(
                 restored.scenarios[0].runs[0].completion,
                 CompletionState::TaskIncomplete
@@ -3421,9 +3163,9 @@ mod tests {
         let mut unavailable = run(0, true);
         unavailable.score = None;
         unavailable.finish(RunStatus::ResourceLimit);
-        assert_eq!(unavailable.objective_score, None);
+        assert_eq!(unavailable.score, None);
         let mut evaluator_error = run(65, true);
-        evaluator_error.finish(RunStatus::JudgeError);
+        evaluator_error.finish(RunStatus::InfrastructureError);
         assert!(!report(vec![aggregate(vec![evaluator_error])]).execution_succeeded());
     }
 
@@ -3439,7 +3181,7 @@ mod tests {
         assert!(report.passed);
         assert_eq!(report.aggregate.required_passes, 2);
         assert_eq!(report.aggregate.pass_rate, 2.0 / 3.0);
-        assert_eq!(report.aggregate.median_score, Some(80.0));
+        assert_eq!(report.aggregate.mean_score, Some(83.0));
     }
 
     #[test]
@@ -3469,16 +3211,15 @@ mod tests {
             "prompt".into(),
         );
         error.push_failure(
-            RunStatus::JudgeError,
+            RunStatus::InfrastructureError,
             FailurePhase::Evaluate,
-            "judge unavailable",
+            "evaluator unavailable",
         );
         let report = aggregate(vec![run(90, true), run(90, true), error]);
         assert!(!report.passed);
         assert_eq!(report.aggregate.scored_runs, 2);
-        assert_eq!(report.aggregate.technical_invalid_runs, 0);
-        assert_eq!(report.aggregate.undetermined_runs, 1);
-        assert_eq!(report.aggregate.median_score, Some(90.0));
+        assert_eq!(report.aggregate.technical_invalid_runs, 1);
+        assert_eq!(report.aggregate.mean_score, Some(90.0));
     }
 
     #[test]
@@ -3491,14 +3232,13 @@ mod tests {
         );
         let case = ScenarioCase::new(
             "case",
-            1,
             0,
             serde_json::json!({ "variant": "canonical" }),
-            ComplexityProfile::default(),
             Vec::new(),
             DeliverableContract::default(),
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let report = E2eScenarioReport::aggregate_case_with_planned(
             case,
             ExecutionPolicy {
@@ -3516,8 +3256,7 @@ mod tests {
         assert_eq!(report.aggregate.deferred_runs, 1);
         assert_eq!(report.aggregate.completed_runs, 1);
         assert_eq!(report.aggregate.task_incomplete_runs, 1);
-        assert_eq!(report.aggregate.objective_median_score, Some(65.0));
-        assert_eq!(report.aggregate.quality_score_completed, Some(90.0));
+        assert_eq!(report.aggregate.mean_score, Some(65.0));
         assert_eq!(report.aggregate.completion_rate, Some(0.5));
         assert_eq!(
             report.aggregate.completion_evidence_coverage,
@@ -3552,11 +3291,7 @@ mod tests {
 
     #[test]
     fn secondary_infrastructure_failure_survives_sealing_and_aggregation() {
-        for primary in [
-            RunStatus::HardGateFailed,
-            RunStatus::ResourceLimit,
-            RunStatus::JudgeError,
-        ] {
+        for primary in [RunStatus::HardGateFailed, RunStatus::ResourceLimit] {
             for phase in [FailurePhase::Cleanup, FailurePhase::Collect] {
                 let mut failed = run(80, true);
                 failed.push_failure(primary, FailurePhase::Evaluate, "primary failure");
@@ -3567,7 +3302,6 @@ mod tests {
                 );
                 assert_eq!(failed.status, primary);
                 assert_eq!(failed.technical, TechnicalState::TechnicalInvalid);
-                assert_eq!(failed.objective_score, None);
 
                 let bytes = serde_json::to_vec(&failed).unwrap();
                 let decoded: E2eRunReport = serde_json::from_slice(&bytes).unwrap();
@@ -3580,9 +3314,9 @@ mod tests {
                     TechnicalState::TechnicalInvalid
                 );
                 assert_eq!(aggregated.runs[0].completion, CompletionState::Completed);
-                assert_eq!(aggregated.runs[0].objective_score, None);
                 assert_eq!(aggregated.aggregate.technical_invalid_runs, 1);
-                assert_eq!(aggregated.aggregate.objective_scored_runs, 0);
+                // A technically invalid run keeps its measured points but never counts as scored.
+                assert_eq!(aggregated.aggregate.scored_runs, 0);
                 assert!(!aggregated.passed);
             }
         }
@@ -3602,20 +3336,19 @@ mod tests {
         assert_eq!(failed.failures[0].domain, FailureDomain::E2eInfrastructure);
         let aggregated = aggregate(vec![failed]);
         assert_eq!(aggregated.runs[0].technical, TechnicalState::Valid);
-        assert_eq!(aggregated.runs[0].objective_score, Some(0));
+        assert_eq!(aggregated.runs[0].score, Some(0));
         assert_eq!(aggregated.aggregate.technical_invalid_runs, 0);
     }
 
     #[test]
     fn swe_terminal_completion_survives_results_persistence() {
-        for (terminal, status, completion, score, technical, objective) in [
+        for (terminal, status, completion, score, technical) in [
             (
                 "completed",
                 RunStatus::Passed,
                 CompletionState::Completed,
                 100,
                 TechnicalState::Valid,
-                Some(100),
             ),
             (
                 "completed",
@@ -3623,7 +3356,6 @@ mod tests {
                 CompletionState::Completed,
                 100,
                 TechnicalState::TechnicalInvalid,
-                None,
             ),
             (
                 "capability_failure",
@@ -3631,7 +3363,6 @@ mod tests {
                 CompletionState::TaskIncomplete,
                 0,
                 TechnicalState::Valid,
-                Some(0),
             ),
         ] {
             let output = tempfile::tempdir().unwrap();
@@ -3645,7 +3376,7 @@ mod tests {
             std::fs::write(
                 path,
                 serde_json::to_vec(&serde_json::json!({
-                    "schema": "swe-service-report/v1",
+                    "schema": "swe-service-report",
                     "scenario_id": "swe_config_isolation",
                     "fixture_revision": crate::scenarios::swe_service::FIXTURE_REVISION,
                     "accepted_head": "0123456789abcdef0123456789abcdef01234567",
@@ -3657,10 +3388,12 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            let materialized = crate::scenarios::swe_service::materialize(
-                crate::scenarios::ScenarioId::SweConfigIsolation,
-            )
-            .unwrap();
+            let materialized = crate::scenarios::ScenarioId::SweConfigIsolation
+                .materialize(
+                    "swe-test",
+                    crate::scenarios::ScenarioId::SweConfigIsolation.canonical_seed(),
+                )
+                .unwrap();
             let mut run = E2eRunReport::new(
                 "run".into(),
                 attempt.clone(),
@@ -3684,7 +3417,8 @@ mod tests {
 
             assert_eq!(run.technical, technical);
             assert_eq!(run.completion, completion);
-            assert_eq!(run.objective_score, objective);
+            // The score is what the criteria awarded; `technical` says whether to trust it.
+            assert_eq!(run.score, Some(score));
             let scenario = E2eScenarioReport::aggregate_case(
                 materialized.case,
                 materialized.spec.execution,
@@ -3698,7 +3432,7 @@ mod tests {
             let persisted = &persisted.scenarios[0].runs[0];
             assert_eq!(persisted.technical, technical);
             assert_eq!(persisted.completion, completion);
-            assert_eq!(persisted.objective_score, objective);
+            assert_eq!(persisted.score, Some(score));
         }
     }
 
@@ -3715,7 +3449,7 @@ mod tests {
         completed.score = Some(90);
         completed.finish(RunStatus::Passed);
         assert_eq!(completed.technical, TechnicalState::Valid);
-        assert_eq!(completed.objective_score, Some(90));
+        assert_eq!(completed.score, Some(90));
     }
 
     #[test]
@@ -3748,7 +3482,6 @@ mod tests {
         let mut deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             3,
             "scenario materialization failed".into(),
@@ -3756,7 +3489,7 @@ mod tests {
         deferred.refresh_aggregate().unwrap();
         assert!(deferred.case.is_none());
         assert!(deferred.runs.is_empty());
-        assert_eq!(deferred.scenario_version, 0);
+        assert!(deferred.behavior_sha256.is_none());
         assert_eq!(deferred.case_id, "requested-case");
         assert_eq!(deferred.aggregate.planned_runs, 3);
         assert_eq!(deferred.aggregate.observed_runs, 0);
@@ -3764,7 +3497,7 @@ mod tests {
         assert_eq!(deferred.aggregate.total_tokens_consumed, Some(0));
         assert_eq!(deferred.aggregate.completion_rate, None);
         assert_eq!(deferred.aggregate.tokens_per_completion, None);
-        assert_eq!(deferred.aggregate.quality_score_completed, None);
+        assert_eq!(deferred.aggregate.mean_score, None);
         assert!(!deferred.passed);
         assert_eq!(
             deferred.deferral_reason.as_deref(),
@@ -3787,7 +3520,6 @@ mod tests {
             let mut deferred = E2eScenarioReport::deferred(
                 "unmaterialized".into(),
                 "requested-case".into(),
-                0,
                 policy,
                 planned,
                 reason.into(),
@@ -3797,7 +3529,6 @@ mod tests {
         let mut deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             policy,
             2,
             "materialization failed".into(),
@@ -3814,7 +3545,6 @@ mod tests {
         let deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             2,
             "materialization failed".into(),
@@ -3837,10 +3567,7 @@ mod tests {
         assert!(!report.passed);
         assert_eq!(report.scenarios[0].aggregate.completed_runs, 1);
         assert_eq!(report.scenarios[0].aggregate.deferred_runs, 0);
-        assert_eq!(
-            report.scenarios[0].aggregate.objective_median_score,
-            Some(90.0)
-        );
+        assert_eq!(report.scenarios[0].aggregate.mean_score, Some(90.0));
         report.write_to(output.path(), &manifest()).unwrap();
         let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
         assert_eq!(decoded.persistence_errors, vec!["journal append failed"]);
@@ -3857,7 +3584,6 @@ mod tests {
         let deferred = E2eScenarioReport::deferred(
             "unmaterialized".into(),
             "requested-case".into(),
-            0,
             aggregate(Vec::new()).execution_policy,
             2,
             format!("materialization failed: {secret}"),
@@ -3877,20 +3603,20 @@ mod tests {
         outvoted.status = RunStatus::Passed;
         let report = aggregate(vec![outvoted, run(90, true), run(90, true)]);
         assert!(report.passed);
-        assert_eq!(report.aggregate.median_score, Some(90.0));
+        assert_eq!(report.aggregate.mean_score, Some(75.0));
 
         let mut decisive = run(45, false);
         decisive.status = RunStatus::Passed;
         let report = aggregate(vec![decisive, run(90, true)]);
         assert!(report.passed);
-        assert_eq!(report.aggregate.median_score, Some(67.5));
+        assert_eq!(report.aggregate.mean_score, Some(67.5));
     }
 
     #[test]
     fn report_contains_current_execution_shape() {
         let report = report(vec![aggregate(vec![run(90, true)])]);
         let value = serde_json::to_value(report).unwrap();
-        assert_eq!(value["scenarios"][0]["aggregate"]["median_score"], 90.0);
+        assert_eq!(value["scenarios"][0]["aggregate"]["mean_score"], 90.0);
         assert!(value["scenarios"][0].get("threshold").is_none());
         assert_eq!(value["scenarios"][0]["runs"][0]["status"], "passed");
         assert!(value["scenarios"][0]["aggregate"]["cost"].is_object());
@@ -3976,9 +3702,7 @@ mod tests {
             }
         }]}));
 
-        attempt.update_efficiency(WorkExpectation {
-            minimum_expected_work: 10,
-        });
+        attempt.update_efficiency();
 
         let efficiency = attempt.efficiency.unwrap();
         assert_eq!(efficiency.root_turns, Some(3));
@@ -3990,30 +3714,26 @@ mod tests {
         assert_eq!(efficiency.wake_resumes, Some(1));
         assert_eq!(efficiency.effective_fan_out, Some(2));
         assert_eq!(efficiency.observed_work, Some(17));
-        assert!((efficiency.work_amplification.unwrap() - 1.7).abs() < f64::EPSILON);
         assert_eq!(efficiency.total_tokens, Some(1_500));
         assert!(efficiency.unavailable.contains_key("critical_path_ms"));
     }
 
     #[test]
     fn retry_efficiency_and_cost_include_every_technical_attempt() {
-        let work = WorkExpectation {
-            minimum_expected_work: 10,
-        };
         let mut failed = run(0, false);
         failed.status = RunStatus::SubjectError;
         failed.wall_time_ms = 500;
         failed.cost.total_usd = Some(0.10);
         failed.metrics = Some(metrics());
         failed.terminal_status = Some(status(1, 0));
-        failed.update_efficiency(work);
+        failed.update_efficiency();
 
         let mut passed = run(100, true);
         passed.wall_time_ms = 1_000;
         passed.cost.total_usd = Some(0.20);
         passed.metrics = Some(metrics());
         passed.terminal_status = Some(status(2, 1));
-        passed.update_efficiency(work);
+        passed.update_efficiency();
         passed.attach_retry_attempts(vec![RetryAttemptReport::from(&failed)]);
 
         let aggregate = aggregate(vec![passed.clone()]);
@@ -4021,7 +3741,6 @@ mod tests {
         assert_eq!(efficiency.technical_attempts, 2);
         assert_eq!(efficiency.total_tokens, Some(3_000));
         assert_eq!(efficiency.observed_work, Some(33));
-        assert!((efficiency.work_amplification.unwrap() - 3.3).abs() < f64::EPSILON);
         assert!((passed.cost.total_usd.unwrap() - 0.30).abs() < f64::EPSILON);
         assert_eq!(passed.wall_time_ms, 1_500);
         assert_eq!(aggregate.aggregate.total_tokens_consumed, Some(3_000));
@@ -4158,8 +3877,8 @@ mod tests {
             serde_json::from_slice(&std::fs::read(output.path().join("results.json")).unwrap())
                 .unwrap();
         assert_eq!(
-            value.get("schema_version"),
-            Some(&serde_json::json!(RESULTS_SCHEMA_VERSION))
+            value.get("result_contract_sha256"),
+            Some(&serde_json::json!(RESULT_CONTRACT_SHA256))
         );
         assert!(value.get("assessment_contract").is_some());
         assert!(value["scenarios"][0]["runs"][0].get("attempt_id").is_some());
@@ -4191,43 +3910,6 @@ mod tests {
     }
 
     #[test]
-    fn write_preserves_verified_markdown_phase_evidence() {
-        let output = tempfile::tempdir().unwrap();
-        let mut run = run(100, true);
-        run.markdown_execution = Some(MarkdownExecutionReport {
-            source_path: "case.md".into(),
-            source_sha256: format!("sha256:{}", "a".repeat(64)),
-            behavior_sha256: format!("sha256:{}", "b".repeat(64)),
-            compiled_sha256: format!("sha256:{}", "c".repeat(64)),
-            materialized_plan_sha256: Some(format!("sha256:{}", "d".repeat(64))),
-            prompt_sha256: format!("sha256:{}", "e".repeat(64)),
-            pipeline_complete: true,
-            phases: Vec::new(),
-        });
-        let phase = artifact::write_json(
-            output.path(),
-            Path::new("evidence/run/attempt/setup.json"),
-            "attempt-setup",
-            "markdown-phase-evidence",
-            &serde_json::json!({"session_id": "setup"}),
-        )
-        .unwrap();
-        run.evidence.push(phase.clone());
-        let mut report = report(vec![aggregate(vec![run])]);
-
-        report.write_to(output.path(), &manifest()).unwrap();
-        report.write_to(output.path(), &manifest()).unwrap();
-
-        let evidence = &report.scenarios[0].runs[0].evidence;
-        assert!(evidence.iter().any(|reference| reference == &phase));
-        let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
-        assert!(decoded.scenarios[0].runs[0]
-            .evidence
-            .iter()
-            .any(|reference| reference == &phase));
-    }
-
-    #[test]
     fn assessment_status_is_derived_from_the_run() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(0, false)])]);
@@ -4241,24 +3923,59 @@ mod tests {
     }
 
     #[test]
-    fn read_rejects_legacy_and_unknown_versions() {
+    fn score_is_the_plain_sum_of_evaluated_criteria() {
+        let criterion = |awarded: Option<u8>, possible: u8| CriterionReport {
+            id: format!("c{possible}"),
+            description: None,
+            possible,
+            awarded,
+            reason: "observed".into(),
+        };
+        // An unevaluated criterion adds nothing and does not null the score.
+        assert_eq!(
+            criteria_score(&[
+                criterion(Some(40), 40),
+                criterion(None, 30),
+                criterion(Some(10), 30)
+            ]),
+            Some(50)
+        );
+        // Nothing evaluated: no score, not zero.
+        assert_eq!(
+            criteria_score(&[criterion(None, 60), criterion(None, 40)]),
+            None
+        );
+        assert_eq!(criteria_score(&[]), None);
+        // Zero points awarded is a score of zero.
+        assert_eq!(criteria_score(&[criterion(Some(0), 100)]), Some(0));
+        // The sum never exceeds the hundred-point rubric.
+        assert_eq!(
+            criteria_score(&[criterion(Some(80), 80), criterion(Some(80), 80)]),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn read_keeps_a_foreign_result_contract_and_rejects_a_missing_one() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(100, true)])]);
         let path = report.write_to(output.path(), &manifest()).unwrap();
         let mut value: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        value["schema_version"] = serde_json::json!(2);
+        let foreign = format!("sha256:{}", "f".repeat(64));
+        value["result_contract_sha256"] = serde_json::json!(foreign);
+        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
+        // Another contract is a warning, not a refusal: the report keeps saying
+        // which contract it was written under.
+        let (decoded, _) = E2eReport::read_from(&path).unwrap();
+        assert_eq!(decoded.result_contract_sha256, foreign);
+
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("result_contract_sha256");
         std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
         let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains("unsupported results schema_version 2"));
-
-        value["schema_version"] = serde_json::json!(RESULTS_SCHEMA_VERSION + 1);
-        std::fs::write(&path, serde_json::to_vec_pretty(&value).unwrap()).unwrap();
-
-        let error = E2eReport::read_from(&path).unwrap_err();
-        assert!(format!("{error:#}").contains(&format!(
-            "unsupported results schema_version {}",
-            RESULTS_SCHEMA_VERSION + 1
-        )));
+        assert!(format!("{error:#}").contains("decode typed E2E report"));
     }
 
     #[test]
@@ -4266,7 +3983,6 @@ mod tests {
         let step = WorkflowStepReport {
             node_id: "assess".into(),
             step_type: "test.assess".into(),
-            step_version: 1,
             required: true,
             dependencies: Vec::new(),
             dependency_policy: DependencyPolicy::Succeeded,
@@ -4340,19 +4056,13 @@ mod tests {
         };
         let case = ScenarioCase::new(
             "case",
-            2,
             7,
             serde_json::json!({ "status": "ready" }),
-            ComplexityProfile {
-                external_systems: 1,
-                state_transitions: 1,
-                artifact_count: 1,
-                ..ComplexityProfile::default()
-            },
             vec!["iii::state".into()],
             contract,
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
@@ -4435,14 +4145,13 @@ mod tests {
         };
         let case = ScenarioCase::new(
             "case",
-            2,
             7,
             serde_json::json!({ "status": "ready" }),
-            ComplexityProfile::default(),
             vec![],
             contract,
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let captured = CapturedDeliverable {
             id: "result".into(),
             kind: "state_value".into(),
@@ -4539,9 +4248,7 @@ mod tests {
         let case = ScenarioCase::new(
             "case",
             1,
-            1,
             serde_json::json!({}),
-            ComplexityProfile::default(),
             vec![],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
@@ -4559,7 +4266,8 @@ mod tests {
                 capture_before_cleanup: true,
             },
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let reports = evaluate_deliverables(
             &case,
             vec![CapturedDeliverable {

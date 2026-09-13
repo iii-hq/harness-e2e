@@ -17,7 +17,6 @@ fn fixture() -> (TempDir, ExecutionJournal) {
             execution_id: "execution-1".into(),
             request_sha256: "request-sha".into(),
             result_contract_sha256: RESULT_CONTRACT_SHA256.into(),
-            scoring_profile_sha256: SCORING_PROFILE_SHA256.into(),
             created_at: AT.into(),
             request: json!({}),
             runner: json!({}),
@@ -74,10 +73,10 @@ fn checkpoint(
         "run"
     };
     let mut value = json!({
-        "schema": format!("harness-e2e-{kind}-checkpoint/v1"),
+        "schema": format!("harness-e2e-{kind}-checkpoint"),
         "slot_id": slot, "run_id": format!("run-{slot}"), "attempt_id": attempt,
-        "completion": "completed", "technical": "valid", "objective_score": 100,
-        "quality_score_completed": 80, "metrics": null, "cost": null,
+        "completion": "completed", "technical": "valid", "score": 100,
+        "metrics": null, "cost": null,
     });
     value
         .as_object_mut()
@@ -158,8 +157,8 @@ fn live_projection_preserves_pending_slots_and_counts_retries_once() {
         "b",
         "b-final",
         json!({
-            "completion": "task_incomplete", "quality_score_completed": null,
-            "objective_score": 20, "cost": { "total_usd": 0.1 }
+            "completion": "task_incomplete",
+            "score": 20, "cost": { "total_usd": 0.1 }
         }),
     );
     start(&journal, "c", "c-active");
@@ -187,8 +186,6 @@ fn live_projection_preserves_pending_slots_and_counts_retries_once() {
     assert_eq!(live.observed_cost_usd, Some(0.4));
     assert_eq!(live.cost_observed_runs, 2);
     assert_eq!(live.completion_rate, Some(0.5));
-    assert_eq!(live.quality_score_completed, Some(80.0));
-    assert_eq!(live.quality_scored_completed_runs, 1);
     assert_eq!(live.active_attempt.unwrap().attempt_id, "c-active");
     assert_eq!(live.slots[2].state, "pending");
     assert!(live.slots[2].completion.is_none());
@@ -210,7 +207,7 @@ fn unknown_telemetry_stays_null_and_uncommitted_artifacts_are_ignored() {
         &journal,
         "a",
         "a",
-        json!({ "completion": "undetermined", "technical": "technical_invalid", "objective_score": null, "quality_score_completed": null }),
+        json!({ "completion": "undetermined", "technical": "technical_invalid", "score": null }),
     );
     checkpoint(
         root.path(),
@@ -225,7 +222,6 @@ fn unknown_telemetry_stays_null_and_uncommitted_artifacts_are_ignored() {
     assert_eq!(live.observed_cost_usd, None);
     assert_eq!(live.cost_observed_runs, 0);
     assert_eq!(live.completion_rate, None);
-    assert_eq!(live.quality_score_completed, None);
     assert_eq!(live.undetermined_runs, 1);
     assert_eq!(live.technical_invalid_runs, 1);
     assert_eq!(live.journal.runs_committed, 1);

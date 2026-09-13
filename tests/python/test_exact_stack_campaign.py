@@ -72,7 +72,6 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "seed": 4404,
             "progress_interval_seconds": 15,
             "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-            "judge": {"provider": "zai", "model": "glm-5.3"},
             "groups": [
                 {
                     "id": "daily-core",
@@ -80,14 +79,12 @@ def campaign_contract(versions: dict[str, str] | None = None):
                     "scenarios": ["direct_answer"],
                     "runs": 1,
                     "technical_retries": 1,
-                    "weight": 4,
                 },
                 {
                     "id": "weekly-fault-l2",
                     "execution_kind": "fault_injection",
                     "runs": 3,
                     "technical_retries": 0,
-                    "weight": 2,
                     "fault_profile": "weekly-l2-recovery",
                     "fault_scenario": "stateful.2",
                     "soak_minutes": 60,
@@ -99,7 +96,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
 
 def catalog():
     return {
-        "schema": "e2e-scenario-catalog/v4",
+        "schema": "e2e-scenario-catalog",
         "runner": {
             "name": "harness-e2e",
             "version": "0.6.0-experimental",
@@ -109,7 +106,7 @@ def catalog():
         "scenarios": [
             {
                 "scenario_id": "direct_answer",
-                "scenario_version": 2,
+                "behavior_sha256": "sha256:" + "c" * 64,
                 "case_id": "direct_answer:4404",
                 "seed": 4404,
                 "inputs_sha256": f"sha256:{'1' * 64}",
@@ -417,7 +414,6 @@ fail() {
         request = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
         self.assertEqual(request["scenarios"], ["direct_answer"])
         self.assertEqual(request["model"], "deepseek-v4-flash")
-        self.assertEqual(request["judge_model"], "glm-5.3")
         self.assertEqual(request["run_contract"]["mode"]["decision"], "observe_only")
         self.assertEqual(
             set(request["run_contract"]["plan"]),
@@ -466,7 +462,15 @@ fail() {
         self.assertEqual(manifest["campaign_id"], "daily")
         self.assertEqual(manifest["lane"], "daily")
         self.assertEqual([group["id"] for group in manifest["groups"]], ["daily-core", "weekly-fault-l2"])
-        self.assertEqual(manifest["groups"][0]["difficulty_weight"], 4)
+        # Every case counts the same: no weight and no profile travel.
+        self.assertEqual(
+            sorted(manifest),
+            ["campaign_id", "failure_policy", "groups", "kind", "lane"],
+        )
+        self.assertEqual(
+            sorted(manifest["groups"][0]),
+            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
+        )
         self.assertEqual(manifest["groups"][0]["scenarios"], ["direct_answer"])
         self.assertEqual(manifest["groups"][1]["fault_profile"], "weekly-l2-recovery")
         self.assertNotIn("scenarios", manifest["groups"][1])
@@ -687,13 +691,13 @@ fail() {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             group = root / "groups" / "daily-core"
-            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state-v1.json"
+            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state.json"
             checkpoint.parent.mkdir(parents=True)
             payload = b'{"state_sha256":"sha256:checkpoint","state":{"sequence":3}}\n'
             checkpoint.write_bytes(payload)
             for package_root in [group, root]:
                 manifest = MODULE.package_bundle(package_root, campaign_contract(), {})
-                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state-v1.json"))
+                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state.json"))
                 self.assertEqual(reference["path"], checkpoint.relative_to(package_root).as_posix())
                 self.assertEqual(reference["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
                 self.assertEqual(reference["size_bytes"], len(payload))

@@ -1,11 +1,12 @@
 # Harness E2E
 
-`harness-e2e` measures which complexity levels a Harness stack can execute
-with correct deliverables, structural integrity, bounded work, and repeatable
-outcomes.
+`harness-e2e` measures what a Harness stack can execute with correct
+deliverables, structural integrity, bounded work, and repeatable outcomes.
 
-Objective scores preserve measured criterion points independently of completion
-or resource limits. Criteria do not veto the score or approve a run. Completion,
+A run's score is the plain sum of the points its evaluated criteria awarded; a
+criterion nobody evaluated adds nothing and nothing is normalized or rescaled.
+Scores preserve measured criterion points independently of completion or
+resource limits. Criteria do not veto the score or approve a run. Completion,
 technical validity, artifact evidence, and runtime controls are reported
 separately; infrastructure and execution failures still fail the CLI.
 
@@ -44,12 +45,11 @@ node --test tests/dashboard/*.test.cjs
 HARNESS_E2E_BIN="$PWD/target/debug/harness-e2e" python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
-List the materialized scenarios and their scenario versions:
+List the materialized scenarios and their definition digests:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
 cargo run --locked --bin harness-e2e -- catalog
-cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
 The four [Registry scenarios](tests/fixtures/registry-version-comparison/README.md)
@@ -73,19 +73,10 @@ checks have no award and remain `not_evaluated`; an incomplete criterion set has
 no total score. Product failures stay technically valid, while infrastructure
 failures invalidate the run without erasing prior criterion observations.
 
-New declarative scenarios are authored only as `scenarios/*.md`. The compiler
-embeds the exact source, validates the canonical English section structure,
-and exposes the resulting file-stem id through the CLI, worker catalog,
-campaign runner, dashboard, and canonical result artifacts. Required sections are
-Version, Before Test, Prompt and Validations. Plans select their scenarios explicitly.
-
-Replay an archived input only through its immutable plan (the runner rejects
-any scenario, model, policy, budget, stack, runner, run-count, or retry drift):
-
-```bash
-cargo run --locked -- replay-materialized \
-  target/e2e/evidence/<run-id>/<attempt-id>/materialized-plan.json
-```
+Every scenario is a built-in module under `src/scenarios/` that owns its
+prompt, setup, deterministic evaluator, and cleanup; the module id is exposed
+through the CLI, worker catalog, campaign runner, dashboard, and canonical
+result artifacts. Plans select their scenarios explicitly.
 
 Run against an existing stack:
 
@@ -129,7 +120,7 @@ stripping, both by the public suite and by the runner-owned behavioral probe.
 resilience, endurance, and software-engineering. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
-execution model, plus the judge model when the scope includes a Markdown test.
+execution model.
 **Save draft**, **Save and run**, and **Duplicate plan** use one shared lifecycle
 and retain native evidence. Fault-injection plans export
 to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
@@ -142,9 +133,9 @@ The `software-engineering` profile selects the seven incremental Kanban cases,
 four Registry cases, the trending-topics blog build and the Linkly tutorial,
 once each with no technical retries: 13 cases and 13 planned runs. Its twelve
 execution groups keep Registry implementation and verification together, in
-that order, so verification receives the implementation delivery. Registry
-planning requires an explicit auxiliary judge model. Trending topics runs in its
-own `case-trending-topics-build` group using the existing pinned fixture workflow.
+that order, so verification receives the implementation delivery. Trending
+topics runs in its own `case-trending-topics-build` group using the existing
+pinned fixture workflow.
 Linkly runs its eight exchanges in one `case-linkly-tutorial` group. The executor
 creates a fresh pinned `linkly-agentic` scaffold as that group's Compose project,
 with baseline worker versions taken from the resolved stack contract.
@@ -240,7 +231,7 @@ this is a personal experiment, not an exact-stack certification. No build/Git
 tracking or matching remote stack is required. Fault-injection groups still
 require the protected executor; they are not silently omitted. References without
 shard seeds for every scenario cannot be reproduced. Differences in local
-scenario version or case identity are shown as advisory information.
+scenario definition or case identity are shown as advisory information.
 
 Results stay in the local plan store. The RC execution remains a reference,
 never a locally recreated official execution. Native result validation remains
@@ -276,8 +267,7 @@ Compose, evidence, or archive artifacts.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::scenarios-create`,
-`e2e::scenarios-authoring-guide`, `e2e::archive`, `e2e::archive-head`,
+`e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,
 `e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
@@ -285,31 +275,32 @@ materialization and recovery classification stay on the same iii control plane.
 Subject policies deny `e2e::*`.
 
 Durable artifacts are chunked through `storage::*`. Admissions, executions,
-runs, attempts, artifact references and local scenario identities are written
-through the control-plane `database::*` worker. Execution records retain compact
-dashboard summaries and observations, so lists and history do not load native
-reports. Storage schema 3 requires an explicit migration of schema 1 or 2 before this
-worker starts. There is no automatic startup backfill. With the E2E worker stopped
-and its database backed up, run `harness-e2e migrate-storage --url <iii-url>
---config <worker-config.yaml>` to inspect the migration, then repeat with `--apply`.
+runs, attempts and artifact references are written through the control-plane
+`database::*` worker. Execution records retain compact dashboard summaries and
+observations, so lists and history do not load native reports. Storage carries
+no version number: the worker records a fingerprint of its own table layout and
+refuses to start on a database recorded under another fingerprint. A report or
+plan written under another results contract is read with a warning, never
+refused. There is no automatic startup backfill. With the E2E worker stopped
+and its database backed up, run `harness-e2e rebuild-storage --url <iii-url>
+--config <worker-config.yaml>` to inspect the rebuild, then repeat with `--apply`.
 `III_CONFIG` can provide the config path instead. The command uses the same
 database, control namespace and `data_dir` as the worker; relative data paths
 resolve against the config file's directory.
-The database worker must remain available in the control namespace. Apply commits
-all projections and the schema version in one transaction; active executions
-block migration. Missing bundles are listed in the result and never reconstructed
-as scored results. Empty obsolete SQL plan tables are removed; populated ones block
-cutover for explicit reconciliation with PlanStore. A second apply is a no-op.
+The database worker must remain available in the control namespace. Apply drops
+every Harness E2E table and recreates it in one transaction, keeping the
+executions, local plans and receipts this binary can still read; rows it cannot
+read are listed and dropped. Projections are rebuilt from the native bundles;
+missing bundles are listed in the result and never reconstructed as scored
+results. Imported Release Control history is dropped by the rebuild and comes
+back by importing it again. Active executions block the rebuild.
 
 Plan definitions and composed execution receipts are stored in `saved_plans` and
-`saved_plan_executions` through the database worker. The explicit migration reads
-`plan-store/plans/*.json` and `plan-store/executions/*.json`, verifies their
-identities and snapshots, and preserves baseline, candidates, slots and child
-references. Runtime does not read or write those directories. Keep the original
-files and database backup until cutover acceptance; rollback restores both with
-the corresponding previous binary.
+`saved_plan_executions` through the database worker. A saved plan or receipt this
+binary cannot read is deleted on the next read; plans written by another binary
+are never migrated.
 
-Release Control history imports use `harness-e2e-history/v1`, wrapped as
+Release Control history imports use `harness-e2e-history`, wrapped as
 `{json, sha256}` with a `sha256:` digest of the exact UTF-8 JSON. Use **Import
 history** in the Console to import a file or explicitly fetch a plan from the RC
 bridge. Plans and executions retain source identities, revisions and every
@@ -345,9 +336,9 @@ Contract compatibility is established at runtime from
 are parity fixtures, not a linked product API.
 
 The deterministic assessment boundary has one current payload shape, written
-only to `results.json`; scenario contracts are the only versioned domain. The
-judge model is auxiliary: Markdown tests use it for their validators and
-instruction adherence, and only those tests require it.
+only to `results.json`; scenario contracts are the only versioned domain. No
+scenario uses a second model: every score and every audit flag is
+deterministic.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation
@@ -383,19 +374,16 @@ the source repository, revision, E2E ref, and credential boundary are approved.
 ## Comparison
 
 Every completed execution records the subject and E2E revisions, observed wire
-contracts, scenario version, materialized inputs, seed, policies, artifacts,
+contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence. `e2e::compare` accepts two distinct completed
 execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 `comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric
 deltas remain disabled when the case set or canonical contract differs.
 
-Deliverable, structural, technical, cost, latency, turns, retries, and work
-amplification deltas remain independent. Cost and wall-time are reported as
-observed metrics and compared only within a compatible baseline/candidate
-cohort.
-amplification deltas remain independent. A tier is repeatable after five local
-runs satisfy the deliverable, structural, and technical thresholds. Cost and
-wall-time are reported as observed metrics and compared only within a compatible
+Deliverable, structural, technical, cost, latency, turns, and retry deltas
+remain independent. A case is repeatable after five local runs satisfy the
+deliverable, structural, and technical thresholds. Cost and wall-time are
+reported as observed metrics and compared only within a compatible
 baseline/candidate cohort.
 
 ## Runtime-only package boundary

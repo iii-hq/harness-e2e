@@ -27,13 +27,12 @@ use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "quorum_fan_in";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quorum_record";
 
 const MEMBER_COUNT: u8 = 3;
@@ -140,7 +139,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "members": MEMBER_COUNT,
@@ -149,7 +147,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "report_marker": REPORT_MARKER,
             "token_derivation": "run-scoped",
         }),
-        complexity_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -166,32 +163,10 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     })
 }
 
-/// `coordination_edges` is deliberately 2: the quorum pair is what the
-/// barrier coordinates, and the straggler is explicitly OUTSIDE the
-/// coordinated set — it contributes a parallel branch but no fan-in edge.
-/// That keeps the profile below the L4 threshold (`coordination_edges >= 3`
-/// or `dependency_depth >= 3`), so `parallel_branches: 3` derives
-/// L3Concurrent: three concurrent members under a two-edge fan-in contract.
-fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: 2,
-        parallel_branches: 3,
-        external_systems: 1,
-        state_transitions: 2,
-        wake_cycles: 1,
-        coordination_edges: 2,
-        artifact_count: 1,
-        ambiguity_level: 1,
-        ..ComplexityProfile::default()
-    }
-}
-
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -880,9 +855,7 @@ mod tests {
     }
 
     #[test]
-    fn materialization_is_reproducible_and_derives_the_concurrent_tier() {
-        use super::super::ComplexityTier;
-
+    fn materialization_is_reproducible() {
         let first = materialize("attempt-a", 77).unwrap();
         let retry = materialize("attempt-b", 77).unwrap();
         first.validate().unwrap();
@@ -890,14 +863,6 @@ mod tests {
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
-
-        // The quorum pair is the coordinated set and the straggler stays
-        // outside it, so the profile derives L3Concurrent, not L4Coordinated.
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L3Concurrent);
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
         assert!(first.capture.is_some());

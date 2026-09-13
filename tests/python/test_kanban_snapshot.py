@@ -76,7 +76,7 @@ class KanbanSnapshotTests(unittest.TestCase):
         self.catalog.write_text(
             json.dumps(
                 {
-                    "schema": "kanban-scenarios/v1",
+                    "schema": "kanban-scenarios",
                     "shared_prompt": "Work only in the supplied snapshot.",
                     "cases": [
                         {

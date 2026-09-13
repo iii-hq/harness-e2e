@@ -33,8 +33,6 @@ type Catalog = {
   url: string
   models: Model[]
   scenarios: string[]
-  /** Markdown tests the catalog lists but plans cannot run (audit PN-06). */
-  localScenarioIds: string[]
 }
 
 function modelKey(model: Model) {
@@ -70,23 +68,12 @@ function catalogValue(value: JsonObject): Catalog {
           : []
       })
     : []
-  const localScenarioIds = new Set(
-    Array.isArray(value.local_scenarios)
-      ? value.local_scenarios.flatMap((candidate) => {
-          if (!candidate || typeof candidate !== 'object') return []
-          const id = (candidate as JsonObject).id
-          return typeof id === 'string' ? [id] : []
-        })
-      : [],
-  )
   return {
     url: typeof value.url === 'string' ? value.url : '',
     models,
-    localScenarioIds: [...localScenarioIds],
     scenarios: Array.isArray(value.scenarios)
       ? value.scenarios.filter(
-          (item): item is string =>
-            typeof item === 'string' && !localScenarioIds.has(item),
+          (item): item is string => typeof item === 'string',
         )
       : [],
   }
@@ -103,7 +90,6 @@ export const PLAN_FORM_DEFAULTS = {
   purpose: '',
   url: '',
   subject: '',
-  judge: '',
   // Composite workflows contain non-repeatable steps; zero is the safe,
   // valid default for every new local plan.
   technicalRetries: '0',
@@ -124,7 +110,6 @@ export function planFormDirty(
     current.purpose !== initial.purpose ||
     current.url !== initial.url ||
     current.subject !== initial.subject ||
-    current.judge !== initial.judge ||
     current.testQuery !== initial.testQuery ||
     current.runs !== initial.runs ||
     current.technicalRetries !== initial.technicalRetries ||
@@ -144,7 +129,6 @@ export function LocalPlanCreatePage({
 } = {}) {
   const [templates, setTemplates] = useState<MasterTestProfile[]>([])
   const [templateId, setTemplateId] = useState<string | undefined>(profileId)
-  const [requiredJudges, setRequiredJudges] = useState<string[]>([])
   const [savedId, setSavedId] = useState<string | null>(null)
   const [requirements, setRequirements] = useState<PlanRequirements | null>(
     null,
@@ -155,7 +139,6 @@ export function LocalPlanCreatePage({
   const [purpose, setPurpose] = useState(PLAN_FORM_DEFAULTS.purpose)
   const [url, setUrl] = useState(PLAN_FORM_DEFAULTS.url)
   const [subject, setSubject] = useState(PLAN_FORM_DEFAULTS.subject)
-  const [judge, setJudge] = useState(PLAN_FORM_DEFAULTS.judge)
   const [scenarios, setScenarios] = useState<string[]>(
     PLAN_FORM_DEFAULTS.scenarios,
   )
@@ -201,15 +184,6 @@ export function LocalPlanCreatePage({
         await loadCatalog(next)
         const listed = await next.listPlans()
         setTemplates(listed.master_plan?.profiles ?? [])
-        setRequiredJudges([
-          ...new Set(
-            (listed.master_plan?.profiles ?? []).flatMap((p) =>
-              (p.cases ?? [])
-                .filter((c) => c.judge_required)
-                .map((c) => c.scenario_id),
-            ),
-          ),
-        ])
         if (duplicateId || editId) {
           const source = await next.getPlan((duplicateId ?? editId) as string)
           if (source.origin === 'remote')
@@ -223,14 +197,6 @@ export function LocalPlanCreatePage({
           setRuns(String(source.runs))
           setTechnicalRetries(String(source.technical_retries))
           setSeed(source.seed === null ? '' : String(source.seed))
-          setJudge(
-            source.judge_model
-              ? modelKey({
-                  model: source.judge_model,
-                  provider: source.judge_provider,
-                })
-              : '',
-          )
           setSubject(editId ? modelKey(source) : '')
           setTemplateId(source.template_id ?? undefined)
           initialValues.current = {
@@ -239,12 +205,6 @@ export function LocalPlanCreatePage({
             purpose: source.purpose,
             url: source.url,
             subject: editId ? modelKey(source) : '',
-            judge: source.judge_model
-              ? modelKey({
-                  model: source.judge_model,
-                  provider: source.judge_provider,
-                })
-              : '',
             scenarios: source.scenario_ids,
             runs: String(source.runs),
             technicalRetries: String(source.technical_retries),
@@ -298,7 +258,6 @@ export function LocalPlanCreatePage({
   const selectedSubject = catalog?.models.find(
     (item) => modelKey(item) === subject,
   )
-  const selectedJudge = catalog?.models.find((item) => modelKey(item) === judge)
   const groupedModels = useMemo(
     () => modelGroups(catalog?.models ?? []),
     [catalog],
@@ -312,14 +271,6 @@ export function LocalPlanCreatePage({
   }))
   const runsPerTest = Math.max(1, Number(runs) || 1)
   const retryCount = Math.max(0, Number(technicalRetries) || 0)
-  const judgeRequired =
-    Boolean(
-      templates.find((template) => template.id === templateId)
-        ?.protected_supervisor_required,
-    ) ||
-    scenarios.some(
-      (id) => id === 'registry_planning' || requiredJudges.includes(id),
-    )
   // Audit PN-05 / PN-15: the primary stays enabled; after a submit attempt
   // the pending items show inline and next to the button.
   const errors = attempted
@@ -329,8 +280,6 @@ export function LocalPlanCreatePage({
         subject,
         selectedScenarios: scenarios,
         url,
-        judge,
-        judgeRequired,
       })
     : {}
 
@@ -340,7 +289,6 @@ export function LocalPlanCreatePage({
       purpose,
       url,
       subject,
-      judge,
       scenarios,
       testQuery,
       runs,
@@ -363,8 +311,6 @@ export function LocalPlanCreatePage({
       subject,
       selectedScenarios: scenarios,
       url,
-      judge,
-      judgeRequired,
     })
     if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
       setAttempted(true)
@@ -381,8 +327,6 @@ export function LocalPlanCreatePage({
         url,
         model: selectedSubject.model,
         provider: selectedSubject.provider,
-        judge_model: selectedJudge?.model ?? '',
-        judge_provider: selectedJudge?.provider ?? '',
         scenarios,
         runs: runsPerTest,
         technical_retries: retryCount,
@@ -402,7 +346,6 @@ export function LocalPlanCreatePage({
         purpose: purpose.trim(),
         url,
         subject,
-        judge,
         scenarios,
         testQuery,
         runs,
@@ -435,12 +378,8 @@ export function LocalPlanCreatePage({
     subject: selectedSubject
       ? `${selectedSubject.provider} / ${selectedSubject.model}`
       : '',
-    judge: selectedJudge
-      ? `${selectedJudge.provider} / ${selectedJudge.model}`
-      : '',
     url,
   }
-  const localCount = catalog?.localScenarioIds.length ?? 0
 
   return (
     <>
@@ -499,8 +438,7 @@ export function LocalPlanCreatePage({
             </Select>
             <span className="mt-1 block text-xs text-ink-soft">
               Templates fill the initial scope and policy. Edit them and select
-              the execution model before saving; some tests also require a
-              judge.
+              the execution model before saving.
             </span>
           </label>
         ) : null}
@@ -524,19 +462,8 @@ export function LocalPlanCreatePage({
             purpose={purpose}
             url={url}
             subject={subject}
-            judge={judge}
-            judgeRequired={judgeRequired}
             modelGroups={modelOptions}
             availableScenarios={catalog?.scenarios ?? []}
-            localScenarioIds={catalog?.localScenarioIds ?? []}
-            unavailableScenarios={
-              localCount > 0
-                ? {
-                    ids: catalog?.localScenarioIds ?? [],
-                    reason: 'Local Markdown tests are not available in plans.',
-                  }
-                : undefined
-            }
             selectedScenarios={scenarios}
             query={testQuery}
             runs={runs}
@@ -550,7 +477,7 @@ export function LocalPlanCreatePage({
                 : catalog
                   ? {
                       tone: 'ready',
-                      text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}${localCount > 0 ? ` · ${localCount} local not available in plans` : ''}`,
+                      text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}`,
                     }
                   : { tone: 'unavailable', text: 'catalog unavailable' }
             }
@@ -560,7 +487,6 @@ export function LocalPlanCreatePage({
             onPurposeChange={setPurpose}
             onUrlChange={setUrl}
             onSubjectChange={setSubject}
-            onJudgeChange={setJudge}
             onSelectedScenariosChange={setScenarios}
             onQueryChange={setTestQuery}
             onRunsChange={setRuns}

@@ -16,7 +16,6 @@ describe('workflow metrics', () => {
       {
         node_id: 'scan',
         step_type: 'security.scan',
-        step_version: 1,
         required: true,
         dependencies: [],
         status: 'succeeded',
@@ -34,7 +33,6 @@ describe('workflow metrics', () => {
       {
         node_id: 'reconcile',
         step_type: 'github.reconcile',
-        step_version: 1,
         required: true,
         dependencies: ['scan'],
         status: 'failed',
@@ -48,7 +46,6 @@ describe('workflow metrics', () => {
       {
         node_id: 'optional',
         step_type: 'optional.report',
-        step_version: 1,
         required: false,
         dependencies: ['reconcile'],
         status: 'skipped',

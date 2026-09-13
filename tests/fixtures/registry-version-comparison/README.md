@@ -27,7 +27,7 @@ Release Control's existing `harness-evolution` plan selects this profile through
 
 Within the shared execution, implementation publishes its delivery for verification. A new repetition clears that input, and a missing delivery fails verification rather than selecting an older file. Concurrent executions cannot exchange deliveries. Verification applies the patch to a fresh pinned Registry checkout and starts a fresh environment.
 
-In the E2E extension, create a plan with one scenario and an execution model. Select an explicit judge for `registry_planning`; the other three scenarios use runtime validators. Use one run and zero technical retries for initial validation so failures remain visible.
+In the E2E extension, create a plan with one scenario and an execution model. All four scenarios use runtime validators; planning scores the delivered `plan.md` with deterministic text checks. Use one run and zero technical retries for initial validation so failures remain visible.
 
 Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the executor workspace disk. Set `TMPDIR` there as well when the host temporary filesystem has a separate quota. The worker process must receive these variables before the run starts; setting them in the browser does not configure the worker.
 
@@ -47,7 +47,7 @@ cargo run --locked -- run \
   --scenario registry_implementation
 ```
 
-Planning uses a separate model call to assess the plan against the atomic questions. Use the regular `--judge-model` and `--judge-provider` options (or `HARNESS_E2E_JUDGE_MODEL` and `HARNESS_E2E_JUDGE_PROVIDER`). If the judge cannot run, its measurements are unavailable.
+Planning answers each atomic question with a deterministic check over the delivered `plan.md`: contract terms that must be stated, pinned-source paths that must be cited, an ordered implementation sequence, proposed tests that state an expected result, and the absence of excluded work. Each observation cites the plan lines it matched and is retained in `validation/plan-checks.json`. No model call is involved.
 
 To test a previously delivered implementation:
 

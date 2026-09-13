@@ -3,6 +3,7 @@ import { ArrowDown, ArrowUp } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { Button, DataTable, EmptyState } from '@/design-system'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import { formatDuration } from '@/lib/execution-view'
 import {
   comparePrimaryMetrics,
@@ -153,7 +154,7 @@ export function PrimaryMetricsView({
       return baseline.tests.map((test) => ({
         key: test.key,
         label: test.label,
-        version: test.version,
+        definition: test.definition,
         baseline: test,
         candidate: null,
         deltas: null,
@@ -411,15 +412,17 @@ export function PrimaryMetricsView({
                     <tr key={test.key}>
                       <th scope="row" className="pm-test-identity">
                         <span>{test.label}</span>
-                        {test.version !== null ? (
-                          <small>Version {test.version}</small>
+                        {test.definition !== null ? (
+                          <small title={definitionTitle(test.definition)}>
+                            Definition {shortDefinition(test.definition)}
+                          </small>
                         ) : null}
                         <div className="pm-test-actions">
                           {baselineExecutionId && test.baseline ? (
                             <ScenarioChatAction
                               executionId={baselineExecutionId}
                               scenarioId={test.label}
-                              scenarioVersion={test.version}
+                              behaviorSha256={test.definition}
                               label={comparing ? 'Transcript A' : 'Transcript'}
                             />
                           ) : null}
@@ -427,7 +430,7 @@ export function PrimaryMetricsView({
                             <ScenarioChatAction
                               executionId={candidateExecutionId}
                               scenarioId={test.label}
-                              scenarioVersion={test.version}
+                              behaviorSha256={test.definition}
                               label="Transcript B"
                             />
                           ) : null}

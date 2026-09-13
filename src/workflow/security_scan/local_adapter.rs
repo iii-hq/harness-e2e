@@ -14,17 +14,16 @@ const REQUEST_DESC: &str = "Queue a report-only security review for an operator-
 const READ_DESC: &str = "Read a security-scan run and its validated report without exposing internal checkout paths or Harness session identifiers.";
 const LIST_DESC: &str = "List security-scan runs as sanitized lightweight summaries, newest update first. Optional repository and status filters are applied before the bounded result limit.";
 const RECONCILIATION_DESC: &str = "Read or refresh a persisted, sanitized comparison of one Harness report with separately counted Dependabot and code-scanning snapshots. Supports bounded source, severity, lifecycle, and cursor filters; never reports a combined unique total.";
-const SCHEMA_VERSION: &str = "1";
 const DETERMINISTIC_TIME_MS: i64 = 1_700_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ScanModeV1 {
+enum ScanMode {
     Scan,
     Suggest,
 }
 
-impl ScanModeV1 {
+impl ScanMode {
     fn as_str(self) -> &'static str {
         match self {
             Self::Scan => "scan",
@@ -35,10 +34,10 @@ impl ScanModeV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanRequestV1 {
+struct SecurityScanRequest {
     repository: String,
     target_sha: String,
-    mode: ScanModeV1,
+    mode: ScanMode,
     /// Metadata injected by the iii engine. It is accepted on the wire but is
     /// not part of the public function schema or the request identity.
     #[serde(rename = "_caller_worker_id", default)]
@@ -48,7 +47,7 @@ struct SecurityScanRequestV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum RunStatusV1 {
+enum RunStatus {
     Queued,
     Materializing,
     Materialized,
@@ -62,7 +61,7 @@ enum RunStatusV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct RunErrorV1 {
+struct RunError {
     code: String,
     message: String,
     retryable: bool,
@@ -70,15 +69,15 @@ struct RunErrorV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanResponseV1 {
+struct SecurityScanResponse {
     run_id: String,
-    status: RunStatusV1,
+    status: RunStatus,
     deduplicated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanReadRequestV1 {
+struct SecurityScanReadRequest {
     run_id: String,
     #[serde(rename = "_caller_worker_id", default)]
     #[schemars(skip)]
@@ -87,11 +86,11 @@ struct SecurityScanReadRequestV1 {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanListRequestV1 {
+struct SecurityScanListRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     repository: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    status: Option<RunStatusV1>,
+    status: Option<RunStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     limit: Option<u32>,
     #[serde(rename = "_caller_worker_id", default)]
@@ -101,18 +100,17 @@ struct SecurityScanListRequestV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct PublicRunV1 {
-    schema_version: String,
+struct PublicRun {
     run_id: String,
     repository: String,
     target_sha: String,
-    mode: ScanModeV1,
-    status: RunStatusV1,
+    mode: ScanMode,
+    status: RunStatus,
     attempt: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    report: Option<SecurityReportV1>,
+    report: Option<SecurityReport>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<RunErrorV1>,
+    error: Option<RunError>,
     created_at: i64,
     updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,24 +119,24 @@ struct PublicRunV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct PublicRunSummaryV1 {
+struct PublicRunSummary {
     run_id: String,
     repository: String,
     target_sha: String,
-    mode: ScanModeV1,
-    status: RunStatusV1,
+    mode: ScanMode,
+    status: RunStatus,
     attempt: u32,
     finding_count: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    error: Option<RunErrorV1>,
+    error: Option<RunError>,
     created_at: i64,
     updated_at: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     completed_at: Option<i64>,
 }
 
-impl From<&PublicRunV1> for PublicRunSummaryV1 {
-    fn from(run: &PublicRunV1) -> Self {
+impl From<&PublicRun> for PublicRunSummary {
+    fn from(run: &PublicRun) -> Self {
         Self {
             run_id: run.run_id.clone(),
             repository: run.repository.clone(),
@@ -161,20 +159,20 @@ impl From<&PublicRunV1> for PublicRunSummaryV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanReadResponseV1 {
+struct SecurityScanReadResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    run: Option<PublicRunV1>,
+    run: Option<PublicRun>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanListResponseV1 {
-    runs: Vec<PublicRunSummaryV1>,
+struct SecurityScanListResponse {
+    runs: Vec<PublicRunSummary>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum SeverityV1 {
+enum Severity {
     Critical,
     High,
     Medium,
@@ -184,20 +182,20 @@ enum SeverityV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReconciliationSourceV1 {
+enum ReconciliationSource {
     Dependabot,
     CodeScanning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReconciliationLifecycleV1 {
+enum ReconciliationLifecycle {
     Open,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReconciliationScopeV1 {
+enum ReconciliationScope {
     ExactCommit,
     RepositoryDefaultBranch,
     RepositorySnapshot,
@@ -205,7 +203,7 @@ enum ReconciliationScopeV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReconciliationSourceStatusV1 {
+enum ReconciliationSourceStatus {
     Complete,
     Partial,
     Unavailable,
@@ -218,7 +216,7 @@ enum ReconciliationSourceStatusV1 {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-enum ReconciliationHealthStatusV1 {
+enum ReconciliationHealthStatus {
     Healthy,
     Warning,
     Error,
@@ -227,8 +225,8 @@ enum ReconciliationHealthStatusV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReconciliationSourceHealthV1 {
-    status: ReconciliationHealthStatusV1,
+struct ReconciliationSourceHealth {
+    status: ReconciliationHealthStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tool: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -239,26 +237,26 @@ struct ReconciliationSourceHealthV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReconciliationSourceSummaryV1 {
-    source: ReconciliationSourceV1,
-    status: ReconciliationSourceStatusV1,
-    scope: ReconciliationScopeV1,
+struct ReconciliationSourceSummary {
+    source: ReconciliationSource,
+    status: ReconciliationSourceStatus,
+    scope: ReconciliationScope,
     /// Collection time in Unix milliseconds. Null means the source was not queried.
     collected_at: Option<i64>,
     /// Number of normalized records when collection returned usable data. Null
     /// is unavailable/not-collected and is deliberately distinct from zero.
     record_count: Option<u32>,
-    health: ReconciliationSourceHealthV1,
+    health: ReconciliationSourceHealth,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReconciliationAlertV1 {
-    source: ReconciliationSourceV1,
+struct ReconciliationAlert {
+    source: ReconciliationSource,
     number: u64,
-    severity: SeverityV1,
-    lifecycle: ReconciliationLifecycleV1,
-    scope: ReconciliationScopeV1,
+    severity: Severity,
+    lifecycle: ReconciliationLifecycle,
+    scope: ReconciliationScope,
     title: String,
     description: String,
     /// Reconstructed public github.com URL. Dependency-provided URLs are never persisted.
@@ -279,49 +277,49 @@ struct ReconciliationAlertV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-enum HarnessReconciliationStatusV1 {
+enum HarnessReconciliationStatus {
     Verified,
     NotAvailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct HarnessReconciliationSummaryV1 {
-    status: HarnessReconciliationStatusV1,
+struct HarnessReconciliationSummary {
+    status: HarnessReconciliationStatus,
     /// Validated Harness report findings. This is never added to GitHub source counts.
     verified_count: Option<u32>,
     verified_at: Option<i64>,
-    scope: ReconciliationScopeV1,
+    scope: ReconciliationScope,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-enum ReconciliationMatchingStatusV1 {
+enum ReconciliationMatchingStatus {
     Available,
     Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ReconciliationMatchingV1 {
-    status: ReconciliationMatchingStatusV1,
+struct ReconciliationMatching {
+    status: ReconciliationMatchingStatus,
     /// Present only when exact structured identifiers produced matches.
     matched_records: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanReconciliationRequestV1 {
+struct SecurityScanReconciliationRequest {
     run_id: String,
     #[serde(default)]
     refresh: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    source: Option<ReconciliationSourceV1>,
+    source: Option<ReconciliationSource>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    severity: Option<SeverityV1>,
+    severity: Option<Severity>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    lifecycle: Option<ReconciliationLifecycleV1>,
+    lifecycle: Option<ReconciliationLifecycle>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -333,23 +331,22 @@ struct SecurityScanReconciliationRequestV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityScanReconciliationResponseV1 {
-    schema_version: String,
+struct SecurityScanReconciliationResponse {
     run_id: String,
     repository: String,
     target_sha: String,
-    harness: HarnessReconciliationSummaryV1,
+    harness: HarnessReconciliationSummary,
     github_repository: Option<String>,
-    sources: Vec<ReconciliationSourceSummaryV1>,
-    matching: ReconciliationMatchingV1,
-    records: Vec<ReconciliationAlertV1>,
+    sources: Vec<ReconciliationSourceSummary>,
+    matching: ReconciliationMatching,
+    records: Vec<ReconciliationAlert>,
     next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
-enum AssessmentStatusV1 {
+enum AssessmentStatus {
     Assessed,
     NotAssessed,
     #[default]
@@ -358,24 +355,24 @@ enum AssessmentStatusV1 {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityAreaAssessmentV1 {
-    status: AssessmentStatusV1,
+struct SecurityAreaAssessment {
+    status: AssessmentStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityAssessmentsV1 {
-    vulnerabilities: SecurityAreaAssessmentV1,
-    dependencies: SecurityAreaAssessmentV1,
-    secrets: SecurityAreaAssessmentV1,
-    supply_chain: SecurityAreaAssessmentV1,
+struct SecurityAssessments {
+    vulnerabilities: SecurityAreaAssessment,
+    dependencies: SecurityAreaAssessment,
+    secrets: SecurityAreaAssessment,
+    supply_chain: SecurityAreaAssessment,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct FindingLocationV1 {
+struct FindingLocation {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     line_start: Option<u64>,
@@ -385,14 +382,14 @@ struct FindingLocationV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityFindingV1 {
+struct SecurityFinding {
     rule_id: String,
-    severity: SeverityV1,
+    severity: Severity,
     title: String,
     description: String,
     evidence: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    location: Option<FindingLocationV1>,
+    location: Option<FindingLocation>,
     remediation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     suggested_patch: Option<String>,
@@ -400,17 +397,17 @@ struct SecurityFindingV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct SecurityReportV1 {
+struct SecurityReport {
     summary: String,
-    assessments: SecurityAssessmentsV1,
-    findings: Vec<SecurityFindingV1>,
+    assessments: SecurityAssessments,
+    findings: Vec<SecurityFinding>,
 }
 
 #[derive(Default)]
 struct LocalState {
-    runs: BTreeMap<String, PublicRunV1>,
+    runs: BTreeMap<String, PublicRun>,
     identities: HashMap<(String, String, String), String>,
-    snapshots: HashMap<String, SecurityScanReconciliationResponseV1>,
+    snapshots: HashMap<String, SecurityScanReconciliationResponse>,
     sequence: i64,
 }
 
@@ -427,7 +424,7 @@ impl LocalAdapter {
         }
     }
 
-    async fn request(&self, mut request: SecurityScanRequestV1) -> Result<SecurityScanResponseV1> {
+    async fn request(&self, mut request: SecurityScanRequest) -> Result<SecurityScanResponse> {
         if request.repository != REPOSITORY {
             bail!(
                 "repository '{}' is not the configured local security fixture",
@@ -455,7 +452,7 @@ impl LocalAdapter {
         Ok(self.record_request(request))
     }
 
-    fn record_request(&self, request: SecurityScanRequestV1) -> SecurityScanResponseV1 {
+    fn record_request(&self, request: SecurityScanRequest) -> SecurityScanResponse {
         let identity = (
             request.repository.clone(),
             request.target_sha.clone(),
@@ -463,9 +460,9 @@ impl LocalAdapter {
         );
         let mut state = self.lock();
         if let Some(run_id) = state.identities.get(&identity).cloned() {
-            return SecurityScanResponseV1 {
+            return SecurityScanResponse {
                 run_id,
-                status: RunStatusV1::Completed,
+                status: RunStatus::Completed,
                 deduplicated: true,
             };
         }
@@ -473,13 +470,12 @@ impl LocalAdapter {
         let timestamp = DETERMINISTIC_TIME_MS + state.sequence;
         state.sequence += 1;
         let report = deterministic_report(request.mode);
-        let run = PublicRunV1 {
-            schema_version: SCHEMA_VERSION.into(),
+        let run = PublicRun {
             run_id: run_id.clone(),
             repository: request.repository,
             target_sha: request.target_sha,
             mode: request.mode,
-            status: RunStatusV1::Completed,
+            status: RunStatus::Completed,
             attempt: 1,
             report: Some(report),
             error: None,
@@ -489,20 +485,20 @@ impl LocalAdapter {
         };
         state.identities.insert(identity, run_id.clone());
         state.runs.insert(run_id.clone(), run);
-        SecurityScanResponseV1 {
+        SecurityScanResponse {
             run_id,
-            status: RunStatusV1::Completed,
+            status: RunStatus::Completed,
             deduplicated: false,
         }
     }
 
-    fn read(&self, request: SecurityScanReadRequestV1) -> SecurityScanReadResponseV1 {
-        SecurityScanReadResponseV1 {
+    fn read(&self, request: SecurityScanReadRequest) -> SecurityScanReadResponse {
+        SecurityScanReadResponse {
             run: self.lock().runs.get(&request.run_id).cloned(),
         }
     }
 
-    fn list(&self, request: SecurityScanListRequestV1) -> SecurityScanListResponseV1 {
+    fn list(&self, request: SecurityScanListRequest) -> SecurityScanListResponse {
         let mut runs = self
             .lock()
             .runs
@@ -514,7 +510,7 @@ impl LocalAdapter {
                     .is_none_or(|repository| &run.repository == repository)
                     && request.status.is_none_or(|status| run.status == status)
             })
-            .map(PublicRunSummaryV1::from)
+            .map(PublicRunSummary::from)
             .collect::<Vec<_>>();
         runs.sort_by(|left, right| {
             right
@@ -523,13 +519,13 @@ impl LocalAdapter {
                 .then_with(|| right.run_id.cmp(&left.run_id))
         });
         runs.truncate(request.limit.unwrap_or(50).clamp(1, 100) as usize);
-        SecurityScanListResponseV1 { runs }
+        SecurityScanListResponse { runs }
     }
 
     fn reconciliation(
         &self,
-        request: SecurityScanReconciliationRequestV1,
-    ) -> Result<SecurityScanReconciliationResponseV1> {
+        request: SecurityScanReconciliationRequest,
+    ) -> Result<SecurityScanReconciliationResponse> {
         let mut state = self.lock();
         let run =
             state.runs.get(&request.run_id).cloned().with_context(|| {
@@ -596,7 +592,7 @@ pub(crate) async fn register_local_adapter_if_configured(context: &E2eContext) -
     let request_adapter = adapter.clone();
     context.client().register_function(
         REQUEST_FUNCTION,
-        RegisterFunction::new_async(move |request: SecurityScanRequestV1| {
+        RegisterFunction::new_async(move |request: SecurityScanRequest| {
             let adapter = request_adapter.clone();
             async move { adapter.request(request).await.map_err(handler_error) }
         })
@@ -605,24 +601,24 @@ pub(crate) async fn register_local_adapter_if_configured(context: &E2eContext) -
     let read_adapter = adapter.clone();
     context.client().register_function(
         READ_FUNCTION,
-        RegisterFunction::new_async(move |request: SecurityScanReadRequestV1| {
+        RegisterFunction::new_async(move |request: SecurityScanReadRequest| {
             let adapter = read_adapter.clone();
-            async move { Ok::<SecurityScanReadResponseV1, IiiError>(adapter.read(request)) }
+            async move { Ok::<SecurityScanReadResponse, IiiError>(adapter.read(request)) }
         })
         .description(READ_DESC),
     );
     let list_adapter = adapter.clone();
     context.client().register_function(
         LIST_FUNCTION,
-        RegisterFunction::new_async(move |request: SecurityScanListRequestV1| {
+        RegisterFunction::new_async(move |request: SecurityScanListRequest| {
             let adapter = list_adapter.clone();
-            async move { Ok::<SecurityScanListResponseV1, IiiError>(adapter.list(request)) }
+            async move { Ok::<SecurityScanListResponse, IiiError>(adapter.list(request)) }
         })
         .description(LIST_DESC),
     );
     context.client().register_function(
         RECONCILIATION_FUNCTION,
-        RegisterFunction::new_async(move |request: SecurityScanReconciliationRequestV1| {
+        RegisterFunction::new_async(move |request: SecurityScanReconciliationRequest| {
             let adapter = adapter.clone();
             async move { adapter.reconciliation(request).map_err(handler_error) }
         })
@@ -645,39 +641,39 @@ fn deterministic_run_id(identity: &(String, String, String)) -> String {
     format!("sec_local_{:x}", digest.finalize())
 }
 
-fn assessed() -> SecurityAreaAssessmentV1 {
-    SecurityAreaAssessmentV1 {
-        status: AssessmentStatusV1::Assessed,
+fn assessed() -> SecurityAreaAssessment {
+    SecurityAreaAssessment {
+        status: AssessmentStatus::Assessed,
         reason: None,
     }
 }
 
-fn deterministic_report(_mode: ScanModeV1) -> SecurityReportV1 {
+fn deterministic_report(_mode: ScanMode) -> SecurityReport {
     let locations = [
         (
             "fixture.command-injection",
-            SeverityV1::Critical,
+            Severity::Critical,
             "Untrusted shell command construction",
             "src/vulnerable.rs",
             7,
         ),
         (
             "fixture.dependencies",
-            SeverityV1::High,
+            Severity::High,
             "Unpinned vulnerable dependencies",
             "package.json",
             6,
         ),
         (
             "fixture.fake-secret",
-            SeverityV1::Medium,
+            Severity::Medium,
             "Credential-shaped value in environment template",
             ".env.example",
             2,
         ),
         (
             "fixture.supply-chain",
-            SeverityV1::High,
+            Severity::High,
             "Unpinned action and piped installer",
             ".github/workflows/insecure.yml",
             15,
@@ -685,14 +681,14 @@ fn deterministic_report(_mode: ScanModeV1) -> SecurityReportV1 {
     ];
     let findings = locations
         .into_iter()
-        .map(|(rule_id, severity, title, path, line)| SecurityFindingV1 {
+        .map(|(rule_id, severity, title, path, line)| SecurityFinding {
             rule_id: rule_id.into(),
             severity,
             title: title.into(),
             description: "Deterministic finding from the intentionally vulnerable E2E fixture."
                 .into(),
             evidence: format!("Seeded test pattern at {path}:{line}."),
-            location: Some(FindingLocationV1 {
+            location: Some(FindingLocation {
                 path: path.into(),
                 line_start: Some(line),
                 line_end: Some(line),
@@ -705,11 +701,11 @@ fn deterministic_report(_mode: ScanModeV1) -> SecurityReportV1 {
             suggested_patch: None,
         })
         .collect();
-    SecurityReportV1 {
+    SecurityReport {
         summary:
             "Deterministic local analysis found the four intentionally seeded security patterns."
                 .into(),
-        assessments: SecurityAssessmentsV1 {
+        assessments: SecurityAssessments {
             vulnerabilities: assessed(),
             dependencies: assessed(),
             secrets: assessed(),
@@ -719,18 +715,18 @@ fn deterministic_report(_mode: ScanModeV1) -> SecurityReportV1 {
     }
 }
 
-fn deterministic_snapshot(run: &PublicRunV1) -> SecurityScanReconciliationResponseV1 {
+fn deterministic_snapshot(run: &PublicRun) -> SecurityScanReconciliationResponse {
     let finding_count = run
         .report
         .as_ref()
         .map(|report| u32::try_from(report.findings.len()).unwrap_or(u32::MAX));
     let records = vec![
-        ReconciliationAlertV1 {
-            source: ReconciliationSourceV1::Dependabot,
+        ReconciliationAlert {
+            source: ReconciliationSource::Dependabot,
             number: 1,
-            severity: SeverityV1::High,
-            lifecycle: ReconciliationLifecycleV1::Open,
-            scope: ReconciliationScopeV1::RepositoryDefaultBranch,
+            severity: Severity::High,
+            lifecycle: ReconciliationLifecycle::Open,
+            scope: ReconciliationScope::RepositoryDefaultBranch,
             title: "Deterministic Dependabot fixture alert".into(),
             description: "Sanitized local reconciliation record.".into(),
             public_url: "https://github.com/iii-hq/security-scan-e2e-fixture/security/dependabot/1"
@@ -741,12 +737,12 @@ fn deterministic_snapshot(run: &PublicRunV1) -> SecurityScanReconciliationRespon
             end_line: Some(7),
             observed_at: Some("2023-11-14T22:13:20Z".into()),
         },
-        ReconciliationAlertV1 {
-            source: ReconciliationSourceV1::CodeScanning,
+        ReconciliationAlert {
+            source: ReconciliationSource::CodeScanning,
             number: 2,
-            severity: SeverityV1::Critical,
-            lifecycle: ReconciliationLifecycleV1::Open,
-            scope: ReconciliationScopeV1::RepositorySnapshot,
+            severity: Severity::Critical,
+            lifecycle: ReconciliationLifecycle::Open,
+            scope: ReconciliationScope::RepositorySnapshot,
             title: "Deterministic code-scanning fixture alert".into(),
             description: "Sanitized local reconciliation record.".into(),
             public_url:
@@ -759,45 +755,44 @@ fn deterministic_snapshot(run: &PublicRunV1) -> SecurityScanReconciliationRespon
             observed_at: Some("2023-11-14T22:13:20Z".into()),
         },
     ];
-    let summary = |source, scope, count| ReconciliationSourceSummaryV1 {
+    let summary = |source, scope, count| ReconciliationSourceSummary {
         source,
-        status: ReconciliationSourceStatusV1::Complete,
+        status: ReconciliationSourceStatus::Complete,
         scope,
         collected_at: Some(DETERMINISTIC_TIME_MS),
         record_count: Some(count),
-        health: ReconciliationSourceHealthV1 {
-            status: ReconciliationHealthStatusV1::Healthy,
+        health: ReconciliationSourceHealth {
+            status: ReconciliationHealthStatus::Healthy,
             tool: Some("harness-e2e-local-adapter".into()),
             commit_sha: Some(run.target_sha.clone()),
             observed_at: Some("2023-11-14T22:13:20Z".into()),
         },
     };
-    SecurityScanReconciliationResponseV1 {
-        schema_version: SCHEMA_VERSION.into(),
+    SecurityScanReconciliationResponse {
         run_id: run.run_id.clone(),
         repository: run.repository.clone(),
         target_sha: run.target_sha.clone(),
-        harness: HarnessReconciliationSummaryV1 {
-            status: HarnessReconciliationStatusV1::Verified,
+        harness: HarnessReconciliationSummary {
+            status: HarnessReconciliationStatus::Verified,
             verified_count: finding_count,
             verified_at: Some(DETERMINISTIC_TIME_MS),
-            scope: ReconciliationScopeV1::ExactCommit,
+            scope: ReconciliationScope::ExactCommit,
         },
         github_repository: Some(REPOSITORY.into()),
         sources: vec![
             summary(
-                ReconciliationSourceV1::Dependabot,
-                ReconciliationScopeV1::RepositoryDefaultBranch,
+                ReconciliationSource::Dependabot,
+                ReconciliationScope::RepositoryDefaultBranch,
                 1,
             ),
             summary(
-                ReconciliationSourceV1::CodeScanning,
-                ReconciliationScopeV1::RepositorySnapshot,
+                ReconciliationSource::CodeScanning,
+                ReconciliationScope::RepositorySnapshot,
                 1,
             ),
         ],
-        matching: ReconciliationMatchingV1 {
-            status: ReconciliationMatchingStatusV1::Available,
+        matching: ReconciliationMatching {
+            status: ReconciliationMatchingStatus::Available,
             matched_records: Some(0),
         },
         records,
@@ -834,23 +829,23 @@ mod tests {
         let contracts = [
             (
                 REQUEST_FUNCTION,
-                schema::<SecurityScanRequestV1>(),
-                schema::<SecurityScanResponseV1>(),
+                schema::<SecurityScanRequest>(),
+                schema::<SecurityScanResponse>(),
             ),
             (
                 READ_FUNCTION,
-                schema::<SecurityScanReadRequestV1>(),
-                schema::<SecurityScanReadResponseV1>(),
+                schema::<SecurityScanReadRequest>(),
+                schema::<SecurityScanReadResponse>(),
             ),
             (
                 LIST_FUNCTION,
-                schema::<SecurityScanListRequestV1>(),
-                schema::<SecurityScanListResponseV1>(),
+                schema::<SecurityScanListRequest>(),
+                schema::<SecurityScanListResponse>(),
             ),
             (
                 RECONCILIATION_FUNCTION,
-                schema::<SecurityScanReconciliationRequestV1>(),
-                schema::<SecurityScanReconciliationResponseV1>(),
+                schema::<SecurityScanReconciliationRequest>(),
+                schema::<SecurityScanReconciliationResponse>(),
             ),
         ];
         for (function_id, request, response) in contracts {
@@ -872,10 +867,10 @@ mod tests {
     fn state_deduplicates_lists_and_persists_reconciliation() {
         let target_sha = "a".repeat(40);
         let adapter = LocalAdapter::new(PathBuf::from("."));
-        let request = || SecurityScanRequestV1 {
+        let request = || SecurityScanRequest {
             repository: REPOSITORY.into(),
             target_sha: target_sha.clone(),
-            mode: ScanModeV1::Scan,
+            mode: ScanMode::Scan,
             _caller_worker_id: None,
         };
         let first = adapter.record_request(request());
@@ -885,21 +880,18 @@ mod tests {
         assert_eq!(first.run_id, duplicate.run_id);
         let run_id = first.run_id;
         assert_eq!(
-            adapter
-                .list(SecurityScanListRequestV1::default())
-                .runs
-                .len(),
+            adapter.list(SecurityScanListRequest::default()).runs.len(),
             1
         );
         let refreshed = adapter
-            .reconciliation(SecurityScanReconciliationRequestV1 {
+            .reconciliation(SecurityScanReconciliationRequest {
                 run_id: run_id.clone(),
                 refresh: true,
                 ..Default::default()
             })
             .unwrap();
         let reread = adapter
-            .reconciliation(SecurityScanReconciliationRequestV1 {
+            .reconciliation(SecurityScanReconciliationRequest {
                 run_id,
                 ..Default::default()
             })

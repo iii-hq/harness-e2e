@@ -29,7 +29,6 @@ function summary(
         id: 'terra',
         provider: 'openai-codex',
         model: 'gpt-5.6-terra',
-        judge: { provider: 'openai-codex', model: 'gpt-5.6-sol' },
         scenarios: [],
       },
     ],

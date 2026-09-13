@@ -12,9 +12,7 @@ use crate::artifact::{self, ArtifactReference};
 use crate::journal::{
     ExecutionJournal, ExecutionJournalEvent, ExecutionJournalEventKind, JournalProgress,
 };
-use crate::report::{
-    CompletionState, TechnicalState, RESULT_CONTRACT_SHA256, SCORING_PROFILE_SHA256,
-};
+use crate::report::{CompletionState, TechnicalState, RESULT_CONTRACT_SHA256};
 
 #[cfg(test)]
 mod tests;
@@ -31,8 +29,6 @@ pub(super) struct LiveProgress {
     pub undetermined_runs: u64,
     pub technical_invalid_runs: u64,
     pub completion_rate: Option<f64>,
-    pub quality_score_completed: Option<f64>,
-    pub quality_scored_completed_runs: u64,
     pub observed_tokens: Option<u64>,
     pub token_observed_attempts: u64,
     pub observed_cost_usd: Option<f64>,
@@ -58,8 +54,7 @@ pub(super) struct LiveSlot {
     pub run_id: Option<String>,
     pub completion: Option<CompletionState>,
     pub technical: Option<TechnicalState>,
-    pub objective_score: Option<u8>,
-    pub quality_score_completed: Option<u8>,
+    pub score: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -70,8 +65,7 @@ struct Checkpoint {
     attempt_id: String,
     completion: CompletionState,
     technical: TechnicalState,
-    objective_score: Option<u8>,
-    quality_score_completed: Option<u8>,
+    score: Option<u8>,
     metrics: Option<Value>,
     cost: Value,
 }
@@ -82,11 +76,15 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
     }
     let journal = ExecutionJournal::open(root)?;
     let header = journal.read_header()?;
-    if header.execution_id != execution_id
-        || header.result_contract_sha256 != RESULT_CONTRACT_SHA256
-        || header.scoring_profile_sha256 != SCORING_PROFILE_SHA256
-    {
-        bail!("live progress identity or contract mismatch");
+    if header.execution_id != execution_id {
+        bail!("live progress identity mismatch");
+    }
+    if header.result_contract_sha256 != RESULT_CONTRACT_SHA256 {
+        tracing::warn!(
+            execution_id,
+            contract = %header.result_contract_sha256,
+            "live progress was journaled under another results contract"
+        );
     }
     let verified = journal.replay()?;
     // Read exactly the verified prefix. A writer may append while this read is
@@ -128,15 +126,12 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
         undetermined_runs: 0,
         technical_invalid_runs: 0,
         completion_rate: None,
-        quality_score_completed: None,
-        quality_scored_completed_runs: 0,
         observed_tokens: None,
         token_observed_attempts: 0,
         observed_cost_usd: None,
         cost_observed_runs: 0,
     };
     let mut slot_indices = HashMap::new();
-    let mut quality = Vec::new();
     for event in events {
         match event.kind {
             ExecutionJournalEventKind::SlotInventoryCommitted { mut slots } => {
@@ -152,8 +147,7 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                         run_id: None,
                         completion: None,
                         technical: None,
-                        objective_score: None,
-                        quality_score_completed: None,
+                        score: None,
                     });
                 }
             }
@@ -181,7 +175,7 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                 let checkpoint = read_checkpoint(
                     root,
                     &artifact,
-                    "harness-e2e-subject-observation-checkpoint/v1",
+                    "harness-e2e-subject-observation-checkpoint",
                     &slot_id,
                 )?;
                 if checkpoint.attempt_id != attempt_id || !slot_indices.contains_key(&slot_id) {
@@ -205,7 +199,7 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                 artifact,
             } => {
                 let checkpoint =
-                    read_checkpoint(root, &artifact, "harness-e2e-run-checkpoint/v1", &slot_id)?;
+                    read_checkpoint(root, &artifact, "harness-e2e-run-checkpoint", &slot_id)?;
                 if checkpoint.run_id != run_id {
                     bail!("live run identity mismatch");
                 }
@@ -215,13 +209,9 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
                 slot.run_id = Some(run_id);
                 slot.completion = Some(checkpoint.completion);
                 slot.technical = Some(checkpoint.technical);
-                slot.objective_score = checkpoint.objective_score;
-                slot.quality_score_completed = checkpoint.quality_score_completed;
+                slot.score = checkpoint.score;
                 match checkpoint.completion {
-                    CompletionState::Completed => {
-                        live.completed_runs += 1;
-                        quality.extend(checkpoint.quality_score_completed.map(f64::from));
-                    }
+                    CompletionState::Completed => live.completed_runs += 1,
                     CompletionState::TaskIncomplete => live.task_incomplete_runs += 1,
                     CompletionState::Undetermined => live.undetermined_runs += 1,
                 }
@@ -251,12 +241,6 @@ pub(super) fn read(root: &Path, execution_id: &str) -> Result<Option<LiveProgres
     }
     let determined = live.completed_runs + live.task_incomplete_runs;
     live.completion_rate = (determined > 0).then(|| live.completed_runs as f64 / determined as f64);
-    quality.sort_by(f64::total_cmp);
-    live.quality_scored_completed_runs = quality.len() as u64;
-    if !quality.is_empty() {
-        live.quality_score_completed =
-            Some((quality[(quality.len() - 1) / 2] + quality[quality.len() / 2]) / 2.0);
-    }
     Ok(Some(live))
 }
 
@@ -284,14 +268,18 @@ fn read_checkpoint(
         bail!("live checkpoint changed while reading");
     }
     let checkpoint: Checkpoint = serde_json::from_slice(&bytes)?;
-    if checkpoint.schema != schema || checkpoint.slot_id != slot {
+    if checkpoint.slot_id != slot {
         bail!("live checkpoint identity mismatch");
     }
-    if checkpoint.objective_score.is_some_and(|score| score > 100)
-        || checkpoint
-            .quality_score_completed
-            .is_some_and(|score| score > 100)
-    {
+    if checkpoint.schema != schema {
+        tracing::warn!(
+            path = %reference.path,
+            schema = %checkpoint.schema,
+            current = schema,
+            "reading a live checkpoint written under another schema id"
+        );
+    }
+    if checkpoint.score.is_some_and(|score| score > 100) {
         bail!("live checkpoint score outside 0..100");
     }
     Ok(checkpoint)

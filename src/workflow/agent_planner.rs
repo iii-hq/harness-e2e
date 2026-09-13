@@ -16,12 +16,10 @@ use crate::wire::{
 };
 
 use super::{
-    AdaptiveMaterializedWorkflow, AdaptivePlanNodeV1, AdaptivePlanRevisionEvidence,
-    AdaptiveWorkflowPlanV1, AdaptiveWorkflowPolicyV1, StepCatalog,
-    ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    AdaptiveMaterializedWorkflow, AdaptivePlanNode, AdaptivePlanRevisionEvidence,
+    AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy, StepCatalog,
 };
 
-const AGENT_PLANNER_SCHEMA_VERSION: u32 = 1;
 const PLANNER_STUCK_TIMEOUT: Duration = Duration::from_secs(180);
 const PLANNER_MAX_OUTPUT_TOKENS: u64 = 32 * 1024;
 const PLANNER_MAX_TOTAL_TOKENS: u64 = 64 * 1024;
@@ -30,7 +28,7 @@ const PLANNER_MAX_TOTAL_TOKENS: u64 = 64 * 1024;
 /// plan will be judged, but deliberately contains no reference-plan nodes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptivePlannerReferenceCheckV1 {
+pub struct AdaptivePlannerReferenceCheck {
     pub id: String,
     pub description: String,
 }
@@ -40,19 +38,19 @@ pub struct AdaptivePlannerReferenceCheckV1 {
 /// of them exactly; it cannot invent or omit an invalidation receipt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptivePlannerInvalidationV1 {
+pub struct AdaptivePlannerInvalidation {
     pub description: String,
     pub evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptivePlannerMetadataV1 {
+pub struct AdaptivePlannerMetadata {
     pub scenario_id: String,
     pub objective: String,
     #[serde(default)]
-    pub reference_checks: Vec<AdaptivePlannerReferenceCheckV1>,
-    pub invalidation: AdaptivePlannerInvalidationV1,
+    pub reference_checks: Vec<AdaptivePlannerReferenceCheck>,
+    pub invalidation: AdaptivePlannerInvalidation,
 }
 
 /// Inputs owned by the runner. `catalog` is never serialized into the model
@@ -62,9 +60,9 @@ pub struct AgentPlannerRequest<'a> {
     pub model: &'a str,
     pub provider: &'a str,
     pub scenario_prompt: &'a str,
-    pub policy: &'a AdaptiveWorkflowPolicyV1,
+    pub policy: &'a AdaptiveWorkflowPolicy,
     pub catalog: &'a StepCatalog,
-    pub metadata: &'a AdaptivePlannerMetadataV1,
+    pub metadata: &'a AdaptivePlannerMetadata,
     pub execution_id: &'a str,
     pub run_id: &'a str,
     pub attempt_id: &'a str,
@@ -75,7 +73,7 @@ pub struct AgentPlannerRequest<'a> {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AgentPlannerUsageEvidenceV1 {
+pub struct AgentPlannerUsageEvidence {
     pub turns: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
@@ -89,7 +87,7 @@ pub struct AgentPlannerUsageEvidenceV1 {
 /// the private store; reports can expose their digests and bounded usage.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AgentPlannerEvidenceV1 {
+pub struct AgentPlannerEvidence {
     pub restored: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
@@ -98,43 +96,42 @@ pub struct AgentPlannerEvidenceV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage: Option<AgentPlannerUsageEvidenceV1>,
+    pub usage: Option<AgentPlannerUsageEvidence>,
     pub revisions: Vec<AdaptivePlanRevisionEvidence>,
 }
 
 #[derive(Debug, Clone)]
 pub struct AgentPlannerOutcome {
-    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub plans: Vec<AdaptiveWorkflowPlan>,
     pub completed_node_ids: BTreeSet<String>,
     pub materialized: AdaptiveMaterializedWorkflow,
-    pub evidence: AgentPlannerEvidenceV1,
+    pub evidence: AgentPlannerEvidence,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentPlanDocumentV1 {
-    revision_1: AgentPlanRevisionOneV1,
-    revision_2: AgentPlanRevisionTwoV1,
+struct AgentPlanDocument {
+    revision_1: AgentPlanRevisionOne,
+    revision_2: AgentPlanRevisionTwo,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentPlanRevisionOneV1 {
-    nodes: Vec<AdaptivePlanNodeV1>,
+struct AgentPlanRevisionOne {
+    nodes: Vec<AdaptivePlanNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentPlanRevisionTwoV1 {
-    nodes: Vec<AdaptivePlanNodeV1>,
+struct AgentPlanRevisionTwo {
+    nodes: Vec<AdaptivePlanNode>,
     reason: String,
     evidence_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentPlannerBindingV1 {
-    schema_version: u32,
+struct AgentPlannerBinding {
     execution_id: String,
     run_id: String,
     attempt_id: String,
@@ -146,11 +143,8 @@ struct AgentPlannerBindingV1 {
     metadata_sha256: String,
 }
 
-impl AgentPlannerBindingV1 {
+impl AgentPlannerBinding {
     fn validate(&self) -> Result<()> {
-        if self.schema_version != AGENT_PLANNER_SCHEMA_VERSION {
-            bail!("unsupported adaptive planner binding schema version");
-        }
         for (label, value) in [
             ("execution id", self.execution_id.as_str()),
             ("run id", self.run_id.as_str()),
@@ -175,11 +169,10 @@ impl AgentPlannerBindingV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AgentPlannerPrivateEnvelopeV1 {
-    schema_version: u32,
-    binding: AgentPlannerBindingV1,
+struct AgentPlannerPrivateEnvelope {
+    binding: AgentPlannerBinding,
     plans_sha256: String,
-    plans: Vec<AdaptiveWorkflowPlanV1>,
+    plans: Vec<AdaptiveWorkflowPlan>,
 }
 
 #[derive(Debug, Clone)]
@@ -204,7 +197,7 @@ impl AgentPlannerStore {
                 .join(execution_id)
                 .join(run_id)
                 .join(attempt_id)
-                .join("plans-v1.json"),
+                .join("plans.json"),
         })
     }
 
@@ -214,13 +207,12 @@ impl AgentPlannerStore {
 
     fn persist(
         &self,
-        binding: &AgentPlannerBindingV1,
-        plans: &[AdaptiveWorkflowPlanV1],
+        binding: &AgentPlannerBinding,
+        plans: &[AdaptiveWorkflowPlan],
     ) -> Result<String> {
         binding.validate()?;
         let plans_sha256 = crate::artifact::sha256_value(&plans)?;
-        let envelope = AgentPlannerPrivateEnvelopeV1 {
-            schema_version: AGENT_PLANNER_SCHEMA_VERSION,
+        let envelope = AgentPlannerPrivateEnvelope {
             binding: binding.clone(),
             plans_sha256: plans_sha256.clone(),
             plans: plans.to_vec(),
@@ -245,7 +237,7 @@ impl AgentPlannerStore {
             return Ok(plans_sha256);
         }
 
-        let temporary = path.with_file_name(".plans-v1.json.tmp");
+        let temporary = path.with_file_name(".plans.json.tmp");
         let mut options = OpenOptions::new();
         options.write(true).create(true).truncate(true);
         #[cfg(unix)]
@@ -265,10 +257,7 @@ impl AgentPlannerStore {
         Ok(plans_sha256)
     }
 
-    fn load(
-        &self,
-        expected: &AgentPlannerBindingV1,
-    ) -> Result<(Vec<AdaptiveWorkflowPlanV1>, String)> {
+    fn load(&self, expected: &AgentPlannerBinding) -> Result<(Vec<AdaptiveWorkflowPlan>, String)> {
         expected.validate()?;
         let envelope = self.load_envelope()?;
         if envelope.binding != *expected {
@@ -277,14 +266,11 @@ impl AgentPlannerStore {
         Ok((envelope.plans, envelope.plans_sha256))
     }
 
-    fn load_envelope(&self) -> Result<AgentPlannerPrivateEnvelopeV1> {
+    fn load_envelope(&self) -> Result<AgentPlannerPrivateEnvelope> {
         let path = self.path();
         let bytes = fs::read(&path).with_context(|| format!("read {}", path.display()))?;
-        let envelope: AgentPlannerPrivateEnvelopeV1 =
+        let envelope: AgentPlannerPrivateEnvelope =
             serde_json::from_slice(&bytes).with_context(|| format!("decode {}", path.display()))?;
-        if envelope.schema_version != AGENT_PLANNER_SCHEMA_VERSION {
-            bail!("unsupported private adaptive planner state schema version");
-        }
         envelope.binding.validate()?;
         validate_sha256(&envelope.plans_sha256)?;
         let observed = crate::artifact::sha256_value(&envelope.plans)?;
@@ -302,8 +288,7 @@ pub async fn plan_adaptive_workflow(
 ) -> Result<AgentPlannerOutcome> {
     validate_request(&request)?;
     let policy_sha256 = request.policy.canonical_sha256()?;
-    let binding = AgentPlannerBindingV1 {
-        schema_version: AGENT_PLANNER_SCHEMA_VERSION,
+    let binding = AgentPlannerBinding {
         execution_id: request.execution_id.into(),
         run_id: request.run_id.into(),
         attempt_id: request.attempt_id.into(),
@@ -330,7 +315,7 @@ pub async fn plan_adaptive_workflow(
             .materialize(&plans, &completed_node_ids, request.catalog)
             .context("validate restored adaptive plans")?;
         return Ok(AgentPlannerOutcome {
-            evidence: AgentPlannerEvidenceV1 {
+            evidence: AgentPlannerEvidence {
                 restored: true,
                 session_id: None,
                 policy_sha256,
@@ -374,7 +359,7 @@ pub async fn plan_adaptive_workflow(
 
 async fn run_fresh_planner(
     request: &AgentPlannerRequest<'_>,
-    binding: &AgentPlannerBindingV1,
+    binding: &AgentPlannerBinding,
     store: &AgentPlannerStore,
     session_id: &str,
     policy_sha256: &str,
@@ -465,7 +450,7 @@ async fn run_fresh_planner(
         .context("validate agent-authored adaptive plans")?;
     let plans_sha256 = store.persist(binding, &plans)?;
     let transcript_sha256 = crate::artifact::sha256_value(&transcript)?;
-    let usage = AgentPlannerUsageEvidenceV1 {
+    let usage = AgentPlannerUsageEvidence {
         turns: metrics.totals.turns,
         input_tokens: metrics.totals.input_tokens,
         output_tokens: metrics.totals.output_tokens,
@@ -475,7 +460,7 @@ async fn run_fresh_planner(
         cost_usd: metrics.totals.cost_usd,
     };
     Ok(AgentPlannerOutcome {
-        evidence: AgentPlannerEvidenceV1 {
+        evidence: AgentPlannerEvidence {
             restored: false,
             session_id: Some(session_id.into()),
             policy_sha256: policy_sha256.into(),
@@ -535,8 +520,8 @@ fn validate_request(request: &AgentPlannerRequest<'_>) -> Result<()> {
 
 fn build_planner_prompt(
     scenario_prompt: &str,
-    policy: &AdaptiveWorkflowPolicyV1,
-    metadata: &AdaptivePlannerMetadataV1,
+    policy: &AdaptiveWorkflowPolicy,
+    metadata: &AdaptivePlannerMetadata,
     policy_sha256: &str,
 ) -> Result<String> {
     let response_shape = json!({
@@ -571,7 +556,7 @@ fn build_planner_prompt(
     ))
 }
 
-fn parse_agent_plan_document(text: &str) -> Result<AgentPlanDocumentV1> {
+fn parse_agent_plan_document(text: &str) -> Result<AgentPlanDocument> {
     let trimmed = text.trim();
     if trimmed.starts_with("```") || trimmed.ends_with("```") {
         bail!("adaptive planner response must be bare JSON without code fences");
@@ -580,12 +565,11 @@ fn parse_agent_plan_document(text: &str) -> Result<AgentPlanDocumentV1> {
 }
 
 fn bind_agent_document(
-    document: AgentPlanDocumentV1,
+    document: AgentPlanDocument,
     policy_sha256: &str,
-) -> Result<Vec<AdaptiveWorkflowPlanV1>> {
+) -> Result<Vec<AdaptiveWorkflowPlan>> {
     validate_sha256(policy_sha256)?;
-    let first = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let first = AdaptiveWorkflowPlan {
         policy_sha256: policy_sha256.into(),
         revision: 1,
         supersedes_sha256: None,
@@ -594,8 +578,7 @@ fn bind_agent_document(
         nodes: document.revision_1.nodes,
     };
     let first_sha256 = first.canonical_sha256()?;
-    let second = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let second = AdaptiveWorkflowPlan {
         policy_sha256: policy_sha256.into(),
         revision: 2,
         supersedes_sha256: Some(first_sha256),
@@ -607,8 +590,8 @@ fn bind_agent_document(
 }
 
 fn validate_invalidation_binding(
-    plans: &[AdaptiveWorkflowPlanV1],
-    metadata: &AdaptivePlannerMetadataV1,
+    plans: &[AdaptiveWorkflowPlan],
+    metadata: &AdaptivePlannerMetadata,
 ) -> Result<()> {
     if plans.len() != 2 {
         bail!("adaptive planner must produce exactly two revisions");
@@ -619,7 +602,7 @@ fn validate_invalidation_binding(
     Ok(())
 }
 
-fn revision_one_node_ids(plans: &[AdaptiveWorkflowPlanV1]) -> Result<BTreeSet<String>> {
+fn revision_one_node_ids(plans: &[AdaptiveWorkflowPlan]) -> Result<BTreeSet<String>> {
     let first = plans
         .first()
         .context("adaptive planner state has no revision 1")?;
@@ -696,9 +679,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::workflow::{
-        ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveNodeTemplateV1, AdaptiveTrustedAnchorV1,
+        ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveNodeTemplate, AdaptiveTrustedAnchor,
         ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, StepOperationalKind,
-        StepPortDescriptor, StepTypeDescriptor, WorkflowLimits, WorkflowNodeV1,
+        StepPortDescriptor, StepTypeDescriptor, WorkflowLimits, WorkflowNode,
     };
 
     fn document_json() -> String {
@@ -718,9 +701,8 @@ mod tests {
         .unwrap()
     }
 
-    fn binding() -> AgentPlannerBindingV1 {
-        AgentPlannerBindingV1 {
-            schema_version: AGENT_PLANNER_SCHEMA_VERSION,
+    fn binding() -> AgentPlannerBinding {
+        AgentPlannerBinding {
             execution_id: "execution-1".into(),
             run_id: "run-1".into(),
             attempt_id: "attempt-1".into(),
@@ -733,10 +715,9 @@ mod tests {
         }
     }
 
-    fn policy_and_catalog() -> (AdaptiveWorkflowPolicyV1, StepCatalog) {
+    fn policy_and_catalog() -> (AdaptiveWorkflowPolicy, StepCatalog) {
         let descriptor = |id: &str| StepTypeDescriptor {
             id: id.into(),
-            version: 1,
             description: id.into(),
             config_schema: json!({"type": "object", "additionalProperties": false}),
             inputs: BTreeMap::new(),
@@ -763,10 +744,9 @@ mod tests {
         catalog
             .register_descriptor(descriptor("anchor.step"))
             .unwrap();
-        let anchor = |id: &str, depends_on: Vec<String>| WorkflowNodeV1 {
+        let anchor = |id: &str, depends_on: Vec<String>| WorkflowNode {
             id: id.into(),
             step_type: "anchor.step".into(),
-            step_version: 1,
             depends_on,
             inputs: BTreeMap::new(),
             config: json!({}),
@@ -774,10 +754,8 @@ mod tests {
             dependency_policy: DependencyPolicy::Succeeded,
             required: true,
         };
-        let policy = AdaptiveWorkflowPolicyV1 {
-            schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+        let policy = AdaptiveWorkflowPolicy {
             id: "scenario-1".into(),
-            scenario_version: 1,
             description: "fixture".into(),
             limits: WorkflowLimits {
                 max_parallel: 1,
@@ -789,11 +767,10 @@ mod tests {
             max_plan_revisions: 2,
             max_instruction_bytes: 1024,
             templates: vec![
-                AdaptiveNodeTemplateV1 {
+                AdaptiveNodeTemplate {
                     id: "inspect".into(),
                     description: "inspect".into(),
                     step_type: "inspect.step".into(),
-                    step_version: 1,
                     base_config: json!({}),
                     inputs: BTreeMap::new(),
                     activation: ActivationPolicy::Always,
@@ -805,11 +782,10 @@ mod tests {
                     min_occurrences: 1,
                     max_occurrences: 1,
                 },
-                AdaptiveNodeTemplateV1 {
+                AdaptiveNodeTemplate {
                     id: "repair".into(),
                     description: "repair".into(),
                     step_type: "repair.step".into(),
-                    step_version: 1,
                     base_config: json!({}),
                     inputs: BTreeMap::new(),
                     activation: ActivationPolicy::Always,
@@ -823,12 +799,12 @@ mod tests {
                 },
             ],
             trusted_anchors: vec![
-                AdaptiveTrustedAnchorV1 {
+                AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::BeforePlan,
                     terminal: false,
                     node: anchor("preflight", Vec::new()),
                 },
-                AdaptiveTrustedAnchorV1 {
+                AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::AfterPlan,
                     terminal: true,
                     node: anchor("finalize", vec!["repair".into()]),
@@ -923,11 +899,11 @@ mod tests {
 
     #[test]
     fn invalidation_receipts_are_exactly_runner_owned() {
-        let metadata = AdaptivePlannerMetadataV1 {
+        let metadata = AdaptivePlannerMetadata {
             scenario_id: "scenario-1".into(),
             objective: "recover".into(),
             reference_checks: Vec::new(),
-            invalidation: AdaptivePlannerInvalidationV1 {
+            invalidation: AdaptivePlannerInvalidation {
                 description: "changed".into(),
                 evidence_ids: vec!["validation/v1".into()],
             },

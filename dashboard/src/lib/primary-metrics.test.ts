@@ -43,10 +43,9 @@ function run(id: string, options: RunOptions = {}): DashboardRunProjection {
     status: 'passed',
     completion: 'completed',
     technical: 'valid',
-    evaluators: { completion: 'available', quality: 'available' },
+    evaluators: { completion: 'available' },
     assessment: {} as DashboardRunProjection['assessment'],
-    objective_score: score,
-    quality_score_completed: null,
+    score,
     metrics: {
       totals: {
         input_tokens: input,
@@ -67,7 +66,7 @@ function run(id: string, options: RunOptions = {}): DashboardRunProjection {
 function detail(
   tests: Array<{
     id: string
-    version?: number
+    definition?: string
     runs?: DashboardRunProjection[]
     planned?: number
     caseId?: string
@@ -82,7 +81,9 @@ function detail(
     reports: tests.map((test) => ({
       subject_id: 'subject',
       scenario_id: test.id,
-      scenario_version: test.version ?? 1,
+      behavior_sha256:
+        test.definition ??
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
       native_execution_id: test.nativeId ?? `native-${test.id}`,
       available: test.available ?? true,
       report:
@@ -90,13 +91,19 @@ function detail(
           ? undefined
           : ({
               result_contract_sha256: 'result-contract',
-              scoring_profile_sha256: 'scoring-profile',
               scenarios: [
                 {
                   scenario_id: test.id,
-                  scenario_version: test.version ?? 1,
+                  behavior_sha256:
+                    test.definition ??
+                    'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
                   case_id: test.caseId ?? `${test.id}-case`,
-                  case: { inputs_sha256: `inputs-${test.id}` },
+                  case: {
+                    inputs_sha256: `inputs-${test.id}`,
+                    behavior_sha256:
+                      test.definition ??
+                      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+                  },
                   execution_policy: { max_turns: 24 },
                   aggregate: {
                     planned_runs: test.planned ?? test.runs?.length ?? 0,
@@ -351,12 +358,38 @@ describe('primary metrics comparison', () => {
     expect(result.deltas.cacheRead).toBeNull()
   })
 
+  // The definition digest is the compatibility boundary: the same scenario
+  // evaluated by a different definition is reported, never subtracted.
+  it('refuses a delta when the scenario definition changed', () => {
+    const baseline = detail([{ id: 'moved', runs: [run('a')] }])
+    const candidate = detail([
+      {
+        id: 'moved',
+        definition:
+          'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+        runs: [run('b')],
+      },
+    ])
+
+    const result = comparePrimaryMetrics(
+      buildPrimaryMetrics(baseline),
+      buildPrimaryMetrics(candidate),
+      false,
+    )
+
+    expect(result.totalTests).toBe(1)
+    expect(result.tests[0].definition).toBe(
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    )
+    expect(result.deltas.score).toBeNull()
+  })
+
   it('requires explicit report and case identity for a controlled delta', () => {
     const baseline = detail([{ id: 'identity', runs: [run('a')] }])
     const candidate = detail([{ id: 'identity', runs: [run('b')] }])
     const report = candidate.reports[0].report
     if (!report) throw new Error('fixture must contain a report')
-    report.scoring_profile_sha256 = ''
+    report.result_contract_sha256 = ''
 
     const result = comparePrimaryMetrics(
       buildPrimaryMetrics(baseline),

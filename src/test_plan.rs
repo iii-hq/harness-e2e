@@ -9,8 +9,7 @@ use serde_json::{json, Value};
 
 use crate::artifact;
 use crate::control::{scenarios_list, ScenarioDescriptor, ScenariosListRequest};
-use crate::markdown::ScenarioKey;
-use crate::scenarios::{ComplexityTier, ScenarioExecutionKind};
+use crate::scenarios::{ScenarioExecutionKind, ScenarioId};
 
 const SOURCE: &str = include_str!("../config/test-plan.json");
 
@@ -19,7 +18,6 @@ const SOURCE: &str = include_str!("../config/test-plan.json");
 pub struct MasterPlan {
     pub schema: String,
     pub plan_id: String,
-    pub version: u32,
     pub modules: Vec<CapabilityModule>,
     pub diagnostics: Vec<String>,
     pub requirements: BTreeMap<String, Vec<String>>,
@@ -58,7 +56,6 @@ pub struct FaultGroup {
     pub execution_kind: String,
     pub runs: u32,
     pub technical_retries: u8,
-    pub difficulty_weight: u8,
     pub fault_profile: String,
     pub fault_scenario: String,
     pub soak_minutes: u32,
@@ -68,7 +65,6 @@ pub struct FaultGroup {
 pub struct ProfileSnapshot {
     pub schema: String,
     pub plan_id: String,
-    pub version: u32,
     pub definition_sha256: String,
     pub profile_sha256: String,
     pub profile: Profile,
@@ -95,22 +91,12 @@ fn safe_id(value: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
-pub fn execution_kind(key: &ScenarioKey) -> &'static str {
+pub fn execution_kind(key: &ScenarioId) -> &'static str {
     match key.execution_kind() {
         ScenarioExecutionKind::HarnessTurn => "harness_turn",
         ScenarioExecutionKind::ScriptedDialogue => "scripted_dialogue",
         ScenarioExecutionKind::CompositeFlow => "composite_flow",
         ScenarioExecutionKind::AdaptiveFlow => "adaptive_flow",
-    }
-}
-
-pub(crate) fn weight(tier: ComplexityTier) -> u8 {
-    match tier {
-        ComplexityTier::L0Atomic | ComplexityTier::L1Sequential => 1,
-        ComplexityTier::L2Stateful => 2,
-        ComplexityTier::L3Concurrent => 3,
-        ComplexityTier::L4Coordinated => 4,
-        ComplexityTier::L5Adaptive => 5,
     }
 }
 
@@ -128,14 +114,13 @@ impl MasterPlan {
     }
 
     pub fn validate(&self) -> Result<()> {
-        ensure!(
-            self.schema == "harness-e2e-master-test-plan/v1",
-            "unsupported master test plan schema"
-        );
-        ensure!(
-            safe_id(&self.plan_id) && self.version > 0,
-            "invalid master plan identity"
-        );
+        if self.schema != "harness-e2e-master-test-plan" {
+            tracing::warn!(
+                schema = %self.schema,
+                "master test plan carries another schema id; read as it is"
+            );
+        }
+        ensure!(safe_id(&self.plan_id), "invalid master plan identity");
         let mut covered = BTreeSet::new();
         let mut modules = BTreeSet::new();
         for module in &self.modules {
@@ -155,10 +140,7 @@ impl MasterPlan {
         for id in &self.diagnostics {
             ensure!(covered.insert(id.clone()), "duplicate diagnostic {id}");
         }
-        let native: BTreeSet<_> = crate::markdown::all_keys()?
-            .iter()
-            .map(ToString::to_string)
-            .collect();
+        let native: BTreeSet<_> = ScenarioId::ALL.iter().map(ToString::to_string).collect();
         ensure!(
             covered == native,
             "master plan coverage differs from native catalog: missing {:?}, unknown {:?}",
@@ -200,9 +182,9 @@ impl MasterPlan {
                     "invalid fault group id"
                 );
                 let expected = match group.fault_profile.as_str() {
-                    "weekly-l2-recovery" => (2, "stateful.2"),
-                    "weekly-l3-recovery" => (3, "coordination.3"),
-                    "weekly-l4-recovery" => (4, "coordination.4"),
+                    "weekly-l2-recovery" => "stateful.2",
+                    "weekly-l3-recovery" => "coordination.3",
+                    "weekly-l4-recovery" => "coordination.4",
                     _ => bail!("unsupported fault profile"),
                 };
                 ensure!(
@@ -210,8 +192,7 @@ impl MasterPlan {
                         && group.technical_retries == 0
                         && (3..=20).contains(&group.runs)
                         && (60..=180).contains(&group.soak_minutes)
-                        && group.difficulty_weight == expected.0
-                        && group.fault_scenario == expected.1,
+                        && group.fault_scenario == expected,
                     "invalid recovery policy for {}",
                     group.id
                 );
@@ -254,7 +235,7 @@ impl MasterPlan {
                     "unknown or repeated grouped scenario {id}"
                 );
                 ensure!(
-                    id.parse::<ScenarioKey>()?.execution_kind()
+                    id.parse::<ScenarioId>()?.execution_kind()
                         == ScenarioExecutionKind::HarnessTurn,
                     "sequential profile groups require ordinary harness turns"
                 );
@@ -297,7 +278,7 @@ impl MasterPlan {
             };
             let admission: crate::control::RunRequest = serde_json::from_value(json!({
                 "idempotency_key": format!("plan-preview:{}:{id}", profile.id), "lane": profile.lane,
-                "model": "preview", "provider": "preview", "judge_model": "preview", "judge_provider": "preview",
+                "model": "preview", "provider": "preview",
                 "scenarios": [id], "runs": 1, "seed": seed, "technical_retries": retries,
             }))?;
             crate::control::validate_run_request(&admission)?;
@@ -317,13 +298,12 @@ impl MasterPlan {
                 .zip(tokens)
                 .and_then(|(sum, cap)| cap.checked_mul(attempts).and_then(|n| sum.checked_add(n)));
             cases.push(json!({
-                "scenario_id": id, "scenario_version": case.scenario_version, "case_id": case.case_id,
+                "scenario_id": id, "behavior_sha256": case.behavior_sha256, "case_id": case.case_id,
                 "seed": case.seed, "inputs_sha256": case.inputs_sha256, "contract_sha256": case.contract_sha256,
-                "execution_kind": execution_kind(key), "difficulty_weight": weight(case.classification.tier),
+                "execution_kind": execution_kind(key),
                 "resource_envelope": envelope, "required_capabilities": case.required_capabilities,
                 "requirements": self.requirements.get(id).cloned().unwrap_or_default(),
                 "module": self.modules.iter().find(|m| m.scenarios.contains(id)).map(|m| &m.id),
-                "judge_required": key.built_in().is_none() || key.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning),
             }));
             // Every repetition is a fresh invocation. This also obeys the
             // campaign parser's one-case, runs=1 adaptive-flow contract.
@@ -335,11 +315,6 @@ impl MasterPlan {
                 continue;
             }
             let group = grouped.cloned().unwrap_or_else(|| vec![id.clone()]);
-            let group_weight = group
-                .iter()
-                .map(|id| weight(native[id].classification.tier))
-                .max()
-                .unwrap();
             let group_retries = if group
                 .iter()
                 .all(|id| native[id].scenario_id.execution_kind().replay_safe())
@@ -351,7 +326,7 @@ impl MasterPlan {
             ordinary_groups.push(json!({
                 "id": format!("case-{}", id.replace('_', "-")),
                 "execution_kind": execution_kind(key), "runs": 1,
-                "technical_retries": group_retries, "difficulty_weight": group_weight,
+                "technical_retries": group_retries,
                 "scenarios": group,
             }));
         }
@@ -370,7 +345,7 @@ impl MasterPlan {
             );
             let campaign = json!({
                 "kind": "harness-e2e-campaign", "campaign_id": format!("{}-r{repetition:02}", profile.id),
-                "lane": profile.lane, "failure_policy": "advisory", "scoring_profile": "difficulty-weighted-v1", "groups": groups,
+                "lane": profile.lane, "failure_policy": "advisory", "groups": groups,
             });
             campaigns.push(campaign);
         }
@@ -381,9 +356,8 @@ impl MasterPlan {
             .sum::<u64>()
             * u64::from(profile.repetitions);
         Ok(ProfileSnapshot {
-            schema: "harness-e2e-profile-snapshot/v1".into(),
+            schema: "harness-e2e-profile-snapshot".into(),
             plan_id: self.plan_id.clone(),
-            version: self.version,
             definition_sha256,
             profile_sha256,
             profile: profile.clone(),
@@ -394,7 +368,7 @@ impl MasterPlan {
                 "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions) + fault_runs,
                 "session_turn_limit_sum": subject_turns, "subject_token_limit": subject_token_limit,
                 "unbounded_token_cases": unbounded_token_cases, "fault_budget_separate": fault_runs > 0,
-                "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, judge, capture and cleanup are additional"}),
+                "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
             protected_supervisor_required: !profile.fault_groups.is_empty(),
         })
@@ -408,21 +382,23 @@ impl MasterPlan {
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
                 "technical_retries": profile.technical_retries, "budget": snapshot.budget,
                 "profile_sha256": snapshot.profile_sha256, "protected_supervisor_required": snapshot.protected_supervisor_required,
-                "judge_required": snapshot.protected_supervisor_required || snapshot.cases.iter().any(|c| c["judge_required"] == true),
                 "cases": snapshot.cases}));
         }
         Ok(
-            json!({"plan_id": self.plan_id, "version": self.version, "definition_sha256": self.digest()?, "profiles": profiles}),
+            json!({"plan_id": self.plan_id, "definition_sha256": self.digest()?, "profiles": profiles}),
         )
     }
 
     pub fn campaign_catalog(&self) -> Result<Value> {
         let mut scenarios = BTreeMap::new();
         for (id, case) in native_catalog(None)? {
-            scenarios.insert(id, json!({"execution_kind": execution_kind(&case.scenario_id), "difficulty_weight": weight(case.classification.tier), "markdown": case.scenario_id.built_in().is_none()}));
+            scenarios.insert(
+                id,
+                json!({"execution_kind": execution_kind(&case.scenario_id)}),
+            );
         }
         Ok(
-            json!({"schema": "harness-e2e-campaign-catalog/v1", "definition_sha256": self.digest()?, "scenarios": scenarios}),
+            json!({"schema": "harness-e2e-campaign-catalog", "definition_sha256": self.digest()?, "scenarios": scenarios}),
         )
     }
 }
@@ -465,8 +441,7 @@ fn measurement_cohorts(paths: &[std::path::PathBuf]) -> Result<(MeasurementCohor
                 }
             }
             let identity = json!({"case": case, "execution_policy": scenario.execution_policy,
-                "system_under_test": report.system_under_test, "subject": report.subject,
-                "judge": report.judge});
+                "system_under_test": report.system_under_test, "subject": report.subject});
             let digest = artifact::sha256_value(&identity)?;
             if let Some((_, accumulated)) = cohorts.get_mut(&digest) {
                 let planned = accumulated
@@ -498,7 +473,7 @@ pub fn measure(paths: &[std::path::PathBuf]) -> Result<Value> {
             "run_ids": scenario.runs.iter().map(|r| &r.run_id).collect::<Vec<_>>()})
     }).collect();
     Ok(
-        json!({"schema": "harness-e2e-profile-measurements/v1", "interpretation": "descriptive_only",
+        json!({"schema": "harness-e2e-profile-measurements", "interpretation": "descriptive_only",
         "cohorts": cohorts, "deferred": deferred, "input_artifacts": paths}),
     )
 }
@@ -537,7 +512,7 @@ mod tests {
                             let id = id.as_str().unwrap();
                             assert!(selected.insert(id));
                             if !id
-                                .parse::<ScenarioKey>()
+                                .parse::<ScenarioId>()
                                 .unwrap()
                                 .execution_kind()
                                 .replay_safe()
@@ -610,15 +585,6 @@ mod tests {
         );
         assert_eq!(snapshot.profile.repetitions, 1);
         assert_eq!(snapshot.profile.technical_retries, 0);
-        assert_eq!(
-            snapshot
-                .cases
-                .iter()
-                .filter(|case| case["judge_required"] == true)
-                .map(|case| &case["scenario_id"])
-                .collect::<Vec<_>>(),
-            vec![&json!("registry_planning")]
-        );
     }
 
     #[test]
@@ -666,21 +632,6 @@ mod tests {
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();
         assert!(changed.validate().is_err());
-    }
-
-    #[test]
-    fn registry_planning_requires_a_judge_in_console_catalog() {
-        let plan = embedded().unwrap();
-        let mut profile = plan.profiles[0].clone();
-        profile.modules.clear();
-        profile.scenarios = vec!["registry_planning".into(), "registry_implementation".into()];
-        let snapshot = plan.materialize_scope(profile, None).unwrap();
-        for case in snapshot.cases {
-            assert_eq!(
-                case["judge_required"],
-                case["scenario_id"] == "registry_planning"
-            );
-        }
     }
 
     #[test]

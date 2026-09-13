@@ -20,7 +20,6 @@ function execution(
         id: 'terra',
         model: 'gpt-5.6-terra',
         provider: 'openai-codex',
-        judge: { model: 'gpt-5.6-sol', provider: 'openai-codex' },
         scenarios: [],
       },
     ],
@@ -35,7 +34,6 @@ function execution(
         infrastructure_error: 1,
         resource_limit: 1,
         subject_error: 0,
-        judge_error: 0,
         unavailable: 0,
       },
       assessment_outcomes: {} as never,
@@ -76,10 +74,6 @@ describe('execution presentation view model', () => {
     expect(presentation.subjects[0]).toEqual({
       provider: 'openai-codex',
       model: 'gpt-5.6-terra',
-    })
-    expect(presentation.judges[0]).toEqual({
-      provider: 'openai-codex',
-      model: 'gpt-5.6-sol',
     })
   })
 

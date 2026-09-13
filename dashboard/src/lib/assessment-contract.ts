@@ -14,7 +14,6 @@ export type SystemStatus =
   | 'passed'
   | 'hard_gate_failed'
   | 'subject_error'
-  | 'judge_error'
   | 'resource_limit'
   | 'infrastructure_error'
 
@@ -22,22 +21,6 @@ export type EvidenceReference = {
   artifact_id: string
   artifact_sha256: string
   locator?: string
-}
-
-/** Identity of a Markdown-scenario analyzer: the instruction-adherence pass
- *  and the opt-in transcript audit are the only producers left. */
-export type AnalyzerIdentity = {
-  analyzer: string
-  provider?: string
-  model?: string
-  input_sha256: string
-}
-
-export type AnalyzerUsage = {
-  latency_ms?: number
-  input_tokens?: number
-  output_tokens?: number
-  cost_usd?: number
 }
 
 export type AssessmentResult = {
@@ -140,7 +123,6 @@ function emptyAssessmentSummary(): AssessmentSummary {
       passed: 0,
       hard_gate_failed: 0,
       subject_error: 0,
-      judge_error: 0,
       resource_limit: 0,
       infrastructure_error: 0,
     },
@@ -173,9 +155,13 @@ export function readAssessmentContract(result: unknown): AssessmentContract {
   if (!isRecord(result)) {
     throw new AssessmentContractError('E2E result must be an object')
   }
-  if ('schema_version' in result) {
+  const contractSha256 = result.result_contract_sha256
+  if (
+    typeof contractSha256 !== 'string' ||
+    !contractSha256.startsWith('sha256:')
+  ) {
     throw new AssessmentContractError(
-      'versioned E2E payloads are not supported',
+      'results require a result_contract_sha256 digest',
     )
   }
   const contract = result.assessment_contract

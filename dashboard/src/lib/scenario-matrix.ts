@@ -6,7 +6,7 @@ import type {
   DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
-import { SCORING_PROFILE_SHA256 } from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
   generalRunMetrics,
@@ -23,7 +23,8 @@ export type ScenarioMatrixItem = {
   scenarioIndex: number | null
   subjectId: string
   scenarioId: string
-  scenarioVersion: number | null
+  /** Digest of the definition that evaluated the scenario, when retained. */
+  behaviorSha256: string | null
   available: boolean
   objective: {
     status: OperationalStatus
@@ -38,27 +39,22 @@ export type ScenarioMatrixItem = {
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
   aggregate: DashboardScenarioAggregate | null
-  /** `band` groups the facts so each row of the result card divides evenly.
-   *  Eleven tiles in one seven-column grid left a visible orphan cell and said
-   *  nothing about what kind of number each one was (audit ED-24). */
+  /** The execution facts of the scenario, one tile each (audit ED-24). */
   primaryMetrics: Array<{
     label: string
     value: string
     detail: string
-    band: MetricBand
   }>
 }
-
-export type MetricBand = 'scoring' | 'execution'
 
 export type ResultContractSummary = {
   key: string
   valid: boolean
-  schemaVersion: number | null
   reportState: 'complete' | 'partial' | null
   objectiveOutcome: 'passed' | 'failed' | 'inconclusive' | null
   resultContractSha256: string | null
-  scoringProfileSha256: string | null
+  /** False when the report was written under another results contract than this Console: shown, with a warning. */
+  resultContractCurrent: boolean
 }
 
 export type ScenarioMatrixSummary = {
@@ -132,7 +128,6 @@ function resultContracts(
   return (detail.reports ?? []).flatMap((record, index) => {
     const report = record.report
     if (!record.available || !report) return []
-    const schemaVersion = finiteNumber(report.schema_version)
     const reportState =
       report.report_state === 'complete' || report.report_state === 'partial'
         ? report.report_state
@@ -144,25 +139,17 @@ function resultContracts(
         ? report.objective_outcome
         : null
     const resultContractSha256 = nonEmptyString(report.result_contract_sha256)
-    const scoringProfileSha256 = nonEmptyString(report.scoring_profile_sha256)
-    const key = [
-      schemaVersion,
-      reportState,
-      objectiveOutcome,
-      resultContractSha256,
-      scoringProfileSha256,
-    ].join(':')
+    const key = [reportState, objectiveOutcome, resultContractSha256].join(':')
     if (seen.has(key)) return []
     seen.add(key)
     return [
       {
         key: key || `invalid-${index}`,
         valid: validResultContract(report),
-        schemaVersion,
         reportState,
         objectiveOutcome,
         resultContractSha256,
-        scoringProfileSha256,
+        resultContractCurrent: resultContractSha256 === RESULT_CONTRACT_SHA256,
       },
     ]
   })
@@ -213,7 +200,7 @@ function scenarioItem(
   const duration = scenarioDuration(detail, subjectId, scenario, runs)
 
   return {
-    key: `${subjectId}:${scenario.scenario_id}:v${scenario.scenario_version}:${reportIndex}:${scenarioIndex}`,
+    key: `${subjectId}:${scenario.scenario_id}:${scenario.behavior_sha256 ?? 'no-definition'}:${reportIndex}:${scenarioIndex}`,
     reason:
       objective.status === 'passed'
         ? null
@@ -223,7 +210,7 @@ function scenarioItem(
     scenarioIndex,
     subjectId,
     scenarioId: scenario.scenario_id,
-    scenarioVersion: scenario.scenario_version,
+    behaviorSha256: scenario.behavior_sha256 ?? null,
     available: true,
     objective,
     durationMs: duration.value,
@@ -273,7 +260,7 @@ function unavailableScenario(
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',
     scenarioId,
-    scenarioVersion: summary?.scenario_version ?? null,
+    behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
     objective: {
       status: 'unavailable',
@@ -324,8 +311,7 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'undetermined_runs',
     'technical_valid_runs',
     'technical_invalid_runs',
-    'objective_scored_runs',
-    'quality_scored_completed_runs',
+    'scored_runs',
     'technical_failures',
   ]
   if (requiredNumbers.some((key) => finiteNumber(aggregate[key]) === null)) {
@@ -335,10 +321,7 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
     'execution_reliability',
     'completion_evidence_coverage',
     'completion_rate',
-    'objective_median_score',
-    'objective_score_coverage',
-    'quality_score_completed',
-    'quality_coverage',
+    'mean_score',
     'total_tokens_consumed',
     'tokens_completed_p50',
     'failed_attempt_tokens',
@@ -354,18 +337,17 @@ function validAggregate(value: unknown): DashboardScenarioAggregate | null {
   return value as DashboardScenarioAggregate
 }
 
-// The version label and the contract fingerprint are not gates for now, in
+// The definition digest and the contract fingerprint are not gates for now, in
 // step with the Rust reader: a report the server accepted is shown, and the
-// contract it carries stays visible in the identity band.
+// results contract it carries stays visible in the identity band. Another
+// contract is a warning there, never a reason to hide figures.
 function validResultContract(report: DashboardReportProjection): boolean {
   return (
-    finiteNumber(report.schema_version) !== null &&
     (report.report_state === 'complete' || report.report_state === 'partial') &&
     (report.objective_outcome === 'passed' ||
       report.objective_outcome === 'failed' ||
       report.objective_outcome === 'inconclusive') &&
-    nonEmptyString(report.result_contract_sha256) !== null &&
-    report.scoring_profile_sha256 === SCORING_PROFILE_SHA256
+    nonEmptyString(report.result_contract_sha256) !== null
   )
 }
 
@@ -473,39 +455,7 @@ function primaryMetrics(
           ? missingDetail
           : 'Subject execution time',
   }
-  const markdownMetrics = run?.markdown_execution
-    ? [
-        {
-          label: 'Validation score',
-          value:
-            finiteNumber(run.validation_score) == null
-              ? 'Unavailable'
-              : `${finiteNumber(run.validation_score)}/100`,
-          detail: 'Deterministic sum of isolated validator outcomes',
-        },
-        {
-          label: 'Instruction adherence',
-          value:
-            finiteNumber(run.instruction_adherence?.score) == null
-              ? title(run.instruction_adherence?.availability ?? 'unavailable')
-              : `${finiteNumber(run.instruction_adherence?.score)}/100`,
-          detail: 'Judge-scored prompt-following, Markdown tests only',
-        },
-        {
-          label: 'Pipeline integrity',
-          value: run.markdown_execution.pipeline_complete
-            ? 'Complete'
-            : 'Incomplete',
-          detail: 'Correct revision, section routing, and phase completion',
-        },
-        {
-          label: 'Technical failures',
-          value: formatCount(run.failures?.length ?? 0),
-          detail: 'Infrastructure, evaluator, resource, or cleanup failures',
-        },
-      ]
-    : []
-  const executionMetrics = [
+  return [
     runtimeMetric,
     {
       label: 'Total tokens',
@@ -544,22 +494,6 @@ function primaryMetrics(
             : missingDetail,
     },
   ]
-  return [
-    ...markdownMetrics.map((metric) => ({
-      ...metric,
-      band: 'scoring' as const,
-    })),
-    ...executionMetrics.map((metric) => ({
-      ...metric,
-      band: 'execution' as const,
-    })),
-  ]
-}
-
-function title(value: string) {
-  return value
-    .replaceAll('_', ' ')
-    .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
 export type StepMetricSignal = {

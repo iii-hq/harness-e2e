@@ -75,7 +75,6 @@
     "EfficiencyReport": {
       "type": "object",
       "required": [
-        "minimum_expected_work",
         "observed_complexity",
         "technical_attempts",
         "wall_time_ms"
@@ -141,11 +140,6 @@
             "integer",
             "null"
           ],
-          "format": "uint64",
-          "minimum": 0.0
-        },
-        "minimum_expected_work": {
-          "type": "integer",
           "format": "uint64",
           "minimum": 0.0
         },
@@ -223,13 +217,6 @@
           "type": "integer",
           "format": "uint64",
           "minimum": 0.0
-        },
-        "work_amplification": {
-          "type": [
-            "number",
-            "null"
-          ],
-          "format": "double"
         }
       }
     },
@@ -509,13 +496,18 @@
         "origin",
         "run_id",
         "scenario_id",
-        "scenario_version",
         "seed",
         "status"
       ],
       "properties": {
         "attempt_id": {
           "type": "string"
+        },
+        "behavior_sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "case_id": {
           "type": "string"
@@ -554,11 +546,6 @@
         },
         "scenario_id": {
           "type": "string"
-        },
-        "scenario_version": {
-          "type": "integer",
-          "format": "uint32",
-          "minimum": 0.0
         },
         "seed": {
           "type": "integer",
@@ -688,7 +675,6 @@
         "passed",
         "hard_gate_failed",
         "subject_error",
-        "judge_error",
         "resource_limit",
         "infrastructure_error"
       ]

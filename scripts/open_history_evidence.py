@@ -58,7 +58,7 @@ def open_bundle(archive_path, value, bundle):
             manifest = json.loads(archive.read(info))
             workflow = manifest.get('workflow', {})
             group = report.get('payload', {}).get('group', {}).get('group_id')
-            if (manifest.get('schema') == 'e2e-observation-bundle/v1'
+            if (manifest.get('schema') == 'e2e-observation-bundle'
                     and manifest.get('execution_id') == execution['id']
                     and manifest.get('campaign_id') == execution['id']
                     and manifest.get('attempt') == execution['attempt']

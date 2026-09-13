@@ -3,7 +3,6 @@
   "title": "FaultProfile",
   "type": "object",
   "required": [
-    "max_work_amplification",
     "profile_id",
     "seed"
   ],
@@ -61,10 +60,6 @@
       "items": {
         "type": "string"
       }
-    },
-    "max_work_amplification": {
-      "type": "number",
-      "format": "double"
     },
     "out_of_order_results": {
       "default": false,

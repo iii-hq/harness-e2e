@@ -22,13 +22,12 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "fanout_ladder";
-const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "worker_rows";
 const REPORT_DELIVERABLE_ID: &str = "fanout_report";
 
@@ -105,7 +104,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "fan_out": rung.fan_out,
@@ -113,7 +111,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "report_marker": report_marker(rung.fan_out),
             "token_derivation": "run-scoped",
         }),
-        complexity_profile(rung.fan_out),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -130,28 +127,10 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-/// The rung is the profile: fan-out 2 derives L3Concurrent and every larger
-/// rung derives L4Coordinated, so the ladder spans the concurrency tiers on
-/// purpose.
-fn complexity_profile(fan_out: u8) -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: 2,
-        parallel_branches: fan_out,
-        state_transitions: u16::from(fan_out),
-        wake_cycles: 1,
-        artifact_count: 2,
-        coordination_edges: u16::from(fan_out),
-        ambiguity_level: 1,
-        ..ComplexityProfile::default()
-    }
-}
-
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id, rung.fan_out),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -771,14 +750,6 @@ mod tests {
         assert_ne!(worker_token("attempt-a", 3), worker_token("attempt-a", 4));
         assert_ne!(worker_token("attempt-a", 3), worker_token("attempt-b", 3));
         assert!(worker_token("attempt-a", 0).starts_with("FAN-"));
-    }
-
-    #[test]
-    fn retained_case_is_coordinated() {
-        use super::super::ComplexityTier;
-
-        let retained = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        assert_eq!(retained.case.complexity.tier, ComplexityTier::L4Coordinated);
     }
 
     #[test]

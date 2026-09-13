@@ -46,7 +46,7 @@ describe('plan charts', () => {
             id: 'minimal_path',
             title: 'Minimal Path',
             subtitle: '2 of 4 metrics moved',
-            unchanged: 'quality score 90 · turns 2',
+            unchanged: 'score 90 · turns 2',
             rows: [
               {
                 id: 'tokens',
@@ -66,7 +66,7 @@ describe('plan charts', () => {
       />,
     )
     expect(html).toContain('data-diverging-bars')
-    expect(html).toContain('unchanged: quality score 90 · turns 2')
+    expect(html).toContain('unchanged: score 90 · turns 2')
     const tokens = html.slice(html.indexOf('data-diverging-row="tokens"'))
     const duration = html.slice(html.indexOf('data-diverging-row="duration"'))
     // An increase starts at the reference and grows right; a decrease
@@ -109,7 +109,7 @@ describe('plan charts', () => {
   it('collapses a dumbbell whose ends coincide into one marked point', () => {
     const html = renderToStaticMarkup(
       <Dumbbell
-        label="Quality per test"
+        label="Score per test"
         domain={[0, 100]}
         ticks={[
           { value: 0, label: '0' },

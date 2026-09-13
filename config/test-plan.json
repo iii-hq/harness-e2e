@@ -1,12 +1,19 @@
 {
-  "schema": "harness-e2e-master-test-plan/v1",
+  "schema": "harness-e2e-master-test-plan",
   "plan_id": "harness",
-  "version": 1,
   "modules": [
     {
       "id": "m10",
       "label": "Incremental Kanban application",
-      "scenarios": ["kanban_c1_foundation", "kanban_c2_persistence", "kanban_c3_board", "kanban_c4_ticket_flow", "kanban_c5_edit_move", "kanban_c6_discussion", "kanban_c7_live"]
+      "scenarios": [
+        "kanban_c1_foundation",
+        "kanban_c2_persistence",
+        "kanban_c3_board",
+        "kanban_c4_ticket_flow",
+        "kanban_c5_edit_move",
+        "kanban_c6_discussion",
+        "kanban_c7_live"
+      ]
     },
     {
       "id": "m1",
@@ -223,7 +230,7 @@
       "metrics": [
         "execution_reliability",
         "completion_rate",
-        "objective_score_coverage"
+        "score_coverage"
       ],
       "modules": [],
       "scenarios": [
@@ -343,8 +350,7 @@
       "purpose": "Measure recovery without duplicate effects or leaked resources.",
       "metrics": [
         "deliverable_success",
-        "structural_integrity",
-        "work_amplification"
+        "structural_integrity"
       ],
       "modules": [],
       "scenarios": [
@@ -361,7 +367,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 2,
           "fault_profile": "weekly-l2-recovery",
           "fault_scenario": "stateful.2",
           "soak_minutes": 60,
@@ -371,7 +376,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 3,
           "fault_profile": "weekly-l3-recovery",
           "fault_scenario": "coordination.3",
           "soak_minutes": 60,
@@ -381,7 +385,6 @@
           "execution_kind": "fault_injection",
           "runs": 3,
           "technical_retries": 0,
-          "difficulty_weight": 4,
           "fault_profile": "weekly-l4-recovery",
           "fault_scenario": "coordination.4",
           "soak_minutes": 60,
@@ -420,7 +423,9 @@
         "completion_evidence_coverage",
         "tokens_per_completion"
       ],
-      "modules": ["m10"],
+      "modules": [
+        "m10"
+      ],
       "scenarios": [
         "registry_planning",
         "registry_implementation",
@@ -434,7 +439,10 @@
       "lane": "local-software-engineering",
       "fault_groups": [],
       "scenario_groups": [
-        ["registry_implementation", "registry_verification"]
+        [
+          "registry_implementation",
+          "registry_verification"
+        ]
       ]
     }
   ]

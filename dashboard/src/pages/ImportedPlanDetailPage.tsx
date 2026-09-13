@@ -96,7 +96,6 @@ function frozenSetup(reference: RcReference) {
   }
   return {
     subject: model(plan.subject),
-    judge: model(plan.judge),
     scenarios,
     repetitions: count(profile.repetitions),
     technicalRetries: count(profile.technical_retries),
@@ -361,7 +360,6 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
           reference.execution.label ||
           `${plan?.label || plan?.source.plan_key || 'Imported plan'} local reproduction`,
         subject: object(reference.execution.plan).subject,
-        judge: object(reference.execution.plan).judge,
         materialized: reference.materialized,
         shards: reference.shards,
       })) as LocalPlan
@@ -784,7 +782,6 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
                 technicalRetries: frozen.technicalRetries ?? 0,
                 seed: 'frozen per test',
                 subject: modelLabel(frozen.subject),
-                judge: modelLabel(frozen.judge),
                 url: localUrl,
               }}
               error={error}
@@ -827,9 +824,7 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
               purpose="Local reproduction of a shared Release Control execution."
               url={localUrl}
               subject={modelValue(frozen.subject)}
-              judge={modelValue(frozen.judge)}
-              judgeRequired={Boolean(modelValue(frozen.judge))}
-              modelGroups={[frozen.subject, frozen.judge]
+              modelGroups={[frozen.subject]
                 .filter((entry) => entry.provider && entry.model)
                 .map((entry) => ({
                   provider: entry.provider,
@@ -856,7 +851,6 @@ export function ImportedPlanDetailPage({ planId }: { planId: string }) {
               onPurposeChange={() => undefined}
               onUrlChange={() => undefined}
               onSubjectChange={() => undefined}
-              onJudgeChange={() => undefined}
               onSelectedScenariosChange={() => undefined}
               onQueryChange={() => undefined}
               onRunsChange={() => undefined}

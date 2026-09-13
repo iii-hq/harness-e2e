@@ -18,7 +18,7 @@ from publish_swe_campaign import main
 
 def native_report(run_id, *, mode="journey"):
     return {
-        "schema": "swe-service-report/v1",
+        "schema": "swe-service-report",
         "scenario_id": "swe_service_journey" if mode == "journey" else "swe_config_isolation",
         "mode": mode,
         "run_id": run_id,

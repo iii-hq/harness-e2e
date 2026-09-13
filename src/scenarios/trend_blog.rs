@@ -32,13 +32,12 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "trend_blog";
-const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;
@@ -231,7 +230,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "edition": EDITION,
@@ -243,13 +241,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "outputs": [OUTPUT_INDEX, OUTPUT_FEED, OUTPUT_MANIFEST],
             "rule": "cover the top-ranked topics using only the provided sources; never invent facts, quotes, URLs, or figures the sources withhold",
         }),
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 2,
-            external_systems: 1,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -267,7 +258,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(),
         filesystem_root: Some(workspace_root(run_id)),
         execution: ExecutionPolicy {
@@ -947,15 +937,11 @@ mod tests {
     }
 
     #[test]
-    fn materialize_is_reproducible_and_l2_stateful() {
+    fn materialize_is_reproducible() {
         let first = materialize("attempt-a", 7).unwrap();
         let retry = materialize("attempt-b", 7).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.capture.is_some());
         first.validate().unwrap();

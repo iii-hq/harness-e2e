@@ -55,7 +55,6 @@ def load_report(path: pathlib.Path) -> dict[str, Any]:
     except (OSError, json.JSONDecodeError) as error:
         raise PublishError(f"cannot read endurance report {path}: {error}") from error
     required = {
-        "scenario_version",
         "accepted_head",
         "accepted_rungs",
         "total_rungs",
@@ -67,7 +66,7 @@ def load_report(path: pathlib.Path) -> dict[str, Any]:
     missing = sorted(required - set(report))
     if missing:
         raise PublishError(f"endurance report is missing: {', '.join(missing)}")
-    if report["scenario_version"] != 1 or report["total_rungs"] != 10:
+    if report["total_rungs"] != 10:
         raise PublishError("unsupported endurance report contract")
     if not isinstance(report["accepted_patch"], str):
         raise PublishError("accepted_patch must be text")
@@ -105,9 +104,7 @@ def public_projection(report: dict[str, Any], execution_id: str) -> dict[str, An
         )
     return {
         "kind": "engineering-endurance-public-observation",
-        "version": 1,
         "execution_id": execution_id,
-        "scenario_version": report["scenario_version"],
         "accepted_rungs": report["accepted_rungs"],
         "total_rungs": report["total_rungs"],
         "terminal_status": report["terminal_status"],

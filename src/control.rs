@@ -28,25 +28,18 @@ use crate::journal::{
     ExecutionJournal, ExecutionJournalEventKind, ExecutionJournalHeader, JournalProgress,
     JournalTerminalState, EXECUTION_JOURNAL_SCHEMA,
 };
-use crate::judge::JudgeConfig;
 use crate::longitudinal::{self, ComparisonPolicy, ComparisonResponse};
-use crate::markdown::{
-    MarkdownScenarioSource, ScenarioKey, LOCAL_SCENARIO_DIRECTORY, LOCAL_SCENARIO_MAX_BYTES,
-    LOCAL_SCENARIO_REQUIRED_SECTIONS, LOCAL_SCENARIO_TEMPLATE,
-};
 use crate::persistence::Persistence;
 use crate::report::{
     E2eManifest, E2eObservationEnvelope, E2eReport, ObservationDataAvailability,
     ObservationEvidence, ObservationExecutionIdentity, ObservationIdentity, ObservationMetric,
-    ObservationMetricDerivation, ObservationMetricOrigin, ObservationObjective, ObservationOutcome,
-    ObservationProvenance, ObservationRunContract, ObservationSample, ObservationSelectedCase,
-    RunnerIdentity, CATALOG_SCHEMA, OBSERVATION_SCHEMA,
+    ObservationMetricOrigin, ObservationObjective, ObservationOutcome, ObservationProvenance,
+    ObservationRunContract, ObservationSample, ObservationSelectedCase, RunnerIdentity,
+    CATALOG_SCHEMA, OBSERVATION_SCHEMA,
 };
-#[cfg(test)]
 use crate::scenarios::ScenarioId;
 use crate::scenarios::{
-    scenario_contract_sha256, ComplexityClassification, ComplexityProfile, DeliverableContract,
-    ExecutionPolicy, ScenarioCharacterization,
+    scenario_contract_sha256, DeliverableContract, ExecutionPolicy, ScenarioCharacterization,
 };
 use crate::suite::{
     run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
@@ -61,8 +54,6 @@ pub const RESULTS_GET_ID: &str = "e2e::results-get";
 pub const RESULTS_LIST_ID: &str = "e2e::results-list";
 pub const COMPARE_ID: &str = "e2e::compare";
 pub const SCENARIOS_LIST_ID: &str = "e2e::scenarios-list";
-pub const SCENARIOS_CREATE_ID: &str = "e2e::scenarios-create";
-pub const SCENARIOS_AUTHORING_GUIDE_ID: &str = "e2e::scenarios-authoring-guide";
 pub const FAULT_PLAN_ID: &str = "e2e::fault-plan";
 pub const FAULT_EVALUATE_ID: &str = "e2e::fault-evaluate";
 
@@ -128,7 +119,7 @@ pub struct PhaseTransition {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ActiveAttempt {
-    pub scenario_id: ScenarioKey,
+    pub scenario_id: ScenarioId,
     #[serde(default)]
     pub run_id: String,
     pub attempt_id: String,
@@ -196,25 +187,8 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
-    /// Auxiliary model for Markdown scenarios only (validators, instruction
-    /// adherence, setup and cleanup); supply model and provider together.
     #[serde(default)]
-    pub judge_model: Option<String>,
-    #[serde(default)]
-    pub judge_provider: Option<String>,
-    /// Opt-in behavioral audit analyzer; supply model and provider together.
-    #[serde(default)]
-    pub audit_model: Option<String>,
-    #[serde(default)]
-    pub audit_provider: Option<String>,
-    #[serde(default)]
-    pub scenarios: Vec<ScenarioKey>,
-    /// Immutable local Markdown definitions resolved by the control plane at
-    /// admission time. This is persisted for restart-safe execution and is
-    /// not part of the public function schema.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schemars(skip)]
-    pub local_markdown_scenarios: Vec<MarkdownScenarioSource>,
+    pub scenarios: Vec<ScenarioId>,
     #[serde(default = "default_runs")]
     pub runs: u32,
     #[serde(default)]
@@ -315,7 +289,7 @@ pub struct ResultsListRequest {
     #[serde(default)]
     pub lane: Option<String>,
     #[serde(default)]
-    pub scenario_id: Option<ScenarioKey>,
+    pub scenario_id: Option<ScenarioId>,
     #[serde(default = "default_results_limit")]
     pub limit: u16,
 }
@@ -347,107 +321,18 @@ pub struct ScenariosListRequest {
     pub seed: Option<u64>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct ScenarioAuthoringGuideRequest {
-    // iii injects this routing metadata for worker and CLI invocations.
-    // Accept it at the wire boundary without exposing or persisting it.
-    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
-    #[schemars(skip)]
-    _caller_worker_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct ScenarioAuthoringGuideResponse {
-    /// Versioned shape of this guidance response.
-    pub schema: String,
-    /// Short statement of what local authoring is for.
-    pub summary: String,
-    /// Always false: persistence and execution are separate operations.
-    pub creation_starts_execution: bool,
-    /// Existing files are never silently replaced.
-    pub overwrites_existing_file: bool,
-    /// Function that returns the complete built-in and local scenario catalog.
-    pub list_function: String,
-    /// Function that validates and persists one new local definition.
-    pub create_function: String,
-    /// Separate function used only when the user explicitly asks to execute.
-    pub run_function: String,
-    /// Worker-data-relative directory where definitions are persisted.
-    pub storage_directory: String,
-    /// Maximum accepted UTF-8 Markdown source size.
-    pub max_source_bytes: usize,
-    /// File-name requirements enforced by the worker.
-    pub file_name_rules: Vec<String>,
-    /// Required H2 headings, in their exact order.
-    pub required_h2_sections: Vec<String>,
-    /// Rules for weighted H3 validation criteria.
-    pub validation_rules: Vec<String>,
-    /// Recommended safe sequence for an agent authoring a local test.
-    pub workflow: Vec<String>,
-    /// Copy-ready valid Markdown source.
-    pub template: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct LocalScenarioCreateRequest {
-    // iii injects this routing metadata for Console-to-worker invocations.
-    // Accept it at the wire boundary without exposing or persisting it.
-    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
-    #[schemars(skip)]
-    _caller_worker_id: Option<String>,
-    /// One UTF-8 `.md` file name, without a directory. Use letters, numbers,
-    /// spaces, hyphens, or underscores; its stem becomes `local_<safe_id>`.
-    /// Existing files are rejected instead of overwritten.
-    pub file_name: String,
-    /// Complete Markdown test definition. It must contain one H1 followed by
-    /// the required H2 sections in order and
-    /// contain positive `### Name (N%)` validations totaling exactly 100%.
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-pub struct LocalScenarioCreateResponse {
-    pub scenario: ScenarioDescriptor,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ScenarioDescriptor {
-    pub scenario_id: ScenarioKey,
-    pub origin: ScenarioOrigin,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub author_version: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_path: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub source_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub behavior_sha256: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub compiled_sha256: Option<String>,
-    pub scenario_version: u32,
+    pub scenario_id: ScenarioId,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
     pub contract_sha256: String,
-    pub classification: ComplexityClassification,
-    pub complexity: ComplexityProfile,
     pub characterization: ScenarioCharacterization,
     pub resource_envelope: ScenarioResourceEnvelope,
     pub required_capabilities: Vec<String>,
     pub deliverable_contract: DeliverableContract,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ScenarioOrigin {
-    #[default]
-    BuiltIn,
-    Markdown,
-    Local,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -497,7 +382,6 @@ struct ControlPlaneInner {
     plan_reservation: Mutex<Option<String>>,
     records: RwLock<HashMap<String, ExecutionRecord>>,
     cancellations: Mutex<HashMap<String, watch::Sender<bool>>>,
-    scenario_lock: Mutex<()>,
     durable: DurableHistory,
     updates: broadcast::Sender<ControlPlaneUpdate>,
 }
@@ -545,7 +429,6 @@ impl ControlPlane {
                 plan_reservation: Mutex::new(None),
                 records: RwLock::new(HashMap::new()),
                 cancellations: Mutex::new(HashMap::new()),
-                scenario_lock: Mutex::new(()),
                 updates,
             }),
         };
@@ -748,7 +631,7 @@ impl ControlPlane {
         register_agent_function(
             &self.inner.iii,
             SCENARIOS_LIST_ID,
-            "List every built-in, committed Markdown, and local E2E test with its immutable contract, origin, capabilities, complexity, and materialized case. Call e2e::scenarios-authoring-guide before authoring a new local test.",
+            "List every built-in E2E test with its immutable contract, capabilities, complexity, and materialized case.",
             "list_tests",
             false,
             {
@@ -763,37 +646,6 @@ impl ControlPlane {
                     }
                 })
             },
-        );
-        register_agent_function(
-            &self.inner.iii,
-            SCENARIOS_CREATE_ID,
-            "Create one local Markdown E2E test after validating its complete authoring contract. This persists a definition outside Git and never starts an execution; call e2e::run separately only when execution is explicitly requested.",
-            "create_local_test",
-            true,
-            {
-                let control = self.clone();
-                RegisterFunction::new_async(move |request: LocalScenarioCreateRequest| {
-                    let control = control.clone();
-                    async move {
-                        control
-                            .create_local_scenario(request)
-                            .await
-                            .map_err(handler_error)
-                    }
-                })
-            },
-        );
-        register_agent_function(
-            &self.inner.iii,
-            SCENARIOS_AUTHORING_GUIDE_ID,
-            "Explain how the Harness can author a local Markdown E2E test, including the exact template, validation rules, persistence behavior, and separate create/list/run workflow. Call this before e2e::scenarios-create.",
-            "understand_local_test_authoring",
-            false,
-            RegisterFunction::new_async(
-                move |_request: ScenarioAuthoringGuideRequest| async move {
-                    Ok::<_, Error>(scenario_authoring_guide())
-                },
-            ),
         );
     }
 
@@ -857,63 +709,9 @@ impl ControlPlane {
         &self,
         request: ScenariosListRequest,
     ) -> Result<ScenariosListResponse> {
-        let _lock = self.inner.scenario_lock.lock().await;
-        let output_root = self.inner.output_root.clone();
-        tokio::task::spawn_blocking(move || scenarios_list_with_local(&output_root, request))
+        tokio::task::spawn_blocking(move || scenarios_list(request))
             .await
-            .context("load local scenario catalog task")?
-    }
-
-    pub async fn create_local_scenario(
-        &self,
-        request: LocalScenarioCreateRequest,
-    ) -> Result<LocalScenarioCreateResponse> {
-        let _lock = self.inner.scenario_lock.lock().await;
-        let output_root = self.inner.output_root.clone();
-        let definition = tokio::task::spawn_blocking(move || {
-            crate::markdown::create_local_scenario(
-                &output_root,
-                &request.file_name,
-                &request.source,
-            )
-        })
-        .await
-        .context("create local scenario task")??;
-        let persisted = json!({
-            "scenario": definition.scenario,
-            "source": definition.source,
-            "source_path": definition.scenario.source_path,
-            "source_sha256": definition.scenario.source_sha256,
-            "created_at": now(),
-        });
-        self.inner
-            .persistence
-            .save_local_scenario(&definition.scenario.id, &persisted)
-            .await
-            .context("persist local Markdown scenario")?;
-        let seed = ScenarioKey::Markdown(definition.scenario.id.clone()).canonical_seed();
-        Ok(LocalScenarioCreateResponse {
-            scenario: materialize_markdown_descriptor(
-                definition.scenario,
-                seed,
-                ScenarioOrigin::Local,
-            )?,
-        })
-    }
-
-    async fn resolve_local_markdown_scenarios(
-        &self,
-        scenarios: &[ScenarioKey],
-        capture_catalog: bool,
-    ) -> Result<Vec<MarkdownScenarioSource>> {
-        let _lock = self.inner.scenario_lock.lock().await;
-        let output_root = self.inner.output_root.clone();
-        let scenarios = scenarios.to_vec();
-        tokio::task::spawn_blocking(move || {
-            resolve_local_markdown_scenarios(&output_root, &scenarios, capture_catalog)
-        })
-        .await
-        .context("load local scenarios for execution task")?
+            .context("load scenario catalog task")?
     }
 
     pub async fn run(&self, request: RunRequest) -> Result<RunAccepted> {
@@ -931,9 +729,6 @@ impl ControlPlane {
     async fn run_owned(&self, mut request: RunRequest, owner: Option<&str>) -> Result<RunAccepted> {
         request.slot_start_deadline_seconds =
             crate::suite::resolve_slot_start_deadline(request.slot_start_deadline_seconds)?;
-        request.local_markdown_scenarios = self
-            .resolve_local_markdown_scenarios(&request.scenarios, request.run_contract.is_some())
-            .await?;
         let lane_budget = validate_run_request(&request)?;
         let request_sha256 = artifact::sha256_value(&request)?;
         let run_contract_sha256 = request
@@ -984,7 +779,6 @@ impl ControlPlane {
                 execution_id: execution_id.clone(),
                 request_sha256: request_sha256.clone(),
                 result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                 created_at: now.clone(),
                 request: serde_json::to_value(&request).context("encode journal request")?,
                 runner: serde_json::to_value(RunnerIdentity::runtime())
@@ -1096,12 +890,10 @@ impl ControlPlane {
         });
         let output = self.inner.output_root.join(&execution_id);
         let scenarios = if request.scenarios.is_empty() {
-            crate::markdown::default_keys()
+            ScenarioId::ALL.to_vec()
         } else {
             unique_scenarios(&request.scenarios)
         };
-        let judge = judge_config(&request);
-        let audit_analyzer = audit_config(&request);
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             execution_id: None,
@@ -1109,11 +901,8 @@ impl ControlPlane {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
             },
-            judge,
-            audit_analyzer,
             output: output.clone(),
             scenarios,
-            local_markdown_scenarios: request.local_markdown_scenarios.clone(),
             runs: request.runs,
             seed: request.seed,
             rotating_seeds: request.rotating_seeds.clone(),
@@ -1129,7 +918,6 @@ impl ControlPlane {
                 adaptive_resume,
             }),
             observation_contract: request.run_contract.clone(),
-            materialized_markdown_plan: None,
         })
         .await;
         checkpoint_task.abort();
@@ -1227,7 +1015,7 @@ impl ControlPlane {
                 )?;
                 self.update_record(execution_id, |record| {
                     record.active_attempt = Some(ActiveAttempt {
-                        scenario_id: scenario_id.clone(),
+                        scenario_id: *scenario_id,
                         run_id: run_id.clone(),
                         attempt_id: attempt_id.clone(),
                         session_id: session_id.clone(),
@@ -1655,11 +1443,7 @@ impl ControlPlane {
                 json!({ "root_session_id": active.session_id }),
             )
             .await;
-        if let Some(cleanup) = active
-            .scenario_id
-            .built_in()
-            .and_then(|scenario| scenario.spec(&active.attempt_id).cleanup)
-        {
+        if let Some(cleanup) = active.scenario_id.spec(&active.attempt_id).cleanup {
             let context = E2eContext::from_client(self.inner.iii.clone());
             if let Err(error) = cleanup(&context, &active.attempt_id).await {
                 tracing::warn!(
@@ -1915,7 +1699,6 @@ impl ControlPlane {
                         record.request_sha256.clone()
                     },
                     result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                     created_at: record.requested_at.clone(),
                     request: serde_json::to_value(&record.request)
                         .context("encode recovered journal request")?,
@@ -1986,48 +1769,6 @@ fn register_agent_function(
             }
         })),
     );
-}
-
-fn scenario_authoring_guide() -> ScenarioAuthoringGuideResponse {
-    ScenarioAuthoringGuideResponse {
-        schema: "e2e-local-scenario-authoring/v1".into(),
-        summary: "Author a reusable local Markdown test without changing the repository or starting an execution.".into(),
-        creation_starts_execution: false,
-        overwrites_existing_file: false,
-        list_function: SCENARIOS_LIST_ID.into(),
-        create_function: SCENARIOS_CREATE_ID.into(),
-        run_function: RUN_ID.into(),
-        storage_directory: LOCAL_SCENARIO_DIRECTORY.into(),
-        max_source_bytes: LOCAL_SCENARIO_MAX_BYTES,
-        file_name_rules: vec![
-            "Pass one .md file name only; do not include a directory or path traversal.".into(),
-            "Use a non-empty stem made from ASCII letters, numbers, spaces, hyphens, or underscores.".into(),
-            "Choose a new name: an existing local file is rejected and never overwritten.".into(),
-            "The file stem compiles to a stable local_<safe_id> scenario id.".into(),
-        ],
-        required_h2_sections: LOCAL_SCENARIO_REQUIRED_SECTIONS
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        validation_rules: vec![
-            "Add at least one H3 criterion under Validations.".into(),
-            "Format every criterion heading as ### Name (N%) with a positive integer weight."
-                .into(),
-            "Make all criterion weights total exactly 100%.".into(),
-            "Provide non-empty instructions below every validation heading.".into(),
-        ],
-        workflow: vec![
-            "Draft source from this template.".into(),
-            format!("Call {SCENARIOS_CREATE_ID} with file_name and the complete source."),
-            format!(
-                "Call {SCENARIOS_LIST_ID} to confirm the returned id appears with origin local."
-            ),
-            format!(
-                "Call {RUN_ID} only later and only when the user explicitly asks to execute the test."
-            ),
-        ],
-        template: LOCAL_SCENARIO_TEMPLATE.into(),
-    }
 }
 
 fn handler_error(error: anyhow::Error) -> Error {
@@ -2185,7 +1926,7 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     }
     let budget = lane_budget(&request.lane);
     let scenarios = if request.scenarios.is_empty() {
-        crate::markdown::default_keys()
+        ScenarioId::ALL.to_vec()
     } else {
         unique_scenarios(&request.scenarios)
     };
@@ -2231,17 +1972,7 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     let turns_per_run = scenarios
         .iter()
         .try_fold(0_u64, |total, scenario| -> Result<u64> {
-            let max_turns = scenario.built_in().map_or_else(
-                || {
-                    markdown_scenario_for_request(request, scenario.as_str()).map(|compiled| {
-                        16_u64
-                            + u64::from(crate::markdown::execution_policy().max_turns)
-                            + 8_u64.saturating_mul(compiled.validations.len() as u64)
-                            + 16
-                    })
-                },
-                |built_in| Ok(u64::from(built_in.spec("budget").execution.max_turns)),
-            )?;
+            let max_turns = u64::from(scenario.spec("budget").execution.max_turns);
             let physical_attempts = if scenario.execution_kind().replay_safe() {
                 u64::from(request.technical_retries) + 1
             } else {
@@ -2272,21 +2003,6 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             budget.max_declared_turns
         );
     }
-    if request.judge_model.is_some() != request.judge_provider.is_some() {
-        bail!("judge_model and judge_provider must be supplied together");
-    }
-    if scenarios.iter().any(|scenario| {
-        scenario.built_in().is_none()
-            || scenario.built_in() == Some(crate::scenarios::ScenarioId::RegistryPlanning)
-    }) && (request.judge_model.is_none() || request.judge_provider.is_none())
-    {
-        bail!(
-            "Markdown and Registry planning scenarios require an explicit judge_model and judge_provider for setup, validation, adherence, and cleanup"
-        );
-    }
-    if request.audit_model.is_some() != request.audit_provider.is_some() {
-        bail!("audit_model and audit_provider must be supplied together");
-    }
     if let Some(contract) = &request.run_contract {
         contract.validate()?;
         let expected = observation_idempotency_key(request)?;
@@ -2307,8 +2023,6 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         "lane": request.lane,
         "model": request.model,
         "provider": request.provider,
-        "judge_model": request.judge_model,
-        "judge_provider": request.judge_provider,
         "scenarios": request.scenarios,
         "runs": request.runs,
         "seed": request.seed,
@@ -2339,29 +2053,26 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
             runner
         );
     }
-    let catalog = scenarios_list_with_definitions(
-        &request.local_markdown_scenarios,
-        ScenariosListRequest { seed: request.seed },
-    )?;
+    let catalog = scenarios_list(ScenariosListRequest { seed: request.seed })?;
     if contract.plan.catalog_sha256 != catalog.catalog_sha256 {
-        bail!(
-            "E2E observation catalog mismatch: expected {}, observed {}",
-            contract.plan.catalog_sha256,
-            catalog.catalog_sha256
+        tracing::warn!(
+            expected = %contract.plan.catalog_sha256,
+            observed = %catalog.catalog_sha256,
+            "E2E observation contract names another scenario catalog; observing with the runtime catalog"
         );
     }
     let scenarios = if request.scenarios.is_empty() {
-        crate::markdown::default_keys()
+        ScenarioId::ALL.to_vec()
     } else {
         unique_scenarios(&request.scenarios)
     };
     let mut expected = Vec::new();
     for scenario in scenarios {
         for seed in observation_case_seeds(&scenario, request.seed, &request.rotating_seeds) {
-            let descriptor = materialize_request_scenario_descriptor(request, &scenario, seed)?;
+            let descriptor = materialize_scenario_descriptor(scenario, seed, "run-contract")?;
             expected.push(ObservationSelectedCase {
                 scenario_id: descriptor.scenario_id,
-                scenario_version: descriptor.scenario_version,
+                behavior_sha256: descriptor.behavior_sha256,
                 case_id: descriptor.case_id,
                 seed: descriptor.seed,
                 inputs_sha256: descriptor.inputs_sha256,
@@ -2373,16 +2084,16 @@ fn preflight_run_contract(request: &RunRequest) -> Result<()> {
     let mut supplied = contract.selected_cases.clone();
     sort_selected_cases(&mut supplied);
     if supplied != expected {
-        bail!("E2E observation selected cases differ from runtime materialization");
+        tracing::warn!(
+            supplied = supplied.len(),
+            expected = expected.len(),
+            "E2E observation selected cases differ from runtime materialization; the observation reports what ran"
+        );
     }
     Ok(())
 }
 
-fn observation_case_seeds(
-    scenario: &ScenarioKey,
-    fixed: Option<u64>,
-    rotating: &[u64],
-) -> Vec<u64> {
+fn observation_case_seeds(scenario: &ScenarioId, fixed: Option<u64>, rotating: &[u64]) -> Vec<u64> {
     if scenario.canonical_seed_only() {
         return vec![scenario.canonical_seed()];
     }
@@ -2433,29 +2144,10 @@ fn lane_budget(lane: &str) -> LaneBudget {
     }
 }
 
-fn audit_config(request: &RunRequest) -> Option<JudgeConfig> {
-    request
-        .audit_model
-        .clone()
-        .zip(request.audit_provider.clone())
-        .map(|(model, provider)| JudgeConfig { model, provider })
-}
-
-/// The judge is the auxiliary model Markdown scenarios use for their
-/// validators and instruction adherence. Built-in scenarios never use it, so
-/// there is no default: it exists only when the request names it.
-fn judge_config(request: &RunRequest) -> Option<JudgeConfig> {
-    request
-        .judge_model
-        .clone()
-        .zip(request.judge_provider.clone())
-        .map(|(model, provider)| JudgeConfig { model, provider })
-}
-
-fn unique_scenarios(scenarios: &[ScenarioKey]) -> Vec<ScenarioKey> {
+fn unique_scenarios(scenarios: &[ScenarioId]) -> Vec<ScenarioId> {
     scenarios
         .iter()
-        .cloned()
+        .copied()
         .fold(Vec::new(), |mut result, id| {
             if !result.contains(&id) {
                 result.push(id);
@@ -2464,53 +2156,8 @@ fn unique_scenarios(scenarios: &[ScenarioKey]) -> Vec<ScenarioKey> {
         })
 }
 
-fn resolve_local_markdown_scenarios(
-    output_root: &Path,
-    scenarios: &[ScenarioKey],
-    capture_catalog: bool,
-) -> Result<Vec<MarkdownScenarioSource>> {
-    let requested = scenarios
-        .iter()
-        .filter(|scenario| scenario.built_in().is_none())
-        .map(|scenario| scenario.as_str().to_string())
-        .collect::<std::collections::HashSet<_>>();
-    if requested.is_empty() && !capture_catalog {
-        return Ok(Vec::new());
-    }
-    let embedded = crate::markdown::embedded_catalog()?
-        .into_iter()
-        .map(|scenario| scenario.id)
-        .collect::<std::collections::HashSet<_>>();
-    let unresolved = requested
-        .difference(&embedded)
-        .cloned()
-        .collect::<std::collections::HashSet<_>>();
-    if unresolved.is_empty() && !capture_catalog {
-        return Ok(Vec::new());
-    }
-    let catalog = crate::markdown::local_catalog(output_root)?;
-    if capture_catalog {
-        return Ok(catalog);
-    }
-    let resolved = catalog
-        .into_iter()
-        .filter(|definition| unresolved.contains(&definition.scenario.id))
-        .collect::<Vec<_>>();
-    let resolved_ids = resolved
-        .iter()
-        .map(|definition| definition.scenario.id.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    if let Some(id) = unresolved
-        .iter()
-        .find(|id| !resolved_ids.contains(id.as_str()))
-    {
-        bail!("unknown E2E scenario '{id}'");
-    }
-    Ok(resolved)
-}
-
 pub fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResponse> {
-    let scenarios = crate::markdown::all_keys()?
+    let scenarios = ScenarioId::ALL
         .into_iter()
         .map(|scenario_id| {
             let seed = request.seed.unwrap_or_else(|| scenario_id.canonical_seed());
@@ -2532,159 +2179,32 @@ pub fn scenarios_list(request: ScenariosListRequest) -> Result<ScenariosListResp
     })
 }
 
-fn scenarios_list_with_local(
-    output_root: &Path,
-    request: ScenariosListRequest,
-) -> Result<ScenariosListResponse> {
-    scenarios_list_with_definitions(&crate::markdown::local_catalog(output_root)?, request)
-}
-
-fn scenarios_list_with_definitions(
-    definitions: &[MarkdownScenarioSource],
-    request: ScenariosListRequest,
-) -> Result<ScenariosListResponse> {
-    let mut response = scenarios_list(request.clone())?;
-    if definitions.is_empty() {
-        return Ok(response);
-    }
-    for definition in definitions {
-        crate::markdown::validate_local_definition(definition)?;
-        let scenario_id = ScenarioKey::Markdown(definition.scenario.id.clone());
-        let seed = request.seed.unwrap_or_else(|| scenario_id.canonical_seed());
-        response.scenarios.push(materialize_markdown_descriptor(
-            definition.scenario.clone(),
-            seed,
-            ScenarioOrigin::Local,
-        )?);
-    }
-    response
-        .scenarios
-        .sort_by(|left, right| left.scenario_id.as_str().cmp(right.scenario_id.as_str()));
-    response.catalog_sha256 = artifact::sha256_value(&json!({
-        "schema": response.schema,
-        "runner": response.runner,
-        "scenarios": response.scenarios,
-    }))?;
-    Ok(response)
-}
-
 fn materialize_scenario_descriptor(
-    scenario_id: ScenarioKey,
+    scenario_id: ScenarioId,
     seed: u64,
     label: &str,
 ) -> Result<ScenarioDescriptor> {
-    match scenario_id.clone() {
-        ScenarioKey::BuiltIn(id) => {
-            let materialized = id.materialize(label, seed)?;
-            let contract_sha256 =
-                scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
-            let complexity = materialized.case.complexity.profile;
-            let resource_envelope = ScenarioResourceEnvelope {
-                execution: materialized.spec.execution,
-                workflow: serde_json::from_value(
-                    materialized.case.inputs["workflow_resource_budgets"].clone(),
-                )
-                .ok(),
-            };
-            Ok(ScenarioDescriptor {
-                scenario_id,
-                origin: ScenarioOrigin::BuiltIn,
-                title: None,
-                author_version: None,
-                source_path: None,
-                source_sha256: None,
-                behavior_sha256: None,
-                compiled_sha256: None,
-                scenario_version: materialized.case.scenario_version,
-                case_id: materialized.case.case_id,
-                seed: materialized.case.seed,
-                inputs_sha256: materialized.case.inputs_sha256,
-                contract_sha256,
-                classification: materialized.case.complexity,
-                complexity,
-                characterization: materialized.case.characterization,
-                resource_envelope,
-                required_capabilities: materialized.case.required_capabilities,
-                deliverable_contract: materialized.case.deliverable_contract,
-            })
-        }
-        ScenarioKey::Markdown(id) => {
-            let scenario = crate::markdown::embedded_scenario(&id)?;
-            materialize_markdown_descriptor(scenario, seed, ScenarioOrigin::Markdown)
-        }
-    }
-}
-
-fn markdown_scenario_for_request(
-    request: &RunRequest,
-    id: &str,
-) -> Result<crate::markdown::CompiledMarkdownScenario> {
-    request
-        .local_markdown_scenarios
-        .iter()
-        .find(|definition| definition.scenario.id == id)
-        .map(|definition| definition.scenario.clone())
-        .map(Ok)
-        .unwrap_or_else(|| crate::markdown::embedded_scenario(id))
-}
-
-fn materialize_request_scenario_descriptor(
-    request: &RunRequest,
-    scenario_id: &ScenarioKey,
-    seed: u64,
-) -> Result<ScenarioDescriptor> {
-    if scenario_id.built_in().is_some() {
-        materialize_scenario_descriptor(scenario_id.clone(), seed, "run-contract")
-    } else {
-        materialize_markdown_descriptor(
-            markdown_scenario_for_request(request, scenario_id.as_str())?,
-            seed,
-            if request
-                .local_markdown_scenarios
-                .iter()
-                .any(|definition| definition.scenario.id == scenario_id.as_str())
-            {
-                ScenarioOrigin::Local
-            } else {
-                ScenarioOrigin::Markdown
-            },
+    let materialized = scenario_id.materialize(label, seed)?;
+    let contract_sha256 =
+        scenario_contract_sha256(&materialized.case, materialized.spec.execution)?;
+    let resource_envelope = ScenarioResourceEnvelope {
+        execution: materialized.spec.execution,
+        workflow: serde_json::from_value(
+            materialized.case.inputs["workflow_resource_budgets"].clone(),
         )
-    }
-}
-
-fn materialize_markdown_descriptor(
-    scenario: crate::markdown::CompiledMarkdownScenario,
-    seed: u64,
-    origin: ScenarioOrigin,
-) -> Result<ScenarioDescriptor> {
-    let scenario_id = ScenarioKey::Markdown(scenario.id.clone());
-    let case = crate::suite::markdown_case(&scenario, seed)?;
-    let execution = crate::markdown::execution_policy();
-    let contract_sha256 = scenario_contract_sha256(&case, execution)?;
-    let complexity = case.complexity.profile;
+        .ok(),
+    };
     Ok(ScenarioDescriptor {
         scenario_id,
-        origin,
-        title: Some(scenario.title),
-        author_version: Some(scenario.version),
-        source_path: Some(scenario.source_path),
-        source_sha256: Some(scenario.source_sha256),
-        behavior_sha256: Some(scenario.behavior_sha256),
-        compiled_sha256: Some(scenario.compiled_sha256),
-        scenario_version: case.scenario_version,
-        case_id: case.case_id,
-        seed: case.seed,
-        inputs_sha256: case.inputs_sha256,
+        behavior_sha256: materialized.case.behavior_sha256.clone(),
+        case_id: materialized.case.case_id,
+        seed: materialized.case.seed,
+        inputs_sha256: materialized.case.inputs_sha256,
         contract_sha256,
-        classification: case.complexity,
-        complexity,
-        characterization: case.characterization,
-        resource_envelope: ScenarioResourceEnvelope {
-            execution,
-            workflow: None,
-        },
-        required_capabilities: case.required_capabilities,
-        deliverable_contract: case.deliverable_contract,
+        characterization: materialized.case.characterization,
+        resource_envelope,
+        required_capabilities: materialized.case.required_capabilities,
+        deliverable_contract: materialized.case.deliverable_contract,
     })
 }
 
@@ -2811,21 +2331,10 @@ fn observation_samples(report: &E2eReport) -> Vec<ObservationSample> {
                     Some(_) => ObservationDataAvailability::Partial,
                     None => ObservationDataAvailability::Unavailable,
                 };
-                let derivations = run
-                    .efficiency
-                    .as_ref()
-                    .is_some_and(|metrics| metrics.work_amplification.is_some())
-                    .then(|| ObservationMetricDerivation {
-                        metric: "work_amplification".into(),
-                        origin: ObservationMetricOrigin::DerivedFromObserved,
-                        formula: "observed_work / max(minimum_expected_work, 1)".into(),
-                        formula_version: "1".into(),
-                    })
-                    .into_iter()
-                    .collect();
+                let derivations = Vec::new();
                 ObservationSample {
                     scenario_id: scenario.scenario_id.clone(),
-                    scenario_version: scenario.scenario_version,
+                    behavior_sha256: scenario.behavior_sha256.clone(),
                     case_id: scenario.case_id.clone(),
                     seed,
                     run_id: run.run_id.clone(),
@@ -2865,9 +2374,7 @@ fn observation_metric_values(
         ("output_tokens", "tokens"),
         ("total_tokens", "tokens"),
         ("cost_usd", "USD"),
-        ("minimum_expected_work", "work_units"),
         ("observed_work", "work_units"),
-        ("work_amplification", "ratio"),
         ("technical_attempts", "attempts"),
     ];
     let mut values = METRICS
@@ -2933,17 +2440,9 @@ fn observation_metric_values(
                 (Some(metrics), "cost_usd") => {
                     (metrics.cost_usd, ObservationMetricOrigin::Observed)
                 }
-                (Some(metrics), "minimum_expected_work") => (
-                    Some(metrics.minimum_expected_work as f64),
-                    ObservationMetricOrigin::Observed,
-                ),
                 (Some(metrics), "observed_work") => (
                     metrics.observed_work.map(|value| value as f64),
                     ObservationMetricOrigin::Observed,
-                ),
-                (Some(metrics), "work_amplification") => (
-                    metrics.work_amplification,
-                    ObservationMetricOrigin::DerivedFromObserved,
                 ),
                 (Some(metrics), "technical_attempts") => (
                     Some(metrics.technical_attempts as f64),
@@ -3123,7 +2622,6 @@ mod tests {
                     execution_id: "recovery".into(),
                     request_sha256: "request".into(),
                     result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                    scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                     created_at: now(),
                     request: serde_json::to_value(request()).unwrap(),
                     runner: json!({}),
@@ -3168,12 +2666,7 @@ mod tests {
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
-            judge_model: None,
-            judge_provider: None,
-            audit_model: None,
-            audit_provider: None,
-            scenarios: vec![ScenarioId::ContextPressure.into()],
-            local_markdown_scenarios: Vec::new(),
+            scenarios: vec![ScenarioId::ContextPressure],
             runs: 1,
             seed: Some(42),
             rotating_seeds: Vec::new(),
@@ -3202,69 +2695,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn local_scenario_create_accepts_engine_caller_metadata_without_serializing_it() {
-        let request: LocalScenarioCreateRequest = serde_json::from_value(serde_json::json!({
-            "_caller_worker_id": "console-1",
-            "file_name": "console-draft.md",
-            "source": "# Console draft"
-        }))
-        .unwrap();
-
-        assert_eq!(request._caller_worker_id.as_deref(), Some("console-1"));
-        assert_eq!(request.file_name, "console-draft.md");
-        assert!(!serde_json::to_value(&request)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .contains_key("_caller_worker_id"));
-    }
-
-    #[test]
-    fn authoring_guide_separates_definition_creation_from_execution() {
-        let guide = scenario_authoring_guide();
-
-        assert_eq!(guide.schema, "e2e-local-scenario-authoring/v1");
-        assert!(!guide.creation_starts_execution);
-        assert!(!guide.overwrites_existing_file);
-        assert_eq!(guide.create_function, SCENARIOS_CREATE_ID);
-        assert_eq!(guide.list_function, SCENARIOS_LIST_ID);
-        assert_eq!(guide.run_function, RUN_ID);
-        assert_eq!(
-            guide.required_h2_sections,
-            LOCAL_SCENARIO_REQUIRED_SECTIONS.map(str::to_string)
-        );
-        crate::markdown::compile_local("local-scenarios/guide-example.md", &guide.template)
-            .unwrap();
-    }
-
-    #[test]
-    fn authoring_guide_request_is_closed() {
-        let request = serde_json::from_value::<ScenarioAuthoringGuideRequest>(serde_json::json!({
-            "_caller_worker_id": "cli"
-        }))
-        .unwrap();
-        assert_eq!(request._caller_worker_id.as_deref(), Some("cli"));
-        assert!(!serde_json::to_value(&request)
-            .unwrap()
-            .as_object()
-            .unwrap()
-            .contains_key("_caller_worker_id"));
-        assert!(
-            serde_json::from_value::<ScenarioAuthoringGuideRequest>(serde_json::json!({
-                "execute": true
-            }))
-            .is_err()
-        );
-    }
-
     fn d0_request() -> RunRequest {
         let mut request = request();
         let catalog = scenarios_list(ScenariosListRequest { seed: request.seed }).unwrap();
         let scenario = catalog
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::ContextPressure.into())
+            .find(|scenario| scenario.scenario_id == ScenarioId::ContextPressure)
             .unwrap()
             .clone();
         request.run_contract = Some(ObservationRunContract {
@@ -3290,7 +2727,7 @@ mod tests {
             attempt: 1,
             selected_cases: vec![ObservationSelectedCase {
                 scenario_id: scenario.scenario_id,
-                scenario_version: scenario.scenario_version,
+                behavior_sha256: scenario.behavior_sha256.clone(),
                 case_id: scenario.case_id.clone(),
                 seed: scenario.seed,
                 inputs_sha256: scenario.inputs_sha256.clone(),
@@ -3328,12 +2765,9 @@ mod tests {
     #[test]
     fn scenarios_list_materializes_versioned_cases() {
         let response = scenarios_list(ScenariosListRequest { seed: Some(7) }).unwrap();
-        assert_eq!(
-            response.scenarios.len(),
-            crate::markdown::all_keys().unwrap().len()
-        );
+        assert_eq!(response.scenarios.len(), ScenarioId::ALL.len());
         for scenario in &response.scenarios {
-            let id = scenario.scenario_id.clone();
+            let id = scenario.scenario_id;
             let expected_seed = if id.canonical_seed_only() {
                 id.canonical_seed()
             } else {
@@ -3345,18 +2779,17 @@ mod tests {
                 .contains(&format!("seed-{expected_seed:016x}")));
         }
         assert_eq!(response.schema, CATALOG_SCHEMA);
-        assert_eq!(response.schema, "e2e-scenario-catalog/v4");
+        assert_eq!(response.schema, "e2e-scenario-catalog");
         assert!(response.catalog_sha256.starts_with("sha256:"));
         assert!(response.scenarios.iter().all(|scenario| {
             scenario.inputs_sha256.starts_with("sha256:")
                 && scenario.contract_sha256.starts_with("sha256:")
-                && scenario.classification.method
-                    == crate::scenarios::ComplexityMethod::CapabilityV2
+                && scenario.behavior_sha256.starts_with("sha256:")
         }));
         let git = response
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::GitRegressionForensics.into())
+            .find(|scenario| scenario.scenario_id == ScenarioId::GitRegressionForensics)
             .unwrap();
         assert_eq!(
             git.characterization.realism.execution,
@@ -3365,95 +2798,13 @@ mod tests {
         let incident = response
             .scenarios
             .iter()
-            .find(|scenario| scenario.scenario_id == ScenarioId::IncidentResponse.into())
+            .find(|scenario| scenario.scenario_id == ScenarioId::IncidentResponse)
             .unwrap();
         let workflow = incident.resource_envelope.workflow.as_ref().unwrap();
         assert_eq!(workflow.max_parallel, 3);
         assert_eq!(workflow.max_total_tokens, Some(686_000));
         assert_eq!(workflow.max_cost_usd, Some(25.0));
         assert_eq!(workflow.technical_retries, 0);
-        let markdown = response
-            .scenarios
-            .iter()
-            .find(|scenario| scenario.scenario_id.as_str() == "insert_record")
-            .unwrap();
-        assert_eq!(markdown.origin, ScenarioOrigin::Markdown);
-        assert_eq!(markdown.author_version, Some(2));
-        assert!(markdown
-            .source_sha256
-            .as_deref()
-            .unwrap()
-            .starts_with("sha256:"));
-    }
-
-    #[test]
-    fn scenarios_list_includes_local_markdown_from_the_worker_data_directory() {
-        let root = tempfile::tempdir().unwrap();
-        let source = "# Console draft\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the local task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
-        crate::markdown::create_local_scenario(root.path(), "console-draft.md", source).unwrap();
-
-        let response =
-            scenarios_list_with_local(root.path(), ScenariosListRequest { seed: Some(9) }).unwrap();
-        let local = response
-            .scenarios
-            .iter()
-            .find(|scenario| scenario.scenario_id.as_str() == "local_console_draft")
-            .unwrap();
-        assert_eq!(local.origin, ScenarioOrigin::Local);
-        assert_eq!(local.title.as_deref(), Some("Console draft"));
-        assert_eq!(local.seed, 9);
-        assert!(local
-            .source_path
-            .as_deref()
-            .unwrap()
-            .starts_with("local-scenarios/"));
-        assert!(response.catalog_sha256.starts_with("sha256:"));
-    }
-
-    #[test]
-    fn local_markdown_is_frozen_for_execution_and_unknown_ids_are_rejected() {
-        let root = tempfile::tempdir().unwrap();
-        let source = "# Frozen draft\n\n## Version\n\n1\n\n## Before Test\n\nPrepare isolated state.\n\n## Prompt\n\nComplete the frozen task.\n\n## Validations\n\n### Correct result (100%)\n\nThe requested result exists.\n";
-        crate::markdown::create_local_scenario(root.path(), "frozen-draft.md", source).unwrap();
-        let selected = vec!["local_frozen_draft".parse::<ScenarioKey>().unwrap()];
-
-        let frozen = resolve_local_markdown_scenarios(root.path(), &selected, false).unwrap();
-        assert_eq!(frozen.len(), 1);
-        assert_eq!(frozen[0].source, source);
-        assert_eq!(
-            artifact::sha256_bytes(frozen[0].source.as_bytes()),
-            frozen[0].scenario.source_sha256
-        );
-        let mut local_request = request();
-        local_request.lane = "local".into();
-        local_request.scenarios = selected;
-        local_request.local_markdown_scenarios = frozen;
-        local_request.judge_model = Some("judge".into());
-        local_request.judge_provider = Some("provider".into());
-        validate_run_request(&local_request).unwrap();
-        assert!(resolve_local_markdown_scenarios(
-            root.path(),
-            &["local_missing".parse().unwrap()],
-            false,
-        )
-        .is_err());
-        assert!(resolve_local_markdown_scenarios(
-            root.path(),
-            &[ScenarioId::ContextPressure.into()],
-            false,
-        )
-        .unwrap()
-        .is_empty());
-        assert_eq!(
-            resolve_local_markdown_scenarios(
-                root.path(),
-                &[ScenarioId::ContextPressure.into()],
-                true,
-            )
-            .unwrap()
-            .len(),
-            1
-        );
     }
 
     #[test]
@@ -3467,7 +2818,7 @@ mod tests {
     }
 
     #[test]
-    fn d0_preflight_binds_runner_catalog_and_selected_cases() {
+    fn d0_preflight_binds_the_runner_and_warns_on_case_drift() {
         let request = d0_request();
         validate_run_request(&request).unwrap();
         preflight_run_contract(&request).unwrap();
@@ -3479,13 +2830,12 @@ mod tests {
             .to_string()
             .contains("identity mismatch"));
 
-        let mut wrong_case = request;
-        wrong_case.run_contract.as_mut().unwrap().selected_cases[0].inputs_sha256 =
+        // Selected cases that drifted from the runtime materialization are a
+        // warning: the observation reports what actually ran.
+        let mut drifted_case = request;
+        drifted_case.run_contract.as_mut().unwrap().selected_cases[0].inputs_sha256 =
             format!("sha256:{}", "b".repeat(64));
-        assert!(preflight_run_contract(&wrong_case)
-            .unwrap_err()
-            .to_string()
-            .contains("selected cases"));
+        preflight_run_contract(&drifted_case).unwrap();
     }
 
     #[test]
@@ -3556,52 +2906,57 @@ mod tests {
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("ws://{}", listener.local_addr().unwrap());
-        let server =
-            tokio::spawn(async move {
-                let (socket, _) = listener.accept().await.unwrap();
-                let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
-                let mut queries = 0;
-                let mut transactions = 0;
-                while let Some(Ok(frame)) = socket.next().await {
-                    let Message::Text(message) = frame else {
-                        continue;
-                    };
-                    let message: Value = serde_json::from_str(&message).unwrap();
-                    if message["type"] != "invokefunction" || message["invocation_id"].is_null() {
-                        continue;
-                    }
-                    let result = match message["function_id"].as_str().unwrap() {
-                        "database::transaction" => {
-                            transactions += 1;
-                            json!({"committed": true})
-                        }
-                        "database::query" => {
-                            queries += 1;
-                            let sql = message["data"]["sql"].as_str().unwrap();
-                            if sql.contains("sqlite_master") {
-                                json!({"rows": []})
-                            } else if sql.contains("SELECT version") {
-                                json!({"rows": [{"version": 3}]})
-                            } else if sql.contains("terminal = 0") {
-                                json!({"rows": []})
-                            } else {
-                                assert!(sql.contains("ORDER BY requested_at DESC"));
-                                json!({"rows": []})
-                            }
-                        }
-                        other => panic!("unexpected bulk restore call: {other}"),
-                    };
-                    socket.send(Message::Text(json!({
-                    "type": "invocationresult", "invocation_id": message["invocation_id"],
-                    "function_id": message["function_id"], "result": result,
-                }).to_string())).await.unwrap();
-                    if transactions == 1 && queries == 4 {
-                        break;
-                    }
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            let mut queries = 0;
+            let mut transactions = 0;
+            while let Some(Ok(frame)) = socket.next().await {
+                let Message::Text(message) = frame else {
+                    continue;
+                };
+                let message: Value = serde_json::from_str(&message).unwrap();
+                if message["type"] != "invokefunction" || message["invocation_id"].is_null() {
+                    continue;
                 }
-                assert_eq!(transactions, 1);
-                assert_eq!(queries, 4);
-            });
+                let result = match message["function_id"].as_str().unwrap() {
+                    "database::transaction" => {
+                        transactions += 1;
+                        json!({"committed": true})
+                    }
+                    "database::query" => {
+                        queries += 1;
+                        let sql = message["data"]["sql"].as_str().unwrap();
+                        if sql.contains("sqlite_master") {
+                            json!({"rows": []})
+                        } else if sql.contains("SELECT fingerprint") {
+                            json!({"rows": [{"fingerprint": crate::persistence::storage_fingerprint()}]})
+                        } else if sql.contains("terminal = 0") {
+                            json!({"rows": []})
+                        } else {
+                            assert!(sql.contains("ORDER BY requested_at DESC"));
+                            json!({"rows": []})
+                        }
+                    }
+                    other => panic!("unexpected bulk restore call: {other}"),
+                };
+                socket
+                    .send(Message::Text(
+                        json!({
+                            "type": "invocationresult", "invocation_id": message["invocation_id"],
+                            "function_id": message["function_id"], "result": result,
+                        })
+                        .to_string(),
+                    ))
+                    .await
+                    .unwrap();
+                if transactions == 1 && queries == 4 {
+                    break;
+                }
+            }
+            assert_eq!(transactions, 1);
+            assert_eq!(queries, 4);
+        });
         let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
         tokio::time::timeout(Duration::from_secs(5), async {
             while client.get_connection_state() != iii_sdk::runtime::IIIConnectionState::Connected {
@@ -3673,10 +3028,8 @@ mod tests {
                 supports_vision: None,
             },
             None,
-            None,
             vec![crate::report::E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -3808,7 +3161,6 @@ mod tests {
         let metrics: crate::report::EfficiencyReport = serde_json::from_value(json!({
             "wall_time_ms": 0,
             "root_turns": 0,
-            "minimum_expected_work": 1,
             "technical_attempts": 1,
             "observed_complexity": {},
             "unavailable": {}
@@ -3816,7 +3168,7 @@ mod tests {
         .unwrap();
         let observed = ObservationSample {
             scenario_id: "direct_answer".into(),
-            scenario_version: 1,
+            behavior_sha256: None,
             case_id: "case".into(),
             seed: 1,
             run_id: "run".into(),
@@ -3875,7 +3227,7 @@ mod tests {
     #[test]
     fn lane_budget_counts_rotating_seeds_as_distinct_cases() {
         let mut request = request();
-        request.scenarios = vec![ScenarioId::MechanicalReaction.into()];
+        request.scenarios = vec![ScenarioId::MechanicalReaction];
         request.rotating_seeds = (100..108).collect();
 
         assert_eq!(
@@ -3888,7 +3240,7 @@ mod tests {
     fn security_review_is_admitted_and_ignores_ineligible_retries() {
         let mut request = request();
         request.lane = "local".into();
-        request.scenarios = vec![ScenarioId::SecurityReview.into()];
+        request.scenarios = vec![ScenarioId::SecurityReview];
         request.technical_retries = 0;
         validate_run_request(&request).expect("security review should use the control plane");
 
@@ -3901,13 +3253,13 @@ mod tests {
     fn todo_worker_scenarios_are_admitted_by_the_control_plane() {
         let mut simple = request();
         simple.lane = "local".into();
-        simple.scenarios = vec![ScenarioId::TodoWorkerSimple.into()];
+        simple.scenarios = vec![ScenarioId::TodoWorkerSimple];
         simple.technical_retries = 0;
         validate_run_request(&simple).expect("todo_worker_simple should be Console-admitted");
 
         let mut planned = request();
         planned.lane = "local".into();
-        planned.scenarios = vec![ScenarioId::TodoWorkerPlanned.into()];
+        planned.scenarios = vec![ScenarioId::TodoWorkerPlanned];
         planned.technical_retries = 0;
         validate_run_request(&planned)
             .expect("planned Todo worker should be Console-admitted without technical retries");

@@ -47,8 +47,8 @@
     ]
   },
   "dashboard_projection": {
-    "scenario_version": 4,
-    "assessment_profile_sha256": "sha256:e8997ebb3be61fc3dbf0ab8d2c8e87e952e7ef8f68cbe1d8d8fdbd42801bd176",
+    "behavior_sha256": "sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+    "assessment_profile_sha256": "sha256:3ddbdf1668dbfc3ce916dd3b78cfe77fc564280bbf65a84d41bdfeadbc036351",
     "summary": {
       "run_count": 1,
       "assessment_count": 1,
@@ -59,7 +59,6 @@
         "passed": 0,
         "hard_gate_failed": 1,
         "subject_error": 0,
-        "judge_error": 0,
         "resource_limit": 0,
         "infrastructure_error": 0
       },

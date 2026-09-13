@@ -21,7 +21,6 @@ use super::read_model::{
 use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::control::{LocalScenarioCreateRequest, ScenarioOrigin};
 use crate::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
@@ -34,7 +33,6 @@ pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
-pub(super) const LOCAL_SCENARIO_CREATE: &str = "e2e::dashboard::local-scenario-create";
 pub(super) const PLAN_CONTROL: &str = "e2e::dashboard::plan-control";
 pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
 pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
@@ -161,16 +159,6 @@ pub(super) struct CatalogResponse {
     url: String,
     models: Vec<CatalogModel>,
     scenarios: Vec<String>,
-    local_scenarios: Vec<LocalScenarioSummary>,
-}
-
-#[derive(Debug, Serialize, JsonSchema)]
-pub(super) struct LocalScenarioSummary {
-    id: String,
-    title: String,
-    version: u32,
-    source_path: String,
-    source_sha256: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -412,7 +400,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         TEST_HISTORY_GET,
-        "Read local metric history for one test version, with provider-grouped execution and judge models, without comparison actions.",
+        "Read local metric history for one test version, with provider-grouped execution models, without comparison actions.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: TestHistoryRequest| {
@@ -547,23 +535,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 let iii = iii.clone();
                 async move {
                     catalog(&controller, request, Some(&iii))
-                        .await
-                        .map_err(handler_error)
-                }
-            })
-        },
-    );
-    register(
-        iii,
-        LOCAL_SCENARIO_CREATE,
-        "Validate and save one local-only Markdown scenario, then return its compiled identity.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |request: LocalScenarioCreateRequest| {
-                let controller = controller.clone();
-                async move {
-                    controller
-                        .create_local_scenario(request)
                         .await
                         .map_err(handler_error)
                 }
@@ -813,12 +784,10 @@ pub(super) async fn catalog(
                 .iter()
                 .map(|scenario| scenario.scenario_id.to_string())
                 .collect();
-            let local_scenarios = local_scenario_summaries(&scenario_catalog.scenarios);
             return Ok(CatalogResponse {
                 url,
                 models,
                 scenarios,
-                local_scenarios,
             });
         }
     }
@@ -834,54 +803,29 @@ pub(super) async fn catalog(
         if models.is_empty() {
             bail!("the running Harness has no registered models");
         }
-        let (scenarios, local_scenarios) = if url == controller.default_url() {
-            let scenario_catalog = controller.scenario_catalog().await?;
-            (
-                scenario_catalog
-                    .scenarios
-                    .iter()
-                    .map(|scenario| scenario.scenario_id.to_string())
-                    .collect(),
-                local_scenario_summaries(&scenario_catalog.scenarios),
-            )
+        let scenarios = if url == controller.default_url() {
+            controller
+                .scenario_catalog()
+                .await?
+                .scenarios
+                .iter()
+                .map(|scenario| scenario.scenario_id.to_string())
+                .collect()
         } else {
-            (
-                crate::markdown::all_keys()?
-                    .into_iter()
-                    .map(|value| value.to_string())
-                    .collect(),
-                Vec::new(),
-            )
+            crate::scenarios::ScenarioId::ALL
+                .iter()
+                .map(ToString::to_string)
+                .collect()
         };
         Ok(CatalogResponse {
             url,
             models,
             scenarios,
-            local_scenarios,
         })
     }
     .await;
     context.shutdown().await;
     result
-}
-
-fn local_scenario_summaries(
-    scenarios: &[crate::control::ScenarioDescriptor],
-) -> Vec<LocalScenarioSummary> {
-    scenarios
-        .iter()
-        .filter(|scenario| scenario.origin == ScenarioOrigin::Local)
-        .map(|scenario| LocalScenarioSummary {
-            id: scenario.scenario_id.to_string(),
-            title: scenario
-                .title
-                .clone()
-                .unwrap_or_else(|| scenario.scenario_id.to_string()),
-            version: scenario.scenario_version,
-            source_path: scenario.source_path.clone().unwrap_or_default(),
-            source_sha256: scenario.source_sha256.clone().unwrap_or_default(),
-        })
-        .collect()
 }
 
 fn normalized_filter(value: Option<String>) -> Option<String> {

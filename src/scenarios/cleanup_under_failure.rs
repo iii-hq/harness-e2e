@@ -21,14 +21,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "cleanup_under_failure";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "teardown_report";
 
 const MARKER_KEY: &str = "work-marker";
@@ -140,7 +139,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "task": "approval-with-teardown",
@@ -149,14 +147,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "marker_key": MARKER_KEY,
             "token_derivation": "run-scoped",
         }),
-        ComplexityProfile {
-            planning_depth: 1,
-            dependency_depth: 2,
-            external_systems: 1,
-            state_transitions: 2,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -177,7 +167,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let approve = approve_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Run a task whose approval may be refused, and prove that you tear down every piece
 of standing machinery before reporting. Work in the isolated state scope `{scope}`.
@@ -789,7 +778,7 @@ mod tests {
     }
 
     #[test]
-    fn materialized_case_is_reproducible_and_l2_stateful() {
+    fn materialized_case_is_reproducible() {
         let first = materialize("attempt-a", 23).unwrap();
         let retry = materialize("attempt-b", 23).unwrap();
         first.validate().unwrap();
@@ -797,14 +786,6 @@ mod tests {
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
         assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
     }

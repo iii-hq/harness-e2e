@@ -24,7 +24,6 @@ function assessment(
       passed: 2,
       hard_gate_failed: 0,
       subject_error: 0,
-      judge_error: 0,
       resource_limit: 0,
       infrastructure_error: 0,
     },
@@ -196,7 +195,8 @@ describe('local plan comparison view model', () => {
             scenarios: [
               {
                 id: 'direct_answer',
-                scenario_version: 1,
+                behavior_sha256:
+                  'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
                 pass_rate: 100,
                 assessment_summary: assessment(),
               },
@@ -206,7 +206,8 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'direct_answer',
-            scenario_version: 1,
+            behavior_sha256:
+              'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             run_count: 2,
             averages: { turns },
             samples: { turns: 2 },
@@ -332,7 +333,8 @@ describe('local plan comparison view model', () => {
           scenarios: [
             {
               id: 'direct_answer',
-              scenario_version: 2,
+              behavior_sha256:
+                'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
               pass_rate: 100,
               assessment_summary: assessment(),
             },
@@ -342,7 +344,8 @@ describe('local plan comparison view model', () => {
       scenario_metrics: [
         {
           scenario_id: 'direct_answer',
-          scenario_version: 2,
+          behavior_sha256:
+            'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
           contract_fingerprint: contract,
           averages: { tokens: 1000, duration_seconds: 4 },
         },
@@ -371,7 +374,8 @@ describe('local plan comparison view model', () => {
               scenarios: [
                 {
                   scenario_id: 'security_review',
-                  scenario_version: 3,
+                  behavior_sha256:
+                    'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
                   runs: [
                     {
                       run_id: `${id}-run`,
@@ -408,7 +412,8 @@ describe('local plan comparison view model', () => {
             scenarios: [
               {
                 id: 'security_review',
-                scenario_version: 3,
+                behavior_sha256:
+                  'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
                 pass_rate: 100,
                 assessment_summary: assessment(),
               },
@@ -418,8 +423,9 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'security_review',
-            scenario_version: 3,
-            contract_fingerprint: 'security-v3',
+            behavior_sha256:
+              'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+            contract_fingerprint: 'security-contract',
           },
         ],
       }) as unknown as DashboardExecutionDetail
@@ -448,8 +454,9 @@ describe('local plan comparison view model', () => {
         scenario_metrics: [
           {
             scenario_id: 'minimal_path',
-            scenario_version: 2,
-            contract_fingerprint: 'minimal-v2',
+            behavior_sha256:
+              'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
+            contract_fingerprint: 'minimal-contract',
             run_count: 1,
             averages: {
               tokens: perCompletion,
@@ -461,7 +468,13 @@ describe('local plan comparison view model', () => {
         subjects: [
           {
             id: 'subject',
-            scenarios: [{ id: 'minimal_path', scenario_version: 2 }],
+            scenarios: [
+              {
+                id: 'minimal_path',
+                behavior_sha256:
+                  'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
+              },
+            ],
           },
         ] as never,
       })
@@ -530,7 +543,8 @@ describe('retained criterion points', () => {
           scenarios: [
             {
               id: 'test',
-              scenario_version: 1,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               passed: false,
               runs: awards.length,
             },
@@ -544,9 +558,7 @@ describe('retained criterion points', () => {
           available: true,
           report: {
             result_contract_sha256: 'results-contract',
-            scoring_profile_sha256: 'scoring-contract',
             subject: { model: 'subject', provider: 'provider' },
-            judge: { model: 'judge', provider: 'provider' },
             scenarios: [
               {
                 scenario_id: 'test',
@@ -558,7 +570,7 @@ describe('retained criterion points', () => {
                   run_id: `run-${index}`,
                   technical: 'valid',
                   status: 'passed',
-                  objective_score: awarded,
+                  score: awarded,
                   criteria: [{ id: 'delivery', possible, awarded }],
                 })),
               },
@@ -585,9 +597,7 @@ describe('retained criterion points', () => {
     expect(
       comparison.metrics.some((metric) => metric.id.startsWith('criterion:')),
     ).toBe(false)
-    expect(right.reports[0].report?.scenarios[0].runs[0].objective_score).toBe(
-      20,
-    )
+    expect(right.reports[0].report?.scenarios[0].runs[0].score).toBe(20)
   })
 
   it('uses only matched repetitions for deltas while displaying every measured point', () => {
@@ -611,34 +621,6 @@ describe('retained criterion points', () => {
       },
     })
   })
-
-  it.each([
-    [null, null, 1],
-    [null, { model: 'judge', provider: 'provider' }, 0],
-    [null, undefined, 1],
-    [undefined, undefined, 1],
-    [null, {}, 0],
-    [undefined, { model: 'judge' }, 0],
-  ])(
-    'pairs optional judge identity %j / %j with %i repetitions',
-    (leftJudge, rightJudge, paired) => {
-      const left = scored([25])
-      const right = scored([0])
-      Object.assign(left.reports[0].report!, { judge: leftJudge })
-      Object.assign(right.reports[0].report!, { judge: rightJudge })
-
-      expect(
-        buildScenarioComparisons(left, right)[0].metrics.find(
-          (metric) => metric.id === 'criterion:delivery:40',
-        ),
-      ).toMatchObject({
-        baseline: 25,
-        candidate: 0,
-        delta: paired ? -25 : null,
-        evidence: { paired },
-      })
-    },
-  )
 
   it('accepts compact plan execution summaries without slots', () => {
     const baseline = scored([10, 20])

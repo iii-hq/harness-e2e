@@ -14,19 +14,19 @@ pub mod todo_worker;
 use std::sync::Arc;
 
 pub use adaptive::{
-    AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplateV1,
-    AdaptivePlanNodeV1, AdaptivePlanRevisionEvidence, AdaptiveTrustedAnchorV1,
-    AdaptiveWorkflowPlanV1, AdaptiveWorkflowPolicyV1, ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplate, AdaptivePlanNode,
+    AdaptivePlanRevisionEvidence, AdaptiveTrustedAnchor, AdaptiveWorkflowPlan,
+    AdaptiveWorkflowPolicy,
 };
 pub use agent_planner::{
-    plan_adaptive_workflow, AdaptivePlannerInvalidationV1, AdaptivePlannerMetadataV1,
-    AdaptivePlannerReferenceCheckV1, AgentPlannerEvidenceV1, AgentPlannerOutcome,
-    AgentPlannerRequest, AgentPlannerUsageEvidenceV1,
+    plan_adaptive_workflow, AdaptivePlannerInvalidation, AdaptivePlannerMetadata,
+    AdaptivePlannerReferenceCheck, AgentPlannerEvidence, AgentPlannerOutcome, AgentPlannerRequest,
+    AgentPlannerUsageEvidence,
 };
 pub use builtin::{
-    harness_descriptor, harness_descriptor_v2, register_harness_step, register_harness_step_v2,
-    HarnessStepConfig, HarnessStepConfigV2, HarnessStepPolicy, HARNESS_STEP_ID,
-    HARNESS_STEP_VERSION, HARNESS_STEP_VERSION_V2,
+    bounded_harness_descriptor, harness_descriptor, opens_harness_session,
+    register_bounded_harness_step, register_harness_step, BoundedHarnessStepConfig,
+    HarnessStepConfig, HarnessStepPolicy, BOUNDED_HARNESS_STEP_ID, HARNESS_STEP_ID,
 };
 pub use catalog::{
     CapturedWorkflowAsset, NoopWorkflowCleanupHook, RegisteredStepType, StepCatalog,
@@ -36,15 +36,14 @@ pub use catalog::{
     WorkflowProvenance, WorkflowTermination, WorkflowTerminationReason,
 };
 pub use resume::{
-    ResumeDisposition, StepResumePhase, WorkflowResumeEnvelopeV1, WorkflowResumeIdentityV1,
-    WorkflowResumeStateV1, WorkflowResumeStepV1, WorkflowResumeStore,
-    WORKFLOW_RESUME_SCHEMA_VERSION,
+    ResumeDisposition, StepResumePhase, WorkflowResumeEnvelope, WorkflowResumeIdentity,
+    WorkflowResumeState, WorkflowResumeStep, WorkflowResumeStore,
 };
 pub(crate) use run::observe_worker_contracts;
 pub use scheduler::{
     execute_adaptive_workflow, execute_resumable_workflow, execute_workflow, CheckpointStore,
     ResumableWorkflowExecutionRequest, ResumableWorkflowOutcome, WorkflowAssetReport,
-    WorkflowAttemptReport, WorkflowCheckpointV1, WorkflowCleanupReport, WorkflowCleanupStatus,
+    WorkflowAttemptReport, WorkflowCheckpoint, WorkflowCleanupReport, WorkflowCleanupStatus,
     WorkflowCriterionResult, WorkflowExecutionRequest, WorkflowFailurePhase,
     WorkflowNeedsReconciliation, WorkflowStepFailure, WorkflowStepReport, WorkflowStepStatus,
 };
@@ -56,7 +55,7 @@ use crate::scenarios::ScenarioId;
 /// The definition is retained only to drive this in-process scheduler and to
 /// produce a non-executable evidence snapshot.
 pub struct CompositeScenarioRuntime {
-    pub definition: WorkflowDefinitionV1,
+    pub definition: WorkflowDefinition,
     pub catalog: Arc<StepCatalog>,
     pub cleanup_hook: Arc<dyn WorkflowCleanupHook>,
 }
@@ -65,8 +64,8 @@ pub struct CompositeScenarioRuntime {
 /// shape has already passed the runner-owned policy before this value reaches
 /// the scheduler.
 pub struct AdaptiveScenarioRuntime {
-    pub policy: AdaptiveWorkflowPolicyV1,
-    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub policy: AdaptiveWorkflowPolicy,
+    pub plans: Vec<AdaptiveWorkflowPlan>,
     pub completed_node_ids: std::collections::BTreeSet<String>,
     pub materialized: AdaptiveMaterializedWorkflow,
     pub catalog: Arc<StepCatalog>,
@@ -85,11 +84,12 @@ pub fn adaptive_runtime(
         ScenarioId::IncidentResponse => {
             let source = incident_response::definition();
             let mut catalog = StepCatalog::new();
-            if source.nodes.iter().any(|node| {
-                node.step_type == builtin::HARNESS_STEP_ID
-                    && node.step_version == builtin::HARNESS_STEP_VERSION_V2
-            }) {
-                register_harness_step_v2(
+            if source
+                .nodes
+                .iter()
+                .any(|node| node.step_type == builtin::BOUNDED_HARNESS_STEP_ID)
+            {
+                register_bounded_harness_step(
                     &mut catalog,
                     context.clone(),
                     model,
@@ -150,7 +150,7 @@ pub fn adaptive_runtime(
 /// Return the Rust-owned definition for a composite scenario. Adding a future
 /// sequential scenario requires registering it here and implementing its step
 /// catalog; no JSON definition is loaded or accepted by the runner.
-pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinitionV1> {
+pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinition> {
     if crate::scenarios::swe_service::is_swe(scenario) {
         return Some(crate::scenarios::swe_service::workflow::definition(
             scenario,
@@ -175,46 +175,44 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
         };
         if crate::scenarios::swe_service::is_swe(*scenario) {
             for descriptor in crate::scenarios::swe_service::workflow::descriptors() {
-                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                if catalog.get(&descriptor.id).is_none() {
                     catalog.register_descriptor(descriptor)?;
                 }
             }
         }
-        if definition.nodes.iter().any(|node| {
-            node.step_type == builtin::HARNESS_STEP_ID
-                && node.step_version == builtin::HARNESS_STEP_VERSION
-        }) && catalog
-            .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION)
-            .is_none()
+        if definition
+            .nodes
+            .iter()
+            .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
+            && catalog.get(builtin::HARNESS_STEP_ID).is_none()
         {
             catalog.register_descriptor(harness_descriptor()?)?;
         }
-        if definition.nodes.iter().any(|node| {
-            node.step_type == builtin::HARNESS_STEP_ID
-                && node.step_version == builtin::HARNESS_STEP_VERSION_V2
-        }) && catalog
-            .get(builtin::HARNESS_STEP_ID, builtin::HARNESS_STEP_VERSION_V2)
-            .is_none()
+        if definition
+            .nodes
+            .iter()
+            .any(|node| node.step_type == builtin::BOUNDED_HARNESS_STEP_ID)
+            && catalog.get(builtin::BOUNDED_HARNESS_STEP_ID).is_none()
         {
-            catalog.register_descriptor(harness_descriptor_v2()?)?;
+            catalog.register_descriptor(bounded_harness_descriptor()?)?;
         }
         if scenario == &ScenarioId::SecurityReview {
             for descriptor in security_scan::descriptors_only() {
-                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                if catalog.get(&descriptor.id).is_none() {
                     catalog.register_descriptor(descriptor)?;
                 }
             }
         }
         if scenario == &ScenarioId::IncidentResponse {
             for descriptor in incident_response::descriptors_only()? {
-                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                if catalog.get(&descriptor.id).is_none() {
                     catalog.register_descriptor(descriptor)?;
                 }
             }
         }
         if scenario == &ScenarioId::TodoWorkerPlanned {
             for descriptor in todo_worker::descriptors_only()? {
-                if catalog.get(&descriptor.id, descriptor.version).is_none() {
+                if catalog.get(&descriptor.id).is_none() {
                     catalog.register_descriptor(descriptor)?;
                 }
             }
@@ -249,25 +247,27 @@ pub fn composite_runtime(
             cleanup_hook,
         });
     }
-    if definition.nodes.iter().any(|node| {
-        node.step_type == builtin::HARNESS_STEP_ID
-            && node.step_version == builtin::HARNESS_STEP_VERSION
-    }) {
+    if definition
+        .nodes
+        .iter()
+        .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
+    {
         register_harness_step(&mut catalog, context.clone(), model, provider)?;
     }
-    if definition.nodes.iter().any(|node| {
-        node.step_type == builtin::HARNESS_STEP_ID
-            && node.step_version == builtin::HARNESS_STEP_VERSION_V2
-    }) {
+    if definition
+        .nodes
+        .iter()
+        .any(|node| node.step_type == builtin::BOUNDED_HARNESS_STEP_ID)
+    {
         let policy = match scenario {
             ScenarioId::IncidentResponse => incident_response::harness_policy()?,
             ScenarioId::TodoWorkerPlanned => todo_worker::harness_policy()?,
             _ => bail!(
-                "scenario '{}' uses Harness v2 without a workspace policy",
+                "scenario '{}' uses the bounded Harness step without a workspace policy",
                 scenario.as_str()
             ),
         };
-        register_harness_step_v2(&mut catalog, context.clone(), model, provider, policy)?;
+        register_bounded_harness_step(&mut catalog, context.clone(), model, provider, policy)?;
     }
     let cleanup_hook = match scenario {
         ScenarioId::SecurityReview => {
@@ -294,42 +294,28 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub const WORKFLOW_SCHEMA_VERSION: u32 = 1;
 pub const LOCAL_MAX_PARALLELISM: u16 = 16;
 pub const LOCAL_MAX_NODES: u16 = 256;
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowDefinitionV1 {
-    pub schema_version: u32,
+pub struct WorkflowDefinition {
     pub id: String,
-    pub scenario_version: u32,
     pub description: String,
     #[serde(default)]
     pub limits: WorkflowLimits,
-    pub nodes: Vec<WorkflowNodeV1>,
+    pub nodes: Vec<WorkflowNode>,
     #[serde(default)]
     pub criteria: Vec<WorkflowCriterionDeclaration>,
 }
 
-impl WorkflowDefinitionV1 {
+impl WorkflowDefinition {
     pub fn canonical_sha256(&self) -> Result<String> {
         crate::artifact::sha256_value(self)
     }
 
     pub fn validate(&self, catalog: &StepCatalog) -> Result<MaterializedWorkflow> {
         validate_identifier(&self.id, "workflow id")?;
-        if self.schema_version != WORKFLOW_SCHEMA_VERSION {
-            bail!(
-                "workflow '{}' uses schema_version {}; supported version is {}",
-                self.id,
-                self.schema_version,
-                WORKFLOW_SCHEMA_VERSION
-            );
-        }
-        if self.scenario_version == 0 {
-            bail!("workflow '{}' scenario_version must be positive", self.id);
-        }
         if self.description.trim().is_empty() {
             bail!("workflow '{}' description cannot be empty", self.id);
         }
@@ -354,14 +340,12 @@ impl WorkflowDefinitionV1 {
 
         let mut descriptors = HashMap::with_capacity(self.nodes.len());
         for node in &self.nodes {
-            let registered = catalog
-                .get(&node.step_type, node.step_version)
-                .with_context(|| {
-                    format!(
-                        "node '{}' references unregistered step type '{}@{}'",
-                        node.id, node.step_type, node.step_version
-                    )
-                })?;
+            let registered = catalog.get(&node.step_type).with_context(|| {
+                format!(
+                    "node '{}' references unregistered step type '{}'",
+                    node.id, node.step_type
+                )
+            })?;
             registered
                 .descriptor
                 .validate_config(&node.config)
@@ -476,10 +460,9 @@ fn default_workflow_timeout_seconds() -> u64 {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct WorkflowNodeV1 {
+pub struct WorkflowNode {
     pub id: String,
     pub step_type: String,
-    pub step_version: u32,
     #[serde(default)]
     pub config: Value,
     #[serde(default)]
@@ -608,7 +591,6 @@ pub struct RequiredFunctionContract {
 #[serde(deny_unknown_fields)]
 pub struct StepTypeDescriptor {
     pub id: String,
-    pub version: u32,
     pub description: String,
     pub config_schema: Value,
     #[serde(default)]
@@ -626,9 +608,6 @@ pub struct StepTypeDescriptor {
 impl StepTypeDescriptor {
     pub fn validate(&self) -> Result<()> {
         validate_identifier(&self.id, "step type id")?;
-        if self.version == 0 {
-            bail!("step type '{}' version must be positive", self.id);
-        }
         if self.description.trim().is_empty() {
             bail!("step type '{}' description cannot be empty", self.id);
         }
@@ -649,9 +628,8 @@ impl StepTypeDescriptor {
             .map_err(|error| anyhow::anyhow!("compile config schema for '{}': {error}", self.id))?;
         if let Err(errors) = validator.validate(config) {
             bail!(
-                "configuration does not match '{}@{}': {}",
+                "configuration does not match '{}': {}",
                 self.id,
-                self.version,
                 errors
                     .map(|error| error.to_string())
                     .collect::<Vec<_>>()
@@ -664,7 +642,7 @@ impl StepTypeDescriptor {
 
 #[derive(Debug, Clone)]
 pub struct MaterializedWorkflow {
-    pub definition: WorkflowDefinitionV1,
+    pub definition: WorkflowDefinition,
     pub sha256: String,
     pub topological_order: Vec<String>,
 }
@@ -693,8 +671,8 @@ fn validate_ports(step_id: &str, ports: &BTreeMap<String, StepPortDescriptor>) -
 }
 
 fn validate_dependencies_and_order<'a>(
-    ordered_nodes: &'a [WorkflowNodeV1],
-    nodes: &HashMap<&'a str, &'a WorkflowNodeV1>,
+    ordered_nodes: &'a [WorkflowNode],
+    nodes: &HashMap<&'a str, &'a WorkflowNode>,
 ) -> Result<HashMap<&'a str, BTreeSet<&'a str>>> {
     let mut indegree = HashMap::new();
     let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
@@ -765,8 +743,8 @@ fn validate_dependencies_and_order<'a>(
 }
 
 fn validate_node_bindings(
-    node: &WorkflowNodeV1,
-    nodes: &HashMap<&str, &WorkflowNodeV1>,
+    node: &WorkflowNode,
+    nodes: &HashMap<&str, &WorkflowNode>,
     descriptors: &HashMap<&str, &StepTypeDescriptor>,
     ancestors: &HashMap<&str, BTreeSet<&str>>,
 ) -> Result<()> {
@@ -855,8 +833,8 @@ fn validate_node_bindings(
 }
 
 fn validate_activation(
-    node: &WorkflowNodeV1,
-    nodes: &HashMap<&str, &WorkflowNodeV1>,
+    node: &WorkflowNode,
+    nodes: &HashMap<&str, &WorkflowNode>,
     descriptors: &HashMap<&str, &StepTypeDescriptor>,
     ancestors: &HashMap<&str, BTreeSet<&str>>,
 ) -> Result<()> {
@@ -921,8 +899,8 @@ fn validate_activation(
 }
 
 fn validate_criteria(
-    definition: &WorkflowDefinitionV1,
-    nodes: &HashMap<&str, &WorkflowNodeV1>,
+    definition: &WorkflowDefinition,
+    nodes: &HashMap<&str, &WorkflowNode>,
     descriptors: &HashMap<&str, &StepTypeDescriptor>,
 ) -> Result<()> {
     if definition.criteria.is_empty() {
@@ -979,7 +957,7 @@ fn validate_criteria(
 }
 
 fn validate_retry_safety(
-    definition: &WorkflowDefinitionV1,
+    definition: &WorkflowDefinition,
     descriptors: &HashMap<&str, &StepTypeDescriptor>,
 ) -> Result<()> {
     if definition.limits.technical_retries == 0 {
@@ -1021,7 +999,6 @@ mod tests {
     fn descriptor(id: &str) -> StepTypeDescriptor {
         StepTypeDescriptor {
             id: id.into(),
-            version: 1,
             description: "test".into(),
             config_schema: json!({"type": "object", "additionalProperties": false}),
             inputs: BTreeMap::new(),
@@ -1048,11 +1025,10 @@ mod tests {
         catalog
     }
 
-    fn node(id: &str, dependencies: &[&str]) -> WorkflowNodeV1 {
-        WorkflowNodeV1 {
+    fn node(id: &str, dependencies: &[&str]) -> WorkflowNode {
+        WorkflowNode {
             id: id.into(),
             step_type: "test.noop".into(),
-            step_version: 1,
             config: json!({}),
             depends_on: dependencies.iter().map(|value| (*value).into()).collect(),
             inputs: BTreeMap::new(),
@@ -1062,11 +1038,9 @@ mod tests {
         }
     }
 
-    fn workflow(nodes: Vec<WorkflowNodeV1>) -> WorkflowDefinitionV1 {
-        WorkflowDefinitionV1 {
-            schema_version: 1,
+    fn workflow(nodes: Vec<WorkflowNode>) -> WorkflowDefinition {
+        WorkflowDefinition {
             id: "test.workflow".into(),
-            scenario_version: 1,
             description: "test workflow".into(),
             limits: WorkflowLimits::default(),
             nodes,
@@ -1075,14 +1049,14 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cycles_and_unknown_step_versions() {
+    fn rejects_cycles_and_unknown_step_types() {
         let error = workflow(vec![node("a", &["b"]), node("b", &["a"])])
             .validate(&catalog())
             .unwrap_err();
         assert!(error.to_string().contains("cycle"));
 
         let mut unknown = node("a", &[]);
-        unknown.step_version = 7;
+        unknown.step_type = "test.unregistered".into();
         let error = workflow(vec![unknown]).validate(&catalog()).unwrap_err();
         assert!(error.to_string().contains("unregistered"));
     }

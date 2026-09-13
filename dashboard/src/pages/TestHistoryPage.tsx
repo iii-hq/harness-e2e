@@ -76,6 +76,7 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import type {
   HistoryModelGroup,
   TestCatalogRow,
@@ -85,12 +86,10 @@ import type {
 } from '@/lib/test-catalog'
 import {
   compareTestObservations,
+  sameScenarioDefinition,
   testObservationKey,
 } from '@/lib/test-history-comparison'
-import {
-  catalogComplexityPresentation,
-  catalogRealismPresentation,
-} from '@/pages/TestsCatalogPage'
+import { catalogRealismPresentation } from '@/pages/TestsCatalogPage'
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -116,23 +115,14 @@ function parseModelSelection(value: string) {
   return null
 }
 
-function modelGroups(
-  history: TestHistoryResponse | null,
-  role: 'subject' | 'judge',
-): HistoryModelGroup[] {
-  const configured =
-    role === 'subject' ? history?.subject_models : history?.judge_models
-  if (configured?.length) return configured
+function modelGroups(history: TestHistoryResponse | null): HistoryModelGroup[] {
+  if (history?.subject_models.length) return history.subject_models
   if (!history) return []
 
   const groups = new Map<string, Set<string>>()
   for (const observation of history.observations) {
-    const provider =
-      role === 'subject'
-        ? observation.subject_provider
-        : observation.judge_provider
-    const model =
-      role === 'subject' ? observation.subject_model : observation.judge_model
+    const provider = observation.subject_provider
+    const model = observation.subject_model
     if (!provider || !model) continue
     const models = groups.get(provider) ?? new Set<string>()
     models.add(model)
@@ -144,6 +134,14 @@ function modelGroups(
       provider,
       models: [...models].sort((left, right) => left.localeCompare(right)),
     }))
+}
+
+function mean(values: Array<number | null | undefined>) {
+  const known = values.filter(
+    (value): value is number => value !== null && Number.isFinite(value),
+  )
+  if (known.length === 0) return null
+  return known.reduce((total, value) => total + value, 0) / known.length
 }
 
 function median(values: Array<number | null | undefined>) {
@@ -278,7 +276,7 @@ export function ScoreTrendChart({
   // Observations arrive newest-first; the chart reads left → right in time.
   const plotted = [...observations]
     .reverse()
-    .filter((item) => finiteMetric(item.median_score) !== null)
+    .filter((item) => finiteMetric(item.mean_score) !== null)
   if (plotted.length === 0) {
     return (
       <p className="m-0 text-xs text-ink-soft">
@@ -300,7 +298,7 @@ export function ScoreTrendChart({
   const line = xs
     .map(
       (x, index) =>
-        `${x.toFixed(1)},${yFor(plotted[index].median_score as number).toFixed(1)}`,
+        `${x.toFixed(1)},${yFor(plotted[index].mean_score as number).toFixed(1)}`,
     )
     .join(' ')
   const gate = yFor(50)
@@ -318,7 +316,7 @@ export function ScoreTrendChart({
         className="block h-40 w-full font-mono text-label"
         viewBox={`0 0 ${width} 160`}
         role="img"
-        aria-label="Median score per retained execution, oldest on the left"
+        aria-label="Mean score per retained execution, oldest on the left"
         data-score-trend
       >
         {[top, gate, bottom].map((y) => (
@@ -376,7 +374,7 @@ export function ScoreTrendChart({
           const key = testObservationKey(item)
           const selectedIndex = selectedKeys.indexOf(key)
           const failed = item.status !== 'passed'
-          const score = item.median_score as number
+          const score = item.mean_score as number
           const x = xs[index]
           const y = yFor(score)
           const slot =
@@ -543,6 +541,10 @@ export function ObservationComparisonPanel({
   const personal =
     baseline?.source === 'release-control' ||
     candidate?.source === 'release-control'
+  // A Release Control reference keeps its own stack, cohort and system; only
+  // the scenario has to match before its descriptive deltas mean anything.
+  const scenario =
+    baseline && candidate ? sameScenarioDefinition(baseline, candidate) : null
   const verdict =
     comparison?.compatible && !personal ? comparisonVerdict(comparison) : null
   return (
@@ -559,11 +561,13 @@ export function ObservationComparisonPanel({
       }
       metrics={comparison?.metrics ?? {}}
       interpretDeltas={Boolean(comparison?.compatible && !personal)}
-      showDeltas={Boolean(personal || comparison?.compatible)}
+      showDeltas={Boolean(
+        personal ? scenario?.matches : comparison?.compatible,
+      )}
       metricLabels={
         personal
           ? {
-              score: 'median objective score',
+              score: 'mean score',
               cost: 'subject cost',
               tokens: 'tokens incl. cache',
             }
@@ -631,13 +635,18 @@ export function ObservationComparisonPanel({
       }
     >
       {personal ? (
-        <Callout tone="info">
-          Descriptive comparison of this scenario. Scored runs:{' '}
-          {baseline?.scored_runs}/{baseline?.run_count} →{' '}
+        <Callout tone={scenario?.matches ? 'info' : 'warning'}>
+          {scenario?.matches
+            ? 'Descriptive comparison of this scenario.'
+            : 'Not comparable · values shown, deltas withheld.'}{' '}
+          Scored runs: {baseline?.scored_runs}/{baseline?.run_count} →{' '}
           {candidate?.scored_runs}/{candidate?.run_count}.{' '}
-          {comparison?.reasons
-            .filter((reason) => reason.endsWith('differs'))
-            .join(' · ')}
+          {(scenario?.matches
+            ? (comparison?.reasons ?? []).filter((reason) =>
+                reason.endsWith('differs'),
+              )
+            : (scenario?.reasons ?? [])
+          ).join(' · ')}
         </Callout>
       ) : comparison ? (
         comparison.compatible ? (
@@ -647,7 +656,7 @@ export function ObservationComparisonPanel({
                 <StatusBadge status={verdict.status} label={verdict.title} />
               ) : null}
               <span className="text-ink-soft">
-                {verdict?.detail} · same contract, seed, cohort, model and judge
+                {verdict?.detail} · same contract, seed, cohort and model
               </span>
             </span>
           </Callout>
@@ -657,7 +666,7 @@ export function ObservationComparisonPanel({
             title="not comparable · values shown, deltas not interpreted"
           >
             {comparison.reasons.join(' · ')}. Choose two executions of the same
-            model, judge and cohort to read deltas.
+            model and cohort to read deltas.
           </Callout>
         )
       ) : (
@@ -673,13 +682,13 @@ export function ObservationComparisonPanel({
 
 function ExecutionDetailsDialog({
   observation,
-  testVersion,
+  testDefinition,
   testId,
   spec,
   onClose,
 }: {
   observation: TestObservation
-  testVersion: number | undefined
+  testDefinition: string | undefined
   testId: string
   spec: TestSpec | null
   onClose: () => void
@@ -722,13 +731,15 @@ function ExecutionDetailsDialog({
         : null,
     [detail, testId],
   )
-  const version = observation.scenario_version ?? testVersion
+  const definition = shortDefinition(
+    observation.behavior_sha256 || testDefinition,
+  )
   const availableReports = scopedDetail?.reports.filter(
     (report) => report.available,
   ).length
   const result = statusPresentation(observation.status)
   const metrics = [
-    ['score', formatScore(observation.median_score)],
+    ['score', formatScore(observation.mean_score)],
     ['duration', formatDuration(observation.median_duration_seconds)],
     ['tokens', formatTokens(observation.median_tokens)],
     ['cost', formatCost(observation.median_cost_usd)],
@@ -744,7 +755,7 @@ function ExecutionDetailsDialog({
       tall
       kicker="execution"
       title={testId}
-      description={`${formatDate(observation.completed_at)} · ${version ? `test v${version}` : 'test version unknown'} · ${runLabel(observation.run_count)}`}
+      description={`${formatDate(observation.completed_at)} · ${definition ? `definition ${definition}` : 'definition not recorded'} · ${runLabel(observation.run_count)}`}
       closeLabel="Close execution details"
       className="ds-root"
       footer={
@@ -774,7 +785,7 @@ function ExecutionDetailsDialog({
       }
     >
       <div className="grid gap-6">
-        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-4">
+        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-3">
           <div className="grid gap-1">
             <dt className="ds-label">result</dt>
             <dd className="m-0">
@@ -788,12 +799,6 @@ function ExecutionDetailsDialog({
                 observation.subject_provider,
                 observation.subject_model,
               )}
-            </dd>
-          </div>
-          <div className="grid gap-1">
-            <dt className="ds-label">judge</dt>
-            <dd className="m-0 font-mono text-ink">
-              {modelLabel(observation.judge_provider, observation.judge_model)}
             </dd>
           </div>
           <div className="grid gap-1">
@@ -857,29 +862,26 @@ function ExecutionDetailsDialog({
 /* ----------------------------------------------------------------- page */
 
 type HistoryFilters = {
-  version: number | undefined
+  /** Definition digest, or the server's `unmaterialized` marker. */
+  definition: string | undefined
   model: string
-  judge: string
   system: string
   result: string
 }
 
 const EMPTY_FILTERS: HistoryFilters = {
-  version: undefined,
+  definition: undefined,
   model: '',
-  judge: '',
   system: '',
   result: '',
 }
 
 /** Audit TH-19: filters, the a/b selection and the open dialog live in the hash. */
 export function historyStateFromParams(params: URLSearchParams) {
-  const version = params.get('version')
   return {
     filters: {
-      version: version && /^\d+$/.test(version) ? Number(version) : undefined,
+      definition: params.get('definition') || undefined,
       model: params.get('model') ?? '',
-      judge: params.get('judge') ?? '',
       system: params.get('system') ?? '',
       result: params.get('result') ?? '',
     } satisfies HistoryFilters,
@@ -896,10 +898,9 @@ export function historyStateToParams(
   open: string | null,
 ) {
   const params = new URLSearchParams()
-  if (filters.version !== undefined)
-    params.set('version', String(filters.version))
+  if (filters.definition !== undefined)
+    params.set('definition', filters.definition)
   if (filters.model) params.set('model', filters.model)
-  if (filters.judge) params.set('judge', filters.judge)
   if (filters.system) params.set('system', filters.system)
   if (filters.result) params.set('result', filters.result)
   if (comparisonKeys[0]) params.set('a', comparisonKeys[0])
@@ -910,21 +911,22 @@ export function historyStateToParams(
 
 function filtersActive(filters: HistoryFilters) {
   return (
-    filters.version !== undefined ||
-    Boolean(filters.model || filters.judge || filters.system || filters.result)
+    filters.definition !== undefined ||
+    Boolean(filters.model || filters.system || filters.result)
   )
 }
 
-/** Audit TH-07: says which version is shown and whether the contract moved on. */
-export function versionStatement(history: TestHistoryResponse) {
+/** Audit TH-07: says which definition is shown and whether it moved on. */
+export function definitionStatement(history: TestHistoryResponse) {
   const current = history.current_version ?? null
+  const shown = shortDefinition(history.test_version)
   if (current === null || current === history.test_version)
-    return `contract v${history.test_version}${current === null ? '' : ' · current'}`
-  const currentVersion = history.available_versions.find(
+    return `definition ${shown}${current === null ? '' : ' · current'}`
+  const currentDefinition = history.available_versions.find(
     (item) => item.version === current,
   )
-  const currentRuns = currentVersion?.execution_count ?? 0
-  return `showing v${history.test_version} (latest with executions) · current contract v${current} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
+  const currentRuns = currentDefinition?.execution_count ?? 0
+  return `showing definition ${shown} (latest with executions) · current definition ${shortDefinition(current)} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
 }
 
 export function TestHistoryPage({ testId }: { testId: string }) {
@@ -1074,14 +1076,11 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       .then((next) => {
         if (cancelled) return
         const execution = parseModelSelection(filters.model)
-        const judge = parseModelSelection(filters.judge)
         return next.getTestHistory({
           test_id: testId,
-          test_version: filters.version,
+          test_version: filters.definition,
           subject_provider: execution?.provider,
           subject_model: execution?.model,
-          judge_provider: judge?.provider,
-          judge_model: judge?.model,
           system_version_id: filters.system || undefined,
           limit: 100,
         })
@@ -1099,10 +1098,10 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     return () => {
       cancelled = true
     }
-  }, [filters.model, filters.judge, filters.system, filters.version, testId])
+  }, [filters.definition, filters.model, filters.system, testId])
 
-  // Identity (complexity, realism, lifecycle) and the previous/next test come
-  // from the catalog (audit T-14 / TH-06).
+  // Identity (realism, lifecycle) and the previous/next test come from the
+  // catalog (audit T-14 / TH-06).
   useEffect(() => {
     let cancelled = false
     void getDashboardDataBridge()
@@ -1142,14 +1141,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     candidateCase,
   ])
 
-  const executionModelGroups = useMemo(
-    () => modelGroups(history, 'subject'),
-    [history],
-  )
-  const judgeModelGroups = useMemo(
-    () => modelGroups(history, 'judge'),
-    [history],
-  )
+  const executionModelGroups = useMemo(() => modelGroups(history), [history])
 
   const allObservations = history?.observations ?? []
   // Audit TH-21: the result filter is applied here so the chips keep their
@@ -1180,7 +1172,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     }
   }, [loading, observations, comparisonKeys])
 
-  const scores = allObservations.map((item) => item.median_score)
+  const scores = allObservations.map((item) => item.mean_score)
   const costs = allObservations.map((item) => item.median_cost_usd)
   const durations = allObservations.map((item) => item.median_duration_seconds)
   const tokens = allObservations.map((item) => item.median_tokens)
@@ -1201,9 +1193,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         null)
   const contract = contractSummary(allObservations)
   const lastRun = allObservations[0] ?? null
-  const complexity = catalogRow
-    ? catalogComplexityPresentation(catalogRow)
-    : null
   const realism = catalogRow ? catalogRealismPresentation(catalogRow) : null
   const hasEvidence = allObservations.length > 0
   const filtered = filtersActive(filters)
@@ -1238,9 +1227,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   }
 
   const identity = [
-    history ? versionStatement(history) : null,
+    history ? definitionStatement(history) : null,
     contract?.short ?? null,
-    complexity?.value ? `complexity ${complexity.value}` : null,
     realism?.value ? `realism ${realism.value}` : null,
     history
       ? `${history.total} ${history.total === 1 ? 'execution' : 'executions'} retained`
@@ -1456,8 +1444,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   key={testObservationKey(item)}
                   value={testObservationKey(item)}
                 >
-                  {item.case_id || 'Case unavailable'} · v
-                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                  {item.case_id || 'Case unavailable'} ·{' '}
+                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
+                  seed {item.seed ?? '—'}
                 </option>
               ))}
             </Select>
@@ -1474,8 +1463,9 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   key={testObservationKey(item)}
                   value={testObservationKey(item)}
                 >
-                  {item.case_id || 'Case unavailable'} · v
-                  {item.scenario_version ?? '—'} · seed {item.seed ?? '—'}
+                  {item.case_id || 'Case unavailable'} ·{' '}
+                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
+                  seed {item.seed ?? '—'}
                 </option>
               ))}
             </Select>
@@ -1544,8 +1534,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 className="grid gap-3"
               >
                 <p className="m-0 text-xs text-ink-muted">
-                  Retained history · {allObservations.length} executions ·
-                  medians of the reported execution summaries
+                  Retained history · {allObservations.length} executions · mean
+                  score and medians of the reported execution summaries
                 </p>
                 <div
                   className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
@@ -1565,8 +1555,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   />
                   {knownMetricCount(scores) > 0 ? (
                     <MetricCard
-                      label="median score"
-                      value={formatScore(median(scores))}
+                      label="mean score"
+                      value={formatScore(mean(scores))}
                       detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
                     />
                   ) : null}
@@ -1599,7 +1589,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : null}
 
             {allObservations.filter(
-              (item) => finiteMetric(item.median_score) !== null,
+              (item) => finiteMetric(item.mean_score) !== null,
             ).length >= 2 ? (
               <details>
                 <summary className="cursor-pointer text-sm font-medium text-ink">
@@ -1621,26 +1611,28 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
             <section className="grid gap-3" aria-label="History filters">
               <div className="flex flex-wrap items-center gap-2">
-                <label className="ds-visually-hidden" htmlFor="history-version">
-                  Test version
+                <label
+                  className="ds-visually-hidden"
+                  htmlFor="history-definition"
+                >
+                  Scenario definition
                 </label>
                 <Select
-                  id="history-version"
+                  id="history-definition"
                   className="max-w-[16rem]"
-                  value={filters.version ?? ''}
+                  value={filters.definition ?? ''}
                   onChange={(event) =>
-                    setFilter(
-                      'version',
-                      event.target.value
-                        ? Number(event.target.value)
-                        : undefined,
-                    )
+                    setFilter('definition', event.target.value || undefined)
                   }
                 >
-                  <option value="">version: latest with executions</option>
+                  <option value="">definition: latest with executions</option>
                   {(history?.available_versions ?? []).map((item) => (
-                    <option key={item.version} value={item.version}>
-                      v{item.version}
+                    <option
+                      key={item.version}
+                      value={item.version}
+                      title={definitionTitle(item.version)}
+                    >
+                      {shortDefinition(item.version)}
                       {item.version === history?.current_version
                         ? ' · current'
                         : ''}
@@ -1657,17 +1649,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     placeholder="all execution models"
                     ariaLabel="Execution model"
                     clearLabel="all execution models"
-                  />
-                </div>
-                <div className="w-full max-w-[16rem]">
-                  <ProviderModelDropdown
-                    groups={judgeModelGroups}
-                    value={filters.judge}
-                    onChange={(next) => setFilter('judge', next)}
-                    optionValue={modelSelection}
-                    placeholder="all judges"
-                    ariaLabel="Judge model"
-                    clearLabel="all judges"
                   />
                 </div>
                 {(history?.systems.length ?? 0) > 0 ? (
@@ -1743,7 +1724,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             ) : observations.length === 0 ? (
               <EmptyState
                 title="No executions match these filters"
-                description="Widen the version, model, judge or result filter."
+                description="Widen the definition, model or result filter."
                 actions={
                   <button
                     className={buttonClassName({ variant: 'secondary' })}
@@ -1832,11 +1813,14 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                           <span className="block font-mono text-xs text-ink">
                             {formatDate(item.completed_at)}
                           </span>
-                          <span className="block font-mono text-label text-ink-muted">
+                          <span
+                            className="block font-mono text-label text-ink-muted"
+                            title={definitionTitle(item.behavior_sha256)}
+                          >
                             {runLabel(item.run_count)} ·{' '}
                             {item.execution_id.slice(0, 8)}…
-                            {item.scenario_version
-                              ? ` · v${item.scenario_version}`
+                            {shortDefinition(item.behavior_sha256)
+                              ? ` · ${shortDefinition(item.behavior_sha256)}`
                               : ''}
                           </span>
                         </td>
@@ -1848,9 +1832,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                             )}
                           </span>
                           <span className="block font-mono text-label text-ink-muted">
-                            judge{' '}
-                            {modelLabel(item.judge_provider, item.judge_model)}{' '}
-                            · {systemSummary(item)}
+                            {systemSummary(item)}
                           </span>
                         </td>
                         <td data-label="Result">
@@ -1860,7 +1842,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                           />
                         </td>
                         <td data-label="Score" className={numericCellClassName}>
-                          {formatScore(item.median_score)}
+                          {formatScore(item.mean_score)}
                         </td>
                         <td
                           data-label="Duration"
@@ -1959,8 +1941,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                         baseline as TestObservation,
                         candidate,
                       ).compatible
-                    ? 'same model, judge and cohort · deltas interpreted'
-                    : 'different model, judge or cohort · deltas shown, not interpreted'}
+                    ? 'same model and cohort · deltas interpreted'
+                    : 'different model or cohort · deltas shown, not interpreted'}
             </span>
             <span className="ms-auto flex gap-2">
               <button
@@ -2014,7 +1996,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       {openObservation ? (
         <ExecutionDetailsDialog
           observation={openObservation}
-          testVersion={history?.test_version}
+          testDefinition={history?.test_version}
           testId={testId}
           spec={catalogRow?.spec ?? null}
           onClose={() => setOpenKey(null)}

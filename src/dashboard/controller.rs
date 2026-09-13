@@ -13,12 +13,11 @@ use super::bus::DashboardEvents;
 use super::read_model::DashboardReadModel;
 use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
-    ControlPlane, ExecutionPhase, ExecutionRecord, LocalScenarioCreateRequest,
-    LocalScenarioCreateResponse, RunRequest as ControlRunRequest, ScenariosListRequest,
-    ScenariosListResponse,
+    ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
+    ScenariosListRequest, ScenariosListResponse,
 };
-use crate::markdown::ScenarioKey;
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
+use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -83,8 +82,6 @@ impl Controller {
                 url,
                 model: env::var("HARNESS_E2E_MODEL").unwrap_or_default(),
                 provider: env::var("HARNESS_E2E_PROVIDER").unwrap_or_default(),
-                judge_model: env::var("HARNESS_E2E_JUDGE_MODEL").unwrap_or_default(),
-                judge_provider: env::var("HARNESS_E2E_JUDGE_PROVIDER").unwrap_or_default(),
                 runs: 1,
                 technical_retries: 1,
                 seed: env::var("HARNESS_E2E_SEED")
@@ -169,17 +166,6 @@ impl Controller {
             .as_ref()
             .context("the E2E control plane is not available")?
             .attempt_get(execution_id, run_id, attempt_id)
-            .await
-    }
-
-    pub(super) async fn create_local_scenario(
-        &self,
-        request: LocalScenarioCreateRequest,
-    ) -> Result<LocalScenarioCreateResponse> {
-        self.control
-            .as_ref()
-            .context("the E2E control plane is not available")?
-            .create_local_scenario(request)
             .await
     }
 
@@ -496,21 +482,10 @@ pub(super) fn control_request(
         .iter()
         .map(|value| {
             value
-                .parse::<ScenarioKey>()
+                .parse::<ScenarioId>()
                 .map_err(|_| format!("unknown scenario '{value}'"))
         })
         .collect::<std::result::Result<Vec<_>, _>>()?;
-    let (judge_model, judge_provider) = match (
-        request.judge_model.is_empty(),
-        request.judge_provider.is_empty(),
-    ) {
-        (true, true) => (None, None),
-        (false, false) => (
-            Some(request.judge_model.clone()),
-            Some(request.judge_provider.clone()),
-        ),
-        _ => return Err("judge_model and judge_provider must be supplied together".into()),
-    };
     Ok(ControlRunRequest {
         _caller_worker_id: None,
         idempotency_key: format!("dashboard:{}", uuid::Uuid::new_v4().simple()),
@@ -518,12 +493,7 @@ pub(super) fn control_request(
         lane: "local".into(),
         model: request.model.clone(),
         provider: request.provider.clone(),
-        judge_model,
-        judge_provider,
-        audit_model: None,
-        audit_provider: None,
         scenarios,
-        local_markdown_scenarios: Vec::new(),
         runs: request.runs,
         seed: request.seed,
         rotating_seeds: Vec::new(),
@@ -563,8 +533,6 @@ pub(super) fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
             url: String::new(),
             model: record.request.model.clone(),
             provider: record.request.provider.clone(),
-            judge_model: record.request.judge_model.clone().unwrap_or_default(),
-            judge_provider: record.request.judge_provider.clone().unwrap_or_default(),
             scenarios: record
                 .request
                 .scenarios
@@ -619,8 +587,6 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     request.url = request.url.trim().to_string();
     request.model = request.model.trim().to_string();
     request.provider = request.provider.trim().to_string();
-    request.judge_model = request.judge_model.trim().to_string();
-    request.judge_provider = request.judge_provider.trim().to_string();
     validate_stack_url(&request.url).map_err(|error| error.to_string())?;
     if request.label.len() > 120 || request.label.chars().any(char::is_control) {
         return Err("label is invalid".into());
@@ -629,9 +595,6 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
         if value.is_empty() || value.len() > 200 || value.chars().any(char::is_control) {
             return Err(format!("{name} is invalid"));
         }
-    }
-    if request.judge_model.is_empty() != request.judge_provider.is_empty() {
-        return Err("judge_model and judge_provider must be supplied together".into());
     }
     if !(1..=20).contains(&request.runs) {
         return Err("runs must be between 1 and 20".into());
@@ -644,21 +607,10 @@ pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<
     }
     request.scenarios.sort();
     request.scenarios.dedup();
-    let selected = request
-        .scenarios
-        .iter()
-        .map(|value| {
-            value
-                .parse::<ScenarioKey>()
-                .map_err(|_| "request contains an unknown scenario".to_string())
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    if selected
-        .iter()
-        .any(|scenario| scenario.built_in().is_none())
-        && request.judge_model.is_empty()
-    {
-        return Err("Markdown scenarios require an explicit judge model and provider".into());
+    for value in &request.scenarios {
+        value
+            .parse::<ScenarioId>()
+            .map_err(|_| "request contains an unknown scenario".to_string())?;
     }
     Ok(())
 }

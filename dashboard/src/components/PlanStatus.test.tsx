@@ -6,23 +6,18 @@ import type { PlanExecution } from '@/lib/plan-execution'
 import { PlanProgress, Requirements } from './PlanStatus'
 
 describe('executable plan journey', () => {
-  it('requires an explicit execution model and the required evaluator', () => {
+  it('requires an explicit execution model', () => {
     const config = {
       mode: 'plan' as const,
       label: 'Smoke',
       subject: '',
-      judge: '',
-      judgeRequired: true,
       selectedScenarios: ['minimal_path'],
       url: 'ws://localhost',
     }
     expect(validateExecutionSetup(config)).toEqual({
       subject: 'Choose an execution model.',
-      judge: 'Choose a judge model for the selected tests.',
     })
-    expect(
-      validateExecutionSetup({ ...config, subject: 'model', judge: 'judge' }),
-    ).toEqual({})
+    expect(validateExecutionSetup({ ...config, subject: 'model' })).toEqual({})
   })
   it('routes templates and duplication, and rejects the old manual URL', () => {
     expect(routeFromHash('#/ext/harness-e2e/plans/new/profile/smoke')).toEqual({

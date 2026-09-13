@@ -26,7 +26,8 @@ function detail(): DashboardExecutionDetail {
           scenarios: [
             {
               scenario_id: 'direct_answer',
-              scenario_version: 2,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               runs: [
                 {
                   run_id: 'run-1',
@@ -86,24 +87,33 @@ describe('scenario chat targets', () => {
     ])
   })
 
-  it('keeps transcript inspection within the selected test version', () => {
+  it('keeps transcript inspection within the selected definition', () => {
     const value = detail()
     const other = structuredClone(value.reports[0])
     const scenario = other.report!.scenarios[0]
-    scenario.scenario_version = 3
-    scenario.runs[0].session_id = 'version-3-session'
+    scenario.behavior_sha256 =
+      'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
+    scenario.runs[0].session_id = 'other-definition-session'
     scenario.runs[0].retry_attempts = []
     value.reports.push(other)
     expect(
-      scenarioChatTargets(value, 'direct_answer', null, null, 2).map(
-        (target) => target.sessionId,
-      ),
+      scenarioChatTargets(
+        value,
+        'direct_answer',
+        null,
+        null,
+        'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+      ).map((target) => target.sessionId),
     ).toEqual(['session-current', 'session-retry'])
     expect(
-      scenarioChatTargets(value, 'direct_answer', null, null, 3).map(
-        (target) => target.sessionId,
-      ),
-    ).toEqual(['version-3-session'])
+      scenarioChatTargets(
+        value,
+        'direct_answer',
+        null,
+        null,
+        'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+      ).map((target) => target.sessionId),
+    ).toEqual(['other-definition-session'])
     expect(
       scenarioChatTargets(value, 'direct_answer', null, null, null),
     ).toEqual([])

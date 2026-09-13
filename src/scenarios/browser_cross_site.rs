@@ -23,14 +23,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "browser_cross_site";
-const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x6272_6f77_7365_0001;
 const DELIVERABLE_ID: &str = "browser_cross_site_evidence";
 const TARGET_TICKET: &str = "TCK-42";
@@ -878,7 +877,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "cross-site-ui-policy-reconciliation",
@@ -888,16 +886,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "superseded_policy_present": true,
             "backend_oracle": "runner_owned",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 4,
-            external_systems: 3,
-            state_transitions: 2,
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "browser::interactive".into(),
@@ -916,7 +904,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let info = fixture_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Resolve support ticket `{TARGET_TICKET}` using only the real browser UI.
 

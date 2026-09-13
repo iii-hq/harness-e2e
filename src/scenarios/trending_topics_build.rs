@@ -17,7 +17,6 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 pub const ID: &str = "trending_topics_build";
-pub const VERSION: u32 = 1;
 
 const FIXTURE_URL: &str = "git@github.com:iii-hq/e2e-fixture.git";
 const FIXTURE_REVISION: &str = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2";
@@ -107,7 +106,6 @@ fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
 pub fn scenario(run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Build the application described by `/workspace/TASK.md`. Use `{}` for every file read, edit, Git operation, build, and test command. Each command starts in `/workspace` inside your private container. Clone `git://127.0.0.1:9418/origin.git` into `/workspace/app` on branch `build`, make and commit the complete implementation there, and push the final commit to `origin/build`. Do not publish or deploy outside this attempt. Supply `command` and `timeout_ms` (1..=120000). Use function discovery only to find this exact tool.",
             function_id(run_id)
@@ -147,7 +145,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
         spec: scenario(namespace),
         case: ScenarioCase::new(
             ID,
-            VERSION,
             stable_seed(ID),
             json!({
                 "fixture_url": FIXTURE_URL,
@@ -156,15 +153,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "branch": "build",
                 "runtime_assets": asset_hashes,
             }),
-            ComplexityProfile {
-                planning_depth: 4,
-                dependency_depth: 2,
-                external_systems: 2,
-                state_transitions: 4,
-                validation_loops: 2,
-                artifact_count: 1,
-                ..Default::default()
-            },
             vec![
                 "iii::functions".into(),
                 "docker".into(),
@@ -612,7 +600,7 @@ fn portable_evidence_with_limit(directory: &Path, result: &mut Value, limit: u64
         )?;
     }
     Ok(json!({
-        "format": "trending-topics-evidence-v1",
+        "format": "trending-topics-evidence",
         "files": files,
         "omitted_files": omitted,
         "capture_verification_errors": result["capture_verification_errors"],

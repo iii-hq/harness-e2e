@@ -20,7 +20,8 @@ import {
 
 type ScenarioChatActionProps = {
   scenarioId: string
-  scenarioVersion?: number | null
+  /** Digest of the scenario definition the transcripts belong to. */
+  behaviorSha256?: string | null
   executionId?: string | null
   subjectId?: string | null
   runId?: string | null
@@ -42,7 +43,7 @@ function targetLabel(target: ScenarioChatTarget) {
 
 export function ScenarioChatAction({
   scenarioId,
-  scenarioVersion,
+  behaviorSha256,
   executionId,
   subjectId,
   runId,
@@ -55,7 +56,7 @@ export function ScenarioChatAction({
   const menuRef = useRef<HTMLDivElement>(null)
   const menuId = useId()
   const resolvedExecutionId = detail?.id ?? executionId ?? null
-  const sourceKey = `${resolvedExecutionId ?? ''}:${subjectId ?? ''}:${scenarioId}:${scenarioVersion}:${runId ?? ''}`
+  const sourceKey = `${resolvedExecutionId ?? ''}:${subjectId ?? ''}:${scenarioId}:${behaviorSha256}:${runId ?? ''}`
   const detailTargets = useMemo(
     () =>
       detail
@@ -64,10 +65,10 @@ export function ScenarioChatAction({
             scenarioId,
             subjectId,
             runId,
-            scenarioVersion,
+            behaviorSha256,
           )
         : null,
-    [detail, runId, scenarioId, scenarioVersion, subjectId],
+    [detail, runId, scenarioId, behaviorSha256, subjectId],
   )
   const [loadedTargets, setLoadedTargets] = useState<
     ScenarioChatTarget[] | null
@@ -145,7 +146,7 @@ export function ScenarioChatAction({
       const next = await loadScenarioChatTargets({
         executionId: resolvedExecutionId,
         scenarioId,
-        scenarioVersion,
+        behaviorSha256,
         subjectId,
         runId,
       })

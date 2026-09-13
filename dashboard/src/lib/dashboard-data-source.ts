@@ -1,13 +1,10 @@
 import type {
-  AnalyzerIdentity,
-  AnalyzerUsage,
   AssessmentContract,
   AssessmentSummary,
   RunAssessmentContract,
 } from '@/lib/assessment-contract'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 import type { PlanExecution } from '@/lib/plan-execution'
-import type { RESULTS_SCHEMA_VERSION } from '@/lib/result-contract.generated'
 import type {
   EvaluatedVersionsResponse,
   TestHistoryInput,
@@ -38,7 +35,6 @@ export type LocalPlan = {
   origin?: 'local'
   reference_execution_id?: string
   reference_differences?: string[]
-  schema_version: number
   id: string
   label: string
   purpose: string
@@ -50,16 +46,13 @@ export type LocalPlan = {
   url: string
   model: string
   provider: string
-  judge_model: string
-  judge_provider: string
   scenarios: Array<{
     scenario_id: string
-    scenario_version: number
+    behavior_sha256: string
     case_id: string
     seed: number
     inputs_sha256: string
     contract_sha256: string
-    complexity_tier: string
   }>
   scenario_ids: string[]
   runs: number
@@ -107,10 +100,8 @@ export type MasterTestProfile = {
   label: string
   purpose: string
   metrics: string[]
-  judge_required?: boolean
   cases?: Array<{
     scenario_id: string
-    judge_required: boolean
     requirements: string[]
   }>
   scenario_ids: string[]
@@ -130,7 +121,6 @@ export type MasterTestProfile = {
 
 export type MasterTestPlan = {
   plan_id: string
-  version: number
   definition_sha256: string
   profiles: MasterTestProfile[]
 }
@@ -162,17 +152,16 @@ export type DashboardModelIdentity = JsonObject & {
   id?: string
   model?: string
   provider?: string
-  judge?: DashboardModelIdentity | null
 }
 
 export type DashboardScenarioSummary = JsonObject & {
   id: string
-  scenario_version?: number
+  behavior_sha256?: string
   case_id?: string
   status?: string
   passed?: boolean
   pass_rate?: number | null
-  median_score?: number | null
+  mean_score?: number | null
   technical_failures?: number | null
   wall_time_seconds?: number | null
   total_cost_usd?: number | null
@@ -181,7 +170,7 @@ export type DashboardScenarioSummary = JsonObject & {
 
 export type DashboardScenarioMetricSummary = JsonObject & {
   scenario_id: string
-  scenario_version?: number
+  behavior_sha256?: string
   subject_id?: string
   contract_fingerprint?: string
   run_count?: number
@@ -194,7 +183,6 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     tokens?: number | null
     failed_attempt_tokens?: number | null
     tokens_per_completion?: number | null
-    work_amplification?: number | null
   }
   samples?: JsonObject & {
     cost_usd?: number | null
@@ -205,7 +193,6 @@ export type DashboardScenarioMetricSummary = JsonObject & {
     failed_attempt_tokens?: number | null
     tokens_per_completion?: number | null
     tokens?: number | null
-    work_amplification?: number | null
   }
   workflow?: DashboardWorkflowMetricSummary | null
 }
@@ -241,7 +228,6 @@ export type DashboardSubjectSummary = JsonObject & {
   id: string
   model?: string
   provider?: string
-  judge?: DashboardModelIdentity | null
   assessment_summary?: AssessmentSummary
   scenarios: DashboardScenarioSummary[]
 }
@@ -314,16 +300,13 @@ export type LiveProgress = {
     run_id: string | null
     completion: CompletionState | null
     technical: TechnicalState | null
-    objective_score: number | null
-    quality_score_completed: number | null
+    score: number | null
   }>
   completed_runs: number
   task_incomplete_runs: number
   undetermined_runs: number
   technical_invalid_runs: number
   completion_rate: number | null
-  quality_score_completed: number | null
-  quality_scored_completed_runs: number
   observed_tokens: number | null
   token_observed_attempts: number
   observed_cost_usd: number | null
@@ -362,7 +345,6 @@ export type EvaluatorAvailability =
 
 export type DashboardEvaluatorStates = {
   completion: EvaluatorAvailability
-  quality: EvaluatorAvailability
 }
 
 export type DashboardScenarioAggregate = JsonObject & {
@@ -377,12 +359,10 @@ export type DashboardScenarioAggregate = JsonObject & {
   execution_reliability: number | null
   completion_evidence_coverage: number | null
   completion_rate: number | null
-  objective_scored_runs: number
-  objective_median_score: number | null
-  objective_score_coverage: number | null
-  quality_scored_completed_runs: number
-  quality_score_completed: number | null
-  quality_coverage: number | null
+  /** Technically valid runs that carry a score. */
+  scored_runs: number
+  /** Mean score of the scored runs; null when none was scored. */
+  mean_score: number | null
   total_tokens_consumed: number | null
   tokens_completed_p50: number | null
   failed_attempt_tokens: number | null
@@ -411,7 +391,6 @@ export type SemanticTestAsset = JsonObject & {
 export type SemanticTestReport = JsonObject & {
   node_id: string
   step_type: string
-  step_version: number
   required: boolean
   dependencies: string[]
   status: string
@@ -447,7 +426,6 @@ export type ScenarioFlowEvidence = JsonObject & {
   snapshot: JsonObject & {
     executable: false
     scenario_id?: string
-    scenario_version?: number
   }
   checkpoint: JsonObject & { path: string; sha256?: string }
   cleanup: JsonObject & {
@@ -468,33 +446,9 @@ export type DashboardRunProjection = JsonObject & {
   completion: CompletionState
   technical: TechnicalState
   evaluators: DashboardEvaluatorStates
-  objective_score: number | null
-  quality_score_completed: number | null
-  score?: number | null
-  validation_score?: number | null
-  /** Markdown scenarios only: the judge-scored prompt-following pass, with
-   *  the analyzer identity and usage it recorded. */
-  instruction_adherence?:
-    | (JsonObject & {
-        availability: 'available' | 'unavailable' | 'failed'
-        score?: number | null
-        summary?: string
-        requirements?: JsonValue[]
-        analyzer?: AnalyzerIdentity
-        analyzer_usage?: AnalyzerUsage
-      })
-    | null
-  markdown_execution?:
-    | (JsonObject & {
-        pipeline_complete: boolean
-        source_path?: string
-        source_sha256?: string
-        behavior_sha256?: string
-        compiled_sha256?: string
-        materialized_plan_sha256?: string | null
-        phases?: JsonValue[]
-      })
-    | null
+  /** Plain sum of the points the evaluated criteria awarded; null when the
+   *  run evaluated nothing. */
+  score: number | null
   failures?: Array<JsonObject & { phase?: string; message?: string }>
   wall_time_ms?: number | null
   metrics?: DashboardRunMetrics | null
@@ -516,15 +470,12 @@ export type DashboardRetryAttemptProjection = JsonObject & {
   completion: CompletionState
   technical: TechnicalState
   evaluators: DashboardEvaluatorStates
-  objective_score: number | null
-  quality_score_completed: number | null
+  score: number | null
   wall_time_ms?: number | null
 }
 
 export type DashboardReportProjection = JsonObject & {
-  schema_version: typeof RESULTS_SCHEMA_VERSION
   result_contract_sha256: string
-  scoring_profile_sha256: string
   report_state: 'complete' | 'partial'
   objective_outcome: 'passed' | 'failed' | 'inconclusive'
   assessment_availability?: 'available' | 'unavailable'
@@ -533,12 +484,16 @@ export type DashboardReportProjection = JsonObject & {
   scenarios: Array<
     JsonObject & {
       scenario_id: string
-      scenario_version: number
+      /** Digest of the definition the case was materialized from; absent only
+       *  when no case could be materialized for the slot. */
+      behavior_sha256?: string
+      case_id?: string
+      case?: JsonObject | null
       assessment_summary?: AssessmentSummary
       status?: string
       passed?: boolean
       pass_rate?: number | null
-      median_score?: number | null
+      mean_score?: number | null
       technical_failures?: number
       aggregate: DashboardScenarioAggregate
       runs: DashboardRunProjection[]
@@ -588,7 +543,6 @@ export type RuntimeConfig = {
     test_version_get: string
     test_history_get: string
     catalog_get: string
-    local_scenario_create: string
     run_status: string
     run_start: string
     run_cancel: string
@@ -640,10 +594,6 @@ export type DashboardDataBridge = {
   deletePlan(planId: string): Promise<void>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
-  createLocalScenario(request: {
-    file_name: string
-    source: string
-  }): Promise<JsonObject>
   getRunSnapshot(after?: number): Promise<JsonObject>
   startRun(request: JsonObject): Promise<JsonObject>
   cancelRun(): Promise<JsonObject>
@@ -731,8 +681,6 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
-    createLocalScenario: (request) =>
-      call(runtime.functions.local_scenario_create, request),
     getRunSnapshot: (after) =>
       call(runtime.functions.run_status, after === undefined ? {} : { after }),
     startRun: (request) => call(runtime.functions.run_start, request),

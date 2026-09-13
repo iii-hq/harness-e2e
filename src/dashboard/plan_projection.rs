@@ -74,7 +74,7 @@ impl PlanStore {
                 "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null, "event": "local", "actor": "local",
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
                 "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": plan.snapshot.profile.lane,
-                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "judge": if plan.plan.judge_model.is_empty() { Value::Null } else { json!({"model": plan.plan.judge_model, "provider": plan.plan.judge_provider}) }, "scenarios": []}],
+                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "scenarios": []}],
                 "requested_runs": execution.slots.len(), "scenario_metrics": [], "execution": {"id": execution.id},
                 "totals": {"expected_reports": execution.slots.len(), "received_reports": summary["observed"], "missing_reports": execution.slots.len() as u64 - summary["observed"].as_u64().unwrap_or(0),
                     "report_coverage": summary["observed"].as_f64().map(|observed| observed / execution.slots.len().max(1) as f64), "passed_scenarios": summary["passed"], "total_tokens": null, "total_cost_usd": null},
@@ -213,11 +213,11 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, native_sum
             "status": status,
             "passed": status == "passed", "pass_rate": if planned == 0 { 0.0 } else { completed as f64 / planned as f64 },
             "technical_failures": aggregate["technical_failures"],
-            "median_score": aggregate["median_score"], "total_cost_usd": aggregate["cost"]["total_usd"]}));
+            "mean_score": aggregate["mean_score"], "total_cost_usd": aggregate["cost"]["total_usd"]}));
         let contract = json!({"case_id": cohort["identity"]["case"]["case_id"], "case": cohort["identity"]["case"],
-            "scenario_id": id, "scenario_version": cohort["identity"]["case"]["scenario_version"], "execution_policy": cohort["identity"]["execution_policy"]});
+            "scenario_id": id, "execution_policy": cohort["identity"]["execution_policy"]});
         metrics.push(json!({"subject_id": value["subjects"][0]["id"], "scenario_id": id,
-            "scenario_version": cohort["identity"]["case"]["scenario_version"], "contract_fingerprint": super::presenter::contract_fingerprint(&contract), "run_count": count,
+            "behavior_sha256": cohort["identity"]["case"]["behavior_sha256"], "contract_fingerprint": super::presenter::contract_fingerprint(&contract), "run_count": count,
             "averages": {"tokens": aggregate["total_tokens_consumed"].as_f64().filter(|_| count > 0.0).map(|tokens| tokens / count), "tokens_per_completion": aggregate["tokens_per_completion"]},
             "samples": {"tokens": if aggregate["total_tokens_consumed"].is_number() { count } else { 0.0 }, "tokens_per_completion": aggregate["completed_runs"]}}));
     }

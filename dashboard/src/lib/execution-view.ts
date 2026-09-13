@@ -19,7 +19,6 @@ export type FailureCategory =
   | 'infrastructure'
   | 'resource_limit'
   | 'subject'
-  | 'judge'
   | 'inconclusive'
 
 export type FailureBreakdown = Record<FailureCategory, number> & {
@@ -37,7 +36,6 @@ export type ExecutionPresentation = {
   execution: DashboardExecutionSummary
   label: string
   subjects: ExecutionModel[]
-  judges: ExecutionModel[]
   attention: ExecutionAttentionState
   breakdown: FailureBreakdown
   primaryIssue: { category: FailureCategory; count: number } | null
@@ -56,7 +54,6 @@ const CATEGORY_ORDER: FailureCategory[] = [
   'infrastructure',
   'resource_limit',
   'subject',
-  'judge',
   'inconclusive',
 ]
 
@@ -65,7 +62,6 @@ const STATUS_KEYS = [
   'infrastructure_error',
   'resource_limit',
   'subject_error',
-  'judge_error',
   'unavailable',
 ] as const
 
@@ -135,7 +131,6 @@ export function failureBreakdown(
     infrastructure: countStatus(counts, 'infrastructure_error'),
     resource_limit: countStatus(counts, 'resource_limit'),
     subject: countStatus(counts, 'subject_error'),
-    judge: countStatus(counts, 'judge_error'),
     inconclusive: countStatus(counts, 'unavailable'),
     passed: countStatus(counts, 'passed'),
     total: 0,
@@ -151,14 +146,12 @@ export function failureBreakdown(
       breakdown.infrastructure +
       breakdown.resource_limit +
       breakdown.subject +
-      breakdown.judge +
       breakdown.inconclusive
   }
   breakdown.issues =
     breakdown.infrastructure +
     breakdown.resource_limit +
     breakdown.subject +
-    breakdown.judge +
     breakdown.inconclusive
   return breakdown
 }
@@ -209,20 +202,6 @@ export function executionSubjects(
   })
 }
 
-export function executionJudges(
-  execution: DashboardExecutionSummary,
-): ExecutionModel[] {
-  const seen = new Set<string>()
-  return subjectsFor(execution).flatMap((subject) => {
-    const judge = modelFrom(subject.judge)
-    if (!judge) return []
-    const key = `${judge.provider}/${judge.model}`
-    if (seen.has(key)) return []
-    seen.add(key)
-    return [judge]
-  })
-}
-
 export function executionLabel(execution: DashboardExecutionSummary): string {
   return (
     stringValue(execution.label) ||
@@ -240,7 +219,6 @@ export function buildExecutionPresentation(
     execution,
     label: executionLabel(execution),
     subjects: executionSubjects(execution),
-    judges: executionJudges(execution),
     attention: attentionState(execution, breakdown),
     breakdown,
     primaryIssue: primaryIssue(breakdown),
@@ -296,7 +274,6 @@ export function categoryLabel(category: FailureCategory): string {
     infrastructure: 'Infrastructure',
     resource_limit: 'Resource limit',
     subject: 'Subject model',
-    judge: 'Markdown judge',
     inconclusive: 'Inconclusive',
   }[category]
 }

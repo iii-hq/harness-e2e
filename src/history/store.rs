@@ -16,6 +16,10 @@ pub(crate) const SQL: &[&str] = &[
 impl Persistence {
     pub async fn import_history(&self, input: HistoryImport) -> Result<Value> {
         let history = input.decode()?;
+        let warnings = history.warnings();
+        for warning in &warnings {
+            tracing::warn!(plan = %history.plan.key, %warning, "history import contract drift");
+        }
         let source = &history.source.instance_id;
         let plan_id = history.local_plan_id();
         let mut statements = vec![
@@ -105,7 +109,7 @@ impl Persistence {
             counts[kind] += 1;
         }
         Ok(
-            json!({"plan_id": plan_id, "inserted": counts[0], "updated": counts[1], "unchanged": counts[2], "reports": history.counts.reports, "runs": history.counts.runs}),
+            json!({"plan_id": plan_id, "inserted": counts[0], "updated": counts[1], "unchanged": counts[2], "reports": history.counts.reports, "runs": history.counts.runs, "warnings": warnings}),
         )
     }
 

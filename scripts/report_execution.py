@@ -71,11 +71,10 @@ def runs_from_results(results: dict[str, Any]) -> list[dict[str, Any]]:
                 prune(
                     {
                         "scenario_id": scenario_id,
-                        "scenario_version": scenario.get("scenario_version"),
+                        "behavior_sha256": scenario.get("behavior_sha256"),
                         "case_id": scenario.get("case_id"),
                         "seed": None if seed is None else str(seed),
                         "repetition": repetition,
-                        "tier": obj(case.get("complexity")).get("tier"),
                         "definition_sha256": case.get("inputs_sha256"),
                         "run": run,
                     }
@@ -153,9 +152,7 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,
             "subject": obj(plan.get("subject")) or None,
-            "judge": obj(plan.get("judge")) or None,
             "result_contract_sha256": results.get("result_contract_sha256"),
-            "scoring_profile_sha256": results.get("scoring_profile_sha256"),
         }
     )
 
@@ -171,7 +168,7 @@ def materialized_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "kind": "materialized",
         "execution_id": args.execution_id,
-        "schema": snapshot.get("schema") or "harness-e2e-profile-snapshot/v1",
+        "schema": snapshot.get("schema") or "harness-e2e-profile-snapshot",
         "profile_snapshot": snapshot or None,
         "profile": prune(
             {
@@ -217,7 +214,7 @@ def shard_payload(args: argparse.Namespace) -> dict[str, Any]:
         "kind": "shard",
         "execution_id": args.execution_id,
         "shard": f"{args.campaign_id}/{args.group_id}",
-        "schema": "harness-e2e-run-checkpoint/v1" if source == "journal" else "harness-e2e-results/v1",
+        "schema": "harness-e2e-run-checkpoint" if source == "journal" else "harness-e2e-results",
         "group": prune(
             {
                 "campaign_id": args.campaign_id,
@@ -238,7 +235,7 @@ def summary_payload(args: argparse.Namespace) -> dict[str, Any]:
     return {
         "kind": "summary",
         "execution_id": args.execution_id,
-        "schema": "harness-e2e-campaign-summary/v1",
+        "schema": "harness-e2e-campaign-summary",
         "summary": summary,
         "identity": identity_of(args, None),
         "bundle": bundle_reference(args),

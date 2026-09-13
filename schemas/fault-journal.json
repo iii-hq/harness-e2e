@@ -48,13 +48,6 @@
     "lane": {
       "type": "string"
     },
-    "observed_work_amplification": {
-      "type": [
-        "number",
-        "null"
-      ],
-      "format": "double"
-    },
     "profile_sha256": {
       "type": "string"
     },

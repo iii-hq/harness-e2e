@@ -47,6 +47,7 @@ import {
   getDashboardDataBridge,
   type LocalPlan,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import {
   buildExecutionPresentation,
   formatDate,
@@ -456,9 +457,10 @@ export function PlanScope({
   const scenarios = plan.scenarios.length
     ? plan.scenarios.map((scenario) => ({
         id: scenario.scenario_id,
-        label: `${scenario.scenario_id} v${scenario.scenario_version}`,
+        label: `${scenario.scenario_id} · ${shortDefinition(scenario.behavior_sha256)}`,
+        title: definitionTitle(scenario.behavior_sha256),
       }))
-    : plan.scenario_ids.map((id) => ({ id, label: id }))
+    : plan.scenario_ids.map((id) => ({ id, label: id, title: undefined }))
   const baselineCaptured =
     baselineSummary?.completed_at ?? baselineSummary?.started_at ?? null
   const facts: Array<[string, ReactNode]> = [
@@ -470,6 +472,7 @@ export function PlanScope({
             className="text-ink underline-offset-4 hover:underline"
             href={hashForTestHistory(scenario.id)}
             key={scenario.id}
+            title={scenario.title}
           >
             {scenario.label}
             {index < scenarios.length - 1 ? ' ·' : ''}
@@ -486,12 +489,6 @@ export function PlanScope({
       plan.model
         ? `${plan.model}${plan.provider ? ` · ${plan.provider}` : ''}`
         : 'not set',
-    ],
-    [
-      'judge',
-      plan.judge_model
-        ? `${plan.judge_model}${plan.judge_provider ? ` · ${plan.judge_provider}` : ''}`
-        : 'automatic · default protocol',
     ],
     [
       'baseline captured',
@@ -1773,7 +1770,6 @@ export function planProvenanceEntries(
     ['plan id', plan.id],
     ['scope hash', plan.scope_hash],
     ['endpoint', plan.url],
-    ['schema', plan.schema_version ? `v${plan.schema_version}` : null],
     ['created', formatDate(plan.created_at)],
     ['updated', plan.updated_at ? formatDate(plan.updated_at) : null],
     ['official baseline', plan.baseline_execution_id],
@@ -1784,11 +1780,10 @@ export function planProvenanceEntries(
         : null,
     ],
     ...plan.scenarios.map((scenario): [string, string] => [
-      `${scenario.scenario_id} v${scenario.scenario_version}`,
+      `${scenario.scenario_id} · ${shortDefinition(scenario.behavior_sha256)}`,
       [
         scenario.case_id ? `case ${scenario.case_id}` : null,
         `seed ${scenario.seed}`,
-        scenario.complexity_tier ? `tier ${scenario.complexity_tier}` : null,
         scenario.contract_sha256
           ? `contract ${shortHash(scenario.contract_sha256)}`
           : null,

@@ -13,7 +13,6 @@ import {
 } from '@/pages/PlansPage'
 
 const plan: LocalPlan = {
-  schema_version: 1,
   id: 'plan-1',
   label: 'Focused regression check',
   purpose: 'Confirm the affected local flow.',
@@ -25,8 +24,6 @@ const plan: LocalPlan = {
   url: 'https://example.invalid/catalog',
   model: 'codex/gpt-5.6-terra',
   provider: 'openai-codex',
-  judge_model: 'codex/gpt-5.6-sol',
-  judge_provider: 'openai-codex',
   scenarios: [],
   scenario_ids: ['direct_answer'],
   runs: 1,

@@ -10,7 +10,6 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: SIMPLE_ID,
-        version: VERSION,
         prompt: format!(
             "Create a todo worker and make it live.\n\n<todo_task_contract>\n{}\n</todo_task_contract>\n\nCreate the worker only inside the supplied workspace. Declare it in the root worker-compose.yaml, validate with compose::validate, start its local stack with compose::up and wait=false, poll worker::status until it is running, inspect all four function contracts, and test the behavior before reporting completion.",
             serde_json::to_string_pretty(&contract).expect("serialize Todo contract")
@@ -34,27 +33,8 @@ pub fn simple_scenario(run_id: &str) -> ScenarioSpec {
 pub fn simple_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         SIMPLE_ID,
-        VERSION,
         seed,
         materialized_case_inputs()?,
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 3,
-            parallel_branches: 0,
-            external_systems: 2,
-            state_transitions: 10,
-            wake_cycles: 0,
-            validation_loops: 0,
-            artifact_count: 1,
-            coordination_edges: 1,
-            ambiguity_level: 3,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::compose".into(),
@@ -74,7 +54,6 @@ pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
     let contract = task_contract(run_id).expect("run-scoped Todo contract");
     ScenarioSpec {
         id: PLANNED_ID,
-        version: VERSION,
         prompt: "Plan the creation of a Todo Worker, then execute the compiled plan in a separate Harness session and validate it independently.".into(),
         filesystem_root: Some(PathBuf::from(contract.workspace_root)),
         execution: ExecutionPolicy {
@@ -95,27 +74,8 @@ pub fn planned_scenario(run_id: &str) -> ScenarioSpec {
 pub fn planned_materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         PLANNED_ID,
-        VERSION,
         seed,
         materialized_case_inputs()?,
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 5,
-            parallel_branches: 0,
-            external_systems: 2,
-            state_transitions: 14,
-            wake_cycles: 0,
-            validation_loops: 1,
-            artifact_count: 3,
-            coordination_edges: 5,
-            ambiguity_level: 4,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "harness::independent_session".into(),
@@ -146,7 +106,6 @@ fn materialized_case_inputs() -> Result<Value> {
         Path::new("/run-dir/scenario-workspaces/todo-e2e-attempt_id"),
     )?;
     Ok(json!({
-        "scenario_version": VERSION,
         "worker_name_template": "todo-e2e-<attempt_id>",
         "function_prefix_template": "<worker_name>::",
         "workspace_root_template": "<run-dir>/scenario-workspaces/<worker_name>",

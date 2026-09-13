@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::watch;
 
-use super::{PortValueKind, ReplayPolicy, StepResumePhase, StepTypeDescriptor, WorkflowNodeV1};
+use super::{PortValueKind, ReplayPolicy, StepResumePhase, StepTypeDescriptor, WorkflowNode};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -133,7 +133,7 @@ pub struct StepExecutorContext {
     pub workflow_sha256: String,
     pub run_id: String,
     pub attempt_id: String,
-    pub node: WorkflowNodeV1,
+    pub node: WorkflowNode,
     pub replay_policy: ReplayPolicy,
     pub inputs: BTreeMap<String, TypedPortValue>,
     pub output_dir: PathBuf,
@@ -205,8 +205,8 @@ pub trait StepExecutor: Send + Sync {
             ReplayPolicy::Compensable | ReplayPolicy::NonRepeatable => {
                 StepReconcileOutcome::NeedsReconciliation {
                     reason: format!(
-                        "step '{}@{}' must implement reconciliation for {:?} replay",
-                        context.node.step_type, context.node.step_version, context.replay_policy
+                        "step '{}' must implement reconciliation for {:?} replay",
+                        context.node.step_type, context.replay_policy
                     ),
                 }
             }
@@ -261,7 +261,7 @@ pub struct RegisteredStepType {
 
 #[derive(Clone, Default)]
 pub struct StepCatalog {
-    entries: HashMap<(String, u32), RegisteredStepType>,
+    entries: BTreeMap<String, RegisteredStepType>,
 }
 
 impl StepCatalog {
@@ -275,16 +275,11 @@ impl StepCatalog {
         executor: Arc<dyn StepExecutor>,
     ) -> Result<()> {
         descriptor.validate()?;
-        let key = (descriptor.id.clone(), descriptor.version);
-        if self.entries.contains_key(&key) {
-            bail!(
-                "step type '{}@{}' is already registered",
-                descriptor.id,
-                descriptor.version
-            );
+        if self.entries.contains_key(&descriptor.id) {
+            bail!("step type '{}' is already registered", descriptor.id);
         }
         self.entries.insert(
-            key,
+            descriptor.id.clone(),
             RegisteredStepType {
                 descriptor,
                 executor,
@@ -297,8 +292,8 @@ impl StepCatalog {
         self.register(descriptor, Arc::new(DescriptorOnlyExecutor))
     }
 
-    pub fn get(&self, id: &str, version: u32) -> Option<&RegisteredStepType> {
-        self.entries.get(&(id.to_string(), version))
+    pub fn get(&self, id: &str) -> Option<&RegisteredStepType> {
+        self.entries.get(id)
     }
 
     pub fn descriptors(&self) -> Vec<StepTypeDescriptor> {
@@ -307,11 +302,7 @@ impl StepCatalog {
             .values()
             .map(|registered| registered.descriptor.clone())
             .collect::<Vec<_>>();
-        descriptors.sort_by(|left, right| {
-            left.id
-                .cmp(&right.id)
-                .then_with(|| left.version.cmp(&right.version))
-        });
+        descriptors.sort_by(|left, right| left.id.cmp(&right.id));
         descriptors
     }
 
@@ -326,9 +317,8 @@ struct DescriptorOnlyExecutor;
 impl StepExecutor for DescriptorOnlyExecutor {
     async fn execute(&self, context: StepExecutorContext) -> Result<StepExecutorOutput> {
         bail!(
-            "step type '{}@{}' was registered for validation only",
-            context.node.step_type,
-            context.node.step_version
+            "step type '{}' was registered for validation only",
+            context.node.step_type
         )
     }
 }

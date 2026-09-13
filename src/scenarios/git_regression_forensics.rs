@@ -24,13 +24,12 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "git_regression_forensics";
-const VERSION: u32 = 4;
 
 const ACQUISITION_ID: &str = "repository_acquisition";
 const TRACE_ID: &str = "investigation_trace";
@@ -243,21 +242,8 @@ pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
     validate_public_manifest(&inputs)?;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         inputs,
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 3,
-            parallel_branches: 2,
-            external_systems: 2,
-            state_transitions: 9,
-            validation_loops: 1,
-            artifact_count: 3,
-            coordination_edges: 3,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::registry".to_string(),
@@ -282,7 +268,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let report = root.join(REPORT_RELATIVE_PATH);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Investigate a regression in the supplied immutable snapshot of the real repository
 `coderefinery/git-bisect-exercise`.
@@ -1972,7 +1957,6 @@ mod tests {
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 3);
-        assert_eq!(first.case.complexity.profile.artifact_count, 3);
         assert!(!first.spec.prompt.contains(CULPRIT_SHA));
         first.validate().unwrap();
     }

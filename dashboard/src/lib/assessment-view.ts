@@ -35,14 +35,18 @@ export type AssessmentRunView = {
   key: string
   subjectId: string
   scenarioId: string
-  scenarioVersion: number
+  /** Digest of the definition that evaluated the run, when the report carries
+   *  one; an unmaterialized slot produces no assessment at all. */
+  behaviorSha256: string | null
   runId: string
   attemptId: string
   metrics: AssessmentRunMetrics
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
   failureMessages?: string[]
-  objectiveScore: number | null
+  /** Plain sum of the points the evaluated criteria awarded; null when the run
+   *  evaluated nothing. */
+  score: number | null
   assessments: AssessmentEntry[]
   evidence: EvidenceReference[]
 }
@@ -128,7 +132,7 @@ export function buildAssessmentWorkspace(
           assessmentRunView(
             record.subject_id,
             scenario.scenario_id,
-            scenario.scenario_version,
+            scenario.behavior_sha256 ?? null,
             contract,
             projectedRun,
             projectedRun.transcript,
@@ -151,11 +155,7 @@ export function buildAssessmentWorkspace(
 function assessmentRunPriority(run: AssessmentRunView) {
   if (run.systemStatus === 'infrastructure_error') return 0
   if (run.systemStatus === 'resource_limit') return 0
-  if (
-    run.systemStatus === 'subject_error' ||
-    run.systemStatus === 'judge_error'
-  )
-    return 1
+  if (run.systemStatus === 'subject_error') return 1
   if (run.systemStatus === 'unavailable') return 3
   return 4
 }
@@ -187,9 +187,6 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
   if (run.systemStatus === 'subject_error') {
     return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario.'
   }
-  if (run.systemStatus === 'judge_error') {
-    return 'Fix the Markdown validator invocation or its schema path, validate the JSON contract, and rerun the scenario.'
-  }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'
   }
@@ -199,7 +196,7 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
 function assessmentRunView(
   subjectId: string,
   scenarioId: string,
-  scenarioVersion: number,
+  behaviorSha256: string | null,
   contract: RunAssessmentContract,
   projectedRun: DashboardRunProjection,
   transcript?: { messages?: unknown },
@@ -235,7 +232,7 @@ function assessmentRunView(
     key: `${subjectId}:${scenarioId}:${contract.run_id}:${contract.attempt_id}`,
     subjectId,
     scenarioId,
-    scenarioVersion,
+    behaviorSha256,
     runId: contract.run_id,
     attemptId: contract.attempt_id,
     metrics: assessmentRunMetrics(projectedRun),
@@ -248,7 +245,7 @@ function assessmentRunView(
         ? [failure.message]
         : [],
     ),
-    objectiveScore: finiteNumber(projectedRun.objective_score),
+    score: finiteNumber(projectedRun.score),
     assessments,
     evidence,
   }

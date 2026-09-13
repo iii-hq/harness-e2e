@@ -229,7 +229,6 @@ def suite_groups(campaign: dict[str, Any]) -> list[dict[str, Any]]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "weight": group["difficulty_weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {
@@ -263,7 +262,6 @@ def build_contract(
         # it with, so the same slot is the same slot across executions.
         "seed": None,
         "subject": plan["subject"],
-        "judge": plan["judge"],
         "groups": suite_groups(campaign),
     }
     body = {
