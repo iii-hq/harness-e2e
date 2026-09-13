@@ -408,7 +408,8 @@ mod tests {
             "harness_e2e".into(),
             "default".into(),
         );
-        db.initialize().await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        db.initialize(root.path()).await.unwrap();
         db.import_history(transport.clone()).await.unwrap();
         assert_eq!(
             db.import_history(transport).await.unwrap()["unchanged"],

@@ -4,7 +4,7 @@ Status: primeiro incremento implementado localmente; etapas restantes propostas.
 
 ## Primeiro incremento
 
-- Worker e `rebuild-storage` usam o mesmo YAML, por `--config`/`III_CONFIG`. A reconstrução do banco deriva banco, namespace e diretório de evidências dessa configuração; caminhos relativos são resolvidos a partir do arquivo YAML. Foram removidos os overrides `HARNESS_E2E_CONTROL_DATABASE`/`HARNESS_E2E_CONTROL_NAMESPACE` e `--runs-dir` do comando administrativo.
+- O worker usa um único YAML, por `--config`/`III_CONFIG`, para banco, namespace e diretório de evidências; caminhos relativos são resolvidos a partir do arquivo YAML. Não há comando administrativo de storage: o worker reconcilia o layout do banco ao iniciar. Foram removidos os overrides `HARNESS_E2E_CONTROL_DATABASE`/`HARNESS_E2E_CONTROL_NAMESPACE`.
 - `shell_coder_sandbox`, `chess_engine_build` e `trend_blog` preparam automaticamente o bundle compartilhado. O preparador de Git foi extraído do engineering ticket e reutilizado, preservando revisão fixada, ausência de remotes, timeout e cleanup por `TempDir`.
 - O bundle pequeno é materializado em diretórios temporários independentes por leitura. O shell/coder lê os assets verificados em memória e descarta a origem temporária; avaliação e captura materializam novamente o bundle incorporado, independentemente do workspace alterado pelo candidato. Não há cache persistente ou estado adicional no contexto nesta etapa.
 - O launcher exact-stack deixou de preparar e repassar `HARNESS_E2E_FIXTURE_PATH`. O override existente do engineering ticket no executor protegido permanece com seu contrato de posse e cleanup.

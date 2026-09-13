@@ -234,7 +234,8 @@ mod tests {
         .await
         .unwrap();
         let db = Persistence::new(client.clone(), "harness_e2e".into(), "default".into());
-        db.initialize().await.unwrap();
+        let root = tempfile::tempdir().unwrap();
+        db.initialize(root.path()).await.unwrap();
         let input: HistoryImport = serde_json::from_str(include_str!(
             "../../tests/fixtures/history/retained-history.json"
         ))

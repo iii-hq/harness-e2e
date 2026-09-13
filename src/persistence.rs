@@ -4,12 +4,13 @@
 //! a driver nor a connection string: it only sends parameterised statements to
 //! the dedicated control-plane database namespace.
 //!
-//! Storage carries no version number.  The layout this runner expects is a
-//! fingerprint of its own SQL; a database recorded under another fingerprint
-//! is rebuilt explicitly with `harness-e2e rebuild-storage`, which keeps every
-//! row this runner can still read and drops the rest.  Rows written under
-//! another results contract are data, not a reason to refuse the database.
-use std::collections::BTreeSet;
+//! Storage carries no version number and needs no migration step.  Every
+//! table records the fingerprint of the statements that create it; at start
+//! the worker recreates the tables whose fingerprint moved, keeping the rows
+//! it can still read (executions, local plans and receipts) and reprojecting
+//! runs from the native bundles.  Everything else is reported as a warning
+//! and never refused.
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{bail, Context, Result};
@@ -26,7 +27,7 @@ const DATABASE_QUERY: &str = "database::query";
 const DATABASE_TRANSACTION: &str = "database::transaction";
 
 const SCHEMA: &[&str] = &[
-    "CREATE TABLE IF NOT EXISTS harness_e2e_storage (fingerprint TEXT PRIMARY KEY)",
+    "CREATE TABLE IF NOT EXISTS harness_e2e_storage (name TEXT PRIMARY KEY, fingerprint TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS executions (execution_id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, phase TEXT NOT NULL, requested_at TEXT NOT NULL, updated_at TEXT NOT NULL, lane TEXT NOT NULL, subject_provider TEXT NOT NULL, subject_model TEXT NOT NULL, terminal INTEGER NOT NULL CHECK (terminal IN (0, 1)), result_path TEXT NULL, result_sha256 TEXT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS executions_requested_at_idx ON executions(requested_at DESC)",
     "CREATE INDEX IF NOT EXISTS executions_phase_idx ON executions(terminal, updated_at)",
@@ -41,20 +42,11 @@ const SCHEMA: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS saved_plan_executions_plan_started_idx ON saved_plan_executions(plan_id, started_at DESC)",
 ];
 
-/// Every table a rebuild drops before recreating the layout. The trailing
-/// names belong to layouts this runner no longer writes.
-const OWNED_TABLES: &[&str] = &[
-    "harness_e2e_storage",
-    "executions",
-    "attempts",
-    "runs",
-    "artifacts",
-    "archives",
-    "saved_plans",
-    "saved_plan_executions",
-    "history_campaigns",
-    "history_reports",
-    "history_runs",
+const STORAGE_TABLE: &str = "harness_e2e_storage";
+const PROJECTION_TABLES: &[&str] = &["attempts", "runs", "artifacts", "archives"];
+const HISTORY_TABLES: &[&str] = &["history_campaigns", "history_reports", "history_runs"];
+/// Tables of layouts this runner no longer writes; dropped when found.
+const LEGACY_TABLES: &[&str] = &[
     "harness_e2e_schema",
     "plans",
     "plan_executions",
@@ -62,15 +54,45 @@ const OWNED_TABLES: &[&str] = &[
     "local_scenarios",
 ];
 
-/// Identity of the storage layout: every statement that creates it.
-pub fn storage_fingerprint() -> String {
-    let layout = SCHEMA
-        .iter()
-        .chain(crate::history::store::SQL.iter())
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n");
-    crate::artifact::sha256_bytes(layout.as_bytes())
+/// One table with every statement that creates it (table and indexes).
+struct TableLayout {
+    name: String,
+    statements: Vec<&'static str>,
+}
+
+impl TableLayout {
+    /// Identity of the table layout: the statements that create it.
+    fn fingerprint(&self) -> String {
+        crate::artifact::sha256_bytes(self.statements.join("\n").as_bytes())
+    }
+}
+
+fn statement_table(sql: &str) -> &str {
+    let rest = sql
+        .strip_prefix("CREATE TABLE IF NOT EXISTS ")
+        .or_else(|| {
+            sql.strip_prefix("CREATE INDEX IF NOT EXISTS ")
+                .and_then(|rest| rest.split_once(" ON "))
+                .map(|(_, table)| table)
+        })
+        .unwrap_or_else(|| panic!("unsupported storage statement: {sql}"));
+    rest.split([' ', '(']).next().unwrap_or_default()
+}
+
+/// Every table this runner creates, in statement order.
+fn table_layouts() -> Vec<TableLayout> {
+    let mut layouts: Vec<TableLayout> = Vec::new();
+    for sql in SCHEMA.iter().chain(crate::history::store::SQL.iter()) {
+        let table = statement_table(sql);
+        match layouts.iter_mut().find(|layout| layout.name == table) {
+            Some(layout) => layout.statements.push(sql),
+            None => layouts.push(TableLayout {
+                name: table.to_owned(),
+                statements: vec![sql],
+            }),
+        }
+    }
+    layouts
 }
 
 fn layout_statements() -> impl Iterator<Item = Value> {
@@ -80,12 +102,25 @@ fn layout_statements() -> impl Iterator<Item = Value> {
         .map(|sql| json!({"sql": sql, "params": []}))
 }
 
-fn layout_mismatch(recorded: Option<&str>) -> anyhow::Error {
-    anyhow::anyhow!(
-        "the Harness E2E storage layout ({}) differs from this runner ({}); stop the E2E worker and run `harness-e2e rebuild-storage --config <worker config>`",
-        recorded.unwrap_or("unrecorded"),
-        storage_fingerprint()
-    )
+/// Rows that survive the recreation of stale tables, and what did not.
+#[derive(Default)]
+struct Salvage {
+    statements: Vec<Value>,
+    executions: usize,
+    plans: usize,
+    plan_executions: usize,
+    dropped: Value,
+    unavailable: Vec<Value>,
+}
+
+impl Salvage {
+    fn count(&mut self, key: &str) {
+        if self.dropped.is_null() {
+            self.dropped = json!({});
+        }
+        let next = self.dropped[key].as_u64().unwrap_or(0) + 1;
+        self.dropped[key] = json!(next);
+    }
 }
 
 #[derive(Clone)]
@@ -104,70 +139,159 @@ impl Persistence {
         }
     }
 
-    pub async fn initialize(&self) -> Result<()> {
-        let fingerprint = storage_fingerprint();
+    /// Create the layout and reconcile the tables whose fingerprint moved.
+    /// A stale table is dropped and recreated with the rows this runner can
+    /// still read: execution records, local plans and receipts are decoded
+    /// and reinserted, run projections are rebuilt from the native bundles
+    /// under `data_dir`, and imported Release Control history is reported as
+    /// dropped (import it again). Nothing here refuses the database.
+    pub async fn initialize(&self, data_dir: &Path) -> Result<()> {
+        let layouts = table_layouts();
         let present = self.present_tables().await?;
-        if !present.is_empty() {
-            let recorded = if present.contains("harness_e2e_storage") {
-                self.recorded_fingerprint().await?
-            } else {
-                None
-            };
-            if recorded.as_deref() != Some(fingerprint.as_str()) {
-                return Err(layout_mismatch(recorded.as_deref()));
+        let mut recorded = BTreeMap::new();
+        let mut marker_readable = true;
+        if present.contains(STORAGE_TABLE) {
+            for row in self
+                .query(&format!("SELECT * FROM {STORAGE_TABLE}"), json!([]))
+                .await?
+            {
+                match (row["name"].as_str(), row["fingerprint"].as_str()) {
+                    (Some(name), Some(fingerprint)) => {
+                        recorded.insert(name.to_owned(), fingerprint.to_owned());
+                    }
+                    _ => marker_readable = false,
+                }
             }
         }
-        let statements = layout_statements()
-            .chain(std::iter::once(json!({
-                "sql": "INSERT INTO harness_e2e_storage(fingerprint) SELECT ? WHERE NOT EXISTS (SELECT 1 FROM harness_e2e_storage)",
-                "params": [fingerprint]
-            })))
-            .collect();
+        let mut stale = layouts
+            .iter()
+            .filter(|layout| layout.name != STORAGE_TABLE)
+            .filter(|layout| {
+                present.contains(&layout.name)
+                    && recorded.get(&layout.name) != Some(&layout.fingerprint())
+            })
+            .map(|layout| layout.name.clone())
+            .collect::<BTreeSet<_>>();
+        if present.contains(STORAGE_TABLE) && !marker_readable {
+            stale.insert(STORAGE_TABLE.to_owned());
+        }
+        let legacy = LEGACY_TABLES
+            .iter()
+            .filter(|table| present.contains(**table))
+            .map(|table| (*table).to_owned())
+            .collect::<Vec<_>>();
+
+        let mut statements = Vec::new();
+        let mut summary = json!({});
+        if !stale.is_empty() || !legacy.is_empty() {
+            let salvage = self.salvage(&present, &stale, data_dir).await?;
+            for table in stale.iter().chain(legacy.iter()) {
+                statements
+                    .push(json!({"sql": format!("DROP TABLE IF EXISTS {table}"), "params": []}));
+            }
+            statements.extend(layout_statements());
+            statements.extend(salvage.statements);
+            summary = json!({
+                "recreated": stale,
+                "legacy_dropped": legacy,
+                "executions": salvage.executions,
+                "plans": salvage.plans,
+                "plan_executions": salvage.plan_executions,
+                "dropped": salvage.dropped,
+                "unavailable_evidence": salvage.unavailable,
+            });
+        } else {
+            statements.extend(layout_statements());
+        }
+        for layout in &layouts {
+            statements.push(json!({
+                "sql": format!("INSERT INTO {STORAGE_TABLE}(name, fingerprint) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET fingerprint = excluded.fingerprint"),
+                "params": [layout.name, layout.fingerprint()]
+            }));
+        }
         self.transaction(statements).await?;
-        let recorded = self.recorded_fingerprint().await?;
-        if recorded.as_deref() != Some(fingerprint.as_str()) {
-            return Err(layout_mismatch(recorded.as_deref()));
+        if !summary
+            .as_object()
+            .is_some_and(|summary| summary.is_empty())
+        {
+            tracing::warn!(%summary, "recreated stale Harness E2E storage tables at start");
         }
         Ok(())
     }
 
-    /// Run with the E2E worker stopped; the database worker must remain
-    /// available. Drops every Harness E2E table and recreates this runner's
-    /// layout, keeping the executions, local plans and receipts it can still
-    /// decode. Imported Release Control history is dropped: import it again
-    /// from the Console afterwards. Dry-run unless `apply` is set.
-    pub async fn rebuild_storage(&self, data_dir: &Path, apply: bool) -> Result<Value> {
-        let fingerprint = storage_fingerprint();
-        let present = self.present_tables().await?;
-        let layout_current = present.contains("harness_e2e_storage")
-            && self.recorded_fingerprint().await?.as_deref() == Some(fingerprint.as_str());
+    /// What survives the recreation of the stale tables.
+    async fn salvage(
+        &self,
+        present: &BTreeSet<String>,
+        stale: &BTreeSet<String>,
+        data_dir: &Path,
+    ) -> Result<Salvage> {
+        let is_stale = |table: &str| stale.contains(table);
+        let projections_stale = PROJECTION_TABLES.iter().any(|table| is_stale(table));
+        let mut salvage = Salvage::default();
 
-        let mut executions = Vec::new();
-        let mut dropped_executions = Vec::new();
-        if present.contains("executions") {
+        // Execution records: reinserted when their table moved, reprojected
+        // from the native bundles when a projection table moved.
+        if (is_stale("executions") || projections_stale) && present.contains("executions") {
+            let mut records = Vec::new();
             for row in self.query("SELECT * FROM executions", json!([])).await? {
                 match decode_record(&row) {
-                    Ok(record) => executions.push(record),
-                    Err(error) => dropped_executions.push(
-                        json!({"execution_id": row["execution_id"], "error": format!("{error:#}")}),
-                    ),
+                    Ok(record) => records.push(record),
+                    Err(error) => {
+                        tracing::warn!(execution_id = %row["execution_id"], %error, "dropping an execution record this runner cannot read");
+                        salvage.count("executions");
+                    }
+                }
+            }
+            salvage.executions = records.len();
+            for mut record in records {
+                if projections_stale {
+                    if let Some(path) = record
+                        .result_path
+                        .as_deref()
+                        .filter(|_| record.phase.terminal())
+                    {
+                        match crate::report::E2eReport::read_from(&data_dir.join(path)) {
+                            Ok((report, _))
+                                if report.execution.execution_id == record.execution_id =>
+                            {
+                                record.report = Some(report);
+                            }
+                            Ok(_) => salvage.unavailable.push(json!({"execution_id": record.execution_id, "error": "native report identity differs"})),
+                            Err(error) => salvage.unavailable.push(json!({"execution_id": record.execution_id, "error": format!("{error:#}")})),
+                        }
+                    }
+                    if record.report.is_none()
+                        && record
+                            .dashboard_projection
+                            .as_ref()
+                            .is_some_and(|projection| {
+                                serde_json::from_value::<crate::dashboard::ExecutionProjection>(
+                                    projection.clone(),
+                                )
+                                .is_err()
+                            })
+                    {
+                        salvage.unavailable.push(json!({"execution_id": record.execution_id, "error": "retained dashboard projection is unreadable"}));
+                        record.dashboard_projection = None;
+                    }
+                    salvage
+                        .statements
+                        .extend(terminal_projection_statements(&record)?);
+                } else {
+                    salvage.statements.push(execution_statement(&record)?);
                 }
             }
         }
-        if let Some(active) = executions.iter().find(|record| !record.phase.terminal()) {
-            bail!(
-                "finish or cancel active execution {} with the previous worker before rebuilding storage",
-                active.execution_id
-            );
-        }
 
-        let mut remote_rows = 0u64;
-        let mut plans = Vec::new();
-        let mut dropped_plans = Vec::new();
-        if present.contains("saved_plans") {
+        // Local plans and receipts: decoded and validated before reinsertion;
+        // remote rows belong to imported history and come back with it.
+        let mut plan_ids = BTreeSet::new();
+        if is_stale("saved_plans") && present.contains("saved_plans") {
+            let mut plans = Vec::new();
             for row in self.query("SELECT * FROM saved_plans", json!([])).await? {
                 if row["origin"] != "local" {
-                    remote_rows += 1;
+                    salvage.count("remote_plan_rows");
                     continue;
                 }
                 match decode_hashed_payload::<SavedPlan>(&row, "saved plan")
@@ -175,128 +299,76 @@ impl Persistence {
                 {
                     Ok(plan) => plans.push(plan),
                     Err(error) => {
-                        dropped_plans.push(json!({"id": row["id"], "error": format!("{error:#}")}))
+                        tracing::warn!(id = %row["id"], %error, "dropping a saved plan this runner cannot read");
+                        salvage.count("plans");
                     }
                 }
             }
+            salvage.plans = plans.len();
+            for plan in &plans {
+                plan_ids.insert(plan.plan.id.clone());
+                salvage.statements.push(saved_plan_statement(plan)?);
+            }
+        } else if present.contains("saved_plans") {
+            for row in self
+                .query(
+                    "SELECT id FROM saved_plans WHERE origin = 'local'",
+                    json!([]),
+                )
+                .await?
+            {
+                if let Some(id) = row["id"].as_str() {
+                    plan_ids.insert(id.to_owned());
+                }
+            }
         }
-        let plan_ids = plans
-            .iter()
-            .map(|plan| plan.plan.id.as_str())
-            .collect::<BTreeSet<_>>();
-        let mut plan_executions = Vec::new();
-        let mut dropped_plan_executions = Vec::new();
-        if present.contains("saved_plan_executions") {
+        if is_stale("saved_plan_executions") && present.contains("saved_plan_executions") {
+            let mut receipts = Vec::new();
             for row in self
                 .query("SELECT * FROM saved_plan_executions", json!([]))
                 .await?
             {
                 if row["origin"] != "local" {
-                    remote_rows += 1;
+                    salvage.count("remote_plan_rows");
                     continue;
                 }
                 match decode_hashed_payload::<PlanExecution>(&row, "saved plan execution").and_then(
                     |execution| {
                         validate_saved_plan_execution(&execution)?;
-                        if !plan_ids.contains(execution.plan_id.as_str()) {
+                        if !plan_ids.contains(&execution.plan_id) {
                             bail!("plan {} is not retained", execution.plan_id);
                         }
                         Ok(execution)
                     },
                 ) {
-                    Ok(execution) => plan_executions.push(execution),
-                    Err(error) => dropped_plan_executions
-                        .push(json!({"id": row["id"], "error": format!("{error:#}")})),
+                    Ok(execution) => receipts.push(execution),
+                    Err(error) => {
+                        tracing::warn!(id = %row["id"], %error, "dropping a plan receipt this runner cannot read");
+                        salvage.count("plan_executions");
+                    }
                 }
             }
+            salvage.plan_executions = receipts.len();
+            for execution in &receipts {
+                salvage
+                    .statements
+                    .push(saved_plan_execution_statement(execution)?);
+            }
         }
-        if let Some(active) = plan_executions
-            .iter()
-            .find(|execution| matches!(execution.state.as_str(), "running" | "cancelling"))
-        {
-            bail!(
-                "finish or cancel active plan execution {} with the previous worker before rebuilding storage",
-                active.id
-            );
-        }
-        let mut history_rows = 0u64;
-        for table in ["history_campaigns", "history_reports", "history_runs"] {
-            if present.contains(table) {
-                history_rows += self
+
+        for table in HISTORY_TABLES {
+            if is_stale(table) && present.contains(*table) {
+                let rows = self
                     .query(&format!("SELECT COUNT(*) AS count FROM {table}"), json!([]))
                     .await?
                     .first()
                     .and_then(|row| row["count"].as_u64())
                     .unwrap_or(0);
+                salvage.dropped["history_rows"] =
+                    json!(salvage.dropped["history_rows"].as_u64().unwrap_or(0) + rows);
             }
         }
-
-        let mut statements = OWNED_TABLES
-            .iter()
-            .map(|table| json!({"sql": format!("DROP TABLE IF EXISTS {table}"), "params": []}))
-            .collect::<Vec<_>>();
-        statements.extend(layout_statements());
-        statements.push(json!({
-            "sql": "INSERT INTO harness_e2e_storage(fingerprint) VALUES (?)",
-            "params": [fingerprint]
-        }));
-        let mut unavailable = Vec::new();
-        let retained_executions = executions.len();
-        for mut record in executions {
-            if let Some(path) = record
-                .result_path
-                .as_deref()
-                .filter(|_| record.phase.terminal())
-            {
-                match crate::report::E2eReport::read_from(&data_dir.join(path)) {
-                    Ok((report, _)) if report.execution.execution_id == record.execution_id => {
-                        record.report = Some(report);
-                    }
-                    Ok(_) => unavailable.push(json!({"execution_id": record.execution_id, "error": "native report identity differs"})),
-                    Err(error) => unavailable.push(json!({"execution_id": record.execution_id, "error": format!("{error:#}")})),
-                }
-            }
-            if record.report.is_none()
-                && record
-                    .dashboard_projection
-                    .as_ref()
-                    .is_some_and(|projection| {
-                        serde_json::from_value::<crate::dashboard::ExecutionProjection>(
-                            projection.clone(),
-                        )
-                        .is_err()
-                    })
-            {
-                unavailable.push(json!({"execution_id": record.execution_id, "error": "retained dashboard projection is unreadable"}));
-                record.dashboard_projection = None;
-            }
-            statements.extend(terminal_projection_statements(&record)?);
-        }
-        for plan in &plans {
-            statements.push(saved_plan_statement(plan)?);
-        }
-        for execution in &plan_executions {
-            statements.push(saved_plan_execution_statement(execution)?);
-        }
-        if apply {
-            self.transaction(statements).await?;
-        }
-        Ok(json!({
-            "fingerprint": fingerprint,
-            "layout_current": layout_current,
-            "apply": apply,
-            "executions": retained_executions,
-            "plans": plans.len(),
-            "plan_executions": plan_executions.len(),
-            "dropped": {
-                "executions": dropped_executions,
-                "plans": dropped_plans,
-                "plan_executions": dropped_plan_executions,
-                "remote_plan_rows": remote_rows,
-                "history_rows": history_rows,
-            },
-            "unavailable_evidence": unavailable,
-        }))
+        Ok(salvage)
     }
 
     async fn present_tables(&self) -> Result<BTreeSet<String>> {
@@ -308,19 +380,8 @@ impl Persistence {
             .await?
             .iter()
             .filter_map(|row| row["name"].as_str())
-            .filter(|name| OWNED_TABLES.contains(name))
             .map(str::to_owned)
             .collect())
-    }
-
-    async fn recorded_fingerprint(&self) -> Result<Option<String>> {
-        let rows = self
-            .query("SELECT fingerprint FROM harness_e2e_storage", json!([]))
-            .await?;
-        if rows.len() != 1 {
-            return Ok(None);
-        }
-        Ok(rows[0]["fingerprint"].as_str().map(str::to_owned))
     }
 
     pub(crate) async fn saved_plan(&self, id: &str) -> Result<Option<SavedPlan>> {
@@ -803,14 +864,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn storage_fingerprint_is_a_digest_of_the_layout() {
-        assert!(storage_fingerprint().starts_with("sha256:"));
-        assert_eq!(storage_fingerprint(), storage_fingerprint());
+    fn every_layout_statement_belongs_to_one_table() {
+        let layouts = table_layouts();
+        let statements = layouts
+            .iter()
+            .map(|layout| layout.statements.len())
+            .sum::<usize>();
+        assert_eq!(statements, SCHEMA.len() + crate::history::store::SQL.len());
+        let names = layouts
+            .iter()
+            .map(|layout| layout.name.as_str())
+            .collect::<Vec<_>>();
+        for table in [
+            "harness_e2e_storage",
+            "executions",
+            "runs",
+            "saved_plans",
+            "history_runs",
+        ] {
+            assert!(names.contains(&table), "{table}");
+        }
+        let runs = layouts.iter().find(|layout| layout.name == "runs").unwrap();
+        assert_eq!(runs.statements.len(), 2);
+        assert!(runs.fingerprint().starts_with("sha256:"));
     }
 
     #[tokio::test]
     #[ignore = "requires HARNESS_E2E_TEST_DATABASE_URL and an isolated database worker"]
-    async fn real_database_rebuilds_a_foreign_layout() {
+    async fn real_database_start_recreates_stale_tables() {
         let url = std::env::var("HARNESS_E2E_TEST_DATABASE_URL").unwrap();
         let client = iii_sdk::register_worker(
             &url,
@@ -826,51 +907,41 @@ mod tests {
         })
         .await
         .unwrap();
+        let root = tempfile::tempdir().unwrap();
         let persistence = Persistence::new(client.clone(), "harness_e2e".into(), "default".into());
-        persistence.initialize().await.unwrap();
+        persistence.initialize(root.path()).await.unwrap();
+        let current = table_layouts()
+            .into_iter()
+            .map(|layout| (layout.name.clone(), layout.fingerprint()))
+            .collect::<BTreeMap<_, _>>();
+        // A moved `runs` layout and a legacy table from an older runner.
         persistence
             .transaction(vec![
-                json!({"sql": "UPDATE harness_e2e_storage SET fingerprint = 'sha256:foreign'", "params": []}),
-                json!({"sql": "DROP TABLE saved_plan_executions", "params": []}),
-                json!({"sql": "DROP TABLE saved_plans", "params": []}),
+                json!({"sql": "UPDATE harness_e2e_storage SET fingerprint = 'sha256:foreign' WHERE name = 'runs'", "params": []}),
+                json!({"sql": "CREATE TABLE IF NOT EXISTS harness_e2e_schema (version INTEGER PRIMARY KEY)", "params": []}),
             ])
             .await
             .unwrap();
-        assert!(persistence.initialize().await.is_err());
-        let root = tempfile::tempdir().unwrap();
-        let dry = persistence
-            .rebuild_storage(root.path(), false)
+        persistence.initialize(root.path()).await.unwrap();
+        let recorded = persistence
+            .query(
+                "SELECT name, fingerprint FROM harness_e2e_storage",
+                json!([]),
+            )
             .await
-            .unwrap();
-        assert_eq!(dry["layout_current"], false);
-        assert_eq!(dry["plans"], 0);
-        assert_eq!(
-            persistence
-                .query("SELECT fingerprint FROM harness_e2e_storage", json!([]))
-                .await
-                .unwrap()[0]["fingerprint"],
-            "sha256:foreign"
-        );
-        let applied = persistence
-            .rebuild_storage(root.path(), true)
-            .await
-            .unwrap();
-        assert_eq!(applied["fingerprint"], storage_fingerprint());
-        assert_eq!(
-            persistence
-                .query("SELECT fingerprint FROM harness_e2e_storage", json!([]))
-                .await
-                .unwrap()[0]["fingerprint"],
-            storage_fingerprint()
-        );
-        persistence.initialize().await.unwrap();
-        assert_eq!(
-            persistence
-                .rebuild_storage(root.path(), true)
-                .await
-                .unwrap()["layout_current"],
-            true
-        );
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                (
+                    row["name"].as_str().unwrap().to_owned(),
+                    row["fingerprint"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(recorded, current);
+        let present = persistence.present_tables().await.unwrap();
+        assert!(present.contains("runs"));
+        assert!(!present.contains("harness_e2e_schema"));
         client.shutdown_async().await;
     }
 

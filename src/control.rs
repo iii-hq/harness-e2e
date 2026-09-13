@@ -415,7 +415,7 @@ impl ControlPlane {
     ) -> Result<Self> {
         let (updates, _) = broadcast::channel(256);
         persistence
-            .initialize()
+            .initialize(&output_root)
             .await
             .context("initialize Harness E2E persistence")?;
         let control = Self {
@@ -2927,11 +2927,7 @@ mod tests {
                     "database::query" => {
                         queries += 1;
                         let sql = message["data"]["sql"].as_str().unwrap();
-                        if sql.contains("sqlite_master") {
-                            json!({"rows": []})
-                        } else if sql.contains("SELECT fingerprint") {
-                            json!({"rows": [{"fingerprint": crate::persistence::storage_fingerprint()}]})
-                        } else if sql.contains("terminal = 0") {
+                        if sql.contains("sqlite_master") || sql.contains("terminal = 0") {
                             json!({"rows": []})
                         } else {
                             assert!(sql.contains("ORDER BY requested_at DESC"));
@@ -2950,12 +2946,12 @@ mod tests {
                     ))
                     .await
                     .unwrap();
-                if transactions == 1 && queries == 4 {
+                if transactions == 1 && queries == 3 {
                     break;
                 }
             }
             assert_eq!(transactions, 1);
-            assert_eq!(queries, 4);
+            assert_eq!(queries, 3);
         });
         let client = iii_sdk::register_worker(&url, iii_sdk::InitOptions::default());
         tokio::time::timeout(Duration::from_secs(5), async {
