@@ -1835,7 +1835,7 @@ mod tests {
     }
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "requires HARNESS_E2E_TEST_DATABASE_URL and an isolated database worker; run serially"]
-    async fn real_database_rebuild_keeps_readable_plans_and_drops_the_rest() {
+    async fn real_database_start_recreates_a_stale_plan_table_keeping_readable_plans() {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let url = std::env::var("HARNESS_E2E_TEST_DATABASE_URL").unwrap();
@@ -1848,7 +1848,7 @@ mod tests {
         .await
         .unwrap();
         let db = Persistence::new(client.clone(), "harness_e2e".into(), "default".into());
-        db.initialize().await.unwrap();
+        db.initialize(root.path()).await.unwrap();
         db.transaction(vec![
             json!({"sql":"DELETE FROM saved_plan_executions WHERE origin = 'local'","params":[]}),
             json!({"sql":"DELETE FROM saved_plans WHERE origin = 'local'","params":[]}),
@@ -1896,12 +1896,15 @@ mod tests {
         .await
         .unwrap();
 
-        let dry = db.rebuild_storage(root.path(), false).await.unwrap();
-        assert_eq!(dry["plans"], 1);
-        assert_eq!(dry["plan_executions"], 2);
-        assert_eq!(dry["dropped"]["plans"].as_array().unwrap().len(), 1);
-        assert_eq!(dry["dropped"]["plans"][0]["id"], foreign_id);
-        db.rebuild_storage(root.path(), true).await.unwrap();
+        // The plan tables were written under another layout: the next start
+        // recreates them with the plans and receipts it can still read.
+        db.transaction(vec![json!({
+            "sql": "UPDATE harness_e2e_storage SET fingerprint = 'sha256:foreign' WHERE name IN ('saved_plans', 'saved_plan_executions')",
+            "params": []
+        })])
+        .await
+        .unwrap();
+        db.initialize(root.path()).await.unwrap();
         assert!(db.saved_plan(&foreign_id).await.unwrap().is_none());
         let after = manager.get_local(&plan_id).await.unwrap();
         assert_eq!(after.baseline_execution_id, before.baseline_execution_id);

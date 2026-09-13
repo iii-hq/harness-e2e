@@ -25,17 +25,6 @@ struct Cli {
 enum Command {
     /// Run the Compose-managed harness-e2e service (the default when no command is given).
     Worker(WorkerArgs),
-    /// Rebuild the control database for this runner's storage layout with the E2E worker stopped (dry-run by default).
-    RebuildStorage {
-        #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
-        url: String,
-        /// Compose-materialized worker config; defaults to III_CONFIG.
-        #[arg(long, env = "III_CONFIG")]
-        config: PathBuf,
-        /// Drop and recreate every Harness E2E table in one transaction, keeping the rows this runner can still read.
-        #[arg(long)]
-        apply: bool,
-    },
     /// Print every scenario id as a JSON array.
     List,
     /// Print the canonical materialized scenario catalog used by campaign tooling.
@@ -224,24 +213,6 @@ async fn main() -> Result<()> {
         }
         Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
-        Some(Command::RebuildStorage {
-            url,
-            config: config_path,
-            apply,
-        }) => {
-            let config = worker::load_config(&config_path)?;
-            let data_dir = worker::resolve_data_dir(&config.data_dir, &config_path)?;
-            let context = harness_e2e::context::E2eContext::connect(&url).await?;
-            let result = harness_e2e::persistence::Persistence::new(
-                context.client().clone(),
-                config.control_database,
-                config.control_namespace,
-            )
-            .rebuild_storage(&data_dir, apply)
-            .await?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
-            Ok(())
-        }
         Some(Command::Run(args)) => run(args).await,
         Some(Command::Report(args)) => report(args),
         Some(Command::FaultPlan(args)) => fault_plan(args),
@@ -405,31 +376,6 @@ mod tests {
         assert!(
             Cli::try_parse_from(["harness-e2e", "worker", "--url", "ws://localhost:1"]).is_err()
         );
-    }
-
-    #[test]
-    fn storage_rebuild_requires_worker_config_instead_of_a_runs_directory() {
-        let cli = Cli::try_parse_from([
-            "harness-e2e",
-            "rebuild-storage",
-            "--config",
-            "/tmp/compose/harness-e2e.yaml",
-        ])
-        .unwrap();
-        let Some(Command::RebuildStorage { config, apply, .. }) = cli.command else {
-            panic!("expected rebuild-storage command");
-        };
-        assert_eq!(config, PathBuf::from("/tmp/compose/harness-e2e.yaml"));
-        assert!(!apply);
-        assert!(Cli::try_parse_from([
-            "harness-e2e",
-            "rebuild-storage",
-            "--config",
-            "/tmp/compose/harness-e2e.yaml",
-            "--runs-dir",
-            "/tmp/other",
-        ])
-        .is_err());
     }
 
     #[test]

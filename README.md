@@ -278,22 +278,15 @@ Durable artifacts are chunked through `storage::*`. Admissions, executions,
 runs, attempts and artifact references are written through the control-plane
 `database::*` worker. Execution records retain compact dashboard summaries and
 observations, so lists and history do not load native reports. Storage carries
-no version number: the worker records a fingerprint of its own table layout and
-refuses to start on a database recorded under another fingerprint. A report or
-plan written under another results contract is read with a warning, never
-refused. There is no automatic startup backfill. With the E2E worker stopped
-and its database backed up, run `harness-e2e rebuild-storage --url <iii-url>
---config <worker-config.yaml>` to inspect the rebuild, then repeat with `--apply`.
-`III_CONFIG` can provide the config path instead. The command uses the same
-database, control namespace and `data_dir` as the worker; relative data paths
-resolve against the config file's directory.
-The database worker must remain available in the control namespace. Apply drops
-every Harness E2E table and recreates it in one transaction, keeping the
-executions, local plans and receipts this binary can still read; rows it cannot
-read are listed and dropped. Projections are rebuilt from the native bundles;
-missing bundles are listed in the result and never reconstructed as scored
-results. Imported Release Control history is dropped by the rebuild and comes
-back by importing it again. Active executions block the rebuild.
+no version number and has no migration step: every table records the
+fingerprint of the statements that create it, and at start the worker
+recreates the tables whose fingerprint moved in one transaction, keeping the
+execution records, local plans and receipts it can still read and rebuilding
+run projections from the native bundles. Rows it cannot read, missing bundles
+and imported Release Control history in a recreated table are logged as
+warnings; the history comes back by importing it again, and nothing is
+reconstructed as a scored result. A report or plan written under another
+results contract is read with a warning, never refused.
 
 Plan definitions and composed execution receipts are stored in `saved_plans` and
 `saved_plan_executions` through the database worker. A saved plan or receipt this

@@ -167,11 +167,10 @@ The main execution list shows the parent; its detail links to native artifacts.
 No synthetic results report is created. Missing telemetry stays unavailable.
 
 Saved plans and composed receipts live in the local SQL store, accessed only
-through the database worker. The store carries no version: the worker refuses a
-database whose layout fingerprint differs from its own, and the explicit
-`rebuild-storage` dry-run and apply recreate it, keeping every execution, plan
-and receipt the current binary can still read. Plans written by another binary
-are deleted, never migrated; active records block the rebuild.
+through the database worker. The store carries no version and no migration
+step: at start the worker recreates any table whose layout fingerprint moved,
+keeping every execution, plan and receipt the current binary can still read.
+Plans written by another binary are deleted, never migrated.
 
 The plans list combines local plans and imported RC plans, marked `remote`.
 Import history accepts the versioned JSON transport or explicitly discovers and
