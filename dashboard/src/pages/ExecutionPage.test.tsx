@@ -10,6 +10,7 @@ import {
   provenanceEntries,
   resultFilterCounts,
   snapshotMetricCards,
+  tokenBreakdownLines,
   turnsOfRuns,
   verdictVariant,
 } from '@/lib/execution-detail'
@@ -52,10 +53,10 @@ const run: AssessmentRunView = {
   attemptId: 'attempt-1',
   metrics: {
     totalTokens: 4_182,
-    inputTokens: null,
-    outputTokens: null,
-    cacheReadTokens: null,
-    cacheWriteTokens: null,
+    inputTokens: 3_000,
+    outputTokens: 1_182,
+    cacheReadTokens: 900,
+    cacheWriteTokens: 0,
     reasoningTokens: null,
     functionCalls: null,
     functionCallErrors: null,
@@ -186,7 +187,7 @@ describe('execution numbers', () => {
     ).toBe('Execution in progress · results are provisional')
   })
 
-  it('describes the six metric cards from the retained detail', () => {
+  it('describes the seven metric cards from the retained detail', () => {
     const cards = executionMetricCards(detail, scenarioSummary())
     expect(cards.map((card) => card.label)).toEqual([
       'tests',
@@ -194,6 +195,7 @@ describe('execution numbers', () => {
       'completion',
       'runtime',
       'tokens',
+      'cost',
       'turns',
     ])
     expect(cards[0]).toMatchObject({
@@ -256,6 +258,33 @@ describe('execution numbers', () => {
       turnsOfRuns([{ ...run, metrics: { ...run.metrics, turns: null } }]),
     ).toBeNull()
   })
+
+  it('spells the token breakdown out in two lines, or none', () => {
+    expect(
+      tokenBreakdownLines({
+        input: 3_000,
+        output: 1_182,
+        cacheRead: 900,
+        cacheWrite: 0,
+      }),
+    ).toEqual(['3,000 in · 1,182 out', 'cache 900 read · 0 write'])
+    expect(
+      tokenBreakdownLines({
+        input: 10,
+        output: null,
+        cacheRead: null,
+        cacheWrite: null,
+      }),
+    ).toEqual(['10 in', 'cache not reported'])
+    expect(
+      tokenBreakdownLines({
+        input: null,
+        output: null,
+        cacheRead: null,
+        cacheWrite: null,
+      }),
+    ).toEqual([])
+  })
 })
 
 describe('execution results table', () => {
@@ -284,6 +313,9 @@ describe('execution results table', () => {
     // Turns appear on the test row (summed) and on the run row.
     expect(html).toContain('>turns<')
     expect((html.match(/>16</g) ?? []).length).toBe(2)
+    // Tokens split into what was sent and received and what the cache served.
+    expect((html.match(/3,000 in · 1,182 out/g) ?? []).length).toBe(2)
+    expect((html.match(/cache 900 read · 0 write/g) ?? []).length).toBe(2)
     // The collapsed test does not.
     expect(html).not.toContain('data-scenario-detail="research_pipeline"')
     expect(html).toContain('aria-expanded="true"')

@@ -64,6 +64,8 @@ import {
   runCountFromDetail,
   snapshotMetricCards,
   summaryFromDetail,
+  tokenBreakdownLines,
+  tokenBreakdownOfRuns,
   turnsOfRuns,
   verdictVariant,
 } from '@/lib/execution-detail'
@@ -101,7 +103,7 @@ function MetricStrip({ cards }: { cards: ExecutionMetricCard[] }) {
   return (
     <div
       data-execution-metrics
-      className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3"
+      className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(8rem,1fr))] gap-3"
     >
       {cards.map((card) => (
         <MetricCard
@@ -210,6 +212,13 @@ function RunRows({
                 </TableCell>
                 <TableCell className={NUMERIC}>
                   {formatMetricCount(run.metrics.totalTokens)}
+                  {tokenBreakdownLines(tokenBreakdownOfRuns([run])).map(
+                    (line) => (
+                      <span key={line} className={META}>
+                        {line}
+                      </span>
+                    ),
+                  )}
                 </TableCell>
                 <TableCell className={NUMERIC}>
                   {formatMetricCount(run.metrics.turns)}
@@ -374,6 +383,13 @@ export function ResultsTable({
                   <TableCell className={NUMERIC}>
                     {formatMetricCount(
                       item.aggregate?.total_tokens_consumed ?? null,
+                    )}
+                    {tokenBreakdownLines(tokenBreakdownOfRuns(itemRuns)).map(
+                      (line) => (
+                        <span key={line} className={META}>
+                          {line}
+                        </span>
+                      ),
                     )}
                   </TableCell>
                   <TableCell className={NUMERIC}>
@@ -574,7 +590,14 @@ function ImportedExecution({
     {
       label: 'tokens',
       value: formatMetricCount(metrics.totalTokens.value),
-      detail: `${metrics.totalTokens.samples} of ${metrics.totalTokens.expected} runs reported`,
+      detail:
+        tokenBreakdownLines({
+          input: metrics.inputTokens.value,
+          output: metrics.outputTokens.value,
+          cacheRead: metrics.cacheRead.value,
+          cacheWrite: metrics.cacheWrite.value,
+        }).join(' · ') ||
+        `${metrics.totalTokens.samples} of ${metrics.totalTokens.expected} runs reported`,
       tone: metrics.totalTokens.value === null ? 'unavailable' : 'neutral',
     },
     {
@@ -584,7 +607,7 @@ function ImportedExecution({
       tone: metrics.turns.value === null ? 'unavailable' : 'neutral',
     },
     {
-      label: 'reported cost',
+      label: 'cost',
       value: formatReportedCost(metrics.costUsd.value),
       detail: `${metrics.costUsd.samples} of ${metrics.costUsd.expected} runs reported`,
       tone: metrics.costUsd.value === null ? 'unavailable' : 'neutral',

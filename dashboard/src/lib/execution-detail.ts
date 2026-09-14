@@ -1,7 +1,10 @@
 import type { StatusVariant } from '@iii-dev/console-ui'
 import type { SystemOutcome } from '@/components/SystemOutcome'
 import type { MetricTone, OperationalStatus } from '@/design-system/primitives'
-import type { AssessmentRunView } from '@/lib/assessment-view'
+import type {
+  AssessmentRunMetrics,
+  AssessmentRunView,
+} from '@/lib/assessment-view'
 import type {
   DashboardExecutionDetail,
   DashboardExecutionSummary,
@@ -254,10 +257,22 @@ export function executionMetricCards(
       label: 'tokens',
       value: formatMetricCount(metrics.subjectTokens.total),
       detail:
-        metrics.cost.total === null
-          ? 'cost not reported'
-          : `${formatReportedCost(metrics.cost.total)} reported cost`,
+        tokenBreakdownLines({
+          input: metrics.inputTokens.total,
+          output: metrics.outputTokens.total,
+          cacheRead: metrics.cacheReadTokens.total,
+          cacheWrite: metrics.cacheWriteTokens.total,
+        }).join(' · ') || 'input and output not reported',
       tone: metrics.subjectTokens.total === null ? 'unavailable' : 'neutral',
+    },
+    {
+      label: 'cost',
+      value: formatReportedCost(metrics.cost.total),
+      detail:
+        metrics.cost.total === null
+          ? 'not reported'
+          : `reported by ${metrics.cost.samples} of ${metrics.cost.expected} run${metrics.cost.expected === 1 ? '' : 's'}`,
+      tone: metrics.cost.total === null ? 'unavailable' : 'neutral',
     },
     {
       label: 'turns',
@@ -277,12 +292,66 @@ export function executionMetricCards(
   ]
 }
 
+export type TokenBreakdown = {
+  input: number | null
+  output: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
+}
+
+/** The subject tokens of the retained runs split as their terminal attempts
+ *  report them; each part null when no run reported it. */
+export function tokenBreakdownOfRuns(
+  runs: ReadonlyArray<{ metrics: AssessmentRunMetrics }>,
+): TokenBreakdown {
+  return {
+    input: sumOfRuns(runs, 'inputTokens'),
+    output: sumOfRuns(runs, 'outputTokens'),
+    cacheRead: sumOfRuns(runs, 'cacheReadTokens'),
+    cacheWrite: sumOfRuns(runs, 'cacheWriteTokens'),
+  }
+}
+
+/** One line for what the subject sent and received, one for what the cache
+ *  read and wrote, each naming only the parts a run reported; nothing when no
+ *  part was reported. */
+export function tokenBreakdownLines(breakdown: TokenBreakdown): string[] {
+  const lines: string[] = []
+  const usage = [
+    breakdown.input === null
+      ? null
+      : `${formatMetricCount(breakdown.input)} in`,
+    breakdown.output === null
+      ? null
+      : `${formatMetricCount(breakdown.output)} out`,
+  ].filter(Boolean)
+  if (usage.length > 0) lines.push(usage.join(' · '))
+  const cache = [
+    breakdown.cacheRead === null
+      ? null
+      : `${formatMetricCount(breakdown.cacheRead)} read`,
+    breakdown.cacheWrite === null
+      ? null
+      : `${formatMetricCount(breakdown.cacheWrite)} write`,
+  ].filter(Boolean)
+  if (cache.length > 0) lines.push(`cache ${cache.join(' · ')}`)
+  else if (lines.length > 0) lines.push('cache not reported')
+  return lines
+}
+
 /** The turns the retained runs of a test spent, summed; null when none reported them. */
 export function turnsOfRuns(
-  runs: ReadonlyArray<{ metrics: { turns: number | null } }>,
+  runs: ReadonlyArray<{ metrics: AssessmentRunMetrics }>,
+): number | null {
+  return sumOfRuns(runs, 'turns')
+}
+
+function sumOfRuns(
+  runs: ReadonlyArray<{ metrics: AssessmentRunMetrics }>,
+  key: keyof AssessmentRunMetrics,
 ): number | null {
   const known = runs
-    .map((run) => run.metrics.turns)
+    .map((run) => run.metrics[key])
     .filter(
       (value): value is number => value !== null && Number.isFinite(value),
     )
