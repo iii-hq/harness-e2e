@@ -754,6 +754,31 @@ fn schema_at_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     schema_variant(root, current)
 }
 
+fn names_required(schema: &Value, name: &str) -> bool {
+    schema
+        .get("required")
+        .and_then(Value::as_array)
+        .is_some_and(|required| required.iter().any(|field| field.as_str() == Some(name)))
+}
+
+/// The branches of a combinator that only CONSTRAINS — each carrying
+/// `required` and no shape of its own.
+///
+/// A field named by one of those branches is still one the caller can always
+/// send and have accepted: `harness::metrics` publishes
+/// `oneOf: [{required: [root_session_id]}, {required: [session_id]}]` beside
+/// its properties, which is "exactly one of these two spellings", and sending
+/// `root_session_id` satisfies it (MOT-4740). Reading only the object's own
+/// `required` there reports a contract that demands a session id as demanding
+/// nothing.
+fn constraint_branches(schema: &Value) -> impl Iterator<Item = &Value> {
+    ["allOf", "anyOf", "oneOf"]
+        .into_iter()
+        .filter_map(move |combinator| schema.get(combinator).and_then(Value::as_array))
+        .flatten()
+        .filter(|branch| branch.get("properties").is_none())
+}
+
 fn schema_marks_required(root: &Value, path: &str) -> bool {
     let mut current = match schema_variant(root, root) {
         Some(schema) => schema,
@@ -768,10 +793,8 @@ fn schema_marks_required(root: &Value, path: &str) -> bool {
             return false;
         };
         if segments.peek().is_none() {
-            return container
-                .get("required")
-                .and_then(Value::as_array)
-                .is_some_and(|required| required.iter().any(|field| field.as_str() == Some(name)));
+            return names_required(container, name)
+                || constraint_branches(container).any(|branch| names_required(branch, name));
         }
         let Some(mut property) = container
             .get("properties")
@@ -805,6 +828,19 @@ fn schema_variant<'a>(root: &'a Value, schema: &'a Value) -> Option<&'a Value> {
     }
     for combinator in ["allOf", "anyOf", "oneOf"] {
         if let Some(options) = schema.get(combinator).and_then(Value::as_array) {
+            // A combinator that only CONSTRAINS — branches carrying `required`
+            // and nothing else, the standard way to say "exactly one of these
+            // keys" — sits BESIDE the object's own `properties`. Descending
+            // into a branch there throws the properties away and every field
+            // reads as missing. `harness::metrics` publishes exactly that
+            // shape for its `root_session_id` / `session_id` pair.
+            if schema.get("properties").is_some()
+                && options
+                    .iter()
+                    .all(|candidate| candidate.get("properties").is_none())
+            {
+                break;
+            }
             if let Some(candidate) = options.iter().find(|candidate| {
                 !matches!(candidate.get("type").and_then(Value::as_str), Some("null"))
             }) {
@@ -835,6 +871,50 @@ fn schema_accepts_type(root: &Value, schema: &Value, expected: JsonType) -> bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // `harness::metrics` says "exactly one of root_session_id / session_id"
+    // the standard way: a `oneOf` of bare `required` branches beside the
+    // object's own `properties`. Descending into the first branch loses the
+    // properties and every field reads as missing, which failed the whole
+    // preflight against a perfectly valid contract (MOT-4740).
+    #[test]
+    fn a_constraint_only_combinator_keeps_the_objects_own_properties() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "oneOf": [
+                { "required": ["root_session_id"] },
+                { "required": ["session_id"] }
+            ],
+            "properties": {
+                "root_session_id": { "type": "string" },
+                "session_id": { "type": "string" }
+            }
+        });
+        for field in ["root_session_id", "session_id"] {
+            let found =
+                schema_at_path(&schema, field).unwrap_or_else(|| panic!("{field} must resolve"));
+            assert_eq!(found.get("type").and_then(Value::as_str), Some("string"));
+        }
+        // Either spelling is one the caller can always send and have
+        // accepted, so both read as required; a field in neither does not.
+        assert!(schema_marks_required(&schema, "root_session_id"));
+        assert!(schema_marks_required(&schema, "session_id"));
+        assert!(!schema_marks_required(&schema, "nothing_named_this"));
+    }
+
+    // A combinator whose branches DO carry shape is still a type union: keep
+    // descending, or an optional-object field stops resolving.
+    #[test]
+    fn a_shape_bearing_combinator_is_still_followed() {
+        let schema = serde_json::json!({
+            "anyOf": [
+                { "type": "null" },
+                { "type": "object", "properties": { "inner": { "type": "string" } } }
+            ]
+        });
+        let found = schema_at_path(&schema, "inner").expect("inner must resolve");
+        assert_eq!(found.get("type").and_then(Value::as_str), Some("string"));
+    }
 
     #[test]
     fn current_harness_catalog_satisfies_the_runner_contract() {
