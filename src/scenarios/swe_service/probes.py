@@ -190,7 +190,7 @@ def run_check(name, workspace, scratch, previous=None, canary=False):
         for size in (0, -1, True, False, 1.5, '4'):
             try:
                 replay(db, iter([event('invalid', 100)]), batch_size=size)
-            except ValueError:
+            except (TypeError, ValueError):
                 pass
             else:
                 raise AssertionError('batch size must be a positive integer, excluding booleans')
@@ -205,7 +205,7 @@ def run_check(name, workspace, scratch, previous=None, canary=False):
         for cursor in (-1, True, False, 1.5, '2'):
             try:
                 replay(cursor_db, iter(selected), batch_size=2, start_cursor=cursor)
-            except ValueError:
+            except (TypeError, ValueError):
                 pass
             else:
                 raise AssertionError('start cursor must be a nonnegative integer, excluding booleans')

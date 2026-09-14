@@ -443,7 +443,9 @@ def checkpoint(args, state):
                 lifecycle_checks = lifecycle.document_checks(args.ticket, immutable, state)
                 if args.ticket >= 3:
                     lifecycle_checks.append({"id": "continuous_integration", "passed": passed,
-                                             "reason": "Public tests, authored tests and cumulative behavioral checks ran on this Git export"})
+                        "reason": "Public tests, authored tests and cumulative behavioral checks passed" if passed else
+                        "Behavioral checks failed: " + ", ".join(check["id"] for check in verification.get("checks", [])
+                                                                 if not check["passed"])})
                 if args.ticket == 3:
                     lifecycle_checks.append({"id": "authored_regressions", "passed": any(
                         name.startswith("tests/agent/") and Path(name).name.startswith("test_")
@@ -469,7 +471,8 @@ def checkpoint(args, state):
                 failed_checks = [check for check in lifecycle_checks if not check["passed"]]
                 if failed_checks:
                     passed = False
-                    feedback = failed_checks[0].get("reason", failed_checks[0]["id"] + " failed")
+                    feedback = "; ".join(check["id"] + ": " + check.get("reason", "failed")
+                                         for check in failed_checks)
             if passed and args.ticket == 5 and not state["canary_revealed"]:
                 canary_observation = {"passed": probe(state, temporary, 5, True)["passed"]}
             if files_in(temporary) != immutable:
