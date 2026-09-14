@@ -10,6 +10,7 @@ import {
   provenanceEntries,
   resultFilterCounts,
   snapshotMetricCards,
+  turnsOfRuns,
   verdictVariant,
 } from '@/lib/execution-detail'
 import { executionVerdict } from '@/lib/execution-verdict'
@@ -60,7 +61,7 @@ const run: AssessmentRunView = {
     functionCallErrors: null,
     durationMs: 151_460,
     sessions: null,
-    turns: null,
+    turns: 16,
   },
   systemStatus: 'passed',
   score: 100,
@@ -185,7 +186,7 @@ describe('execution numbers', () => {
     ).toBe('Execution in progress · results are provisional')
   })
 
-  it('describes the five metric cards from the retained detail', () => {
+  it('describes the six metric cards from the retained detail', () => {
     const cards = executionMetricCards(detail, scenarioSummary())
     expect(cards.map((card) => card.label)).toEqual([
       'tests',
@@ -193,6 +194,7 @@ describe('execution numbers', () => {
       'completion',
       'runtime',
       'tokens',
+      'turns',
     ])
     expect(cards[0]).toMatchObject({
       value: '1/2',
@@ -210,6 +212,7 @@ describe('execution numbers', () => {
         total_tokens: 12_345,
         total_cost_usd: 0.42,
         wall_time_seconds: 125,
+        turns: 48,
       },
     } as unknown as DashboardExecutionDetail)
     expect(cards.map((card) => card.value)).toEqual([
@@ -217,6 +220,7 @@ describe('execution numbers', () => {
       '12,345',
       '$0.4200',
       '2m 05s',
+      '48',
     ])
     expect(cards.every((card) => card.tone === 'neutral')).toBe(true)
   })
@@ -243,6 +247,15 @@ describe('execution numbers', () => {
       ['passed', 1],
     ])
   })
+
+  it('sums the turns of the runs a test retained', () => {
+    expect(
+      turnsOfRuns([run, { ...run, metrics: { ...run.metrics, turns: 9 } }]),
+    ).toBe(25)
+    expect(
+      turnsOfRuns([{ ...run, metrics: { ...run.metrics, turns: null } }]),
+    ).toBeNull()
+  })
 })
 
 describe('execution results table', () => {
@@ -268,6 +281,9 @@ describe('execution results table', () => {
     expect(html).toContain('execution/execution-1/run/run-1')
     expect(html).toContain('4,182')
     expect(html).toContain('2m 31s')
+    // Turns appear on the test row (summed) and on the run row.
+    expect(html).toContain('>turns<')
+    expect((html.match(/>16</g) ?? []).length).toBe(2)
     // The collapsed test does not.
     expect(html).not.toContain('data-scenario-detail="research_pipeline"')
     expect(html).toContain('aria-expanded="true"')

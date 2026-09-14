@@ -21,9 +21,9 @@ column with one of each thing:
 | Notices | host `StatusPanel` (`warn`) | evidence bundle unavailable (with the retained totals as cards), refresh failed, live progress error, persistence errors |
 | Live state | host `StatusPanel` (`info`) + `LiveProgressPanel` / `PlanProgress` | `running · 1 of 4 tests · 2m 00s elapsed` and what to expect |
 | Verdict | host `StatusPanel` (`success` / `warn` / `alert` from the aggregate) | the headline and the next step, once, in the tone of the outcome |
-| Numbers | five `MetricCard`s | tests passed/total, score mean, completion rate, runtime, tokens with reported cost |
-| Results | host `Table`, one row per test | test and definition digest, result badge with the reason, score, runs, runtime, tokens; the row opens onto its runs |
-| Runs of a test | nested host `Table` | run, outcome badge, score, runtime, tokens, `transcript`, `evidence` (the record route), chat action; the workflow steps of composite scenarios below |
+| Numbers | six `MetricCard`s | tests passed/total, score mean, completion rate, runtime, tokens with reported cost, turns with function calls |
+| Results | host `Table`, one row per test | test and definition digest, result badge with the reason, score, runs, runtime, tokens, turns (summed over the retained runs); the row opens onto its runs |
+| Runs of a test | nested host `Table` | run, outcome badge, score, runtime, tokens, turns, `transcript`, `evidence` (the record route), chat action; the workflow steps of composite scenarios below |
 | Evidence record | existing `AssessmentDetailDialog` on the `/run/<runId>` route | unchanged for now: criteria matrix, telemetry, recommendation |
 | Provenance | host `CollapsibleCard` | results contracts (with a `warn` badge when written under another contract), the fact list, `copy json`, the raw JSON |
 | Delete | host `ConfirmDialog` | |
@@ -47,6 +47,19 @@ with the ledger). The page renders.
 `legacy.css` styled bare `table`, `th`, `td` and `tbody tr`, which reached
 the host's `Table` inside the extension. Those rules are now scoped to
 `.page-shell`, the wrapper only legacy pages carry.
+
+## Margins and rhythm
+
+The host's table cells drop their outer padding on the first and last
+column, so a table sits flush with the content edge, as the Console's own
+tables do. The opened runs of a test are inset by one gutter (`px-4`) inside
+the highlighted row so they read as nested. Sections sit 32px apart
+(`mt-8`); the verdict and the metric strip form one group 12px apart; the
+provenance trigger and body take the host's card header and body paddings
+(`px-3 py-2.5`, `p-3`). The metric strip is an auto-fit grid (`minmax(10rem,
+1fr)`), so six, five or four cards fill the row without a trailing gap. The
+disclosure caret leads the test row, so it stays in view when a narrow table
+scrolls and clicking it never scrolls the row away.
 
 ## Open
 

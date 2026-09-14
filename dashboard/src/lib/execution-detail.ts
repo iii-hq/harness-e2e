@@ -259,7 +259,36 @@ export function executionMetricCards(
           : `${formatReportedCost(metrics.cost.total)} reported cost`,
       tone: metrics.subjectTokens.total === null ? 'unavailable' : 'neutral',
     },
+    {
+      label: 'turns',
+      value: formatMetricCount(metrics.turns.total),
+      detail:
+        metrics.functionCalls.total === null
+          ? 'function calls not reported'
+          : `${formatMetricCount(metrics.functionCalls.total)} function call${
+              metrics.functionCalls.total === 1 ? '' : 's'
+            }${
+              metrics.functionErrors.total
+                ? ` · ${formatMetricCount(metrics.functionErrors.total)} failed`
+                : ''
+            }`,
+      tone: metrics.turns.total === null ? 'unavailable' : 'neutral',
+    },
   ]
+}
+
+/** The turns the retained runs of a test spent, summed; null when none reported them. */
+export function turnsOfRuns(
+  runs: ReadonlyArray<{ metrics: { turns: number | null } }>,
+): number | null {
+  const known = runs
+    .map((run) => run.metrics.turns)
+    .filter(
+      (value): value is number => value !== null && Number.isFinite(value),
+    )
+  return known.length === 0
+    ? null
+    : known.reduce((sum, value) => sum + value, 0)
 }
 
 /** The totals that survive an unavailable evidence bundle. */
@@ -270,6 +299,7 @@ export function snapshotMetricCards(
   const tokens = finiteMetric(detail.totals?.total_tokens)
   const cost = finiteMetric(detail.totals?.total_cost_usd)
   const duration = finiteMetric(detail.totals?.wall_time_seconds)
+  const turns = finiteMetric(detail.totals?.turns)
   const card = (
     label: string,
     value: string,
@@ -289,6 +319,7 @@ export function snapshotMetricCards(
       duration === null ? '—' : formatDuration(duration),
       duration !== null,
     ),
+    card('turns', formatMetricCount(turns), turns !== null),
   ]
 }
 

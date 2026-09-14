@@ -37,6 +37,7 @@ export type ExecutionMetrics = {
   durationMs: UsageCoverage
   functionCalls: UsageCoverage
   functionErrors: UsageCoverage
+  turns: UsageCoverage
   completedTokenSamples: number
   tokensCompletedP50: number | null
   tokensPerCompletion: number | null
@@ -158,6 +159,16 @@ export function buildExecutionMetrics(
     ),
     functionErrors: coverage(
       runs.map((run) => cumulativeCounter(run, 'function_call_errors')),
+      scopeComplete,
+    ),
+    turns: coverage(
+      // Efficiency carries turns for newer reports; older ones only in the
+      // terminal attempt's totals, as the assessment view reads them.
+      runs.map(
+        (run) =>
+          cumulativeCounter(run, 'turns') ??
+          counter(field(field(field(run, 'metrics'), 'totals'), 'turns')),
+      ),
       scopeComplete,
     ),
     completedTokenSamples: completedTokens.samples,

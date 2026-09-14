@@ -64,6 +64,7 @@ import {
   runCountFromDetail,
   snapshotMetricCards,
   summaryFromDetail,
+  turnsOfRuns,
   verdictVariant,
 } from '@/lib/execution-detail'
 import { executionVerdict } from '@/lib/execution-verdict'
@@ -100,7 +101,7 @@ function MetricStrip({ cards }: { cards: ExecutionMetricCard[] }) {
   return (
     <div
       data-execution-metrics
-      className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-5"
+      className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(10rem,1fr))] gap-3"
     >
       {cards.map((card) => (
         <MetricCard
@@ -166,6 +167,9 @@ function RunRows({
               <TableHead scope="col" className="text-right">
                 tokens
               </TableHead>
+              <TableHead scope="col" className="text-right">
+                turns
+              </TableHead>
               <TableHead scope="col">
                 <span className="sr-only">evidence</span>
               </TableHead>
@@ -176,7 +180,7 @@ function RunRows({
               <TableRow key={run.key} data-run-id={run.runId}>
                 <TableCell>
                   <a
-                    className="font-mono text-sm text-ink no-underline hover:underline"
+                    className="whitespace-nowrap font-mono text-sm text-ink no-underline hover:underline"
                     href={hashForExecution(executionId, null, run.runId)}
                   >
                     run {index + 1}
@@ -207,8 +211,11 @@ function RunRows({
                 <TableCell className={NUMERIC}>
                   {formatMetricCount(run.metrics.totalTokens)}
                 </TableCell>
+                <TableCell className={NUMERIC}>
+                  {formatMetricCount(run.metrics.turns)}
+                </TableCell>
                 <TableCell>
-                  <span className="flex flex-wrap items-center justify-end gap-1">
+                  <span className="flex flex-nowrap items-center justify-end gap-1">
                     {run.transcript ? (
                       <Button
                         variant="ghost"
@@ -286,8 +293,8 @@ export function ResultsTable({
               <TableHead scope="col" className="text-right">
                 tokens
               </TableHead>
-              <TableHead scope="col">
-                <span className="sr-only">details</span>
+              <TableHead scope="col" className="text-right">
+                turns
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -314,12 +321,31 @@ export function ResultsTable({
                   }}
                 >
                   <TableCell>
-                    <span className="block whitespace-nowrap font-mono text-sm font-medium text-ink">
-                      {item.scenarioId}
+                    <span className="flex items-center gap-2">
+                      <Button
+                        variant="icon"
+                        size="icon"
+                        type="button"
+                        className="-my-1 shrink-0"
+                        aria-expanded={open}
+                        aria-label={`${open ? 'Hide' : 'Show'} the runs of ${item.scenarioId}`}
+                        onClick={() => onToggle(item.key)}
+                      >
+                        {open ? (
+                          <ChevronDown aria-hidden="true" />
+                        ) : (
+                          <ChevronRight aria-hidden="true" />
+                        )}
+                      </Button>
+                      <span className="min-w-0">
+                        <span className="block whitespace-nowrap font-mono text-sm font-medium text-ink">
+                          {item.scenarioId}
+                        </span>
+                        {definition ? (
+                          <span className={META}>definition {definition}</span>
+                        ) : null}
+                      </span>
                     </span>
-                    {definition ? (
-                      <span className={META}>definition {definition}</span>
-                    ) : null}
                   </TableCell>
                   <TableCell>
                     <Badge
@@ -350,21 +376,8 @@ export function ResultsTable({
                       item.aggregate?.total_tokens_consumed ?? null,
                     )}
                   </TableCell>
-                  <TableCell className="text-right">
-                    <Button
-                      variant="icon"
-                      size="icon"
-                      type="button"
-                      aria-expanded={open}
-                      aria-label={`${open ? 'Hide' : 'Show'} the runs of ${item.scenarioId}`}
-                      onClick={() => onToggle(item.key)}
-                    >
-                      {open ? (
-                        <ChevronDown aria-hidden="true" />
-                      ) : (
-                        <ChevronRight aria-hidden="true" />
-                      )}
-                    </Button>
+                  <TableCell className={NUMERIC}>
+                    {formatMetricCount(turnsOfRuns(itemRuns))}
                   </TableCell>
                 </TableRow>
                 {open ? (
@@ -373,7 +386,7 @@ export function ResultsTable({
                       colSpan={RESULT_COLUMNS}
                       className="bg-card-highlight"
                     >
-                      <div className="grid gap-4 py-2">
+                      <div className="grid gap-4 px-4 py-3">
                         <RunRows
                           runs={itemRuns}
                           executionId={detail.id}
@@ -446,7 +459,7 @@ function Provenance({
   return (
     <CollapsibleCard className="mt-8" data-provenance>
       <CollapsibleCardTrigger>
-        <span className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+        <span className="flex flex-wrap items-center justify-between gap-3 px-3 py-2.5">
           <span className="text-sm font-semibold text-ink">provenance</span>
           <span className="font-mono text-xs text-ink-faint">
             {entries.length} facts · {contracts.length} results contract
@@ -455,7 +468,7 @@ function Provenance({
         </span>
       </CollapsibleCardTrigger>
       <CollapsibleCardContent>
-        <div className="grid gap-4 px-4 pt-1 pb-4">
+        <div className="grid gap-4 px-3 pt-1 pb-3">
           {contracts.length > 0 ? (
             <ul className="m-0 grid list-none gap-1 p-0 font-mono text-xs">
               {contracts.map((contract) => (
@@ -563,6 +576,12 @@ function ImportedExecution({
       value: formatMetricCount(metrics.totalTokens.value),
       detail: `${metrics.totalTokens.samples} of ${metrics.totalTokens.expected} runs reported`,
       tone: metrics.totalTokens.value === null ? 'unavailable' : 'neutral',
+    },
+    {
+      label: 'turns',
+      value: formatMetricCount(metrics.turns.value),
+      detail: `${metrics.turns.samples} of ${metrics.turns.expected} runs reported`,
+      tone: metrics.turns.value === null ? 'unavailable' : 'neutral',
     },
     {
       label: 'reported cost',
@@ -986,7 +1005,7 @@ export function ExecutionPage({
               headline="Evidence bundle unavailable"
               detail={detail.evidence_error}
             />
-            <div className="mt-4">
+            <div className="mt-3">
               <MetricStrip cards={snapshotMetricCards(detail)} />
             </div>
           </>
@@ -1033,14 +1052,14 @@ export function ExecutionPage({
 
         {hasReport && !live ? (
           <>
-            <div className="mt-5" data-verdict>
+            <div className="mt-6" data-verdict>
               <StatusPanel
                 variant={verdictVariant(scenarioSummary)}
                 headline={verdict.headline}
                 detail={verdict.nextStep}
               />
             </div>
-            <div className="mt-4">
+            <div className="mt-3">
               <MetricStrip
                 cards={executionMetricCards(detail, scenarioSummary)}
               />
