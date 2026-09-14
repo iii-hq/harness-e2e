@@ -192,6 +192,12 @@ export function executionMetricCards(
     metrics.durationMs.total === null
       ? wallSeconds
       : metrics.durationMs.total / 1000
+  const breakdown: TokenBreakdown = {
+    input: metrics.inputTokens.total,
+    output: metrics.outputTokens.total,
+    cacheRead: metrics.cacheReadTokens.total,
+    cacheWrite: metrics.cacheWriteTokens.total,
+  }
   return [
     {
       label: 'tests',
@@ -256,14 +262,14 @@ export function executionMetricCards(
     {
       label: 'tokens',
       value: formatMetricCount(metrics.subjectTokens.total),
-      detail:
-        tokenBreakdownLines({
-          input: metrics.inputTokens.total,
-          output: metrics.outputTokens.total,
-          cacheRead: metrics.cacheReadTokens.total,
-          cacheWrite: metrics.cacheWriteTokens.total,
-        }).join(' · ') || 'input and output not reported',
+      detail: tokenUsageLine(breakdown) ?? 'input and output not reported',
       tone: metrics.subjectTokens.total === null ? 'unavailable' : 'neutral',
+    },
+    {
+      label: 'cache tokens',
+      value: formatMetricCount(breakdown.cacheRead),
+      detail: cacheTokensDetail(breakdown),
+      tone: breakdown.cacheRead === null ? 'unavailable' : 'neutral',
     },
     {
       label: 'cost',
@@ -312,12 +318,10 @@ export function tokenBreakdownOfRuns(
   }
 }
 
-/** One line for what the subject sent and received, one for what the cache
- *  read and wrote, each naming only the parts a run reported; nothing when no
- *  part was reported. */
-export function tokenBreakdownLines(breakdown: TokenBreakdown): string[] {
-  const lines: string[] = []
-  const usage = [
+/** "8,687 in · 12,060 out", naming only the parts a run reported; null when
+ *  neither was. */
+export function tokenUsageLine(breakdown: TokenBreakdown): string | null {
+  const parts = [
     breakdown.input === null
       ? null
       : `${formatMetricCount(breakdown.input)} in`,
@@ -325,18 +329,27 @@ export function tokenBreakdownLines(breakdown: TokenBreakdown): string[] {
       ? null
       : `${formatMetricCount(breakdown.output)} out`,
   ].filter(Boolean)
-  if (usage.length > 0) lines.push(usage.join(' · '))
-  const cache = [
-    breakdown.cacheRead === null
-      ? null
-      : `${formatMetricCount(breakdown.cacheRead)} read`,
-    breakdown.cacheWrite === null
-      ? null
-      : `${formatMetricCount(breakdown.cacheWrite)} write`,
-  ].filter(Boolean)
-  if (cache.length > 0) lines.push(`cache ${cache.join(' · ')}`)
-  else if (lines.length > 0) lines.push('cache not reported')
-  return lines
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/** What was written to the cache, under the tokens read from it; null when
+ *  no run reported it. */
+export function cacheWriteNote(breakdown: TokenBreakdown): string | null {
+  return breakdown.cacheWrite === null
+    ? null
+    : `${formatMetricCount(breakdown.cacheWrite)} written`
+}
+
+/** The cache card's note: what its value counts, and what was written. */
+export function cacheTokensDetail(breakdown: TokenBreakdown): string {
+  if (breakdown.cacheRead === null && breakdown.cacheWrite === null)
+    return 'not reported'
+  return [
+    breakdown.cacheRead === null ? 'reads not reported' : 'read from the cache',
+    cacheWriteNote(breakdown),
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /** The turns the retained runs of a test spent, summed; null when none reported them. */

@@ -21,9 +21,9 @@ column with one of each thing:
 | Notices | host `StatusPanel` (`warn`) | evidence bundle unavailable (with the retained totals as cards), refresh failed, live progress error, persistence errors |
 | Live state | host `StatusPanel` (`info`) + `LiveProgressPanel` / `PlanProgress` | `running · 1 of 4 tests · 2m 00s elapsed` and what to expect |
 | Verdict | host `StatusPanel` (`success` / `warn` / `alert` from the aggregate) | the headline and the next step, once, in the tone of the outcome |
-| Numbers | seven `MetricCard`s | tests passed/total, score mean, completion rate, runtime, tokens with the input, output and cache breakdown, reported cost, turns with function calls |
-| Results | host `Table`, one row per test | test and definition digest, result badge with the reason, score, runs, runtime, tokens (the input, output and cache breakdown beneath), turns (summed over the retained runs); the row opens onto its runs |
-| Runs of a test | nested host `Table` | run, outcome badge, score, runtime, tokens (breakdown beneath), turns, `transcript`, `evidence` (the record route), chat action; the workflow steps of composite scenarios below |
+| Numbers | eight `MetricCard`s | tests passed/total, score mean, completion rate, runtime, tokens with input and output, cache tokens read with what was written, reported cost, turns with function calls |
+| Results | host `Table`, one row per test | test and definition digest, result badge with the reason, score, runs, runtime, tokens (input and output beneath), cache tokens read (what was written beneath), turns (summed over the retained runs); the row opens onto its runs |
+| Runs of a test | nested host `Table` | run, outcome badge, score, runtime, tokens (input and output beneath), cache read (written beneath), turns, `transcript`, `evidence` (the record route), chat action; the workflow steps of composite scenarios below |
 | Evidence record | existing `AssessmentDetailDialog` on the `/run/<runId>` route | unchanged for now: criteria matrix, telemetry, recommendation |
 | Provenance | host `CollapsibleCard` | results contracts (with a `warn` badge when written under another contract), the fact list, `copy json`, the raw JSON |
 | Delete | host `ConfirmDialog` | |
@@ -57,7 +57,7 @@ the highlighted row so they read as nested. Sections sit 32px apart
 (`mt-8`); the verdict and the metric strip form one group 12px apart; the
 provenance trigger and body take the host's card header and body paddings
 (`px-3 py-2.5`, `p-3`). The metric strip is an auto-fit grid (`minmax(8rem,
-1fr)`), so seven, five or four cards fill the row without a trailing gap. The
+1fr)`), so eight, six or five cards fill the row without a trailing gap. The
 disclosure caret leads the test row, so it stays in view when a narrow table
 scrolls and clicking it never scrolls the row away.
 

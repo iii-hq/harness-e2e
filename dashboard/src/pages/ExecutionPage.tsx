@@ -48,6 +48,8 @@ import {
 } from '@/lib/dashboard-data-source'
 import { shortDefinition } from '@/lib/definition-digest'
 import {
+  cacheTokensDetail,
+  cacheWriteNote,
   type ExecutionMetricCard,
   executionMetricCards,
   executionStatus,
@@ -64,8 +66,9 @@ import {
   runCountFromDetail,
   snapshotMetricCards,
   summaryFromDetail,
-  tokenBreakdownLines,
+  type TokenBreakdown,
   tokenBreakdownOfRuns,
+  tokenUsageLine,
   turnsOfRuns,
   verdictVariant,
 } from '@/lib/execution-detail'
@@ -134,6 +137,31 @@ function IdentityBand({ entries }: { entries: Array<[string, string]> }) {
   )
 }
 
+/** The tokens with input and output beneath, then the cache reads with what
+ *  was written beneath. */
+function TokenCells({
+  total,
+  breakdown,
+}: {
+  total: number | null
+  breakdown: TokenBreakdown
+}) {
+  const usage = tokenUsageLine(breakdown)
+  const written = cacheWriteNote(breakdown)
+  return (
+    <>
+      <TableCell className={NUMERIC}>
+        {formatMetricCount(total)}
+        {usage ? <span className={META}>{usage}</span> : null}
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        {formatMetricCount(breakdown.cacheRead)}
+        {written ? <span className={META}>{written}</span> : null}
+      </TableCell>
+    </>
+  )
+}
+
 function RunRows({
   runs,
   executionId,
@@ -168,6 +196,9 @@ function RunRows({
               </TableHead>
               <TableHead scope="col" className="text-right">
                 tokens
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                cache
               </TableHead>
               <TableHead scope="col" className="text-right">
                 turns
@@ -210,16 +241,10 @@ function RunRows({
                     ? '—'
                     : formatDuration(run.metrics.durationMs / 1000)}
                 </TableCell>
-                <TableCell className={NUMERIC}>
-                  {formatMetricCount(run.metrics.totalTokens)}
-                  {tokenBreakdownLines(tokenBreakdownOfRuns([run])).map(
-                    (line) => (
-                      <span key={line} className={META}>
-                        {line}
-                      </span>
-                    ),
-                  )}
-                </TableCell>
+                <TokenCells
+                  total={run.metrics.totalTokens}
+                  breakdown={tokenBreakdownOfRuns([run])}
+                />
                 <TableCell className={NUMERIC}>
                   {formatMetricCount(run.metrics.turns)}
                 </TableCell>
@@ -263,7 +288,7 @@ function RunRows({
   )
 }
 
-const RESULT_COLUMNS = 7
+const RESULT_COLUMNS = 8
 
 /** The results: one row per test, opening onto its runs and evidence. */
 export function ResultsTable({
@@ -301,6 +326,9 @@ export function ResultsTable({
               </TableHead>
               <TableHead scope="col" className="text-right">
                 tokens
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                cache
               </TableHead>
               <TableHead scope="col" className="text-right">
                 turns
@@ -380,18 +408,10 @@ export function ResultsTable({
                       ? '—'
                       : formatScenarioDuration(item.durationMs)}
                   </TableCell>
-                  <TableCell className={NUMERIC}>
-                    {formatMetricCount(
-                      item.aggregate?.total_tokens_consumed ?? null,
-                    )}
-                    {tokenBreakdownLines(tokenBreakdownOfRuns(itemRuns)).map(
-                      (line) => (
-                        <span key={line} className={META}>
-                          {line}
-                        </span>
-                      ),
-                    )}
-                  </TableCell>
+                  <TokenCells
+                    total={item.aggregate?.total_tokens_consumed ?? null}
+                    breakdown={tokenBreakdownOfRuns(itemRuns)}
+                  />
                   <TableCell className={NUMERIC}>
                     {formatMetricCount(turnsOfRuns(itemRuns))}
                   </TableCell>
@@ -568,6 +588,12 @@ function ImportedExecution({
   const reference = detail.remote_reference as unknown as RcReference
   const metrics = referencePrimaryMetrics(reference).metrics
   const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null)
+  const referenceBreakdown: TokenBreakdown = {
+    input: metrics.inputTokens.value,
+    output: metrics.outputTokens.value,
+    cacheRead: metrics.cacheRead.value,
+    cacheWrite: metrics.cacheWrite.value,
+  }
   const cards: ExecutionMetricCard[] = [
     {
       label: 'score',
@@ -591,14 +617,15 @@ function ImportedExecution({
       label: 'tokens',
       value: formatMetricCount(metrics.totalTokens.value),
       detail:
-        tokenBreakdownLines({
-          input: metrics.inputTokens.value,
-          output: metrics.outputTokens.value,
-          cacheRead: metrics.cacheRead.value,
-          cacheWrite: metrics.cacheWrite.value,
-        }).join(' · ') ||
+        tokenUsageLine(referenceBreakdown) ??
         `${metrics.totalTokens.samples} of ${metrics.totalTokens.expected} runs reported`,
       tone: metrics.totalTokens.value === null ? 'unavailable' : 'neutral',
+    },
+    {
+      label: 'cache tokens',
+      value: formatMetricCount(referenceBreakdown.cacheRead),
+      detail: cacheTokensDetail(referenceBreakdown),
+      tone: referenceBreakdown.cacheRead === null ? 'unavailable' : 'neutral',
     },
     {
       label: 'turns',
