@@ -199,10 +199,10 @@ export type TestSpec = {
   prompt: string
   criteria: TestCriterion[]
   execution: {
-    max_turns: number
+    max_turns?: number | null
     max_output_tokens?: number
     max_total_tokens?: number
-    stuck_timeout_seconds: number
+    stuck_timeout_seconds?: number | null
     max_validation_retries?: number
   }
   denied_functions: string[]

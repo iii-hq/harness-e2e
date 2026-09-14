@@ -1,5 +1,5 @@
 //! Software engineering tasks sharing one versioned service and trusted curriculum.
-//! Only a selected entry snapshot reaches the subject; the journey retains its own code.
+//! Only a selected entry snapshot reaches the subject; the lifecycle retains its own code.
 
 mod assets;
 mod runtime;
@@ -22,9 +22,49 @@ pub const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 pub const FIXTURE_REVISION: &str = "ab373b11ae167ef853f5b5c5184cdcd431a444ea";
 pub const WORKSPACE_ROOT_ENV: &str = "HARNESS_E2E_SWE_WORKSPACE_ROOT";
 
+pub const LIFECYCLE_CRITERIA: &[(&str, u8, &str)] = &[
+    ("demand", 8, "Record customer acceptance and a real GitHub issue before source changes."),
+    ("planning", 8, "Link ownership, dependencies and planned tests to acceptance, with the plan committed in a real PR before implementation."),
+    ("implementation", 20, "Deliver the working product and authored regression tests at the SHA published in the PR."),
+    ("review_ci", 15, "Record technical self-review and successful GitHub CI on the exact candidate SHA, with tests that detect the original defects."),
+    ("release", 12, "Merge and publish an immutable GitHub release after compatibility review, and verify HTTP behavior and restart locally."),
+    ("evolution", 10, "Deliver the tenant requirement through CI, review and merge without regressing accepted behavior."),
+    ("operations", 12, "Merge the incident repair with verified CI and demonstrate restart, rollback and upgrade without data loss or duplicate effects."),
+    ("handoff", 5, "Deliver the runbook through CI, review, merge and a final release, close the issue and revalidate operational procedures."),
+    ("convergence", 5, "Completed stages / (completed stages + rejected checkpoints), awarded after lifecycle completion; no retry cutoff."),
+    ("resource_efficiency", 5, "After completion, mean min(1, reference / observed) for elapsed time, generations and tokens; references are 5400 s, 320 and 1500000, with no execution cutoff. Missing measurements remain unevaluated."),
+];
+
+pub fn criteria(case: Case) -> Vec<CriterionSpec> {
+    if case.lifecycle() {
+        LIFECYCLE_CRITERIA
+            .iter()
+            .map(|(id, weight, description)| {
+                CriterionSpec::scored(
+                    id,
+                    *weight,
+                    description,
+                    if matches!(*id, "convergence" | "resource_efficiency") {
+                        EvaluationDimension::Efficiency
+                    } else {
+                        EvaluationDimension::Deliverable
+                    },
+                )
+            })
+            .collect()
+    } else {
+        vec![CriterionSpec::scored(
+            "swe_delivery",
+            100,
+            "Deliver the requested ticket while preserving accepted software and protected checks.",
+            EvaluationDimension::Deliverable,
+        )]
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Case {
-    /// Zero selects the continuous journey; 1..=8 select an isolated ticket.
+    /// Zero selects the continuous lifecycle; 1..=8 select an isolated ticket.
     pub ticket: u8,
     pub id: &'static str,
 }
@@ -40,7 +80,7 @@ impl Case {
             ScenarioId::SweTenantIsolation => 6,
             ScenarioId::SweReplayPerformance => 7,
             ScenarioId::SweReleaseHandoff => 8,
-            ScenarioId::SweServiceJourney => 0,
+            ScenarioId::SoftwareCompanyLifecycle => 0,
             _ => return None,
         };
         Some(Self {
@@ -49,12 +89,12 @@ impl Case {
         })
     }
 
-    pub fn journey(self) -> bool {
+    pub fn lifecycle(self) -> bool {
         self.ticket == 0
     }
     pub fn mode(self) -> &'static str {
-        if self.journey() {
-            "journey"
+        if self.lifecycle() {
+            "lifecycle"
         } else {
             "isolated"
         }
@@ -62,26 +102,14 @@ impl Case {
     pub fn first_ticket(self) -> u8 {
         self.ticket.max(1)
     }
-    pub fn deadline_seconds(self) -> u64 {
-        if self.journey() {
-            5_400
-        } else {
-            900
-        }
+    pub fn deadline_seconds(self) -> Option<u64> {
+        (!self.lifecycle()).then_some(900)
     }
-    pub fn generations(self) -> u32 {
-        if self.journey() {
-            320
-        } else {
-            64
-        }
+    pub fn generations(self) -> Option<u32> {
+        (!self.lifecycle()).then_some(64)
     }
-    pub fn tokens(self) -> u64 {
-        if self.journey() {
-            1_500_000
-        } else {
-            250_000
-        }
+    pub fn tokens(self) -> Option<u64> {
+        (!self.lifecycle()).then_some(250_000)
     }
 
     pub fn description(self) -> &'static str {
@@ -94,7 +122,7 @@ impl Case {
             6 => "Repair cross-tenant profile access while preserving authorized operations.",
             7 => "Optimize replay work while preserving paging, order and existing behavior.",
             8 => "Address configuration-removal feedback and document the software handoff.",
-            _ => "Evolve one profile service through eight SWE tickets in one continuing Harness session.",
+            _ => "Run a software company lifecycle: demand, planning, implementation, review and CI, release, evolution, incident recovery and handoff.",
         }
     }
 }
@@ -103,7 +131,7 @@ pub fn is_swe(scenario: ScenarioId) -> bool {
     Case::from_scenario(scenario).is_some()
 }
 
-/// One SWE ticket, or the continuous journey, identified by its registered id.
+/// One SWE ticket, or the continuous lifecycle, identified by its registered id.
 pub struct SweService(pub ScenarioId);
 
 #[async_trait]
@@ -135,10 +163,18 @@ impl Scenario for SweService {
                 "mode": selection.mode(),
                 "entry_snapshot": selection.first_ticket() - 1,
                 "task": selection.ticket,
-                "task_count": if selection.journey() { 8 } else { 1 },
+                "task_count": if selection.lifecycle() { 8 } else { 1 },
                 "deadline_seconds": selection.deadline_seconds(),
                 "delegation": "optional",
-                "curriculum_version": 1,
+                "curriculum_version": if selection.lifecycle() { 3 } else { 1 },
+                "lifecycle_contract_sha256": if selection.lifecycle() { Some(crate::artifact::sha256_value(&include_str!("lifecycle.py"))?) } else { None },
+                "github_contract_sha256": if selection.lifecycle() { Some(crate::artifact::sha256_value(&json!({"bridge": include_str!("github_ops.py"), "workflow": include_str!("github-ci.yml")}))?) } else { None },
+                "evaluator_contract_sha256": crate::artifact::sha256_value(&json!({
+                    "controller": include_str!("controller.py"),
+                    "probes": include_str!("probes.py"),
+                    "isolation": include_str!("isolation.py"),
+                }))?,
+                "efficiency_reference": selection.lifecycle().then_some(json!({"elapsed_ms":5_400_000,"generations":320,"tokens":1_500_000})),
             }),
             vec![
                 Capability::IiiFunctions,
@@ -155,8 +191,8 @@ impl Scenario for SweService {
                 }],
                 invariants: vec![InvariantSpec {
                     id: "delivery_complete".into(),
-                    description:
-                        "All requested SWE tickets are accepted within the execution limits.".into(),
+                    description: "All requested checkpoints have been delivered and verified."
+                        .into(),
                 }],
                 provenance_required: true,
                 capture_before_cleanup: true,
@@ -172,17 +208,19 @@ impl Scenario for SweService {
             filesystem_root: None,
             execution: ExecutionPolicy {
                 max_turns: case.generations(),
-                max_output_tokens: Some(32_768),
-                max_total_tokens: Some(case.tokens()),
-                stuck_timeout_seconds: 600,
+                max_output_tokens: (!case.lifecycle()).then_some(32_768),
+                max_total_tokens: case.tokens(),
+                stuck_timeout_seconds: (!case.lifecycle()).then_some(600),
                 max_validation_retries: None,
             },
-            denied_functions: &["e2e::*", "github::*", "configuration::*", "compose::*", "router::*"],
-            criteria: vec![CriterionSpec::scored(
-                "swe_delivery", 100,
-                "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
-                EvaluationDimension::Deliverable,
-            )],
+            denied_functions: &[
+                "e2e::*",
+                "github::*",
+                "configuration::*",
+                "compose::*",
+                "router::*",
+            ],
+            criteria: criteria(case),
         }
     }
 
@@ -317,4 +355,43 @@ pub(crate) fn attach_report(
     report.evidence.push(reference);
     report.deliverables.extend(deliverables);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluator_asset_changes_change_case_inputs_identity() -> Result<()> {
+        let assets = json!({
+            "controller": include_str!("controller.py"),
+            "probes": include_str!("probes.py"),
+            "isolation": include_str!("isolation.py"),
+        });
+        let digest = crate::artifact::sha256_value(&assets)?;
+        for scenario in [
+            ScenarioId::SoftwareCompanyLifecycle,
+            ScenarioId::SweConfigIsolation,
+        ] {
+            let case = SweService(scenario).case(0)?;
+            assert_eq!(
+                case.inputs["evaluator_contract_sha256"].as_str(),
+                Some(digest.as_str())
+            );
+            for name in ["controller", "probes", "isolation"] {
+                let mut changed_assets = assets.clone();
+                let content = changed_assets[name].as_str().unwrap().to_owned();
+                changed_assets[name] = json!(format!("{content}\n# evaluator changed"));
+                let mut changed_inputs = case.inputs.clone();
+                changed_inputs["evaluator_contract_sha256"] =
+                    json!(crate::artifact::sha256_value(&changed_assets)?);
+                assert_ne!(
+                    case.inputs_sha256,
+                    crate::artifact::sha256_value(&changed_inputs)?,
+                    "{scenario:?}: {name} must affect comparability"
+                );
+            }
+        }
+        Ok(())
+    }
 }

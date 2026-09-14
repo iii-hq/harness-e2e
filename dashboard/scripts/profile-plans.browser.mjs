@@ -218,7 +218,8 @@ try {
   await page.getByRole('button', { name: 'Save plan', exact: true }).click()
   await page.locator('[data-plan-lifecycle]').waitFor()
   assert.equal(plans.length, 2)
-  assert.equal(plans[1].scenario_ids.length, 5)
+  assert.equal(plans[1].scenario_ids.length, 6)
+  assert.ok(plans[1].scenario_ids.includes('subagent_explicit_configuration'))
   assert.equal(plans[1].baseline_execution_id, null)
   // Template and manual plans use the same table, detail and lifecycle.
   await page.goto(`${server.url}#/ext/harness-e2e/plans`)
@@ -242,8 +243,8 @@ try {
   await page.getByRole('button', { name: /^cancel execution$/i }).waitFor()
   assert.equal(plans.length, 3)
   assert.equal(active.role, 'baseline')
-  assert.equal(active.slots.length, 5)
-  assert.equal(await page.locator('progress').getAttribute('max'), '5')
+  assert.equal(active.slots.length, 6)
+  assert.equal(await page.locator('progress').getAttribute('max'), '6')
   await page.goto(`${server.url}#/ext/harness-e2e/plans/new/profile/smoke`)
   await page
     .getByRole('button', { name: 'Execution model', exact: true })

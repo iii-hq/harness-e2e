@@ -378,6 +378,7 @@
         "timer_wake",
         "receiving_operation",
         "validation_loop",
+        "subagent_explicit_configuration",
         "subagent_validation",
         "subagent_validation_failure",
         "validation_self_repair",
@@ -412,7 +413,7 @@
         "swe_tenant_isolation",
         "swe_replay_performance",
         "swe_release_handoff",
-        "swe_service_journey"
+        "software_company_lifecycle"
       ]
     },
     "StackIdentity": {

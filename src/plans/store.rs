@@ -2445,9 +2445,9 @@ mod tests {
     #[tokio::test]
     async fn native_coordination_covers_all_slots_including_capability_and_evolution() {
         for (profile, expected_slots, expected_submissions) in [
-            ("smoke", 5, 5),
+            ("smoke", 6, 6),
             ("regression", 9, 9),
-            ("capability", 55, 55),
+            ("capability", 56, 56),
             ("evolution", 69, 66),
             ("endurance", 5, 5),
             ("software-engineering", 13, 12),

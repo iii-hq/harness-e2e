@@ -1243,10 +1243,6 @@
     },
     "ExecutionPolicy": {
       "type": "object",
-      "required": [
-        "max_turns",
-        "stuck_timeout_seconds"
-      ],
       "properties": {
         "max_output_tokens": {
           "type": [
@@ -1266,7 +1262,10 @@
           "minimum": 0.0
         },
         "max_turns": {
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
           "minimum": 0.0
         },
@@ -1281,7 +1280,10 @@
         },
         "stuck_timeout_seconds": {
           "description": "Stop only after this many seconds without observable useful progress. Large scenarios have no fixed wall-clock deadline.",
-          "type": "integer",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint64",
           "minimum": 0.0
         }
@@ -2384,6 +2386,7 @@
         "timer_wake",
         "receiving_operation",
         "validation_loop",
+        "subagent_explicit_configuration",
         "subagent_validation",
         "subagent_validation_failure",
         "validation_self_repair",
@@ -2418,7 +2421,7 @@
         "swe_tenant_isolation",
         "swe_replay_performance",
         "swe_release_handoff",
-        "swe_service_journey"
+        "software_company_lifecycle"
       ]
     },
     "ScenarioMeasurement": {

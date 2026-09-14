@@ -174,10 +174,10 @@ impl Scenario for LinklyTutorial {
             prompt: PROMPTS[0].trim_end().to_string(),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 256,
+                max_turns: Some(256),
                 max_output_tokens: Some(32_768),
                 max_total_tokens: Some(6_000_000),
-                stuck_timeout_seconds: 900,
+                stuck_timeout_seconds: Some(900),
                 max_validation_retries: None,
             },
             denied_functions: &[

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use serde_json::json;
 
-use super::{runtime, Case};
+use super::{criteria, runtime, Case, LIFECYCLE_CRITERIA};
 use crate::context::E2eContext;
 use crate::scenarios::ScenarioId;
 use crate::workflow::{
@@ -27,7 +27,7 @@ pub fn definition(scenario: ScenarioId) -> WorkflowDefinition {
             max_nodes: 3,
             step_timeout_seconds: case.deadline_seconds(),
             workflow_timeout_seconds: case.deadline_seconds(),
-            max_total_tokens: Some(case.tokens()),
+            max_total_tokens: case.tokens(),
             max_cost_usd: None,
             technical_retries: 0,
         },
@@ -36,13 +36,16 @@ pub fn definition(scenario: ScenarioId) -> WorkflowDefinition {
             node("work", SUBJECT, &["prepare"], DependencyPolicy::Succeeded),
             node("capture", CAPTURE, &["work"], DependencyPolicy::Terminal),
         ],
-        criteria: vec![WorkflowCriterionDeclaration {
-            id: "swe_delivery".into(),
-            weight: 100,
-            producer_node_id: "capture".into(),
-            output_port: "delivery".into(),
-            advisory: false,
-        }],
+        criteria: criteria(case)
+            .iter()
+            .map(|criterion| WorkflowCriterionDeclaration {
+                id: criterion.id.into(),
+                weight: criterion.weight,
+                producer_node_id: "capture".into(),
+                output_port: criterion.id.into(),
+                advisory: false,
+            })
+            .collect(),
     }
 }
 
@@ -71,19 +74,21 @@ pub fn descriptors() -> Vec<StepTypeDescriptor> {
             id: id.into(),
             description: match id {
                 PREPARE => "Export and verify the selected SWE entry snapshot and execution boundary.",
-                SUBJECT => "Run one continuing Harness session with optional delegation and aggregate resource limits.",
+                SUBJECT => "Run a continuing Harness session with optional delegation; lifecycle has no aggregate resource limits.",
                 _ => "Capture committed SWE deliveries and the last unfinished attempt independently.",
             }.into(),
             config_schema: json!({"type":"object","additionalProperties":false}),
             inputs: BTreeMap::new(),
-            outputs: BTreeMap::from([(
-                if capture { "delivery" } else { "completed" }.into(),
-                StepPortDescriptor {
-                    kind: if capture { PortValueKind::Assessment } else { PortValueKind::Boolean },
-                    optional: false,
-                    control_source: (!capture).then_some(ControlSource::Deterministic),
-                },
-            )]),
+            outputs: if capture {
+                std::iter::once("swe_delivery").chain(LIFECYCLE_CRITERIA.iter().map(|(id, _, _)| *id))
+                    .map(|id| (id.into(), StepPortDescriptor {
+                        kind: PortValueKind::Assessment, optional: true, control_source: None,
+                    })).collect()
+            } else {
+                BTreeMap::from([("completed".into(), StepPortDescriptor {
+                    kind: PortValueKind::Boolean, optional: false, control_source: Some(ControlSource::Deterministic),
+                })])
+            },
             capabilities: vec!["swe::isolated-python-workspace".into()],
             required_functions: if id == SUBJECT {
                 ["harness::send", "harness::metrics", "harness::status", "harness::session-tree", "harness::stop", "harness::teardown"]

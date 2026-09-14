@@ -62,14 +62,18 @@ export function withInlineCode(text: string) {
 
 function formatBudget(execution: TestSpec['execution']): string {
   return [
-    `${execution.max_turns} turns`,
+    execution.max_turns == null
+      ? 'no turn limit'
+      : `${execution.max_turns} turns`,
     execution.max_output_tokens
       ? `${execution.max_output_tokens.toLocaleString('en-US')} output`
       : null,
     execution.max_total_tokens
       ? `${execution.max_total_tokens.toLocaleString('en-US')} total`
       : null,
-    `${execution.stuck_timeout_seconds}s stuck`,
+    execution.stuck_timeout_seconds == null
+      ? 'no inactivity cutoff'
+      : `${execution.stuck_timeout_seconds}s stuck`,
   ]
     .filter(Boolean)
     .join(' · ')

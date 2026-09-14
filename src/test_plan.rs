@@ -265,7 +265,8 @@ impl MasterPlan {
         let definition_sha256 = self.digest()?;
         let mut cases = Vec::new();
         let mut ordinary_groups = Vec::new();
-        let mut subject_turns = 0_u64;
+        let mut subject_turn_limit = Some(0_u64);
+        let mut unbounded_turn_cases = Vec::new();
         let mut subject_token_limit = Some(0_u64);
         let mut unbounded_token_cases = Vec::new();
         for id in &scenario_ids {
@@ -284,7 +285,17 @@ impl MasterPlan {
             crate::control::validate_run_request(&admission)?;
             let attempts = u64::from(profile.repetitions) * (1 + u64::from(retries));
             let envelope = &case.resource_envelope;
-            subject_turns += u64::from(envelope.execution.max_turns) * attempts;
+            let turns = envelope
+                .execution
+                .max_turns
+                .map(u64::from)
+                .and_then(|turns| turns.checked_mul(attempts));
+            if turns.is_none() {
+                unbounded_turn_cases.push(id.clone());
+            }
+            subject_turn_limit = subject_turn_limit
+                .zip(turns)
+                .and_then(|(sum, turns)| sum.checked_add(turns));
             // A session ceiling cannot stand in for an unbounded workflow
             // containing several sessions. Keep that whole-case limit unknown.
             let tokens = match &envelope.workflow {
@@ -366,8 +377,9 @@ impl MasterPlan {
             campaigns,
             budget: json!({"scenario_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions), "fault_runs": fault_runs,
                 "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions) + fault_runs,
-                "session_turn_limit_sum": subject_turns, "subject_token_limit": subject_token_limit,
-                "unbounded_token_cases": unbounded_token_cases, "fault_budget_separate": fault_runs > 0,
+                "session_turn_limit_sum": subject_turn_limit, "unbounded_turn_cases": unbounded_turn_cases,
+                "subject_token_limit": subject_token_limit, "unbounded_token_cases": unbounded_token_cases,
+                "fault_budget_separate": fault_runs > 0,
                 "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
             protected_supervisor_required: !profile.fault_groups.is_empty(),
@@ -486,9 +498,9 @@ mod tests {
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
         for (id, cases, runs) in [
-            ("smoke", 5, 5),
+            ("smoke", 6, 6),
             ("regression", 9, 9),
-            ("capability", 55, 55),
+            ("capability", 56, 56),
             ("evolution", 23, 69),
             ("resilience", 4, 13),
             ("endurance", 5, 5),
@@ -525,6 +537,14 @@ mod tests {
                 assert_eq!(selected.len(), cases);
             }
         }
+    }
+
+    #[test]
+    fn smoke_includes_explicit_subagent_configuration() {
+        let snapshot = embedded().unwrap().materialize("smoke").unwrap();
+        assert!(snapshot
+            .scenario_ids
+            .contains(&"subagent_explicit_configuration".to_string()));
     }
 
     #[test]

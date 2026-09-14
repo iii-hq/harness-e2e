@@ -1865,7 +1865,7 @@ mod tests {
         assert!(spec.criteria[0].description.contains("kernel oracle"));
 
         // The limits the run answers to are part of the contract, not trivia.
-        assert_eq!(spec.execution.max_turns, 48);
+        assert_eq!(spec.execution.max_turns, Some(48));
         assert_eq!(
             spec.denied_functions,
             ["http::*", "browser::*", "github::*"]

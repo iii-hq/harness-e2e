@@ -99,6 +99,28 @@ class FixtureContract(unittest.TestCase):
                 self.assertTrue(any(not check['passed'] and check['id'].startswith(f'ticket{ticket}')
                                     for check in result['checks']), result)
 
+    def test_replay_type_error_rejection_is_valid_for_python_http_and_cli(self):
+        with tempfile.TemporaryDirectory() as td:
+            workspace = Path(td) / 'subject'
+            shutil.copytree(self.fixture / 'snapshots/08', workspace)
+            replay = workspace / 'src/profile_service/replay.py'
+            source = replay.read_text()
+            self.assertEqual(source.count('raise ValueError('), 2)
+            replay.write_text(source.replace('raise ValueError(', 'raise TypeError('))
+            result = self.probe(workspace, 3)
+            self.assertTrue(result['passed'], result)
+            events = Path(td) / 'events.json'
+            events.write_text(json.dumps([{'event_id': 'invalid', 'tenant': 'alpha',
+                                          'profile_id': 'p', 'delta': 1, 'name': 'Ada'}]))
+            env = {**os.environ, 'PYTHONPATH': str(workspace / 'src'), 'PYTHONDONTWRITEBYTECODE': '1'}
+            for option, value in (('--batch-size', '0'), ('--start-cursor', '-1')):
+                with self.subTest(option=option):
+                    db = Path(td) / (option[2:] + '.sqlite')
+                    process = subprocess.run([sys.executable, '-m', 'profile_service', 'replay',
+                                              '--db', str(db), '--events', str(events), option, value],
+                                             cwd=workspace, env=env, capture_output=True, text=True, timeout=15)
+                    self.assertNotEqual(process.returncode, 0)
+
     def test_cache_hit_bypass_is_rejected(self):
         with tempfile.TemporaryDirectory() as td:
             workspace = Path(td) / 'subject'

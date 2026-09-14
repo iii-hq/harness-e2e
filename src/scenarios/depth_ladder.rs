@@ -143,10 +143,10 @@ impl Scenario for DepthLadder {
             prompt: prompt(&names, run_id, RUNG.depth),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 12 + 4 * u32::from(RUNG.depth),
+                max_turns: Some(12 + 4 * u32::from(RUNG.depth)),
                 max_output_tokens: Some(8_192),
                 max_total_tokens: Some(300_000 + 150_000 * u64::from(RUNG.depth)),
-                stuck_timeout_seconds: 420,
+                stuck_timeout_seconds: Some(420),
                 max_validation_retries: None,
             },
             denied_functions: &[],

@@ -1,9 +1,11 @@
-"""Behavior tests for the trusted checkpoint protocol, using real Git repositories."""
+"""Local checkpoint protocol with real Git and a test-only GitHub adapter."""
 import concurrent.futures
+import hashlib
 import json
 import os
 import signal
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -19,6 +21,12 @@ class ControllerTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+        self.controller = self.root / "controller.py"
+        shutil.copy2(CONTROLLER, self.controller)
+        shutil.copy2(CONTROLLER.with_name("lifecycle.py"), self.root / "lifecycle.py")
+        (self.root / "github_ops.py").write_text(
+            "def refresh(state, save_callback): return {}\n"
+            "def checks(state, ticket, head): return []\n")
         self.fixture = self.root / "fixture"
         for stage in range(9):
             snap = self.fixture / "swe-service/snapshots" / f"{stage:02}"
@@ -35,7 +43,7 @@ class ControllerTest(unittest.TestCase):
         (self.fixture / "swe-service/curriculum.json").write_text(json.dumps({"tickets": tickets}))
         self.probes = self.root / "probes.py"
         self.probes.write_text('''import argparse,json,pathlib,time
-p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--through',type=int);p.add_argument('--canary',action='store_true');a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--workspace');p.add_argument('--through',type=int);p.add_argument('--canary',action='store_true');p.add_argument('--lifecycle',action='store_true');p.add_argument('--previous-workspace');a=p.parse_args()
 w=pathlib.Path(a.workspace)
 control=pathlib.Path(__file__).parent
 with (control/'probe-log').open('a') as f:f.write(str(w)+'\\n')
@@ -58,13 +66,13 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.state = self.root / "trusted/state.json"
 
     def invoke(self, *args, ok=True):
-        result = subprocess.run([sys.executable, "-I", str(CONTROLLER), *map(str, args)],
+        result = subprocess.run([sys.executable, "-I", str(self.controller), *map(str, args)],
                                 text=True, capture_output=True)
         if ok:
             self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout)
 
-    def prepare(self, mode="journey", ticket=1):
+    def prepare(self, mode="lifecycle", ticket=1):
         return self.invoke("prepare", "--fixture-root", self.fixture, "--workspace", self.workspace,
                            "--state-file", self.state, "--probes", self.probes, "--mode", mode,
                            "--isolation", self.isolation, "--ticket", ticket,
@@ -74,8 +82,22 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         return subprocess.check_output(["git", "-C", str(self.workspace), *args], text=True).strip()
 
     def commit(self, stage=None, name="candidate"):
-        if stage is not None:
+        state = json.loads(self.state.read_text())
+        if stage is not None and not (state["mode"] == "lifecycle" and state["current_ticket"] in (1, 2)):
             (self.workspace / "src/stage").write_text(str(stage))
+        if state["mode"] == "lifecycle" and state["current_ticket"] in (1, 2):
+            if state["current_ticket"] == 1:
+                document = {"goal": "Reliable customer profiles", "stakeholders": ["support"],
+                            "acceptance": [{"id": key, "behavior": "Observable contract"}
+                                           for key in ("config", "cache", "replay")]}
+                filename = "request"
+            else:
+                document = {"work_items": [{"id": "service", "owner": "engineer",
+                    "requirements": ["config", "cache", "replay"], "source_paths": ["src/stage"],
+                    "test_paths": ["tests/agent/test_service.py"], "depends_on": []}],
+                    "interfaces": ["CLI"], "risks": ["Preserve caller settings"]}
+                filename = "plan"
+            (self.workspace / f"docs/{filename}.json").write_text(json.dumps(document))
         self.git("add", "-A")
         self.git("-c", "user.name=Subject", "-c", "user.email=subject@example.invalid", "commit", "--allow-empty", "-qm", name)
         return self.git("rev-parse", "HEAD")
@@ -95,7 +117,17 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertNotIn("Legacy canary", json.dumps(result))
         self.assertFalse((self.workspace / "snapshots").exists())
 
-    def test_journey_progresses_in_same_repository_and_capture_keeps_unaccepted_edits(self):
+    def test_repeated_prepare_has_identical_initial_commit_with_distinct_ownership(self):
+        first = self.prepare()
+        first_state = json.loads(self.state.read_text())
+        self.assertEqual(self.git("show", "-s", "--format=%at %ct", "HEAD"), "946684800 946684800")
+        self.workspace = self.root / "second-subject"
+        self.state = self.root / "trusted/second-state.json"
+        second = self.prepare()
+        self.assertEqual(first["initial_head"], second["initial_head"])
+        self.assertNotEqual(first_state["ownership_token"], json.loads(self.state.read_text())["ownership_token"])
+
+    def test_lifecycle_progresses_in_same_repository_and_capture_keeps_unaccepted_edits(self):
         initial = self.prepare()["initial_head"]
         first = self.commit(1)
         a = self.checkpoint(1, first)
@@ -103,7 +135,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(a["current_ticket"], 2)
         self.assertEqual(a["accepted_tickets"], [1])
         self.assertEqual(a["next_ticket"]["number"], 2)
-        (self.workspace / "docs/notes.md").write_text("Retain journey work\n")
+        (self.workspace / "docs/notes.md").write_text("Retain lifecycle work\n")
         second = self.commit(2)
         self.assertEqual(self.checkpoint(2, second)["accepted_tickets"], [1, 2])
         (self.workspace / "src/stage").write_text("unfinished")
@@ -112,7 +144,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(report["schema"], "swe-service-report")
         self.assertEqual(report["initial_head"], initial)
         self.assertEqual(report["accepted_head"], second)
-        self.assertIn("Retain journey work", report["accepted_patch"])
+        self.assertIn("Retain lifecycle work", report["accepted_patch"])
         self.assertNotIn("unfinished", report["accepted_patch"])
         self.assertIn("unfinished", report["unaccepted_patch"])
         self.assertIn("pending test", report["unaccepted_patch"])
@@ -126,7 +158,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(len(report["checkpoints"]), 1)
 
     def test_three_distinct_failed_candidates_end_task_but_duplicates_do_not(self):
-        self.prepare()
+        self.prepare("isolated")
         first = self.commit(0)
         rejection = self.checkpoint(1, first)
         self.assertEqual(rejection["status"], "rejected")
@@ -136,24 +168,29 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(result["status"], "capability_failure")
         self.assertEqual(self.checkpoint(1, self.commit(1, "too late"))["status"], "capability_failure")
 
-    def test_each_journey_ticket_has_its_own_three_rejection_budget(self):
+    def test_lifecycle_rejections_are_evidence_and_never_close_the_run(self):
+        self.probes.write_text(self.probes.read_text().replace("'id':'contract'", "'id':'lifecycle.contract'"))
         self.prepare()
         for ticket in (1, 2):
-            rejection = self.checkpoint(ticket, self.commit(ticket - 1, f"ticket {ticket} rejected"))
-            self.assertEqual(rejection["status"], "rejected")
-            accepted = self.checkpoint(ticket, self.commit(ticket, f"ticket {ticket} accepted"))
+            accepted = self.checkpoint(ticket, self.commit(0, f"stage {ticket}"))
             self.assertEqual(accepted["status"], "accepted")
         accepted_head = accepted["accepted_head"]
-        for attempt in (1, 2, 3):
-            head = self.commit(2, f"ticket 3 rejection {attempt}")
+        for attempt in range(7):
+            head = self.commit(2, f"build rejection {attempt}")
             result = self.checkpoint(3, head)
-            self.assertEqual(result["status"], "capability_failure" if attempt == 3 else "rejected")
+            self.assertEqual(result["status"], "rejected")
+            self.assertIn("Behavioral checks failed: lifecycle.contract", result["feedback"])
+            self.assertIn("lifecycle.contract: failed", result["feedback"])
+            self.assertIn("authored_regressions: failed", result["feedback"])
+            self.assertNotIn("contract failed", result["feedback"], "private probe details stay in evidence")
             self.assertEqual(result["accepted_tickets"], [1, 2])
             self.assertEqual(result["accepted_head"], accepted_head)
             self.assertEqual(self.checkpoint(3, head), result)
+        (self.workspace / "tests/agent/test_service.py").write_text("assert True\n")
+        self.assertEqual(self.checkpoint(3, self.commit(3, "repaired"))["status"], "accepted")
         report = self.invoke("capture", "--state-file", self.state)
-        self.assertEqual([(item["ticket"], item["attempt"]) for item in report["checkpoints"]],
-                         [(1, 1), (1, 2), (2, 1), (2, 2), (3, 1), (3, 2), (3, 3)])
+        self.assertEqual(report["lifecycle"]["rejected_checkpoints"], 7)
+        self.assertEqual(report["scenario_id"], "software_company_lifecycle")
 
     def test_protected_test_and_root_control_mutations_are_rejected(self):
         for path in ("tests/reference/test_public.py", "README.md", "new-control.json"):
@@ -175,7 +212,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.git("branch", "other")
         self.assertEqual(self.checkpoint(1, head)["status"], "rejected")
         self.git("branch", "-D", "other")
-        self.assertEqual(self.checkpoint(1, "f" * 40)["status"], "capability_failure")
+        self.assertEqual(self.checkpoint(1, "f" * 40)["status"], "rejected")
 
     def test_history_rewrite_cannot_replace_accepted_prefix(self):
         initial = self.prepare()["initial_head"]
@@ -210,7 +247,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
             while not (self.root / "started").exists() and time.monotonic() < deadline:
                 time.sleep(0.02)
             self.assertTrue((self.root / "started").exists())
-            (self.workspace / "src/stage").write_text("0")
+            (self.workspace / "src/stage").write_text("changed during probe")
             result = pending.result()
         self.assertEqual(result["status"], "rejected")
         paths = (self.root / "probe-log").read_text().splitlines()
@@ -241,6 +278,34 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertIn("unfinished", report["unaccepted_patch"])
         self.assertTrue(self.invoke("cleanup", "--state-file", self.state)["cleaned"])
 
+    def test_remote_cleanup_preserves_hashed_evidence_and_retries_after_local_cleanup(self):
+        self.prepare()
+        state = json.loads(self.state.read_text())
+        state["github"] = {"issue": {"state": "open"}, "journal": [{"operation": "issue"}]}
+        self.state.write_text(json.dumps(state))
+        report_path = str(self.state) + ".report.json"
+        (self.root / "github_ops.py").write_text(
+            "import json\nfrom pathlib import Path\n"
+            "def cleanup(state, save_callback):\n"
+            f" report = json.loads(Path({report_path!r}).read_text())\n"
+            " assert report['github']['issue']['state'] == 'open'\n"
+            " github = state['github']\n"
+            " github['attempts'] = github.get('attempts', 0) + 1\n"
+            " github['issue']['state'] = 'closed'\n"
+            " save_callback(state)\n"
+            " return {'status': 'partial' if github['attempts'] == 1 else 'completed'}\n")
+        first = self.invoke("cleanup", "--state-file", self.state)
+        self.assertTrue(first["cleaned"])
+        self.assertEqual(first["github_cleanup"]["status"], "partial")
+        self.assertFalse(self.workspace.exists())
+        original = json.loads(Path(report_path).read_text())
+        second = self.invoke("cleanup", "--state-file", self.state)
+        self.assertEqual(second["github_cleanup"]["status"], "completed")
+        final = json.loads(Path(report_path).read_text())
+        self.assertEqual(final["github"], original["github"])
+        self.assertEqual(final["github_evidence_sha256"], hashlib.sha256(
+            json.dumps(final["github"], sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+
     def test_cleanup_refuses_replacement_directory(self):
         self.prepare()
         self.workspace.rename(self.root / "original-subject")
@@ -255,7 +320,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.workspace.mkdir()
         (self.workspace / "valuable").write_text("keep")
         result = self.invoke("prepare", "--fixture-root", self.fixture, "--workspace", self.workspace,
-                             "--state-file", self.state, "--probes", self.probes, "--mode", "journey",
+                             "--state-file", self.state, "--probes", self.probes, "--mode", "lifecycle",
                              "--isolation", self.isolation, "--ticket", 1, "--fixture-revision", "a" * 40, ok=False)
         self.assertEqual(result["status"], "infrastructure_error")
         self.assertEqual((self.workspace / "valuable").read_text(), "keep")
@@ -320,7 +385,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         (self.workspace / "src/stage").write_text("work after git damage\n")
         report = self.invoke("capture", "--state-file", self.state, "--terminal-status", "cancelled")
         self.assertIn("work after git damage", report["unaccepted_patch"])
-        self.assertIn("+1", report["accepted_patch"])
+        self.assertIn("docs/request.json", report["accepted_patch"])
 
     def test_capture_retains_empty_files_symlink_targets_and_mode_changes(self):
         self.prepare()
@@ -380,7 +445,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         for target, value in (("--state-file", self.workspace / "private/state.json"),
                               ("--probes", self.workspace / "private/probes.py")):
             args = ["prepare", "--fixture-root", self.fixture, "--workspace", self.workspace,
-                    "--state-file", self.state, "--probes", self.probes, "--mode", "journey",
+                    "--state-file", self.state, "--probes", self.probes, "--mode", "lifecycle",
                     "--isolation", self.isolation, "--ticket", 1, "--fixture-revision", "a" * 40]
             args[args.index(target) + 1] = value
             result = self.invoke(*args, ok=False)
@@ -406,7 +471,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
 
     def test_command_deadline_kills_slow_subprocess_and_bounds_cleanup(self):
         import importlib.util
-        spec = importlib.util.spec_from_file_location("swe_controller_under_test", CONTROLLER)
+        spec = importlib.util.spec_from_file_location("swe_controller_under_test", self.controller)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         module.OPERATION_DEADLINE = time.monotonic() + 0.15
@@ -484,7 +549,7 @@ while True:time.sleep(0.1)
             with self.subTest(signal=signum):
                 for name in ("isolator-stopped", "isolator-ready", "isolator-pid"):
                     (self.root / name).unlink(missing_ok=True)
-                process = subprocess.Popen([sys.executable, "-I", str(CONTROLLER), "checkpoint",
+                process = subprocess.Popen([sys.executable, "-I", str(self.controller), "checkpoint",
                                             "--state-file", str(self.state), "--ticket", "1", "--head", head],
                                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                 try:

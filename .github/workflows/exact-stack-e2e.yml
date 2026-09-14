@@ -317,6 +317,9 @@ jobs:
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          # This protected-environment secret is a required deployment gap until configured.
+          # It reaches only the runner's private env-file for the lifecycle group.
+          GH_TOKEN: ${{ matrix.group_id == 'case-software-company-lifecycle' && secrets.E2E_LIFECYCLE_GITHUB_TOKEN || '' }}
           HARNESS_E2E_STACK_LOCK: ${{ env.stack_lock }}
         run: scripts/run_exact_stack_group.sh
 
@@ -328,19 +331,6 @@ jobs:
           HARNESS_E2E_STACK_LOCK: ${{ env.stack_lock }}
           HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}
         run: scripts/run_exact_stack_fault.sh
-
-      - name: Publish SWE journey handoff
-        if: always() && matrix.execution_kind != 'fault_injection'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.E2E_FIXTURE_GITHUB_TOKEN }}
-          SWE_EXECUTION_ID: ${{ inputs.execution_id }}-${{ matrix.campaign_id }}-${{ matrix.group_id }}
-          SWE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          python3 scripts/publish_swe_campaign.py \
-            --reports-dir target/harness-e2e-exact-stack/deliverables \
-            --execution-id "$SWE_EXECUTION_ID" --run-url "$SWE_RUN_URL" \
-            --output target/harness-e2e-exact-stack/swe-publication.json
 
       # Whatever the group did, its runs reach the ledger: from results.json
       # when the group finished, from the journal checkpoints when it did not,

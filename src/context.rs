@@ -255,7 +255,7 @@ impl E2eContext {
         &self,
         scenario_id: &str,
         session_id: &str,
-        stuck_timeout: Duration,
+        stuck_timeout: Option<Duration>,
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
     ) -> Result<SessionMetricsResponse> {
@@ -283,7 +283,7 @@ impl E2eContext {
         scenario_id: &str,
         session_id: &str,
         turn_id: &str,
-        stuck_timeout: Duration,
+        stuck_timeout: Option<Duration>,
         log_heartbeat: bool,
         cancellation: Option<&watch::Receiver<bool>>,
     ) -> Result<SessionMetricsResponse> {

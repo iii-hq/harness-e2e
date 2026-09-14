@@ -3129,10 +3129,10 @@ mod tests {
         E2eScenarioReport::aggregate(
             "case",
             ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
-                stuck_timeout_seconds: 1,
+                stuck_timeout_seconds: Some(1),
                 max_validation_retries: None,
             },
             runs,
@@ -3242,10 +3242,10 @@ mod tests {
         let report = E2eScenarioReport::aggregate_case_with_planned(
             case,
             ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
-                stuck_timeout_seconds: 1,
+                stuck_timeout_seconds: Some(1),
                 max_validation_retries: None,
             },
             3,
@@ -4089,10 +4089,10 @@ mod tests {
         let mut report = report(vec![E2eScenarioReport::aggregate_case(
             case,
             ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
-                stuck_timeout_seconds: 1,
+                stuck_timeout_seconds: Some(1),
                 max_validation_retries: None,
             },
             vec![attempt],
@@ -4204,10 +4204,10 @@ mod tests {
         let mut report = report(vec![E2eScenarioReport::aggregate_case(
             case,
             ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
-                stuck_timeout_seconds: 1,
+                stuck_timeout_seconds: Some(1),
                 max_validation_retries: None,
             },
             vec![attempt],

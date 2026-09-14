@@ -275,7 +275,7 @@ pub(crate) trait TreeObserver: Send + Sync {
 }
 
 pub(crate) struct WaitOptions<'a> {
-    pub stuck_timeout: Duration,
+    pub stuck_timeout: Option<Duration>,
     pub sample_interval: Duration,
     pub log_heartbeat: bool,
     pub cancellation: Option<&'a watch::Receiver<bool>>,
@@ -303,16 +303,17 @@ pub(crate) async fn wait_until_complete<O: TreeObserver>(
 
     loop {
         ensure_not_cancelled(cancellation.as_ref())?;
-        let remaining = stuck_timeout.saturating_sub(last_progress.elapsed());
-        if remaining.is_zero() {
+        let remaining =
+            stuck_timeout.map(|timeout| timeout.saturating_sub(last_progress.elapsed()));
+        if remaining.is_some_and(|remaining| remaining.is_zero()) {
             observer.stop_tree(root_session_id).await;
             bail!(
                 "scenario {scenario_id} made no observable progress for {}s while waiting for \
                  the complete session tree {root_session_id}",
-                stuck_timeout.as_secs()
+                stuck_timeout.expect("checked above").as_secs()
             );
         }
-        let wait = remaining.min(sample_interval);
+        let wait = remaining.map_or(sample_interval, |remaining| remaining.min(sample_interval));
         let event = match cancellation.as_mut() {
             Some(receiver) => {
                 tokio::select! {
@@ -538,7 +539,7 @@ mod tests {
             "direct_answer",
             "root",
             WaitOptions {
-                stuck_timeout: stuck,
+                stuck_timeout: Some(stuck),
                 sample_interval: sample,
                 log_heartbeat: false,
                 cancellation,
@@ -684,7 +685,7 @@ mod tests {
             "wake_flow",
             "root",
             WaitOptions {
-                stuck_timeout: Duration::from_secs(2),
+                stuck_timeout: Some(Duration::from_secs(2)),
                 sample_interval: Duration::from_millis(20),
                 log_heartbeat: false,
                 cancellation: None,

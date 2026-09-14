@@ -44,6 +44,19 @@ const spec: TestSpec = {
 }
 
 describe('about test panel', () => {
+  it('displays an unbounded lifecycle without undefined or zero limits', () => {
+    const html = renderToStaticMarkup(
+      <AboutTestPanel
+        spec={{ ...spec, execution: {} }}
+        testId="software_company_lifecycle"
+      />,
+    )
+    expect(html).toContain('no turn limit')
+    expect(html).toContain('no inactivity cutoff')
+    expect(html).not.toContain('undefined turns')
+    expect(html).not.toContain('0 turns')
+  })
+
   it('states the task, the prompt, the scored contract and the limits', () => {
     const html = renderToStaticMarkup(
       <AboutTestPanel spec={spec} testId="chess_engine_build" />,

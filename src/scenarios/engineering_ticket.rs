@@ -574,10 +574,10 @@ impl Scenario for EngineeringTicket {
             // Setup resolves either the launcher override or an isolated workspace.
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 48,
+                max_turns: Some(48),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(600_000),
-                stuck_timeout_seconds: 600,
+                stuck_timeout_seconds: Some(600),
                 max_validation_retries: None,
             },
             denied_functions: &["http::*", "browser::*", "github::*"],
@@ -2312,10 +2312,10 @@ impl Scenario for EngineeringTicketGitHandoff {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 64,
+                max_turns: Some(64),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(600_000),
-                stuck_timeout_seconds: 900,
+                stuck_timeout_seconds: Some(900),
                 max_validation_retries: None,
             },
             denied_functions: &["http::*", "browser::*", "github::*"],
