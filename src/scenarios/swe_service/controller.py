@@ -349,8 +349,10 @@ def prepare(args):
     git(workspace, "config", "user.name", "SWE Developer")
     git(workspace, "config", "user.email", "developer@example.invalid")
     git(workspace, "add", "--force", "-A")
-    git(workspace, "-c", "user.name=SWE Fixture", "-c", "user.email=fixture@example.invalid",
-        "commit", "-qm", "Initial service snapshot")
+    run(["env", "GIT_AUTHOR_DATE=2000-01-01T00:00:00Z", "GIT_COMMITTER_DATE=2000-01-01T00:00:00Z",
+         "git", "-C", str(workspace), "-c", "core.hooksPath=" + os.devnull,
+         "-c", "user.name=SWE Fixture", "-c", "user.email=fixture@example.invalid",
+         "commit", "-qm", "Initial service snapshot"])
     head = git(workspace, "rev-parse", "HEAD").decode().strip()
     (workspace / ".git/swe-controller-owner").write_text(token)
     objects = assets / "repository.git"
@@ -702,7 +704,9 @@ def capture(args, state):
         report["lifecycle"] = {"stages": lifecycle.assessments(state["checkpoints"]),
                                "release_head": state.get("release_head"),
                                "rejected_checkpoints": sum(item["status"] == "rejected" for item in state["checkpoints"])}
-        report["github"] = state.get("github", {"journal": []})
+        github_evidence = json.dumps(state.get("github", {"journal": []}), sort_keys=True, separators=(",", ":"))
+        report["github"] = json.loads(github_evidence)
+        report["github_evidence_sha256"] = digest(github_evidence.encode())
     try:
         report["unaccepted_patch"] = unaccepted_patch(state)
     except (IntegrityError, OSError, RuntimeError) as error:
@@ -716,18 +720,24 @@ def capture(args, state):
 
 
 def cleanup(args, state):
-    if state.get("cleaned"):
-        return {"cleaned": True, "report_file": str(args.state_file) + ".report.json"}
-    workspace = owned_root(state)
-    assets = owned_assets(args, state)
-    stopped = stop_owned_processes(state)
-    capture(args, state)
-    # Evidence is persisted before removing either execution-owned directory.
-    shutil.rmtree(workspace)
-    shutil.rmtree(assets)
-    state["cleaned"] = True
+    stopped = 0
+    if not state.get("cleaned"):
+        workspace = owned_root(state)
+        assets = owned_assets(args, state)
+        stopped = stop_owned_processes(state)
+        capture(args, state)
+    report = state["final_report"]
+    if state["mode"] == "lifecycle" and state.get("github"):
+        report["github_cleanup"] = github_ops.cleanup(state, lambda updated: save(args.state_file, updated))
+        save(str(args.state_file) + ".report.json", report)
+    if not state.get("cleaned"):
+        # Evidence is persisted before removing either execution-owned directory.
+        shutil.rmtree(workspace)
+        shutil.rmtree(assets)
+        state["cleaned"] = True
     save(args.state_file, state)
     return {"cleaned": True, "stopped_processes": stopped,
+            "github_cleanup": report.get("github_cleanup"),
             "report_file": str(args.state_file) + ".report.json"}
 
 

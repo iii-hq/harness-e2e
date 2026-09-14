@@ -64,14 +64,10 @@ impl SystemUnderTestIdentity {
         let stack_mode = nonempty_env("HARNESS_E2E_STACK_MODE").unwrap_or_else(|| "source".into());
         let stack = match stack_mode.as_str() {
             "source" => StackIdentity::Source {
-                workers_repository: identity_value(
-                    "HARNESS_E2E_WORKERS_REPOSITORY",
-                    env!("HARNESS_E2E_BUILD_REPOSITORY"),
-                )?,
-                workers_revision: identity_value(
-                    "HARNESS_E2E_WORKERS_REVISION",
-                    env!("HARNESS_E2E_BUILD_REVISION"),
-                )?,
+                workers_repository: nonempty_env("HARNESS_E2E_WORKERS_REPOSITORY")
+                    .context("source identity requires HARNESS_E2E_WORKERS_REPOSITORY")?,
+                workers_revision: nonempty_env("HARNESS_E2E_WORKERS_REVISION")
+                    .context("source identity requires HARNESS_E2E_WORKERS_REVISION")?,
             },
             "registry" => {
                 let raw = nonempty_env("HARNESS_E2E_STACK_VERSIONS")

@@ -169,6 +169,11 @@ impl Scenario for SweService {
                 "curriculum_version": if selection.lifecycle() { 3 } else { 1 },
                 "lifecycle_contract_sha256": if selection.lifecycle() { Some(crate::artifact::sha256_value(&include_str!("lifecycle.py"))?) } else { None },
                 "github_contract_sha256": if selection.lifecycle() { Some(crate::artifact::sha256_value(&json!({"bridge": include_str!("github_ops.py"), "workflow": include_str!("github-ci.yml")}))?) } else { None },
+                "evaluator_contract_sha256": crate::artifact::sha256_value(&json!({
+                    "controller": include_str!("controller.py"),
+                    "probes": include_str!("probes.py"),
+                    "isolation": include_str!("isolation.py"),
+                }))?,
                 "efficiency_reference": selection.lifecycle().then_some(json!({"elapsed_ms":5_400_000,"generations":320,"tokens":1_500_000})),
             }),
             vec![
@@ -350,4 +355,43 @@ pub(crate) fn attach_report(
     report.evidence.push(reference);
     report.deliverables.extend(deliverables);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn evaluator_asset_changes_change_case_inputs_identity() -> Result<()> {
+        let assets = json!({
+            "controller": include_str!("controller.py"),
+            "probes": include_str!("probes.py"),
+            "isolation": include_str!("isolation.py"),
+        });
+        let digest = crate::artifact::sha256_value(&assets)?;
+        for scenario in [
+            ScenarioId::SoftwareCompanyLifecycle,
+            ScenarioId::SweConfigIsolation,
+        ] {
+            let case = SweService(scenario).case(0)?;
+            assert_eq!(
+                case.inputs["evaluator_contract_sha256"].as_str(),
+                Some(digest.as_str())
+            );
+            for name in ["controller", "probes", "isolation"] {
+                let mut changed_assets = assets.clone();
+                let content = changed_assets[name].as_str().unwrap().to_owned();
+                changed_assets[name] = json!(format!("{content}\n# evaluator changed"));
+                let mut changed_inputs = case.inputs.clone();
+                changed_inputs["evaluator_contract_sha256"] =
+                    json!(crate::artifact::sha256_value(&changed_assets)?);
+                assert_ne!(
+                    case.inputs_sha256,
+                    crate::artifact::sha256_value(&changed_inputs)?,
+                    "{scenario:?}: {name} must affect comparability"
+                );
+            }
+        }
+        Ok(())
+    }
 }

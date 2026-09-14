@@ -38,8 +38,18 @@ request, actor, timestamps, failures, readbacks, resource URLs, candidate/merge 
 Actions run and artifact identifiers, and evidence digests. CI runs the candidate
 inside the same pinned container infrastructure used by the Kanban evaluator,
 without network, credentials or writable source. Its artifact distinguishes the
-candidate checkout SHA from the workflow infrastructure SHA. Remote records remain
-available after local workspace cleanup.
+candidate checkout SHA from the workflow infrastructure SHA. After persisting the
+report and its GitHub evidence digest, cleanup closes owned issues and pending PRs,
+then removes owned prereleases, tags and branches. Closed PRs and Actions history
+retain the remote audit trail. Cleanup has a separate receipt and can be retried;
+an ownership conflict preserves the resource and fails infrastructure validation.
+Titles carry the attempt prefix so retained records remain identifiable.
+
+Repeated attempts start from the same fixture commit, including fixed Git author
+and committer timestamps. Case identity includes the public contract, evaluator,
+GitHub bridge and trusted CI workflow digests. Compare matching case inputs and
+declared model/runtime conditions; changing a contract creates a different cohort.
+Run identifiers and resource namespaces remain unique without changing the input.
 
 Authenticate the trusted local runner with `gh auth login`. Exact-stack CI requires
 the protected `E2E_LIFECYCLE_GITHUB_TOKEN` secret with contents, issues, pull requests

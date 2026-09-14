@@ -1054,17 +1054,18 @@ impl WorkflowCleanupHook for Shared {
                 Ok(())
             };
             // Always try OS cleanup even if capture or Harness teardown failed.
-            let cleanup = tokio::time::timeout_at(
-                self.phase_deadline(295),
-                assets::controller(
-                    &attempt.private_root,
-                    &[
-                        "cleanup".into(),
-                        "--state-file".into(),
-                        attempt.state_file.to_string_lossy().into_owned(),
-                    ],
-                ),
-            )
+            let cleanup = tokio::time::timeout_at(self.phase_deadline(295), async {
+                let args = [
+                    "cleanup".into(),
+                    "--state-file".into(),
+                    attempt.state_file.to_string_lossy().into_owned(),
+                ];
+                if self.case.lifecycle() {
+                    assets::github_controller(&attempt.private_root, &args).await
+                } else {
+                    assets::controller(&attempt.private_root, &args).await
+                }
+            })
             .await
             .context("SWE OS cleanup exhausted shutdown budget")
             .and_then(|result| result);
@@ -1074,7 +1075,15 @@ impl WorkflowCleanupHook for Shared {
                     std::fs::read(format!("{}.report.json", attempt.state_file.display()))?;
                 self.persist_report(serde_json::from_slice(&refreshed)?)?;
             }
-            cleanup?;
+            let cleanup = cleanup?;
+            if let Some(receipt) = cleanup
+                .get("github_cleanup")
+                .filter(|value| !value.is_null())
+            {
+                if receipt["status"] != "completed" {
+                    bail!("SWE GitHub cleanup incomplete; the report contains the cleanup receipt");
+                }
+            }
             capture?;
             teardown?;
             std::fs::remove_dir_all(&attempt.private_root)?;

@@ -65,7 +65,7 @@ Proposta: aproveitar essa mesma verificação e a preparação existente dos cen
 
 ### Identidade deve continuar verificável
 
-No modo `source`, a ausência de `HARNESS_E2E_WORKERS_REPOSITORY`/`REVISION` usa a identidade de build do próprio E2E como default. Isso não comprova qual revisão de Workers/Harness está sendo avaliada. [Fonte](../src/identity.rs).
+No modo `source`, informe `HARNESS_E2E_WORKERS_REPOSITORY` e `HARNESS_E2E_WORKERS_REVISION` com o repositório e o SHA completo do runtime avaliado. A execução exige esses valores; a identidade de build do E2E identifica apenas o runner. No modo `registry`, a identidade usa as versões e o digest do stack lock. [Fonte](../src/identity.rs).
 
 A retirada dessas entradas do setup deve vir acompanhada da identidade efetiva obtida do artefato instalado ou contrato da stack. Manter versão/digest de runtime e fixture na evidência. O launcher exact-stack já deriva parte dessas informações de contratos; reutilizar essa resolução sem inventar identidade quando ela não estiver disponível. [Geração da campanha](../scripts/exact_stack_campaign.py), [resolução da stack](../scripts/resolve_stack_lock.py).
 

@@ -1,5 +1,6 @@
 """Trusted, run-scoped GitHub operations for the company lifecycle fixture."""
 import base64
+from datetime import datetime, timezone
 import hashlib
 import json
 import os
@@ -84,6 +85,12 @@ def _remote_head(ref):
     return head
 
 
+def _delete_ref(ref, expected):
+    with tempfile.TemporaryDirectory(prefix="company-ref-cleanup-") as directory:
+        _call(["git", "init", "--bare", "--quiet", directory])
+        _git(directory, "push", f"--force-with-lease={ref}:{expected}", REMOTE, f":{ref}")
+
+
 def _scope(state):
     namespace = state["ownership_token"]
     if not TOKEN.fullmatch(namespace):
@@ -115,9 +122,13 @@ def initialize(state, save_callback):
         raise BridgeError("Expected authenticated access to the fixed private lifecycle repository")
     if github.get("actor") and github["actor"] != actor["login"]:
         raise BridgeError("Authenticated GitHub actor changed during this run")
+    if github.get("actor_id") and github["actor_id"] != actor.get("id"):
+        raise BridgeError("Authenticated GitHub actor identity changed during this run")
     if github.get("repo_id") and github["repo_id"] != repo["id"]:
         raise BridgeError("Fixed lifecycle repository identity changed during this run")
     github["actor"] = actor["login"]
+    if isinstance(actor.get("id"), int):
+        github["actor_id"] = actor["id"]
     github["repo_id"] = repo["id"]
     github["actor_verified_at"] = time.time()
     save_callback(state)
@@ -140,9 +151,19 @@ def _marker(github):
     return f"<!-- company-lifecycle:{github['namespace']} -->"
 
 
+def _visible_marker(github):
+    return f"[lifecycle {github['namespace'][:8]}]"
+
+
 def _issue(github, request):
-    existing = [item for item in _pages("issues?state=all")
-                if _marker(github) in (item.get("body") or "") and "pull_request" not in item]
+    if (github.get("issue") or {}).get("number"):
+        existing = [_api(f"issues/{github['issue']['number']}")]
+    else:
+        intents = [entry["intent_at"] for entry in github.get("journal", [])
+                   if entry.get("operation") == "issue" and isinstance(entry.get("intent_at"), (int, float))]
+        since = ("&since=" + quote(datetime.fromtimestamp(min(intents), timezone.utc).isoformat())) if intents else ""
+        existing = [item for item in _pages(f"issues?state=all{since}")
+                    if _marker(github) in (item.get("body") or "") and "pull_request" not in item]
     if len(existing) > 1:
         raise BridgeError("Run has multiple matching issues")
     if existing:
@@ -152,7 +173,8 @@ def _issue(github, request):
         body = request.get("body") or "Track the isolated company lifecycle delivery."
         if not isinstance(title, str) or not title.strip() or not isinstance(body, str) or len(body) > 20_000:
             raise BridgeError("Issue title or body is invalid")
-        issue = _api("issues", "POST", {"title": title[:200], "body": f"{body}\n\n{_marker(github)}"})
+        issue = _api("issues", "POST", {"title": f"{_visible_marker(github)} {title}"[:200],
+                                        "body": f"{body}\n\n{_marker(github)}"})
     readback = _api(f"issues/{issue['number']}")
     if _marker(github) not in (readback.get("body") or ""):
         raise BridgeError("Issue readback lost run ownership")
@@ -197,7 +219,11 @@ def _pr(github, request, head, cycle):
     pushed = github["heads"].get(str(cycle), {})
     if pushed.get("head") != head or _remote_head(pushed["ref"]) != head:
         raise BridgeError("PR requires the exact candidate SHA on its run branch")
-    matches = [item for item in _pages("pulls?state=all")
+    recorded = github["prs"].get(str(cycle), {})
+    candidates = ([_api(f"pulls/{recorded['number']}")] if recorded.get("number") else
+                  _pages(f"pulls?state=all&head=iii-hq:{quote(_work_ref(github, cycle), safe='')}"
+                         f"&base={quote(github['base_ref'], safe='')}"))
+    matches = [item for item in candidates
                if item["head"]["ref"] == _work_ref(github, cycle)
                and item["base"]["ref"] == github["base_ref"]
                and item["head"]["repo"]["full_name"] == REPO
@@ -211,11 +237,13 @@ def _pr(github, request, head, cycle):
         body = request.get("body") or "Review the candidate against its lifecycle contract."
         if not isinstance(title, str) or not title.strip() or not isinstance(body, str) or len(body) > 20_000:
             raise BridgeError("Pull request title or body is invalid")
-        pr = _api("pulls", "POST", {"title": title[:200], "body": f"{body}\n\n{_marker(github)}",
+        pr = _api("pulls", "POST", {"title": f"{_visible_marker(github)} {title}"[:200],
+                                    "body": f"{body}\n\n{_marker(github)}",
                                     "head": _work_ref(github, cycle), "base": github["base_ref"]})
     readback = _api(f"pulls/{pr['number']}")
     if (readback["head"]["sha"] != head or readback["base"]["ref"] != github["base_ref"] or
-            readback["head"]["repo"]["full_name"] != REPO):
+            readback["head"]["repo"]["full_name"] != REPO or
+            _marker(github) not in (readback.get("body") or "")):
         raise BridgeError("Pull request readback does not match the candidate")
     result = {"number": readback["number"], "head": head, "base_ref": github["base_ref"],
               "head_repo": REPO,
@@ -225,8 +253,9 @@ def _pr(github, request, head, cycle):
     return result
 
 
-def _run_by_name(name):
-    found = [item for item in _pages(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch", "workflow_runs")
+def _run_by_name(name, since=None):
+    created = ("&created=%3E%3D" + datetime.fromtimestamp(since, timezone.utc).strftime("%Y-%m-%d")) if since else ""
+    found = [item for item in _pages(f"actions/workflows/{WORKFLOW}/runs?event=workflow_dispatch{created}", "workflow_runs")
              if item.get("display_title") == name]
     if len(found) > 1:
         raise BridgeError("CI dispatch has multiple matching runs")
@@ -250,7 +279,15 @@ def _ci(state, github, head, cycle, operation_id, prior, entry, save_callback):
     if pr.get("head") != head or pr.get("state") != "open":
         raise BridgeError("CI requires an open pull request at this SHA")
     name = f"company-ci-{github['namespace']}-{operation_id}"
-    run = _run_by_name(name)
+    known = github["ci"].get(str(cycle), {})
+    known_run = known.get("candidate_head") == head and type(known.get("run_id")) is int
+    if known_run:
+        run = _api(f"actions/runs/{known['run_id']}")
+        if run.get("id") != known["run_id"] or run.get("display_title") != name:
+            raise BridgeError("Stored CI run ID does not match the dispatched operation")
+    else:
+        run = _run_by_name(name, min((item["intent_at"] for item in [*prior, entry]
+                                      if isinstance(item.get("intent_at"), (int, float))), default=None))
     if not run:
         attempts = [item for item in prior if item.get("dispatch_attempted")]
         if not attempts:
@@ -271,7 +308,8 @@ def _ci(state, github, head, cycle, operation_id, prior, entry, save_callback):
                   "reason": "Dispatch is awaiting a matching completed workflow run"}
         github["ci"][str(cycle)] = result
         return result
-    run = _api(f"actions/runs/{run['id']}")
+    if not known_run:
+        run = _api(f"actions/runs/{run['id']}")
     if run.get("head_branch") != "main" or run.get("event") != "workflow_dispatch":
         raise BridgeError("CI run is not the trusted main workflow dispatch")
     trusted_workflow_sha256 = hashlib.sha256(Path(__file__).with_name(WORKFLOW).read_bytes()).hexdigest()
@@ -374,19 +412,20 @@ def _release(github, request, head, cycle):
     if not isinstance(version, str) or not VERSION.fullmatch(version):
         raise BridgeError("Release version is invalid")
     tag = f"run/{github['namespace']}/v{version}"
-    matches = [item for item in _pages("releases") if item["tag_name"] == tag]
-    if len(matches) > 1:
-        raise BridgeError("Release tag is ambiguous")
-    if matches:
-        release = matches[0]
+    recorded = github["releases"].get(str(cycle), {})
+    release = _optional_api(f"releases/tags/{quote(tag, safe='/')}")
+    if release:
+        if (release.get("tag_name") != tag or
+                recorded.get("tag") == tag and recorded.get("id") and release.get("id") != recorded["id"]):
+            raise BridgeError("Release tag is ambiguous")
     else:
         release = _api("releases", "POST", {
             "tag_name": tag, "target_commitish": merged["merge_head"],
-            "name": f"Lifecycle {version} ({github['namespace']})",
-            "body": f"Candidate SHA: {head}\nMerged SHA: {merged['merge_head']}",
+            "name": f"{_visible_marker(github)} Lifecycle {version}",
+            "body": f"Candidate SHA: {head}\nMerged SHA: {merged['merge_head']}\n\n{_marker(github)}",
             "prerelease": True, "draft": False, "generate_release_notes": False})
     release = _api(f"releases/{release['id']}")
-    if release.get("tag_name") != tag:
+    if release.get("tag_name") != tag or _marker(github) not in (release.get("body") or ""):
         raise BridgeError("Release readback lost its run-scoped tag")
     ref = _api(f"git/ref/tags/{quote(tag, safe='/')}")
     if ref.get("object", {}).get("sha") != merged["merge_head"]:
@@ -458,11 +497,11 @@ def _inspect(github):
         receipt.update(head=review.get("commit_id") if review else None,
                        event=("COMMENT" if review.get("state") == "COMMENTED" else review.get("state"))
                        if review else "missing")
-    releases = {item["tag_name"]: item for item in _pages("releases")}
     for cycle, receipt in github["releases"].items():
-        release = releases.get(receipt["tag"])
+        release = _optional_api(f"releases/{receipt['id']}")
         receipt["tag_head"] = _remote_head(f"refs/tags/{receipt['tag']}") if release else None
-        receipt["exists"] = bool(release and release.get("id") == receipt["id"])
+        receipt["exists"] = bool(release and release.get("id") == receipt["id"]
+                                 and release.get("tag_name") == receipt["tag"])
         result.setdefault("releases", {})[cycle] = {"tag": receipt["tag"], "head": receipt["tag_head"],
                                                      "exists": receipt["exists"]}
     github["last_inspection"] = result
@@ -491,6 +530,248 @@ def refresh(state, save_callback):
         entry.update(status="failed", completed_at=time.time(), error=str(error)[:1000])
         save_callback(state)
         raise
+
+
+def cleanup(state, save_callback):
+    """Remove only proved run-owned GitHub resources after the final report is captured."""
+    github = _local(state, save_callback)
+    receipt = github.setdefault("cleanup_receipt", {"started_at": time.time(), "status": "intent",
+                                                  "resources": {}})
+    save_callback(state)
+    journal = github.get("journal", [])
+    if "trusted_refs" not in receipt:
+        def local_commit(value):
+            if not SHA.fullmatch(value or "") or not state.get("objects"):
+                return False
+            try:
+                return _git(state["objects"], "rev-parse", f"{value}^{{commit}}").strip() == value
+            except Exception:
+                return False
+
+        trusted = {"base": {state["initial_head"]} if local_commit(state.get("initial_head")) else set()}
+        for cycle in range(1, 5):
+            trusted[str(cycle)] = set()
+        for entry in journal:
+            if (entry.get("operation") == "push" and entry.get("cycle") in range(1, 5)
+                    and local_commit(entry.get("head"))):
+                trusted[str(entry["cycle"])].add(entry["head"])
+        for entry in journal:
+            merged = entry.get("result") or {}
+            if (entry.get("operation") == "merge" and entry.get("status") == "completed"
+                    and SHA.fullmatch(merged.get("merge_head") or "")):
+                trusted["base"].add(merged["merge_head"])
+        receipt["trusted_refs"] = {key: sorted(values) for key, values in trusted.items()}
+        save_callback(state)
+    try:
+        initialize(state, save_callback)
+    except Exception as error:
+        receipt.update(status="failed", error=str(error)[:1000], failed_at=time.time())
+        save_callback(state)
+        return receipt
+    receipt.update(actor=github["actor"], actor_id=github.get("actor_id"))
+    marker = _marker(github)
+    namespace = github["namespace"]
+
+    def owned(resource, field="user"):
+        user = resource.get(field) or {}
+        if (user.get("login") != github["actor"] or
+                github.get("actor_id") is not None and user.get("id") != github["actor_id"]):
+            raise BridgeError("Remote resource actor does not match this run")
+        if marker not in (resource.get("body") or ""):
+            raise BridgeError("Remote resource lacks the full run ownership marker")
+
+    def attempt(kind, identity, action):
+        key = f"{kind}:{identity}"
+        item = receipt["resources"].setdefault(key, {"kind": kind, "identity": str(identity), "attempts": []})
+        trial = {"status": "intent", "intent_at": time.time(), "actor": github["actor"],
+                 "actor_id": github.get("actor_id")}
+        item["attempts"].append(trial)
+        item["status"] = "intent"
+        save_callback(state)
+        try:
+            trial["result"] = action()
+            trial.update(status="completed", completed_at=time.time())
+            item["status"] = "completed"
+            save_callback(state)
+            return True
+        except Exception as error:
+            trial.update(status="failed", failed_at=time.time(), error=str(error)[:1000])
+            item["status"] = "failed"
+            save_callback(state)
+            return False
+
+    versions = {}
+    for cycle, value in github.get("releases", {}).items():
+        tag = value.get("tag", "")
+        prefix = f"run/{namespace}/v"
+        if tag.startswith(prefix) and VERSION.fullmatch(tag[len(prefix):]):
+            versions[tag] = (cycle, value.get("id"))
+    for entry in journal:
+        if (entry.get("operation") == "release" and entry.get("origin") == "subject" and
+                VERSION.fullmatch(entry.get("version") or "") and
+                str(entry.get("cycle")) in github.get("merges", {})):
+            tag = f"run/{namespace}/v{entry['version']}"
+            versions.setdefault(tag, (str(entry["cycle"]), None))
+    for tag, (cycle, recorded_id) in sorted(versions.items()):
+        merged = github.get("merges", {}).get(cycle, {})
+        expected = merged.get("merge_head")
+        def remove_release():
+            if not SHA.fullmatch(expected or ""):
+                raise BridgeError("Release has no trusted merge SHA")
+            release = _optional_api(f"releases/tags/{quote(tag, safe='/')}")
+            if not release:
+                return {"state": "absent", "tag": tag, "expected_sha": expected}
+            if (release.get("tag_name") != tag or release.get("prerelease") is not True or
+                    recorded_id and release.get("id") != recorded_id):
+                raise BridgeError("Release is not the expected run prerelease")
+            owned(release, "author")
+            ref = _optional_api(f"git/ref/tags/{quote(tag, safe='/')}")
+            if not ref or ref.get("object", {}).get("sha") != expected:
+                raise BridgeError("Release tag does not match its trusted merge SHA")
+            _api(f"releases/{release['id']}", "DELETE")
+            if _optional_api(f"releases/{release['id']}"):
+                raise BridgeError("Release deletion readback still exists")
+            return {"state": "deleted", "id": release["id"], "tag": tag,
+                    "expected_sha": expected, "actor": release["author"].get("login")}
+        release_removed = attempt("release", tag, remove_release)
+
+        def remove_tag():
+            if not release_removed:
+                raise BridgeError("Release deletion failed; its tag is preserved")
+            ref = f"refs/tags/{tag}"
+            actual = _remote_head(ref)
+            if actual is None:
+                return {"state": "absent", "ref": ref, "expected_sha": expected}
+            if actual != expected:
+                raise BridgeError("Run tag moved outside its trusted merge SHA")
+            _delete_ref(ref, actual)
+            if _remote_head(ref) is not None:
+                raise BridgeError("Run tag deletion readback still exists")
+            return {"state": "deleted", "ref": ref, "expected_sha": expected}
+        attempt("tag", tag, remove_tag)
+
+    blocked_branches = set()
+    for cycle in range(1, 5):
+        recorded = github.get("prs", {}).get(str(cycle), {})
+        intents = [entry for entry in journal if entry.get("operation") == "pr" and entry.get("cycle") == cycle]
+        if not recorded and not intents:
+            continue
+        branch = _work_ref(github, cycle)
+        def candidates():
+            numbers = {recorded["number"]} if recorded.get("number") else set()
+            numbers.update(entry["result"]["number"] for entry in intents
+                           if isinstance(entry.get("result"), dict) and entry["result"].get("number"))
+            found = [_optional_api(f"pulls/{number}") for number in sorted(numbers)]
+            if any(not entry.get("result", {}).get("number") for entry in intents):
+                found.extend(_pages(f"pulls?state=all&head=iii-hq:{quote(branch, safe='')}"
+                                    f"&base={quote(github['base_ref'], safe='')}"))
+            return {pr["number"]: pr for pr in found if pr}.values()
+        try:
+            prs = list(candidates())
+            if any(marker not in (pr.get("body") or "") for pr in prs):
+                raise BridgeError("Run branch has a pull request without its ownership marker")
+        except Exception as error:
+            def lookup_failed(error=error):
+                raise error
+            attempt("pr", branch, lookup_failed)
+            blocked_branches.add(cycle)
+            continue
+        if f"pr:{branch}" in receipt["resources"]:
+            attempt("pr", branch, lambda: {"state": "resolved", "numbers": [pr["number"] for pr in prs]})
+        if not prs:
+            attempt("pr", branch, lambda: {"state": "absent", "branch": branch})
+        for pr in prs:
+            def close_pr(pr=pr):
+                current = _optional_api(f"pulls/{pr['number']}")
+                if not current:
+                    return {"state": "absent", "number": pr["number"]}
+                if (current.get("head", {}).get("ref") != branch or
+                        current.get("base", {}).get("ref") != github["base_ref"] or
+                        current.get("head", {}).get("repo", {}).get("full_name") != REPO):
+                    raise BridgeError("Pull request no longer belongs to the run branch")
+                owned(current)
+                if current.get("state") == "open":
+                    _api(f"pulls/{pr['number']}", "PATCH", {"state": "closed"})
+                readback = _api(f"pulls/{pr['number']}")
+                owned(readback)
+                if readback.get("state") != "closed":
+                    raise BridgeError("Pull request closure readback is not closed")
+                return {"state": "closed", "number": pr["number"],
+                        "actor": readback["user"].get("login")}
+            if not attempt("pr", pr["number"], close_pr):
+                blocked_branches.add(cycle)
+
+    issue = github.get("issue") or {}
+    intents = [entry for entry in journal if entry.get("operation") == "issue"]
+    if issue.get("number") or intents:
+        try:
+            if issue.get("number"):
+                issues = [_optional_api(f"issues/{issue['number']}")]
+            else:
+                since = quote(datetime.fromtimestamp(min(entry["intent_at"] for entry in intents),
+                                                   timezone.utc).isoformat())
+                issues = list(_pages(f"issues?state=all&since={since}"))
+            issues = [item for item in issues if item and "pull_request" not in item and
+                      (issue.get("number") == item.get("number") or marker in (item.get("body") or ""))]
+        except Exception as error:
+            def lookup_failed(error=error):
+                raise error
+            attempt("issue", namespace, lookup_failed)
+            issues = []
+            issue_lookup_failed = True
+        else:
+            issue_lookup_failed = False
+            if f"issue:{namespace}" in receipt["resources"]:
+                attempt("issue", namespace, lambda: {"state": "resolved", "numbers": [item["number"] for item in issues]})
+        if not issues and not issue_lookup_failed:
+            attempt("issue", namespace, lambda: {"state": "absent"})
+        for item in issues:
+            def close_issue(number=item["number"]):
+                current = _optional_api(f"issues/{number}")
+                if not current:
+                    return {"state": "absent", "number": number}
+                owned(current)
+                if current.get("state") == "open":
+                    _api(f"issues/{number}", "PATCH", {"state": "closed"})
+                readback = _api(f"issues/{number}")
+                owned(readback)
+                if readback.get("state") != "closed":
+                    raise BridgeError("Issue closure readback is not closed")
+                return {"state": "closed", "number": number, "actor": readback["user"].get("login")}
+            attempt("issue", item["number"], close_issue)
+
+    trusted = {key: {sha for sha in receipt["trusted_refs"].get(key, []) if SHA.fullmatch(sha)}
+               for key in ["base", "1", "2", "3", "4"]}
+    for cycle in ["1", "2", "3", "4", "base"]:
+        if cycle != "base" and not trusted[cycle] and cycle not in github.get("heads", {}):
+            continue
+        if cycle == "base" and not any(entry.get("operation") == "push" for entry in journal) and not github.get("base_head"):
+            continue
+        ref = f"refs/heads/{github['base_ref']}" if cycle == "base" else _branch(github, int(cycle))
+        def remove_ref(ref=ref, allowed=trusted[cycle]):
+            if (cycle == "base" and blocked_branches) or (cycle != "base" and int(cycle) in blocked_branches):
+                raise BridgeError("Open pull request cleanup failed; branch is preserved")
+            actual = _remote_head(ref)
+            if actual is None:
+                return {"state": "absent", "ref": ref}
+            if actual not in allowed or not SHA.fullmatch(actual):
+                raise BridgeError("Run branch moved outside trusted SHA history")
+            _delete_ref(ref, actual)
+            if _remote_head(ref) is not None:
+                raise BridgeError("Run branch deletion readback still exists")
+            return {"state": "deleted", "ref": ref, "sha": actual}
+        attempt("branch", ref, remove_ref)
+
+    failed = sum(item["status"] == "failed" for item in receipt["resources"].values())
+    completed = sum(item["status"] == "completed" for item in receipt["resources"].values())
+    receipt["status"] = "completed" if not failed else "partial" if completed else "failed"
+    receipt["updated_at"] = time.time()
+    if receipt["status"] == "completed":
+        receipt["completed_at"] = receipt["updated_at"]
+        receipt.pop("error", None)
+        receipt.pop("failed_at", None)
+    save_callback(state)
+    return receipt
 
 
 def operate(state, request, save_callback, validate=None):

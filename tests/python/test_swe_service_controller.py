@@ -1,5 +1,6 @@
 """Local checkpoint protocol with real Git and a test-only GitHub adapter."""
 import concurrent.futures
+import hashlib
 import json
 import os
 import signal
@@ -115,6 +116,16 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(result["current_ticket"], 4)
         self.assertNotIn("Legacy canary", json.dumps(result))
         self.assertFalse((self.workspace / "snapshots").exists())
+
+    def test_repeated_prepare_has_identical_initial_commit_with_distinct_ownership(self):
+        first = self.prepare()
+        first_state = json.loads(self.state.read_text())
+        self.assertEqual(self.git("show", "-s", "--format=%at %ct", "HEAD"), "946684800 946684800")
+        self.workspace = self.root / "second-subject"
+        self.state = self.root / "trusted/second-state.json"
+        second = self.prepare()
+        self.assertEqual(first["initial_head"], second["initial_head"])
+        self.assertNotEqual(first_state["ownership_token"], json.loads(self.state.read_text())["ownership_token"])
 
     def test_lifecycle_progresses_in_same_repository_and_capture_keeps_unaccepted_edits(self):
         initial = self.prepare()["initial_head"]
@@ -266,6 +277,34 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(report["accepted_patch"], "")
         self.assertIn("unfinished", report["unaccepted_patch"])
         self.assertTrue(self.invoke("cleanup", "--state-file", self.state)["cleaned"])
+
+    def test_remote_cleanup_preserves_hashed_evidence_and_retries_after_local_cleanup(self):
+        self.prepare()
+        state = json.loads(self.state.read_text())
+        state["github"] = {"issue": {"state": "open"}, "journal": [{"operation": "issue"}]}
+        self.state.write_text(json.dumps(state))
+        report_path = str(self.state) + ".report.json"
+        (self.root / "github_ops.py").write_text(
+            "import json\nfrom pathlib import Path\n"
+            "def cleanup(state, save_callback):\n"
+            f" report = json.loads(Path({report_path!r}).read_text())\n"
+            " assert report['github']['issue']['state'] == 'open'\n"
+            " github = state['github']\n"
+            " github['attempts'] = github.get('attempts', 0) + 1\n"
+            " github['issue']['state'] = 'closed'\n"
+            " save_callback(state)\n"
+            " return {'status': 'partial' if github['attempts'] == 1 else 'completed'}\n")
+        first = self.invoke("cleanup", "--state-file", self.state)
+        self.assertTrue(first["cleaned"])
+        self.assertEqual(first["github_cleanup"]["status"], "partial")
+        self.assertFalse(self.workspace.exists())
+        original = json.loads(Path(report_path).read_text())
+        second = self.invoke("cleanup", "--state-file", self.state)
+        self.assertEqual(second["github_cleanup"]["status"], "completed")
+        final = json.loads(Path(report_path).read_text())
+        self.assertEqual(final["github"], original["github"])
+        self.assertEqual(final["github_evidence_sha256"], hashlib.sha256(
+            json.dumps(final["github"], sort_keys=True, separators=(",", ":")).encode()).hexdigest())
 
     def test_cleanup_refuses_replacement_directory(self):
         self.prepare()
