@@ -1,54 +1,23 @@
-mod api;
 mod assessment_projection;
-mod assets;
 mod bus;
 mod controller;
 mod live_progress;
-mod plan_store;
-mod plans;
-mod presenter;
-mod proxy;
-mod read_model;
+mod plan_projection;
+pub(crate) mod presenter;
+pub(crate) mod read_model;
 mod store;
 
-use std::net::SocketAddr;
-use std::path::PathBuf;
+pub(crate) use read_model::ExecutionProjection;
 
 use anyhow::Result;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
-use axum::Json;
-use clap::Args;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::json;
-
-#[derive(Debug, Clone, Args)]
-pub struct DashboardArgs {
-    /// Address used by the local dashboard.
-    #[arg(long, default_value = "0.0.0.0:4173")]
-    pub listen: SocketAddr,
-
-    /// WebSocket URL of the running Harness stack.
-    #[arg(long, env = "III_URL", default_value = "ws://127.0.0.1:49134")]
-    pub url: String,
-
-    /// Directory that owns local run metadata, logs, and reports.
-    #[arg(long, default_value = "target/harness-e2e-local-runs")]
-    pub runs_dir: PathBuf,
-
-    /// Present retained reports without exposing local execution endpoints.
-    #[arg(long)]
-    pub view_only: bool,
-}
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 struct Defaults {
     url: String,
     model: String,
     provider: String,
-    judge_model: String,
-    judge_provider: String,
     runs: u32,
     technical_retries: u8,
     seed: Option<u64>,
@@ -67,10 +36,6 @@ struct RunRequest {
     url: String,
     model: String,
     provider: String,
-    #[serde(default)]
-    judge_model: String,
-    #[serde(default)]
-    judge_provider: String,
     scenarios: Vec<String>,
     runs: u32,
     technical_retries: u8,
@@ -123,63 +88,26 @@ struct RunSnapshot {
     defaults: Defaults,
 }
 
-#[derive(Debug)]
-struct ApiError {
-    status: StatusCode,
-    message: String,
-}
-
-impl ApiError {
-    fn bad_request(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::BAD_REQUEST,
-            message: message.into(),
-        }
-    }
-
-    fn conflict(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::CONFLICT,
-            message: message.into(),
-        }
-    }
-
-    fn not_found(message: impl Into<String>) -> Self {
-        Self {
-            status: StatusCode::NOT_FOUND,
-            message: message.into(),
-        }
-    }
-
-    fn internal(error: impl std::fmt::Display) -> Self {
-        Self {
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            message: error.to_string(),
-        }
-    }
-}
-
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
-        (self.status, Json(json!({ "error": self.message }))).into_response()
-    }
-}
-
-pub async fn serve(args: DashboardArgs) -> Result<()> {
-    api::serve(args).await
-}
-
 /// Register the dashboard read, plan, run, status, and cancellation functions
 /// against an already registered E2E control plane.
 pub async fn register_worker_functions(
     iii: &iii_sdk::IIIClient,
     control: crate::control::ControlPlane,
 ) -> Result<()> {
-    api::register_worker_functions(iii, control).await
+    let events = Some(bus::DashboardEvents::register(iii));
+    let controller = controller::Controller::new(
+        control.url().to_string(),
+        control.output_root().to_path_buf(),
+        events,
+        Some(control),
+    )
+    .await?;
+    bus::register_functions(iii, controller);
+    Ok(())
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::BTreeMap;
     use std::path::Path;
 
@@ -214,8 +142,6 @@ mod tests {
             url: "ws://127.0.0.1:49134".into(),
             model: "model".into(),
             provider: "provider".into(),
-            judge_model: String::new(),
-            judge_provider: String::new(),
             scenarios: vec!["context_pressure".into()],
             runs: 1,
             technical_retries: 1,
@@ -223,7 +149,7 @@ mod tests {
         }
     }
 
-    fn report() -> E2eReport {
+    pub(crate) fn report() -> E2eReport {
         let execution = ExecutionIdentity {
             execution_id: "execution".into(),
             lane: "local".into(),
@@ -268,10 +194,8 @@ mod tests {
                 supports_vision: Some(false),
             },
             None,
-            None,
             vec![E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -289,7 +213,6 @@ mod tests {
             execution: report.execution.clone(),
             system_under_test: report.system_under_test.clone(),
             subject: report.subject.clone(),
-            judge: report.judge.clone(),
             control_plane: ControlPlaneEvidence {
                 functions: vec![FunctionContractEvidence {
                     function_id: "harness::status".into(),
@@ -309,7 +232,7 @@ mod tests {
         report.write_to(output, &manifest).unwrap();
     }
 
-    fn metadata() -> RunMetadata {
+    pub(super) fn metadata() -> RunMetadata {
         RunMetadata {
             id: "local-20260807T120000-abcdef12".into(),
             label: "first run".into(),
@@ -358,10 +281,7 @@ mod tests {
         let converted = control_request(&request()).expect("request should map");
         assert_eq!(converted.label, " first run ");
         assert_eq!(converted.lane, "local");
-        assert_eq!(
-            converted.scenarios,
-            vec![ScenarioId::ContextPressure.into()]
-        );
+        assert_eq!(converted.scenarios, vec![ScenarioId::ContextPressure]);
         assert!(converted.idempotency_key.starts_with("dashboard:"));
     }
 
@@ -472,12 +392,8 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         // Initialize before writing metadata so startup recovery does not cancel the fixture.
         let controller = controller::Controller::new(
-            DashboardArgs {
-                listen: "127.0.0.1:0".parse().unwrap(),
-                url: "ws://localhost:49134".into(),
-                runs_dir: root.path().into(),
-                view_only: true,
-            },
+            "ws://localhost:49134".into(),
+            root.path().into(),
             None,
             None,
         )
@@ -495,7 +411,6 @@ mod tests {
                 execution_id: metadata.id.clone(),
                 request_sha256: "request".into(),
                 result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-                scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
                 created_at: metadata.started_at.clone(),
                 request: json!({}),
                 runner: json!({}),
@@ -538,9 +453,8 @@ mod tests {
             "case_id": "direct_answer:canonical",
             "execution_policy": {},
             "scenario_id": "direct_answer",
-            "scenario_version": 1,
         });
-        assert_eq!(contract_fingerprint(&value), "fnv1a32:7fdd620a");
+        assert_eq!(contract_fingerprint(&value), "fnv1a32:51327792");
     }
 
     #[test]
@@ -577,14 +491,6 @@ mod tests {
         .enumerate()
         {
             let mut value = report();
-            value.judge = Some(ModelArtifact {
-                model: "judge-model".into(),
-                provider: "judge-provider".into(),
-                context_window: 100,
-                max_output_tokens: 10,
-                supports_tools: Some(false),
-                supports_vision: Some(false),
-            });
             let execution = &mut value.execution;
             execution.execution_id = format!("execution-{index}");
             execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
@@ -614,7 +520,6 @@ mod tests {
                 .collect();
             value.scenarios = vec![E2eScenarioReport::aggregate(
                 "direct_answer",
-                1,
                 ExecutionPolicy {
                     max_turns: 1,
                     max_output_tokens: Some(10),
@@ -668,9 +573,10 @@ mod tests {
             .find(|row| row.test_id == "direct_answer")
             .unwrap();
         let result = row.result.as_ref().unwrap();
-        assert_eq!(result.from.as_ref().unwrap().median_score, Some(100.0));
-        assert_eq!(result.to.as_ref().unwrap().median_score, Some(85.0));
-        assert_eq!(result.delta.score, Some(-15.0));
+        // Means over the pooled runs: (10 + 100 + 100) / 3 against (80 + 90) / 2.
+        assert_eq!(result.from.as_ref().unwrap().mean_score, Some(70.0));
+        assert_eq!(result.to.as_ref().unwrap().mean_score, Some(85.0));
+        assert_eq!(result.delta.score, Some(15.0));
         assert_eq!(result.compatibility, "compatible");
         assert!(result.compatibility_reasons.is_empty());
         assert_eq!(
@@ -683,7 +589,7 @@ mod tests {
         let detail = model
             .test_version_get(super::read_model::TestVersionGetRequest {
                 test_id: "direct_answer".into(),
-                test_version: 1,
+                test_version: E2eScenarioReport::canonical_test_behavior_sha256(),
                 cohort_id,
                 from_version_id: from,
                 to_version_id: to,
@@ -712,7 +618,10 @@ mod tests {
                 ..super::read_model::TestHistoryRequest::default()
             })
             .unwrap();
-        assert_eq!(history.test_version, 1);
+        assert_eq!(
+            history.test_version,
+            E2eScenarioReport::canonical_test_behavior_sha256()
+        );
         assert_eq!(history.total, 2);
         assert_eq!(history.observations.len(), 1);
         assert!(history.next_cursor.is_some());
@@ -720,9 +629,6 @@ mod tests {
         assert_eq!(history.subject_models.len(), 1);
         assert_eq!(history.subject_models[0].provider, "provider");
         assert_eq!(history.subject_models[0].models, vec!["model"]);
-        assert_eq!(history.judge_models.len(), 1);
-        assert_eq!(history.judge_models[0].provider, "judge-provider");
-        assert_eq!(history.judge_models[0].models, vec!["judge-model"]);
         assert_ne!(
             history.series[0].system_version_id,
             history.series[1].system_version_id
@@ -740,25 +646,15 @@ mod tests {
         let filtered = model
             .test_history(super::read_model::TestHistoryRequest {
                 test_id: "direct_answer".into(),
-                test_version: Some(1),
+                test_version: Some(E2eScenarioReport::canonical_test_behavior_sha256()),
                 case_id: Some(history.observations[0].case_id.clone()),
                 subject_provider: Some("provider".into()),
                 subject_model: Some("model".into()),
-                judge_provider: Some("judge-provider".into()),
-                judge_model: Some("judge-model".into()),
                 result: Some("passed".into()),
                 ..super::read_model::TestHistoryRequest::default()
             })
             .unwrap();
         assert_eq!(filtered.total, 2);
-        let no_matching_judge = model
-            .test_history(super::read_model::TestHistoryRequest {
-                test_id: "direct_answer".into(),
-                judge_provider: Some("other-provider".into()),
-                ..super::read_model::TestHistoryRequest::default()
-            })
-            .unwrap();
-        assert_eq!(no_matching_judge.total, 0);
     }
 
     #[test]

@@ -5,14 +5,13 @@ import { MasterTestProfiles } from './MasterTestProfiles'
 
 const plan: MasterTestPlan = {
   plan_id: 'harness',
-  version: 1,
-  definition_sha256: 'sha256:definition',
+  definition_sha256: `sha256:${'d4'.repeat(32)}`,
   profiles: [
     {
       id: 'resilience',
       label: 'Resilience',
       purpose: 'Recover without duplicate effects.',
-      metrics: ['work_amplification'],
+      metrics: ['deliverable_success'],
       scenario_ids: ['cleanup_under_failure'],
       repetitions: 1,
       technical_retries: 0,
@@ -33,11 +32,13 @@ const plan: MasterTestPlan = {
 describe('master test profiles', () => {
   it('shows scope, incomplete budget and protected executor without implying a successful run', () => {
     const html = renderToStaticMarkup(<MasterTestProfiles plan={plan} />)
+    // The plan is identified by its definition digest, never by a version.
+    expect(html).toContain('Master test plan · d4d4d4d4d4d4')
     expect(html).toContain('Resilience')
     expect(html).toContain('Protected fault executor')
     expect(html).toContain('not available for all cases')
     expect(html).toContain('Create Resilience plan')
-    expect(html).toContain('work_amplification')
+    expect(html).toContain('deliverable_success')
     expect(html).not.toContain('run baseline')
   })
 })

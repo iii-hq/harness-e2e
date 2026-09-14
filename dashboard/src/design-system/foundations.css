@@ -1,48 +1,49 @@
-/* The Console owns all color and font tokens. Standalone mode supplies the
-   same semantic names from dashboard-shell.css, so injected styles never
-   repaint the host with a private palette. */
+/* Every value here derives from the Console host: colors and fonts come
+   straight from its tokens (see dashboard-shell.css for the alias layer), and
+   the scales below alias the host's own custom properties, with the host's
+   values as fallbacks so a detached render still holds together.
+
+   Three sizes have no host equivalent and stay dashboard-owned until the
+   redesign settles them: label (11px), sm (13px) and display (22px). */
 .harness-e2e-shell {
   --ds-text-label: 0.6875rem;
-  --ds-text-xs: 0.75rem;
+  --ds-text-xs: var(--text-xs, 0.75rem);
   --ds-text-sm: 0.8125rem;
-  --ds-text-md: 0.875rem;
-  --ds-text-lg: 1rem;
-  --ds-text-xl: 1.25rem;
+  --ds-text-md: var(--text-sm, 0.875rem);
+  --ds-text-lg: var(--text-base, 1rem);
+  --ds-text-xl: var(--text-xl, 1.25rem);
   --ds-text-display: 1.375rem;
-  --ds-leading-tight: 1.2;
-  --ds-leading-body: 1.5;
-  --ds-tracking-tight: -0.01em;
+  --ds-leading-tight: var(--leading-tight, 1.25);
+  --ds-leading-body: var(--text-base--line-height, 1.5);
+  --ds-tracking-tight: var(--tracking-tight, -0.025em);
   --ds-tracking-label: 0.06em;
 
-  --ds-space-1: 0.25rem;
-  --ds-space-2: 0.5rem;
-  --ds-space-3: 0.75rem;
-  --ds-space-4: 1rem;
-  --ds-space-5: 1.25rem;
-  --ds-space-6: 1.5rem;
-  --ds-space-8: 2rem;
-  --ds-space-10: 2.5rem;
-  --ds-space-12: 3rem;
-  --ds-space-16: 4rem;
-  --ds-space-24: 6rem;
-  --ds-space-32: 8rem;
-  --ds-space-40: 10rem;
-  --ds-space-48: 12rem;
+  --ds-space-1: calc(var(--spacing, 0.25rem) * 1);
+  --ds-space-2: calc(var(--spacing, 0.25rem) * 2);
+  --ds-space-3: calc(var(--spacing, 0.25rem) * 3);
+  --ds-space-4: calc(var(--spacing, 0.25rem) * 4);
+  --ds-space-5: calc(var(--spacing, 0.25rem) * 5);
+  --ds-space-6: calc(var(--spacing, 0.25rem) * 6);
+  --ds-space-8: calc(var(--spacing, 0.25rem) * 8);
+  --ds-space-10: calc(var(--spacing, 0.25rem) * 10);
+  --ds-space-12: calc(var(--spacing, 0.25rem) * 12);
+  --ds-space-16: calc(var(--spacing, 0.25rem) * 16);
+  --ds-space-24: calc(var(--spacing, 0.25rem) * 24);
+  --ds-space-32: calc(var(--spacing, 0.25rem) * 32);
+  --ds-space-40: calc(var(--spacing, 0.25rem) * 40);
+  --ds-space-48: calc(var(--spacing, 0.25rem) * 48);
 
-  --ds-radius-sm: 6px;
-  --ds-radius-md: 6px;
-  --ds-radius-lg: 6px;
-  --ds-radius-pill: 999px;
-  --shadow-panel: none;
-  --shadow-focus: 0 0 0 3px
-    color-mix(in srgb, var(--color-accent) 22%, transparent);
+  --ds-radius-sm: var(--radius-sm, 6px);
+  --ds-radius-md: var(--radius-md, 6px);
+  --ds-radius-lg: var(--radius-lg, 6px);
+  --ds-radius-pill: var(--radius-full, 9999px);
 
-  --ds-duration-instant: 100ms;
-  --ds-duration-fast: 160ms;
-  --ds-duration-base: 240ms;
-  --ds-duration-slow: 700ms;
-  --ds-ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
-  --ds-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --ds-duration-instant: var(--motion-duration-instant, 0ms);
+  --ds-duration-fast: var(--motion-duration-fast, 120ms);
+  --ds-duration-base: var(--motion-duration-panel, 220ms);
+  --ds-duration-slow: var(--duration-very-slow, 500ms);
+  --ds-ease-standard: var(--motion-ease-standard, cubic-bezier(0.2, 0, 0, 1));
+  --ds-ease-emphasized: var(--motion-ease-enter, cubic-bezier(0.16, 1, 0.3, 1));
 }
 
 .ds-root,
@@ -61,7 +62,6 @@
 .ds-root :where(button, a, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 3px;
-  box-shadow: var(--shadow-focus);
 }
 
 .ds-display {
@@ -105,14 +105,9 @@
   white-space: nowrap;
 }
 
+/* The host zeroes its motion tokens under reduced motion; this is only the
+   safety net for anything that still states a literal duration. */
 @media (prefers-reduced-motion: reduce) {
-  .harness-e2e-shell {
-    --ds-duration-instant: 1ms;
-    --ds-duration-fast: 1ms;
-    --ds-duration-base: 1ms;
-    --ds-duration-slow: 1ms;
-  }
-
   html:has(.ds-root) {
     scroll-behavior: auto;
   }

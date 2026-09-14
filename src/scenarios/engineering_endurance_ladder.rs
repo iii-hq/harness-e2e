@@ -25,14 +25,13 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
-const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 0x656e_6475_7261_0001;
 const DELIVERABLE_ID: &str = "engineering_endurance_report";
 const BRANCH: &str = "endurance-run";
@@ -971,7 +970,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let checkpoint = checkpoint_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"You are the sole implementer in a cumulative engineering endurance run. Work in the
 isolated Git repository `{}`. Read `{MANIFEST_PATH}`, the source, and the public tests before
@@ -1026,7 +1024,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "cumulative-durable-queue-engineering",
@@ -1047,15 +1044,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "subject_credentials": false,
             },
         }),
-        ComplexityProfile {
-            planning_depth: 10,
-            dependency_depth: 8,
-            state_transitions: 10,
-            validation_loops: 10,
-            artifact_count: 1,
-            ambiguity_level: 6,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".into(),
             "iii::functions".into(),
@@ -1284,7 +1272,6 @@ fn capture<'a>(
             id: DELIVERABLE_ID.into(),
             kind: "engineering_endurance_report".into(),
             content: json!({
-                "scenario_version": VERSION,
                 "initial_head": snapshot.initial_head,
                 "accepted_head": snapshot.accepted_head,
                 "accepted_rungs": snapshot.accepted_rungs,
@@ -1336,12 +1323,11 @@ fn deliverable_contract() -> DeliverableContract {
             schema: json!({
                 "type": "object",
                 "required": [
-                    "scenario_version", "initial_head", "accepted_head", "accepted_rungs",
+                    "initial_head", "accepted_head", "accepted_rungs",
                     "total_rungs", "terminal_status", "elapsed_ms", "checkpoints",
                     "accepted_patch", "github_handoff", "measurements"
                 ],
                 "properties": {
-                    "scenario_version": {"const": VERSION},
                     "initial_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_head": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
                     "accepted_rungs": {"type": "integer", "minimum": 0, "maximum": 10},
@@ -1480,7 +1466,6 @@ class DurableQueue:
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_eq!(first.case.seed, CANONICAL_SEED);
-        assert_eq!(first.case.complexity.profile.validation_loops, 10);
     }
 
     #[test]

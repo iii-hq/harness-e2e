@@ -1,0 +1,182 @@
+{
+  "date": "2026-09-11",
+  "implementation": "uncommitted working trees",
+  "source_heads": {
+    "harness-e2e": "801e7e62e7b509885b133dc50c4cc4777816eb14",
+    "workers": "093ea0f8195a9ca6ada30e13adba19ca75ab5b96"
+  },
+  "checks": {
+    "e2e_lib": {
+      "command": "cargo test --locked --lib",
+      "status": "passed",
+      "log_sha256": "eb802ff84ad4b1ca6d3c414c62ebc5800f7d18fb984ce8e3b6dac9bba3f0f811",
+      "local_log": "/tmp/e2e-hard-tests-verified.log",
+      "summary": [
+        "test result: ok. 691 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 34.40s"
+      ]
+    },
+    "e2e_cli_manifest": {
+      "command": "cargo test --locked --bin harness-e2e --test manifest",
+      "status": "passed",
+      "log_sha256": "83ce640bfc59068c8665019dfadea114d420fb0c9515635df3391b634580d81a",
+      "local_log": "/tmp/e2e-hard-cli-tests.log",
+      "summary": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    "session_manager": {
+      "command": "cargo test --lib --test manifest --test schemas",
+      "status": "passed",
+      "log_sha256": "9474f40e9bf252235c6f5ed6ddeb13fd94d1166f362fc0fa95bb9ff454634bc4",
+      "local_log": "/tmp/workers-e2e-hard-session-verified.log",
+      "summary": [
+        "test result: ok. 83 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.30s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    "session_manager_bdd": {
+      "command": "III_ENGINE_WS_URL=ws://127.0.0.1:49397 cargo test --test bdd",
+      "status": "passed",
+      "log_sha256": "8209a4e7a3dc526327d9345883c889e391f957aa19cf9669d25cab6c222ef20f",
+      "local_log": "/tmp/session-scope-engine-ox82hufo/bdd.log",
+      "summary": [
+        "23 features",
+        "159 scenarios (159 passed)",
+        "1479 steps (1479 passed)"
+      ]
+    },
+    "harness": {
+      "command": "cargo test --manifest-path harness/Cargo.toml",
+      "status": "passed",
+      "log_sha256": "1fa8fedf759db75e66bf20f6cf65ceeca551fca73a9f80d2dcd8ee1c38315811",
+      "local_log": "/tmp/workers-e2e-hard-harness-test.log",
+      "summary": [
+        "test result: ok. 488 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+        "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "ci_runner": {
+      "command": "cargo test --locked --manifest-path harness/Cargo.toml -p harness-e2e",
+      "status": "passed",
+      "log_sha256": "825dfcf091faf65cc3a7628bd67fdfbaeee3dd33e53020a53670ae960d339ebc",
+      "local_log": "/tmp/workers-e2e-hard-internal-runner.log",
+      "summary": [
+        "test result: ok. 55 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      ]
+    },
+    "ci_runner_clippy": {
+      "command": "cargo clippy --locked --manifest-path harness/Cargo.toml -p harness-e2e --all-targets -- -D warnings",
+      "status": "passed",
+      "log_sha256": "8f03f09901fb9c9579394ae7a41183734798eaafc2a77e995d419ab0b1c7d769",
+      "local_log": "/tmp/workers-e2e-hard-internal-clippy.log",
+      "summary": [
+        "    Finished `dev` profile [unoptimized + debuginfo] target(s) in 15.67s"
+      ]
+    },
+    "session_scope_migration": {
+      "command": "python3 -m unittest discover -s session-manager/scripts -p 'test_migrate_session_scopes.py' -v",
+      "status": "passed",
+      "tests": 5,
+      "cases": [
+        "historical_structured_evidence",
+        "generic_ids_do_not_classify_e2e",
+        "parent_and_fork_inheritance",
+        "unknown_supplied_ids_reject_apply",
+        "ambiguous_parent_rejects_apply",
+        "conflicting_scope_rejected",
+        "backup_collision_without_partial_apply",
+        "rollback_after_second_replace_failure",
+        "message_bytes_preserved",
+        "encoded_file_identity",
+        "owner_group_mode_mtime_preserved",
+        "repeated_apply_no_op"
+      ],
+      "evidence": "tool output and checked-in tests"
+    },
+    "dashboard": {
+      "status": "passed",
+      "vitest_files": 45,
+      "vitest_tests": 277,
+      "typecheck": "passed",
+      "standalone_build": "passed",
+      "console_build": "passed",
+      "warning": "Vite chunk size",
+      "evidence": "tool output; no dedicated final log retained"
+    },
+    "console": {
+      "status": "passed",
+      "focused_tests": 85,
+      "broader_hooks_session_tests": 106,
+      "typecheck": "passed",
+      "build": "passed",
+      "evidence": "overlapping runs in tool output; counts are not additive"
+    },
+    "consumers": {
+      "status": "passed",
+      "harness_integration_tests": 120,
+      "workflow_tests": 140,
+      "slack_tests": 37,
+      "telegram_unit_tests": 93,
+      "telegram_engine_integration_tests": 1,
+      "openwiki_tests": 45,
+      "cron_ui_tests": 16,
+      "eval_ui_tests": 4,
+      "security_scan_ui_tests": 44,
+      "iii_directory_ui_tests": 53,
+      "claude_code_registration_tests": 14,
+      "pi_registration_tests": 15,
+      "claude_code_pi_typechecks": "passed; lockfiles unchanged",
+      "rust_checks": [
+        "memory",
+        "approval-gate",
+        "eval",
+        "security-scan"
+      ],
+      "evidence": "tool output; eval/security-scan checks also have temporary logs"
+    },
+    "transcript_browser": {
+      "status": "passed",
+      "current_retained_transcript": true,
+      "retry_retained_transcript": true,
+      "host_chat_calls": 0,
+      "page_errors": 0,
+      "local_script": "/tmp/harness-e2e-transcript-browser.mjs",
+      "local_screenshot": "/tmp/harness-e2e-transcript-isolation.png",
+      "scope": "component interaction fixture; not a full Console visual acceptance or real model execution"
+    },
+    "storage_migration": {
+      "status": "passed",
+      "engine_port": 49395,
+      "dashboard_port": 49396,
+      "database": "real database worker and isolated SQLite copy",
+      "checks": [
+        "dry_run_unchanged",
+        "populated_obsolete_table_rejected",
+        "active_rejected",
+        "atomic_schema_2",
+        "empty_obsolete_tables_removed",
+        "projection_written",
+        "native_reports_not_duplicated",
+        "checksums_valid",
+        "repeat_no_op",
+        "old_reader_requires_migration",
+        "new_reader_lists_both_records"
+      ],
+      "evidence": "storage-migration.json"
+    }
+  },
+  "review": "independent bounded review: no remaining P1/P2 findings",
+  "not_performed": [
+    "live data migration",
+    "deployment",
+    "remote CI",
+    "real model-scored E2E execution",
+    "stages 4 and 5 visual redesign"
+  ]
+}

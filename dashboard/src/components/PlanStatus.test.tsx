@@ -6,34 +6,31 @@ import type { PlanExecution } from '@/lib/plan-execution'
 import { PlanProgress, Requirements } from './PlanStatus'
 
 describe('executable plan journey', () => {
-  it('requires an explicit execution model and the required evaluator', () => {
+  it('requires an explicit execution model', () => {
     const config = {
       mode: 'plan' as const,
       label: 'Smoke',
       subject: '',
-      judge: '',
-      judgeRequired: true,
       selectedScenarios: ['minimal_path'],
       url: 'ws://localhost',
     }
     expect(validateExecutionSetup(config)).toEqual({
       subject: 'Choose an execution model.',
-      judge: 'Choose a judge model for the selected tests.',
     })
-    expect(
-      validateExecutionSetup({ ...config, subject: 'model', judge: 'judge' }),
-    ).toEqual({})
+    expect(validateExecutionSetup({ ...config, subject: 'model' })).toEqual({})
   })
   it('routes templates and duplication, and rejects the old manual URL', () => {
-    expect(routeFromHash('#/plans/new/profile/smoke')).toEqual({
+    expect(routeFromHash('#/ext/harness-e2e/plans/new/profile/smoke')).toEqual({
       page: 'plan-create',
       profileId: 'smoke',
     })
-    expect(routeFromHash('#/plans/new/duplicate/profile-example')).toEqual({
+    expect(
+      routeFromHash('#/ext/harness-e2e/plans/new/duplicate/profile-example'),
+    ).toEqual({
       page: 'plan-create',
       duplicateId: 'profile-example',
     })
-    expect(routeFromHash('#/plans/new/manual')).toBeNull()
+    expect(routeFromHash('#/ext/harness-e2e/plans/new/manual')).toBeNull()
   })
   it('uses every planned slot as progress denominator and separates result axes', () => {
     const execution = {
@@ -98,7 +95,7 @@ describe('executable plan journey', () => {
       />,
     )
     expect(html).toContain('Your saved draft is preserved.')
-    expect(html).toContain('#/plans/profile-active')
+    expect(html).toContain('#/ext/harness-e2e/plans/profile-active')
     expect(html).toContain('Pending')
   })
 })

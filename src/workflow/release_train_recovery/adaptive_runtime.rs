@@ -8,21 +8,19 @@ use serde_json::{json, Value};
 
 use super::{
     ReleaseAction, ReleaseFixture, ReleaseRecoveryGates, ReleaseTrainSimulator, RunStatus,
-    INVALIDATION_EVIDENCE_ID, SCENARIO_ID, SCENARIO_VERSION,
+    INVALIDATION_EVIDENCE_ID, SCENARIO_ID,
 };
 use crate::workflow::{
-    ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow,
-    AdaptiveNodeTemplateV1, AdaptivePlanNodeV1, AdaptiveTrustedAnchorV1, AdaptiveWorkflowPlanV1,
-    AdaptiveWorkflowPolicyV1, BooleanCondition, ControlSource, DependencyPolicy, PortValueKind,
-    ReplayPolicy, StepCatalog, StepEvaluation, StepExecutor, StepExecutorContext,
-    StepExecutorOutput, StepOperationalKind, StepPortDescriptor, StepReconcileOutcome,
-    StepReconcileState, StepTypeDescriptor, TypedPortValue, WorkflowCleanupContext,
-    WorkflowCleanupHook, WorkflowCriterionDeclaration, WorkflowEvaluationOutcome,
-    WorkflowEvaluationResult, WorkflowGateResult, WorkflowLimits, WorkflowNodeV1,
-    ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    ActivationPolicy, AdaptiveAnchorPlacement, AdaptiveMaterializedWorkflow, AdaptiveNodeTemplate,
+    AdaptivePlanNode, AdaptiveTrustedAnchor, AdaptiveWorkflowPlan, AdaptiveWorkflowPolicy,
+    BooleanCondition, ControlSource, DependencyPolicy, PortValueKind, ReplayPolicy, StepCatalog,
+    StepEvaluation, StepExecutor, StepExecutorContext, StepExecutorOutput, StepOperationalKind,
+    StepPortDescriptor, StepReconcileOutcome, StepReconcileState, StepTypeDescriptor,
+    TypedPortValue, WorkflowCleanupContext, WorkflowCleanupHook, WorkflowCriterionDeclaration,
+    WorkflowEvaluationOutcome, WorkflowEvaluationResult, WorkflowGateResult, WorkflowLimits,
+    WorkflowNode,
 };
 
-const STEP_VERSION: u32 = 1;
 const PREFLIGHT: &str = "release_train.preflight";
 const INSPECT_PARTIAL: &str = "release_train.inspect_partial";
 const RERUN: &str = "release_train.rerun_same_immutable_run";
@@ -61,8 +59,8 @@ impl ReleaseTrainRuntimeState {
 }
 
 pub struct ReleaseTrainAdaptiveRuntime {
-    pub policy: AdaptiveWorkflowPolicyV1,
-    pub plans: Vec<AdaptiveWorkflowPlanV1>,
+    pub policy: AdaptiveWorkflowPolicy,
+    pub plans: Vec<AdaptiveWorkflowPlan>,
     pub completed_before_replan: BTreeSet<String>,
     pub materialized: AdaptiveMaterializedWorkflow,
     pub catalog: Arc<StepCatalog>,
@@ -70,7 +68,7 @@ pub struct ReleaseTrainAdaptiveRuntime {
     pub state: Arc<Mutex<ReleaseTrainRuntimeState>>,
 }
 
-pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
+pub fn adaptive_policy() -> AdaptiveWorkflowPolicy {
     let templates = [
         (
             "inspect_partial",
@@ -113,11 +111,10 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
     .into_iter()
     .map(|(id, step_type, description)| {
         let mutates_product = matches!(step_type, RERUN | CREATE_FRESH);
-        AdaptiveNodeTemplateV1 {
+        AdaptiveNodeTemplate {
             id: id.into(),
             description: description.into(),
             step_type: step_type.into(),
-            step_version: STEP_VERSION,
             base_config: json!({}),
             inputs: BTreeMap::new(),
             activation: if mutates_product {
@@ -140,10 +137,8 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
     })
     .collect();
 
-    AdaptiveWorkflowPolicyV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    AdaptiveWorkflowPolicy {
         id: SCENARIO_ID.into(),
-        scenario_version: SCENARIO_VERSION,
         description: "Bounded recovery of a partial immutable release followed by evidence-gated promotion and convergence.".into(),
         limits: WorkflowLimits {
             max_parallel: 1,
@@ -186,8 +181,8 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicyV1 {
 }
 
 pub fn reference_adaptive_plans(
-    policy: &AdaptiveWorkflowPolicyV1,
-) -> Result<(Vec<AdaptiveWorkflowPlanV1>, BTreeSet<String>)> {
+    policy: &AdaptiveWorkflowPolicy,
+) -> Result<(Vec<AdaptiveWorkflowPlan>, BTreeSet<String>)> {
     let policy_sha256 = policy.canonical_sha256()?;
     let first_nodes = vec![
         plan_node("inspect_partial", "inspect_partial", &[]),
@@ -199,8 +194,7 @@ pub fn reference_adaptive_plans(
         ),
         plan_node("preview", "preview", &["verify_publication"]),
     ];
-    let first = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let first = AdaptiveWorkflowPlan {
         policy_sha256: policy_sha256.clone(),
         revision: 1,
         supersedes_sha256: None,
@@ -221,8 +215,7 @@ pub fn reference_adaptive_plans(
             &["observe_stale"],
         ),
     ]);
-    let second = AdaptiveWorkflowPlanV1 {
-        schema_version: ADAPTIVE_WORKFLOW_SCHEMA_VERSION,
+    let second = AdaptiveWorkflowPlan {
         policy_sha256,
         revision: 2,
         supersedes_sha256: Some(first_sha256),
@@ -408,7 +401,6 @@ fn descriptor(
     }
     StepTypeDescriptor {
         id: id.into(),
-        version: STEP_VERSION,
         description: description.into(),
         config_schema: json!({"type": "object", "additionalProperties": false}),
         inputs: BTreeMap::new(),
@@ -436,14 +428,13 @@ fn trusted_anchor(
     id: &str,
     step_type: &str,
     depends_on: &[&str],
-) -> AdaptiveTrustedAnchorV1 {
-    AdaptiveTrustedAnchorV1 {
+) -> AdaptiveTrustedAnchor {
+    AdaptiveTrustedAnchor {
         placement,
         terminal,
-        node: WorkflowNodeV1 {
+        node: WorkflowNode {
             id: id.into(),
             step_type: step_type.into(),
-            step_version: STEP_VERSION,
             config: json!({}),
             depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
             inputs: BTreeMap::new(),
@@ -454,8 +445,8 @@ fn trusted_anchor(
     }
 }
 
-fn plan_node(id: &str, template_id: &str, depends_on: &[&str]) -> AdaptivePlanNodeV1 {
-    AdaptivePlanNodeV1 {
+fn plan_node(id: &str, template_id: &str, depends_on: &[&str]) -> AdaptivePlanNode {
+    AdaptivePlanNode {
         id: id.into(),
         template_id: template_id.into(),
         depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
@@ -738,10 +729,7 @@ mod tests {
     async fn deterministic_steps_converge_and_cleanup_compensates_fixture_state() -> Result<()> {
         let runtime = build_adaptive_runtime(&fixture_path())?;
         for node in &runtime.materialized.definition.nodes {
-            let registered = runtime
-                .catalog
-                .get(&node.step_type, node.step_version)
-                .unwrap();
+            let registered = runtime.catalog.get(&node.step_type).unwrap();
             registered
                 .executor
                 .execute(StepExecutorContext {

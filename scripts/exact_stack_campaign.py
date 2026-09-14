@@ -2,16 +2,17 @@
 """Validate and materialize the exact-stack campaign contract.
 
 Release Control owns every campaign decision — the suite, the models, the
-weights, the policy — and states each one exactly once in the contract it
-dispatches. This repository owns the runtime: which scenarios a pinned runner
-release can execute, how the stack boots, and what evidence comes back. No
-campaign configuration is read from this repository, and nothing is verified
-twice: unknown fields are ignored so either side can add one and ship alone.
+policy — and states each one exactly once in the contract it dispatches. This
+repository owns the runtime: which scenarios a pinned runner release can
+execute, how the stack boots, and what evidence comes back. No campaign
+configuration is read from this repository, and nothing is verified twice:
+unknown fields are ignored so either side can add one and ship alone.
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -120,7 +121,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     """
     require_keys(
         suite,
-        {"id", "label", "lane", "seed", "subject", "judge", "groups"},
+        {"id", "label", "lane", "seed", "subject", "groups"},
         "suite",
     )
     suite_id = require_text(suite.get("id"), "suite.id")
@@ -131,7 +132,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     if suite.get("seed") is not None:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
-    validate_identity(suite, "judge")
 
     groups = suite.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -141,7 +141,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         label = f"suite.groups[{index}]"
         group = require_keys(
             group,
-            {"id", "execution_kind", "runs", "technical_retries", "weight"},
+            {"id", "execution_kind", "runs", "technical_retries"},
             label,
         )
         group_id = require_text(group.get("id"), f"{label}.id")
@@ -153,9 +153,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
             raise ValueError(f"{label}.execution_kind is unsupported")
         require_positive_integer(group.get("runs"), f"{label}.runs")
         require_nonnegative_integer(group.get("technical_retries"), f"{label}.technical_retries")
-        weight = group.get("weight")
-        if weight not in {1, 2, 3, 4, 5}:
-            raise ValueError(f"{label}.weight must be 1-5")
         if kind == "fault_injection":
             require_text(group.get("fault_profile"), f"{label}.fault_profile")
             require_text(group.get("fault_scenario"), f"{label}.fault_scenario")
@@ -373,7 +370,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "difficulty_weight": group["weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {
@@ -389,7 +385,6 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
         "campaign_id": suite["id"],
         "lane": suite["lane"],
         "failure_policy": "advisory",
-        "scoring_profile": "difficulty-weighted-v1",
         "groups": groups,
     }
 
@@ -423,8 +418,8 @@ def materialize_request(
         selected_cases.append(
             {
                 "scenario_id": scenario_id,
-                "scenario_version": require_positive_integer(
-                    descriptor.get("scenario_version"), f"{scenario_id}.scenario_version"
+                "behavior_sha256": require_digest(
+                    descriptor.get("behavior_sha256"), f"{scenario_id}.behavior_sha256"
                 ),
                 "case_id": require_text(descriptor.get("case_id"), f"{scenario_id}.case_id"),
                 "seed": require_nonnegative_integer(descriptor.get("seed"), f"{scenario_id}.seed"),
@@ -439,8 +434,6 @@ def materialize_request(
         "lane": suite["lane"],
         "model": suite["subject"]["model"],
         "provider": suite["subject"]["provider"],
-        "judge_model": suite["judge"]["model"],
-        "judge_provider": suite["judge"]["provider"],
         "scenarios": group["scenarios"],
         "runs": group["runs"],
         "seed": suite["seed"],
@@ -490,8 +483,6 @@ def observation_idempotency_key(request: dict[str, Any]) -> str:
             "lane",
             "model",
             "provider",
-            "judge_model",
-            "judge_provider",
             "scenarios",
             "runs",
             "seed",
@@ -516,12 +507,31 @@ def project_roots(contract: dict[str, Any]) -> list[str]:
     return [f"{root['worker']}@{root['version']}" for root in contract["orchestration"]["roots"]]
 
 
+def group_template(contract: dict[str, Any], group_id: str) -> str:
+    group = next(group for group in contract["suite"]["groups"] if group["id"] == group_id)
+    if "linkly_tutorial" not in group.get("scenarios", []):
+        return ""
+    if (group["scenarios"] != ["linkly_tutorial"] or group["runs"] != 1
+            or group["technical_retries"] != 0):
+        raise ValueError("linkly_tutorial needs a fresh scaffold: one scenario, one run and no retries")
+    return "linkly-agentic"
+
+
+def project_engine_config(project: dict[str, Any], port: int) -> dict[str, Any]:
+    workers = [{"name": "iii" + "-worker-manager", "config": {"host": "127.0.0.1", "port": port}}]
+    workers.extend({"name": name, "config": config}
+                   for name, config in project.get("engine", {}).get("workers", {}).items())
+    return {"workers": workers}
+
+
 def project_scaffold(
     contract: dict[str, Any],
     namespace: str,
     data_dir: Path,
     env_files: dict[str, str],
     environment: dict[str, str],
+    template: dict[str, Any] | None = None,
+    template_packages: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
@@ -561,33 +571,47 @@ def project_scaffold(
         }
     )
 
-    containers: dict[str, Any] = {}
+    manifest = copy.deepcopy(template or {})
+    containers = manifest.setdefault("containers", {})
+    versions = {node["worker"]: node["version"] for node in orchestration["nodes"]}
+    for name, container in containers.items():
+        package = (template_packages or {}).get(name, name)
+        if container.get("worker") != f"package://{name}" or package not in versions:
+            raise ValueError(f"template worker {name} is not in the exact stack")
+        container["worker"] = f"package://{package}"
+        container["version"] = versions[package]
+        # Only the executor's private env files may supply credentials.
+        container.pop("env_file", None)
     for worker in sorted(roots):
-        container: dict[str, Any] = {
-            "worker": f"package://{worker}",
-            "version": roots[worker],
-        }
+        container = containers.setdefault(worker, {})
+        container.update({"worker": f"package://{worker}", "version": roots[worker]})
         if worker in env_files:
             env_file = Path(env_files[worker])
             if not env_file.is_absolute():
                 raise ValueError(f"env file for {worker} must be absolute")
             container["env_file"] = [str(env_file)]
         if worker in declared_environment:
-            container["environment"] = dict(sorted(declared_environment[worker].items()))
+            container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == runner_worker(contract):
             container["config_name"] = f"{namespace}-harness-e2e"
             container["config_override"] = {"data_dir": str(data_dir)}
         elif worker == APPLICATION and harness_override:
             container["config_name"] = f"{namespace}-harness"
-            container["config_override"] = harness_override
+            container.setdefault("config_override", {}).update(harness_override)
         containers[worker] = container
-
-    return {
+    if template is not None and APPLICATION in containers:
+        providers = [worker for worker in env_files if worker.startswith("provider-")]
+        after = containers[APPLICATION].setdefault("start_after", [])
+        after.extend(provider for provider in sorted(providers) if provider not in after)
+        for provider in providers:
+            containers[provider].setdefault("start_after", ["state", "llm-router"])
+    manifest.update({
         "namespace": namespace,
         "startup_timeout": "5m",
         "stop_timeout": "30s",
         "containers": containers,
-    }
+    })
+    return manifest
 
 
 def compose_evidence(
@@ -704,7 +728,7 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
 def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
     files = _package_files(root)
     return {
-        "schema": "e2e-observation-bundle/v1",
+        "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
         "execution_id": contract["execution_id"],
         "attempt": contract["attempt"],
@@ -737,6 +761,9 @@ def main() -> int:
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
     roots.add_argument("--contract", type=Path, required=True)
+    template = commands.add_parser("group-template")
+    template.add_argument("--contract", type=Path, required=True)
+    template.add_argument("--group-id", required=True)
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--namespace", required=True)
@@ -744,6 +771,10 @@ def main() -> int:
     project.add_argument("--env-file", action="append", default=[])
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
+    project.add_argument("--template-compose", type=Path)
+    project.add_argument("--template-package", action="append", default=[])
+    project.add_argument("--engine-config", type=Path)
+    project.add_argument("--engine-port", type=int, default=49134)
     evidence = commands.add_parser("compose-evidence")
     evidence.add_argument("--contract", type=Path, required=True)
     evidence.add_argument("--compose", type=Path, required=True)
@@ -802,8 +833,16 @@ def main() -> int:
                 args.data_dir,
                 assignments(args.env_file, "env-file"),
                 assignments(args.environment, "environment"),
+                yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None,
+                assignments(args.template_package, "template-package"),
             )
+            if "engine" in manifest:
+                manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
             args.output.write_text(yaml.safe_dump(manifest, sort_keys=False))
+            if args.engine_config:
+                args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
+        elif args.command == "group-template":
+            print(group_template(contract, args.group_id))
         elif args.command == "compose-evidence":
             manifest = compose_evidence(
                 contract,

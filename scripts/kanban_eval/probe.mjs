@@ -309,7 +309,7 @@ async function main() {
       : checks.some(({ status }) => status === 'unverified') ? 'incomplete' : 'passed'
   const result = resultFor(caseId, checks, Date.now() - started, status, infrastructureError, functionalStatus)
   const coverage = {
-    schema: 'kanban-evaluation-coverage/v1',
+    schema: 'kanban-evaluation-coverage',
     case_id: caseId,
     complete: !infrastructureError && checks.length > 0 && !checks.some(({ status }) => status === 'unverified'),
     criteria: checks.filter(({ id }) => id.startsWith('criterion_')),
@@ -321,7 +321,7 @@ async function main() {
 
 function resultFor(caseId, checks, durationMs, status, error, functionalStatus = null) {
   return {
-    schema: 'kanban-evaluation/v1',
+    schema: 'kanban-evaluation',
     case_id: caseId,
     checks,
     status,

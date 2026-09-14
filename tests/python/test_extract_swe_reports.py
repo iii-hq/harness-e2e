@@ -14,7 +14,7 @@ class ExtractSweReportsTests(unittest.TestCase):
             root = Path(directory)
             native = root / "native/deliverables/attempt"
             native.mkdir(parents=True)
-            content = b'{ "schema": "swe-service-report/v1", "mode": "journey" }\n'
+            content = b'{ "schema": "swe-service-report", "mode": "journey" }\n'
             (native / "swe_service_report.json").write_bytes(content)
             (native / "unrelated.json").write_text('{"secret":"not a SWE report"}')
             result = subprocess.run([sys.executable, str(SCRIPT), "--native-dir", str(root / "native"), "--output-dir", str(root / "out")], capture_output=True, text=True)

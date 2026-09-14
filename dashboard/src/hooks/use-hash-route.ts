@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import {
-  dashboardHash,
-  dashboardRouteHash,
-  isEmbeddedDashboard,
-} from '@/lib/dashboard-runtime'
+import { useCallback, useEffect, useState } from 'react'
+import { dashboardHash, dashboardRouteHash } from '@/lib/dashboard-runtime'
 
-export type WorkspaceView = 'overview' | 'tests' | 'executions'
+export type WorkspaceView = 'tests' | 'executions'
 
 export type DashboardRoute =
-  | { page: 'overview'; view: WorkspaceView }
+  | { page: 'workspace'; view: WorkspaceView }
   | {
       page: 'execution'
       executionId: string
@@ -27,12 +23,8 @@ export type DashboardRoute =
     }
   | { page: 'plan-detail'; planId: string }
 
-const workspaceViews = new Set<WorkspaceView>([
-  'overview',
-  'tests',
-  'executions',
-])
-const defaultRoute: DashboardRoute = { page: 'overview', view: 'overview' }
+const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
+const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
 
 function decodeSegment(segment: string): string {
   try {
@@ -96,14 +88,11 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     .map(decodeSegment)
   const [head, ...rest] = segments
 
-  if (head === 'scenarios') {
-    return { page: 'overview', view: 'tests' }
-  }
   if (head === 'tests' && rest[0]) {
     return { page: 'test-history', testId: rest[0] }
   }
   if (workspaceViews.has(head as WorkspaceView)) {
-    return { page: 'overview', view: head as WorkspaceView }
+    return { page: 'workspace', view: head as WorkspaceView }
   }
   if (head === 'execution') {
     // #/execution/<id>/run/<runId> opens the evidence record as a route, so
@@ -156,7 +145,7 @@ export function hashForTests(params?: URLSearchParams): string {
   return params ? hashWithParams(hash, params) : hash
 }
 
-export function hashForWorkspace(view: WorkspaceView = 'overview'): string {
+export function hashForWorkspace(view: WorkspaceView = 'executions'): string {
   return dashboardHash(view)
 }
 
@@ -205,42 +194,18 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'test-history') return `${route.page}:${route.testId}`
   if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
   if (route.page === 'plan-create') return route.page
-  if (route.page === 'overview') {
-    return route.view === 'tests' ? 'overview:tests' : 'overview:workspace'
-  }
+  if (route.page === 'workspace') return `workspace:${route.view}`
   return route.page
-}
-
-function replaceHash(targetHash: string) {
-  window.history.replaceState(
-    window.history.state,
-    '',
-    `${window.location.pathname}${window.location.search}${targetHash}`,
-  )
 }
 
 export function useHashRoute(): [DashboardRoute, (targetHash: string) => void] {
   const [route, setRoute] = useState<DashboardRoute>(currentDashboardRoute)
-  const routeRef = useRef(route)
-  routeRef.current = route
 
   useEffect(() => {
-    if (
-      !isEmbeddedDashboard() &&
-      (window.location.hash === '' ||
-        window.location.hash === '#' ||
-        window.location.hash === '#/')
-    ) {
-      replaceHash(hashForWorkspace())
-    }
-
     const handle = () => {
       const next = routeFromHash(window.location.hash)
       if (!next) return
 
-      // Audit S-07: every page is a React component now, so navigation
-      // stays client-side in the standalone build too. The reload used to
-      // flash the html background and drop filters, scroll and dialogs.
       setRoute(next)
     }
     window.addEventListener('hashchange', handle)

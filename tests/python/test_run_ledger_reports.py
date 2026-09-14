@@ -10,6 +10,7 @@ import json
 import pathlib
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -28,7 +29,7 @@ resolve_stack_lock = load("resolve_stack_lock")
 
 
 PROFILE_SNAPSHOT = {
-    "schema": "harness-e2e-profile-snapshot/v1",
+    "schema": "harness-e2e-profile-snapshot",
     "plan_id": "harness",
     "version": 1,
     "definition_sha256": "sha256:" + "d" * 64,
@@ -42,14 +43,12 @@ PROFILE_SNAPSHOT = {
             "campaign_id": "regression-r01",
             "lane": "local-regression",
             "failure_policy": "advisory",
-            "scoring_profile": "difficulty-weighted-v1",
             "groups": [
                 {
                     "id": "case-minimal-path",
                     "execution_kind": "harness_turn",
                     "runs": 1,
                     "technical_retries": 1,
-                    "difficulty_weight": 2,
                     "scenarios": ["minimal_path"],
                 }
             ],
@@ -63,7 +62,6 @@ PLAN = {
     "sha256": "b" * 64,
     "profile": {"plan_id": "harness", "id": "regression"},
     "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-    "judge": {"provider": "zai", "model": "glm-5.3"},
     "runner": {"revision": "a" * 40},
     "stack": {"policy": "latest"},
 }
@@ -86,6 +84,7 @@ class Args:
             "contract_sha256": None,
             "runner_sha": None,
             "cli_version": None,
+            "artifact_name": None,
         }
         self.__dict__.update(defaults | fields)
 
@@ -109,6 +108,7 @@ class ReportPayloadTests(unittest.TestCase):
             Args(profile_snapshot=self.snapshot, plan=self.plan, runner_sha="a" * 40, cli_version="0.23.1-rc.2")
         )
         self.assertEqual(payload["kind"], "materialized")
+        self.assertEqual(payload["profile_snapshot"], PROFILE_SNAPSHOT)
         self.assertEqual(payload["profile"]["id"], "regression")
         self.assertEqual(payload["profile"]["profile_sha256"], PROFILE_SNAPSHOT["profile_sha256"])
         self.assertEqual(payload["profile"]["definition_sha256"], PROFILE_SNAPSHOT["definition_sha256"])
@@ -120,14 +120,28 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual(payload["identity"]["plan_sha256"], PLAN["sha256"])
         self.assertEqual(payload["identity"]["subject"], PLAN["subject"])
 
+    def test_bundle_identity_preserves_the_workflow_attempt_without_inventing_uploaded_metadata(self):
+        args = Args(artifact_name="e2e-observation-fixture-gh-2")
+        with patch.dict("os.environ", {
+            "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77", "GITHUB_RUN_ATTEMPT": "2"
+        }, clear=True):
+            bundle = report_execution.shard_payload(args)["bundle"]
+            self.assertEqual(bundle["artifact_name"], args.artifact_name)
+            self.assertEqual((bundle["run_id"], bundle["run_attempt"]), (77, 2))
+            self.assertIsNone(bundle["artifact_id"])
+            self.assertIsNone(bundle["sha256"])
+            self.assertIsNone(bundle["size_bytes"])
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertIsNone(report_execution.summary_payload(args)["bundle"])
+
     def test_runs_come_from_results_with_the_slot_release_control_recomputes(self):
         results = {
             "scenarios": [
                 {
                     "scenario_id": "tool_contract_recovery",
                     "case_id": "tool_contract_recovery@1",
-                    "scenario_version": 1,
-                    "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64, "complexity": {"tier": "t3"}},
+                    "behavior_sha256": "sha256:" + "b" * 64,
+                    "case": {"seed": 4404, "inputs_sha256": "sha256:" + "1" * 64},
                     "runs": [{"run_id": "run-a", "status": "passed"}, {"run_id": "run-b", "status": "failed"}],
                 }
             ]
@@ -136,7 +150,19 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual([run["repetition"] for run in runs], [0, 1])
         # Seed travels as a decimal string: it is an input to the slot digest.
         self.assertEqual(runs[0]["seed"], "4404")
-        self.assertEqual(runs[0]["tier"], "t3")
+        # Nothing grades the case: no difficulty travels with the run.
+        self.assertEqual(
+            sorted(runs[0]),
+            [
+                "behavior_sha256",
+                "case_id",
+                "definition_sha256",
+                "repetition",
+                "run",
+                "scenario_id",
+                "seed",
+            ],
+        )
         self.assertEqual(runs[0]["definition_sha256"], "sha256:" + "1" * 64)
         self.assertEqual(runs[0]["run"]["run_id"], "run-a")
 
@@ -166,7 +192,7 @@ class ReportPayloadTests(unittest.TestCase):
         checkpoint = artifacts / "journal" / "runs" / "slot-2420557511cf4c76c9a21421"
         checkpoint.mkdir(parents=True)
         (checkpoint / "run-a.json").write_text(
-            json.dumps({"schema": "harness-e2e-run-checkpoint/v1", "slot_id": "slot-2420557511cf4c76c9a21421",
+            json.dumps({"schema": "harness-e2e-run-checkpoint", "slot_id": "slot-2420557511cf4c76c9a21421",
                         "run_id": "run-a", "run": {"run_id": "run-a", "status": "failed"}})
         )
 
@@ -199,6 +225,13 @@ class ReportPayloadTests(unittest.TestCase):
 
 
 class StackResolutionTests(unittest.TestCase):
+    def test_only_linkly_adds_template_workers_to_the_frozen_runtime(self):
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        self.assertEqual(resolve_stack_lock.runtime_roots(snapshot), resolve_stack_lock.RUNTIME_ROOTS)
+        snapshot['campaigns'][0]['groups'][0]['scenarios'] = ['linkly_tutorial']
+        self.assertEqual(set(resolve_stack_lock.runtime_roots(snapshot)),
+                         set(resolve_stack_lock.RUNTIME_ROOTS) | {'http'})
+
     def graph(self, worker, version, nodes=(), edges=()):
         return {"root": {"worker": worker, "version": version}, "nodes": list(nodes), "edges": list(edges)}
 
@@ -255,7 +288,11 @@ class StackResolutionTests(unittest.TestCase):
         # with, so the same slot stays the same slot across executions.
         self.assertIsNone(contract["suite"]["seed"])
         group = contract["suite"]["groups"][0]
-        self.assertEqual(group["weight"], 2)
+        # No difficulty weight travels: every case counts the same.
+        self.assertEqual(
+            sorted(group),
+            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
+        )
         self.assertEqual(group["scenarios"], ["minimal_path"])
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
 

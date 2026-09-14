@@ -43,6 +43,16 @@ RUNTIME_ROOTS = ("browser", "fp", "provider-deepseek", "provider-zai")
 #: The runner executing the scenarios inside that stack.
 RUNNER_ROOT = "harness-e2e"
 
+
+def runtime_roots(snapshot: dict[str, Any]) -> tuple[str, ...]:
+    scenarios = {
+        scenario for campaign in snapshot["campaigns"] for group in campaign["groups"]
+        for scenario in group.get("scenarios", [])
+    }
+    # The HTTP baseline is not a Harness dependency, but needs an exact identity.
+    # The template's shell/console roles use the target graph's ide/ade packages.
+    return RUNTIME_ROOTS + (("http",) if "linkly_tutorial" in scenarios else ())
+
 EXACT_VERSION = re.compile(
     r"^[0-9]+\.[0-9]+\.[0-9]+"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -219,7 +229,6 @@ def suite_groups(campaign: dict[str, Any]) -> list[dict[str, Any]]:
             "execution_kind": group["execution_kind"],
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
-            "weight": group["difficulty_weight"],
         }
         if group["execution_kind"] == "fault_injection":
             materialized |= {
@@ -253,7 +262,6 @@ def build_contract(
         # it with, so the same slot is the same slot across executions.
         "seed": None,
         "subject": plan["subject"],
-        "judge": plan["judge"],
         "groups": suite_groups(campaign),
     }
     body = {
@@ -295,10 +303,11 @@ def main() -> int:
     pinned = stack.get("versions") if isinstance(stack.get("versions"), dict) else {}
 
     roles = {TARGET_ROOT: "target", RUNNER_ROOT: "runner"}
-    roles |= {worker: "runtime" for worker in RUNTIME_ROOTS}
+    runtime = runtime_roots(snapshot)
+    roles |= {worker: "runtime" for worker in runtime}
     graphs = [
         resolve_graph(worker, str(pinned.get(worker, "latest")), CLI_TARGET)
-        for worker in (TARGET_ROOT, *RUNTIME_ROOTS, RUNNER_ROOT)
+        for worker in (TARGET_ROOT, *runtime, RUNNER_ROOT)
     ]
     orchestration = merge_graphs(roles, graphs)
     harness_version = next(root["version"] for root in orchestration["roots"] if root["worker"] == TARGET_ROOT)

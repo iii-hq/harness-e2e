@@ -1,6 +1,11 @@
 import { ArrowRight, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { DashboardPageActions } from '@/components/DashboardPageActions'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+} from '@/components/DashboardPageActions'
+import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
   Callout,
@@ -17,6 +22,7 @@ import {
 } from '@/design-system'
 import {
   hashForExecution,
+  hashForNewPlan,
   replaceRouteParams,
   routeParams,
 } from '@/hooks/use-hash-route'
@@ -31,12 +37,14 @@ import {
   buildExecutionPresentation,
   categoryMessage,
   type ExecutionPresentation,
+  executionTitle,
   formatDate,
   formatDuration,
   formatPercent,
+  modelNames,
+  percentPoints,
+  statusCopy,
 } from '@/lib/execution-view'
-import { executionTitle, percentPoints } from '@/lib/overview-signal'
-import { modelNames, statusCopy } from '@/pages/OverviewPage'
 import '@/design-system/styles.css'
 
 const PAGE_SIZE = 50
@@ -357,18 +365,12 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           </span>
         ) : null}
       </td>
-      <td
-        data-label="Subject · judge"
-        title={modelNames(presentation.subjects)}
-      >
+      <td data-label="Subject" title={modelNames(presentation.subjects)}>
         <span className="block font-mono text-xs text-ink">
           {presentation.subjects[0]?.model ?? '—'}
         </span>
         <span className="block font-mono text-label text-ink-muted">
           {presentation.subjects[0]?.provider ?? ''}
-          {presentation.judges.length > 0
-            ? ` · judge ${presentation.judges[0].model}`
-            : ' · no judge'}
         </span>
       </td>
       <td data-label="Scope" className={numericCellClassName}>
@@ -432,7 +434,7 @@ function LedgerTable({
         <tr>
           <th scope="col">execution</th>
           <th scope="col">result</th>
-          <th scope="col">subject · judge</th>
+          <th scope="col">subject</th>
           <th scope="col" className={numericCellClassName}>
             scope
           </th>
@@ -474,6 +476,15 @@ function LedgerTable({
 }
 
 export function ExecutionsPage() {
+  const [runnerOpen, setRunnerOpen] = useState(false)
+  const [runnerScope, setRunnerScope] = useState<string[]>([])
+  useEffect(() => {
+    const requested = consumeQuickExecutionRequest()
+    if (requested) {
+      setRunnerScope(requested)
+      setRunnerOpen(true)
+    }
+  }, [])
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
   const [cursor, setCursor] = useState<string | null>(null)
@@ -595,6 +606,7 @@ export function ExecutionsPage() {
   // Audit E-07: the page says what the ledger holds, in the column vocabulary.
   const summary = [
     `${total} executions`,
+    `${rows.length} loaded`,
     ...statusCounts.map(([, entry]) => `${entry.count} ${entry.label}`),
   ].join(' · ')
 
@@ -603,7 +615,28 @@ export function ExecutionsPage() {
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
-        actions={null}
+        actions={
+          bridge ? (
+            <>
+              <a
+                className={dashboardHeaderActionClassName()}
+                href={hashForNewPlan()}
+              >
+                New plan
+              </a>
+              <button
+                className={dashboardHeaderActionClassName({ primary: true })}
+                type="button"
+                onClick={() => {
+                  setRunnerScope([])
+                  setRunnerOpen(true)
+                }}
+              >
+                Run tests
+              </button>
+            </>
+          ) : null
+        }
       />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
@@ -612,7 +645,7 @@ export function ExecutionsPage() {
             loading && rows.length === 0 ? 'loading the ledger…' : summary
           }
           headingId="executions-title"
-          context="immutable run ledger"
+          context="Recent activity and retained evidence"
         />
 
         {error ? (
@@ -647,7 +680,8 @@ export function ExecutionsPage() {
                 aria-hidden="true"
               />
               <Input
-                className="pr-9 pl-9 font-mono"
+                className="font-mono"
+                style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={filters.query}
                 placeholder="Search label, model, plan, id or date…"
@@ -746,7 +780,7 @@ export function ExecutionsPage() {
             }
             description={
               rows.length === 0
-                ? 'Run the suite once to publish the first execution.'
+                ? 'Run tests or create a plan to start retaining execution evidence.'
                 : 'Widen the result or trigger filter, or clear the search.'
             }
             actions={
@@ -793,6 +827,13 @@ export function ExecutionsPage() {
           </div>
         )}
       </div>
+      <LocalRunnerDialog
+        bridge={bridge}
+        open={runnerOpen}
+        initialScenarios={runnerScope}
+        onClose={() => setRunnerOpen(false)}
+        onCompleted={() => void load()}
+      />
     </div>
   )
 }

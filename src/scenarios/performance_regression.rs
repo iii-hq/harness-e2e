@@ -23,14 +23,13 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "performance_regression";
-pub const VERSION: u32 = 3;
 pub const CANONICAL_SEED: u64 = 1041;
 
 const DELIVERABLE_ID: &str = "performance_audit";
@@ -243,7 +242,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "stable-unique-quadratic-regression",
@@ -256,14 +254,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
             "wall_clock_policy": "advisory",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 2,
-            validation_loops: 2,
-            artifact_count: 1,
-            ambiguity_level: 4,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -284,7 +274,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = fixture_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Fix the performance regression in this isolated fixture: `{}`.
 

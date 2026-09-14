@@ -16,7 +16,6 @@ pub use adaptive_runtime::{
 };
 
 pub const SCENARIO_ID: &str = "cross_repo_contract_migration";
-pub const SCENARIO_VERSION: u32 = 1;
 pub const CANARY_EVIDENCE_ID: &str = "canary.consumer_b_missing_alias";
 const MARKER_FILE: &str = ".harness-e2e-cross-repo-fixture.json";
 const FIXED_GIT_NAME: &str = "Harness E2E Fixture";
@@ -77,7 +76,6 @@ pub struct AdaptiveNode {
 #[serde(deny_unknown_fields)]
 pub struct MaterializedAdaptiveDag {
     pub scenario_id: String,
-    pub scenario_version: u32,
     pub revision: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes_sha256: Option<String>,
@@ -255,7 +253,6 @@ pub fn materialize_plan(request: &PlanRevisionRequest) -> Result<MaterializedAda
     };
     let sha256 = canonical_sha256(&(
         SCENARIO_ID,
-        SCENARIO_VERSION,
         request.revision,
         &request.supersedes_sha256,
         &request.evidence_ids,
@@ -263,7 +260,6 @@ pub fn materialize_plan(request: &PlanRevisionRequest) -> Result<MaterializedAda
     ))?;
     Ok(MaterializedAdaptiveDag {
         scenario_id: SCENARIO_ID.into(),
-        scenario_version: SCENARIO_VERSION,
         revision: request.revision,
         supersedes_sha256: request.supersedes_sha256.clone(),
         evidence_ids: request.evidence_ids.clone(),

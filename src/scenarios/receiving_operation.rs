@@ -8,13 +8,12 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "receiving_operation";
-const VERSION: u32 = 7;
 const DATABASE_DELIVERABLE_ID: &str = "receiving_database";
 const COORDINATION_DELIVERABLE_ID: &str = "receiving_coordination";
 
@@ -73,7 +72,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": DATABASE,
@@ -82,18 +80,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expected_ledger": expected_ledger_values(),
             "expected_completion_rows": 1,
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 2,
-            parallel_branches: 3,
-            external_systems: 1,
-            state_transitions: 5,
-            wake_cycles: 1,
-            artifact_count: 2,
-            coordination_edges: 3,
-            ambiguity_level: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -114,7 +100,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names),
         filesystem_root: None,
         execution: ExecutionPolicy {

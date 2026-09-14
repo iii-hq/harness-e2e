@@ -7,7 +7,7 @@ use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
 use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
-use crate::workflow::WorkflowCheckpointV1;
+use crate::workflow::WorkflowCheckpoint;
 
 pub fn results() -> RootSchema {
     let mut root = root_schema_for::<E2eReport>();
@@ -17,11 +17,6 @@ pub fn results() -> RootSchema {
         .as_mut()
         .expect("results schema has an object root");
     object.required.insert("manifest".to_string());
-    if let Some(Schema::Object(version)) = object.properties.get_mut("schema_version") {
-        version.enum_values = Some(vec![serde_json::json!(
-            crate::report::RESULTS_SCHEMA_VERSION
-        )]);
-    }
     let scenario = root
         .definitions
         .get_mut("E2eScenarioReport")
@@ -60,7 +55,7 @@ pub fn scenario_catalog() -> RootSchema {
 }
 
 pub fn workflow_checkpoint() -> RootSchema {
-    root_schema_for::<WorkflowCheckpointV1>()
+    root_schema_for::<WorkflowCheckpoint>()
 }
 
 pub fn durable_archive() -> RootSchema {
@@ -119,13 +114,13 @@ mod tests {
 
     #[test]
     fn observation_contract_schemas_match_snapshots() {
-        assert_snapshot("e2e-observation-v1.json", &observation());
-        assert_snapshot("e2e-scenario-catalog-v4.json", &scenario_catalog());
+        assert_snapshot("e2e-observation.json", &observation());
+        assert_snapshot("e2e-scenario-catalog.json", &scenario_catalog());
     }
 
     #[test]
     fn workflow_schemas_match_snapshots() {
-        assert_snapshot("workflow-checkpoint-v1.json", &workflow_checkpoint());
+        assert_snapshot("workflow-checkpoint.json", &workflow_checkpoint());
     }
 
     #[test]

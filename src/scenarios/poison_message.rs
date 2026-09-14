@@ -28,14 +28,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "poison_message";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "quarantine_record";
 const ITEMS: [&str; 3] = ["item-01", "item-02", "item-03"];
 const GOOD_ITEMS: [&str; 2] = ["item-01", "item-03"];
@@ -190,7 +189,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "items": ITEMS,
@@ -198,14 +196,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "quarantine_key": QUARANTINE_KEY,
             "token_derivation": "run-scoped",
         }),
-        ComplexityProfile {
-            planning_depth: 1,
-            dependency_depth: 2,
-            external_systems: 1,
-            state_transitions: 1,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -230,7 +220,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
         .join(", ");
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "Process a batch of three items — {items} — with the processing function that \
              is already registered: `{process}`. Call it with exactly \
@@ -730,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn materialized_case_is_reproducible_and_l2_stateful() {
+    fn materialized_case_is_reproducible() {
         let first = materialize("attempt-a", 23).unwrap();
         let retry = materialize("attempt-b", 23).unwrap();
         let other_seed = materialize("attempt-c", 24).unwrap();
@@ -740,10 +729,6 @@ mod tests {
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_ne!(first.case.case_id, other_seed.case.case_id);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.capture.is_some());

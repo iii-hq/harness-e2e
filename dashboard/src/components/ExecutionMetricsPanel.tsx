@@ -5,7 +5,6 @@ import {
   buildExecutionMetrics,
   type UsageCoverage,
 } from '@/lib/execution-metrics'
-import { formatDuration } from '@/lib/execution-view'
 
 function number(value: number | null) {
   return value === null
@@ -15,11 +14,6 @@ function number(value: number | null) {
 
 function percent(value: number | null) {
   return value === null ? '—' : `${number(value * 100)}%`
-}
-
-function cost(value: number | null) {
-  if (value === null) return '—'
-  return value > 0 && value < 0.0001 ? '<$0.0001' : `$${value.toFixed(4)}`
 }
 
 /** Audit ED-26: inside the "counts and coverage" layer the layer row is the
@@ -88,34 +82,6 @@ export function ExecutionMetricsPanel({
       unit: 'runs',
       note: 'Retries plus terminal attempts of non-completed tasks.',
     },
-    {
-      label: 'Execution cost',
-      metric: metrics.cost,
-      format: cost,
-      unit: 'runs',
-      note: 'Reported subject cost, including retries.',
-    },
-    {
-      label: 'Accumulated run time',
-      metric: metrics.durationMs,
-      format: (value) => (value === null ? '—' : formatDuration(value / 1_000)),
-      unit: 'runs',
-      note: 'Sum of run durations including retries; not elapsed wall-clock time.',
-    },
-    {
-      label: 'Function calls',
-      metric: metrics.functionCalls,
-      format: number,
-      unit: 'runs',
-      note: 'Recorded run efficiency, including retries.',
-    },
-    {
-      label: 'Function errors',
-      metric: metrics.functionErrors,
-      format: number,
-      unit: 'runs',
-      note: 'Recorded run efficiency, including retries.',
-    },
   ]
   return (
     <Shell headless={headless}>
@@ -135,8 +101,8 @@ export function ExecutionMetricsPanel({
         </div>
       )}
       <p className="mt-2 mb-0 text-xs leading-5 text-ink-soft">
-        Whole-execution metrics, pooled across all scenarios and repetitions.
-        Report coverage and scenario pass rate are not task completion.
+        Run outcomes, evidence coverage and retry efficiency. Report coverage
+        and scenario pass rate are not task completion.
       </p>
       {!metrics.scopeComplete ? (
         <p className="mt-3 mb-0 text-sm text-warning" role="status">
@@ -179,17 +145,17 @@ export function ExecutionMetricsPanel({
               detail={`${metrics.completed + metrics.incomplete}/${metrics.planned} planned runs determined`}
             />
             <MetricCard
-              label="quality on completed tasks"
+              label="score"
               value={
-                metrics.qualityMedian === null
+                metrics.scoreMean === null
                   ? '—'
-                  : `${number(metrics.qualityMedian)}/100`
+                  : `${number(metrics.scoreMean)}/100`
               }
-              detail={`Median · ${metrics.qualitySamples}/${metrics.completed} completed runs scored`}
+              detail={`Mean · ${metrics.scoreSamples}/${metrics.planned} planned runs scored`}
             />
           </div>
           <DataTable
-            caption="Consolidated execution consumption and efficiency"
+            caption="Run evidence and efficiency"
             minWidth="620px"
             wrapClassName="mt-5"
           >
@@ -242,25 +208,13 @@ export function ExecutionMetricsPanel({
                   runs with telemetry; pooled median, including retries.
                 </td>
               </DataTableRow>
-              <DataTableRow>
-                <td className="font-semibold">Objective score</td>
-                <td className="font-mono tabular-nums">
-                  {metrics.objectiveMedian === null
-                    ? '—'
-                    : `${number(metrics.objectiveMedian)}/100`}
-                </td>
-                <td className="text-xs text-ink-muted">
-                  Median · {metrics.objectiveSamples}/{metrics.planned} planned
-                  runs scored.
-                </td>
-              </DataTableRow>
             </tbody>
           </DataTable>
           <p className="mt-3 mb-0 text-xs leading-5 text-ink-muted">
             Missing telemetry stays unknown. Observed subtotals are not complete
-            totals and must not be interpreted as improved efficiency. Quality
-            and token medians are pooled from individual runs, not averaged
-            across scenarios.
+            totals and must not be interpreted as improved efficiency. The score
+            mean and the token medians are pooled from individual runs, not
+            averaged across scenarios.
           </p>
         </>
       )}

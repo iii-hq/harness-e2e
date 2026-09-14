@@ -31,14 +31,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_play_ladder";
-const VERSION: u32 = 4;
 const GAME_RECORD_ID: &str = "game_record";
 
 /// The line the subject must end on: `CHESS-RESULT <win|draw|loss>`.
@@ -49,11 +48,6 @@ const RESULT_MARKER: &str = "CHESS-RESULT";
 /// a subject that never reaches a terminal result simply fails `game_completed`
 /// rather than looping forever.
 const MOVE_CAP: u32 = 120;
-
-/// Game-scaled workload floor: a full game is far more work than the profile's
-/// derived minimum, so pin it explicitly rather than letting the vector shrink
-/// it toward the artifact count.
-const MINIMUM_EXPECTED_WORK: u64 = 20;
 
 #[derive(Debug, Clone, Copy)]
 struct Rung {
@@ -332,7 +326,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         // Nothing here is run-scoped: inputs are identical across namespaces
         // for a given seed, so canonical identity stays stable across attempts.
@@ -342,15 +335,12 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "start_fen": chess_engine::STARTPOS,
             "result_marker": RESULT_MARKER,
         }),
-        complexity_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
         ],
         deliverable_contract(),
-    )?
-    // A full game is the workload; the derived floor is far too small for it.
-    .with_minimum_expected_work(MINIMUM_EXPECTED_WORK)?;
+    )?;
     Ok(MaterializedScenario {
         spec: scenario_for_case(namespace, rung),
         case,
@@ -358,25 +348,10 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-/// Fixed across rungs on purpose: opponent strength scales the DIFFICULTY of
-/// winning, not the SHAPE of the work — every rung plays exactly one full
-/// stateful game — so the tier stays `L2Stateful` and the ladder reads as a
-/// pure strength curve rather than a tier climb.
-fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        external_systems: 1,
-        state_transitions: MOVE_CAP as u16,
-        dependency_depth: 2,
-        artifact_count: 1,
-        ..ComplexityProfile::default()
-    }
-}
-
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let move_function = move_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&move_function, rung.depth),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -739,8 +714,6 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_uses_the_maximum_depth() {
-        use super::super::ComplexityTier;
-
         let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
         let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
@@ -754,13 +727,7 @@ mod tests {
                 .and_then(Value::as_u64),
             Some(3)
         );
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L2Stateful);
-        assert_eq!(
-            usize::from(first.case.complexity.profile.artifact_count),
-            first.case.deliverable_contract.artifacts.len()
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert_eq!(first.case.work.minimum_expected_work, MINIMUM_EXPECTED_WORK);
         assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
         assert!(first.spec.execution.max_total_tokens.is_none());
         assert!(first.capture.is_some());
@@ -774,7 +741,6 @@ mod tests {
         let materialized = materialize("chess", CANONICAL_SEED).unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.spec.id, ID);
-        assert_eq!(materialized.spec.version, VERSION);
         let weights: u16 = materialized
             .spec
             .criteria

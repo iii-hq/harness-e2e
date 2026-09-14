@@ -339,7 +339,7 @@ def prepare(args):
     git(objects, "update-ref", "refs/heads/accepted", head)
     initial_tree = tree(objects, head)
     info = workspace.stat()
-    state = {"schema": "swe-service-state/v1", "workspace": str(workspace),
+    state = {"schema": "swe-service-state", "workspace": str(workspace),
              "workspace_identity": [info.st_dev, info.st_ino], "ownership_token": token,
              "assets": str(assets), "objects": str(objects), "probes": str(probes),
              "isolation": str(isolation), "probes_digest": digest(probes.read_bytes()),
@@ -579,7 +579,7 @@ def capture(args, state):
     if state.get("cleaned"):
         return state["final_report"]
     terminal = state["terminal_status"] or getattr(args, "terminal_status", None) or "cancelled"
-    report = {"schema": "swe-service-report/v1",
+    report = {"schema": "swe-service-report",
               "scenario_id": "swe_service_journey" if state["mode"] == "journey" else state["tickets"][state["initial_ticket"] - 1]["id"],
               "mode": state["mode"], "fixture_revision": state["fixture_revision"],
               "run_id": state["run_id"], "initial_head": state["initial_head"],

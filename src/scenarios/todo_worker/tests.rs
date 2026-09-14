@@ -2,7 +2,6 @@ use super::*;
 
 fn valid_plan(contract: &TodoTaskContract) -> TodoValidationPlan {
     TodoValidationPlan {
-        scenario_version: VERSION,
         task_contract_sha256: contract.contract_sha256.clone(),
         summary: "Build the fixed Todo surface and validate it independently.".into(),
         implementation_tasks: vec![TodoImplementationTask {
@@ -26,7 +25,6 @@ fn valid_plan(contract: &TodoTaskContract) -> TodoValidationPlan {
 fn passing_bundle(contract: &TodoTaskContract) -> ValidationEvidenceBundle {
     let candidate = format!("sha256:{}", "d".repeat(64));
     ValidationEvidenceBundle {
-        scenario_version: VERSION,
         contract_sha256: contract.contract_sha256.clone(),
         plan_sha256: None,
         validator: ValidatorIdentity {
@@ -102,7 +100,6 @@ fn simple_scenario_has_a_bounded_harness_budget() {
 fn evidence_requires_every_mandatory_probe() {
     let contract = task_contract("evidence").unwrap();
     let bundle = ValidationEvidenceBundle {
-        scenario_version: VERSION,
         contract_sha256: contract.contract_sha256.clone(),
         plan_sha256: None,
         validator: ValidatorIdentity {
@@ -239,7 +236,6 @@ fn final_candidate_pass_is_not_invalidated_by_an_earlier_failed_attempt() {
     };
     let contract = task_contract("final-candidate").unwrap();
     let bundle = ValidationEvidenceBundle {
-        scenario_version: VERSION,
         contract_sha256: contract.contract_sha256.clone(),
         plan_sha256: None,
         validator: ValidatorIdentity {

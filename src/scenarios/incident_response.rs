@@ -14,13 +14,12 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    ExecutionRealism, HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
+    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, ExecutionRealism,
+    HumanHorizon, MaterializedScenario, ScenarioCase, ScenarioCharacterization,
     ScenarioObservation, ScenarioSpec, ShadowMode,
 };
 
 pub const ID: &str = "incident_response";
-pub const VERSION: u32 = 4;
 pub const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_INCIDENT_FIXTURE_PATH";
 pub const KNOWN_GOOD_REF: &str = "refs/tags/known_good";
 pub const INCIDENT_REF: &str = "refs/tags/incident";
@@ -164,7 +163,6 @@ pub const CRITERIA: [CriterionSpec; 5] = [
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         // Adaptive scenarios retain a purpose prompt for the common scenario
         // contract. The workflow sends bounded node-specific prompts.
         prompt: "Investigate, reproduce, diagnose, remediate, validate, and safely resolve an isolated synthetic software incident in an environment-prepared disposable repository. Preserve deterministic evidence, choose exactly one safe terminal action, and leave fixture restoration to mandatory cleanup.".into(),
@@ -188,10 +186,8 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let spec = scenario(namespace);
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         materialized_inputs()?,
-        complexity_profile(),
         vec![
             "e2e::control-plane-v1".to_string(),
             "harness::independent_session".to_string(),
@@ -216,27 +212,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     })
 }
 
-pub fn complexity_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 6,
-        dependency_depth: 8,
-        parallel_branches: 3,
-        external_systems: 4,
-        state_transitions: 14,
-        wake_cycles: 0,
-        validation_loops: 2,
-        artifact_count: ASSETS.len() as u8,
-        coordination_edges: 16,
-        ambiguity_level: 7,
-        agent_owned_decomposition: true,
-        material_invalidation_events: 1,
-        replan_loops: 1,
-        compensable_mutations: 1,
-        durable_resume_cycles: 1,
-        coherent_long_horizon: true,
-    }
-}
-
 pub fn expected_fixture_contract_identity() -> Value {
     json!({
         "schema_version": 1,
@@ -257,7 +232,7 @@ fn materialized_inputs() -> anyhow::Result<Value> {
     let fixture_contract_sha256 =
         crate::artifact::sha256_value(&expected_fixture_contract_identity())?;
     let hidden_probe_manifest_sha256 = crate::artifact::sha256_value(&json!({
-        "contract": "incident-hidden-probes-v1",
+        "contract": "incident-hidden-probes",
         "probe_count": 5,
     }))?;
     Ok(json!({
@@ -313,7 +288,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn materialized_contract_is_stable_and_l5() {
+    fn materialized_contract_is_stable() {
         let first = materialize("attempt-a", 42).unwrap();
         let retry = materialize("attempt-b", 42).unwrap();
         let rotated = materialize("attempt-c", 43).unwrap();
@@ -322,14 +297,6 @@ mod tests {
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.case.case_id, rotated.case.case_id);
-        assert_eq!(first.case.scenario_version, VERSION);
-        assert_eq!(
-            first.case.complexity.tier,
-            crate::scenarios::ComplexityTier::L5Adaptive
-        );
-        assert_eq!(first.case.complexity.profile, complexity_profile());
-        assert_eq!(first.case.complexity.profile.artifact_count, 11);
-        assert_eq!(first.case.work.minimum_expected_work, 36);
         assert!(first.case.deliverable_contract.artifacts.is_empty());
         assert!(first.capture.is_none());
     }

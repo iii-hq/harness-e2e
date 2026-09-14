@@ -15,7 +15,6 @@ pub use adaptive_runtime::{
 };
 
 pub const SCENARIO_ID: &str = "release_train_recovery";
-pub const SCENARIO_VERSION: u32 = 1;
 pub const INVALIDATION_EVIDENCE_ID: &str = "promotion_preview.incompatible_latest_graph";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -70,7 +69,6 @@ pub struct AdaptiveNode {
 #[serde(deny_unknown_fields)]
 pub struct MaterializedAdaptiveDag {
     pub scenario_id: String,
-    pub scenario_version: u32,
     pub revision: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supersedes_sha256: Option<String>,
@@ -261,7 +259,6 @@ pub fn materialize_plan(request: &PlanRevisionRequest) -> Result<MaterializedAda
     };
     let unsigned = (
         SCENARIO_ID,
-        SCENARIO_VERSION,
         request.revision,
         &request.supersedes_sha256,
         &request.evidence_ids,
@@ -270,7 +267,6 @@ pub fn materialize_plan(request: &PlanRevisionRequest) -> Result<MaterializedAda
     let sha256 = canonical_sha256(&unsigned)?;
     Ok(MaterializedAdaptiveDag {
         scenario_id: SCENARIO_ID.into(),
-        scenario_version: SCENARIO_VERSION,
         revision: request.revision,
         supersedes_sha256: request.supersedes_sha256.clone(),
         evidence_ids: request.evidence_ids.clone(),

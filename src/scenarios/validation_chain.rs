@@ -30,7 +30,6 @@ use super::{
 };
 
 pub const ID: &str = "validation_chain";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validation_chain_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -71,7 +70,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": "primary",
@@ -84,7 +82,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             ],
             "expected_nudges": ["CHAIN-A", "CHAIN-B"],
         }),
-        super::validation_loop::validation_profile(),
         super::validation_loop::validation_capabilities(),
         deliverable_contract(),
     )?;
@@ -101,7 +98,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let broken = broken_fn(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are testing a CHAIN of validators on your own session. Follow the steps \
              exactly.\n\n\

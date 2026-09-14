@@ -42,6 +42,7 @@ import {
   type DashboardDataBridge,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import type {
   CohortDescriptor,
   EvaluatedVersion,
@@ -158,7 +159,7 @@ export function SideResult({ summary }: { summary: TestSideSummary | null }) {
     <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
       <StatusBadge status={status.status} label={status.label} />
       <span className="font-mono text-xs text-ink">
-        {formatNumber(summary.median_score, 0)}
+        {formatNumber(summary.mean_score, 0)}
         <span className="text-ink-muted"> / 100</span>
       </span>
       <span
@@ -358,7 +359,7 @@ function EvidenceRow({
       ) : null}
       <StatusBadge status={status.status} label={status.label} />
       <span className="text-ink">
-        {formatNumber(observation.median_score, 0)}
+        {formatNumber(observation.mean_score, 0)}
         <span className="text-ink-muted">
           {' '}
           / 100 · n={observation.scored_runs}
@@ -554,33 +555,41 @@ export function RowDetails({
 
 /* ------------------------------------------------------------------ rows */
 
-function TestVersionSelect({
+function TestDefinitionSelect({
   row,
   disabled,
-  onVersion,
+  onDefinition,
 }: {
   row: TestCatalogRow
   disabled: boolean
-  onVersion: (row: TestCatalogRow, version: number) => void
+  onDefinition: (row: TestCatalogRow, definition: string) => void
 }) {
+  const selected = row.selected_version ?? row.current_version
   if (row.available_versions.length <= 1) {
     return (
-      <span className="font-mono text-label text-ink-muted">
-        v{row.selected_version ?? row.current_version ?? '—'}
+      <span
+        className="font-mono text-label text-ink-muted"
+        title={definitionTitle(selected)}
+      >
+        {shortDefinition(selected) ?? '—'}
       </span>
     )
   }
   return (
     <Select
       className="max-w-[9rem] text-label"
-      aria-label={`Test version for ${row.test_id}`}
+      aria-label={`Scenario definition for ${row.test_id}`}
       value={row.selected_version ?? ''}
       disabled={disabled}
-      onChange={(event) => onVersion(row, Number(event.target.value))}
+      onChange={(event) => onDefinition(row, event.target.value)}
     >
       {row.available_versions.map((version) => (
-        <option key={version.version} value={version.version}>
-          v{version.version} · {version.run_count} runs
+        <option
+          key={version.version}
+          value={version.version}
+          title={definitionTitle(version.version)}
+        >
+          {shortDefinition(version.version)} · {version.run_count} runs
         </option>
       ))}
     </Select>
@@ -591,25 +600,23 @@ function CompareRow({
   row,
   aLabel,
   bLabel,
-  local,
   expanded,
   loading,
   error,
   showDeltas,
-  onVersion,
+  onDefinition,
   onToggle,
 }: {
   row: TestCatalogRow
   aLabel: string
   bLabel: string
-  local: boolean
   expanded: boolean
   loading: boolean
   error?: string
   /** Audit CP-22: with nothing comparable both delta columns are dashes on
    *  every row. Two columns of nothing are not a comparison. */
   showDeltas: boolean
-  onVersion: (row: TestCatalogRow, version: number) => void
+  onDefinition: (row: TestCatalogRow, definition: string) => void
   onToggle: (row: TestCatalogRow) => void
 }) {
   const state = rowState(row)
@@ -634,10 +641,10 @@ function CompareRow({
             >
               {row.test_id}
             </a>
-            <TestVersionSelect
+            <TestDefinitionSelect
               row={row}
               disabled={loading}
-              onVersion={onVersion}
+              onDefinition={onDefinition}
             />
           </span>
           {runsEachSide ? (
@@ -694,7 +701,7 @@ function CompareRow({
         ) : null}
         <td data-label="Actions" className="text-right">
           <span className="inline-flex flex-wrap items-center justify-end gap-1">
-            {state === 'one_side' && local ? (
+            {state === 'one_side' ? (
               <a
                 className={buttonClassName({
                   variant: 'quiet',
@@ -758,7 +765,7 @@ function CompareRow({
                     type="button"
                     onClick={() =>
                       row.selected_version &&
-                      onVersion(row, row.selected_version)
+                      onDefinition(row, row.selected_version)
                     }
                   >
                     retry
@@ -781,7 +788,7 @@ const GROUPS: Array<{ key: RowState[]; label: string; hint: string }> = [
   {
     key: ['regressed', 'improved', 'unchanged'],
     label: 'comparable',
-    hint: 'same test version, cases and contracts',
+    hint: 'same scenario definition, cases and contracts',
   },
   {
     key: ['changed'],
@@ -803,7 +810,7 @@ export function TestsPage({
   initialTo?: string | null
 }) {
   const bridgeRef = useRef<DashboardDataBridge | null>(null)
-  const versionOverrides = useRef(new Map<string, number>())
+  const definitionOverrides = useRef(new Map<string, string>())
   const rowRequestCounter = useRef(0)
   const rowRequestSequences = useRef(new Map<string, number>())
   const prefetchedCatalog = useRef(new Map<string, TestsListResponse>())
@@ -825,7 +832,6 @@ export function TestsPage({
   const [filter, setFilter] = useState<CompareFilter>('evidence')
   const [showHidden, setShowHidden] = useState(false)
   const [loading, setLoading] = useState(true)
-  const [local, setLocal] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const [rowLoading, setRowLoading] = useState<Set<string>>(new Set())
   const [rowErrors, setRowErrors] = useState<Record<string, string>>({})
@@ -914,7 +920,6 @@ export function TestsPage({
     try {
       const bridge = await getDashboardDataBridge()
       bridgeRef.current = bridge
-      setLocal(bridge.mode === 'local')
       const data = await bridge.listEvaluatedVersions()
       if (evaluatedRevision.current !== data.revision) {
         evaluatedRevision.current = data.revision
@@ -963,8 +968,8 @@ export function TestsPage({
     }
   }, [evaluated?.revision])
 
-  const loadVersionResult = useCallback(
-    async (testId: string, version: number, markDetails = false) => {
+  const loadDefinitionResult = useCallback(
+    async (testId: string, definition: string, markDetails = false) => {
       const bridge = bridgeRef.current
       if (!bridge || !cohortId || !fromVersionId || !toVersionId) return null
       const requestSequence = ++rowRequestCounter.current
@@ -979,7 +984,7 @@ export function TestsPage({
       try {
         const result = await bridge.getTestVersion({
           test_id: testId,
-          test_version: version,
+          test_version: definition,
           cohort_id: cohortId,
           from_version_id: fromVersionId,
           to_version_id: toVersionId,
@@ -993,7 +998,7 @@ export function TestsPage({
         setRows((current) =>
           current.map((row) =>
             row.test_id === testId
-              ? { ...row, selected_version: version, result }
+              ? { ...row, selected_version: definition, result }
               : row,
           ),
         )
@@ -1056,12 +1061,12 @@ export function TestsPage({
         to_version_id: toId || undefined,
       })
 
-    const applyVersionOverrides = async (response: TestsListResponse) => {
+    const applyDefinitionOverrides = async (response: TestsListResponse) => {
       let next = response.rows
       if (!fromVersionId || !toVersionId) return next
       next = await Promise.all(
         next.map(async (row) => {
-          const override = versionOverrides.current.get(row.test_id)
+          const override = definitionOverrides.current.get(row.test_id)
           if (
             !override ||
             override === row.selected_version ||
@@ -1143,7 +1148,7 @@ export function TestsPage({
         }
       }
 
-      const next = await applyVersionOverrides(response)
+      const next = await applyDefinitionOverrides(response)
       if (active) setRows(next)
     }
 
@@ -1222,7 +1227,7 @@ export function TestsPage({
     )
     setToVersionId(nextVersions?.[0]?.id ?? '')
     setFromVersionId(nextVersions?.[1]?.id ?? '')
-    versionOverrides.current.clear()
+    definitionOverrides.current.clear()
     setDetailsLoaded(new Set())
   }
 
@@ -1237,14 +1242,14 @@ export function TestsPage({
     )
   }
 
-  const selectTestVersion = (row: TestCatalogRow, version: number) => {
-    versionOverrides.current.set(row.test_id, version)
+  const selectTestDefinition = (row: TestCatalogRow, definition: string) => {
+    definitionOverrides.current.set(row.test_id, definition)
     setDetailsLoaded((current) => {
       const next = new Set(current)
       next.delete(row.test_id)
       return next
     })
-    void loadVersionResult(row.test_id, version, true)
+    void loadDefinitionResult(row.test_id, definition, true)
   }
 
   const toggleDetails = (row: TestCatalogRow) => {
@@ -1257,7 +1262,7 @@ export function TestsPage({
       return next
     })
     if (opening && !detailsLoaded.has(row.test_id) && row.selected_version) {
-      void loadVersionResult(row.test_id, row.selected_version, true)
+      void loadDefinitionResult(row.test_id, row.selected_version, true)
     }
   }
 
@@ -1273,12 +1278,8 @@ export function TestsPage({
     setToVersionId(versionId)
   }
 
-  const cohortLabel = (cohort: CohortDescriptor) => {
-    const judge = cohort.judge_model
-      ? `judge ${compactModel(cohort.judge_model)}`
-      : 'no judge'
-    return `${compactModel(cohort.subject_model)} · lane ${cohort.lane} · ${judge}`
-  }
+  const cohortLabel = (cohort: CohortDescriptor) =>
+    `${compactModel(cohort.subject_model)} · lane ${cohort.lane}`
   const cohortsWithPairs = (evaluated?.cohorts ?? []).filter(
     (cohort) =>
       (evaluated?.versions.filter((version) => version.cohort_id === cohort.id)
@@ -1308,8 +1309,8 @@ export function TestsPage({
   const bLabel = bVersion ? bVersion.label.toLowerCase() : 'b'
   const headline =
     activeCohort && aVersion && bVersion
-      ? `${compactModel(activeCohort.subject_model)} judged by ${activeCohort.judge_model ? compactModel(activeCohort.judge_model) : 'no judge'} · ${aLabel} → ${bLabel}`
-      : 'two system versions, same model and judge'
+      ? `${compactModel(activeCohort.subject_model)} · ${aLabel} → ${bLabel}`
+      : 'two system versions, same model'
 
   const shareLink = () => {
     void navigator.clipboard?.writeText(window.location.href).then(() => {
@@ -1343,23 +1344,22 @@ export function TestsPage({
               <Link2 size={13} aria-hidden="true" />
               {copied ? 'link copied' : 'share link'}
             </button>
-            {local ? (
-              <a
-                className={dashboardHeaderActionClassName({ primary: true })}
-                href={hashForWorkspace()}
-                onClick={() => requestQuickExecution()}
-              >
-                new run on b
-              </a>
-            ) : null}
+            <a
+              className={dashboardHeaderActionClassName({ primary: true })}
+              href={hashForWorkspace()}
+              onClick={() => requestQuickExecution()}
+            >
+              new run on b
+            </a>
           </>
         }
       />
 
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="compare"
+          title="Compare system versions"
           summary={headline}
+          context="Retained cohorts · per-test mean score and run medians"
           headingId="compare-title"
           breadcrumb={[
             { label: 'tests', href: hashForTests() },
@@ -1377,11 +1377,12 @@ export function TestsPage({
           }
         />
 
-        {/* Audit CP-02 / CP-06: the builder names who was judged by whom and
-            what each side holds; one sentence explains when deltas exist. */}
+        {/* Audit CP-02 / CP-06: the builder names which model ran in which
+            lane and what each side holds; one sentence explains when deltas
+            exist. */}
         <Panel className="mt-6" aria-labelledby="compare-builder-title">
           <h2 className="ds-label mb-3" id="compare-builder-title">
-            cohort · who was judged by whom
+            cohort · which model ran in which lane
           </h2>
           <div className="grid gap-4 @[840px]:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)_auto_minmax(0,1fr)] @[840px]:items-start">
             <div className="grid gap-1">
@@ -1405,8 +1406,8 @@ export function TestsPage({
               </Select>
               <span className="font-mono text-label text-ink-muted">
                 {activeCohort
-                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · judge ${activeCohort.judge_provider ? `${activeCohort.judge_provider}/${activeCohort.judge_model}` : 'no judge'}`
-                  : 'system version = the workers under test · cohort = which model ran with which Markdown judge'}
+                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · lane ${activeCohort.lane}`
+                  : 'system version = the workers under test · cohort = which model ran in which lane'}
                 {evaluated
                   ? ` · ${cohortsWithPairs} of ${evaluated.cohorts.length} cohorts have ≥ 2 versions`
                   : ''}
@@ -1482,7 +1483,7 @@ export function TestsPage({
             </div>
           </div>
           <p className="mt-3 mb-0 text-xs text-ink-soft">
-            Deltas only between runs of the same model, judge and test contract.
+            Deltas only between runs of the same model and test contract.
           </p>
           {recommendation ? (
             <Callout tone="info" className="mt-3" data-recommendation>
@@ -1552,7 +1553,7 @@ export function TestsPage({
               <span className="flex flex-wrap gap-2">
                 {/* Running the missing side is what makes this page work, so
                     it is the action, not an instruction to go and do it. */}
-                {local && onlyOnA.length > 0 ? (
+                {onlyOnA.length > 0 ? (
                   <a
                     className={buttonClassName({
                       variant: 'secondary',
@@ -1566,7 +1567,7 @@ export function TestsPage({
                     {onlyOnA.length === 1 ? '' : 's'} on b
                   </a>
                 ) : null}
-                {local && onlyOnB.length > 0 ? (
+                {onlyOnB.length > 0 ? (
                   <a
                     className={buttonClassName({
                       variant: 'secondary',
@@ -1655,7 +1656,7 @@ export function TestsPage({
                   active={filter === 'comparable'}
                   count={comparableCount}
                   onClick={() => setFilter('comparable')}
-                  title="same test version, cases and contracts on both sides"
+                  title="same scenario definition, cases and contracts on both sides"
                 >
                   comparable
                 </FilterChip>
@@ -1703,7 +1704,7 @@ export function TestsPage({
                 aria-hidden="true"
               />
               <Input
-                className="pr-9 pl-9"
+                style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={query}
                 placeholder="Search test id"
@@ -1772,7 +1773,7 @@ export function TestsPage({
                 >
                   clear filters
                 </button>
-              ) : local ? (
+              ) : (
                 <a
                   className={buttonClassName({
                     variant: 'primary',
@@ -1783,7 +1784,7 @@ export function TestsPage({
                 >
                   run tests
                 </a>
-              ) : null
+              )
             }
           />
         ) : (
@@ -1858,12 +1859,11 @@ export function TestsPage({
                         row={row}
                         aLabel={aLabel}
                         bLabel={bLabel}
-                        local={local}
                         expanded={expanded.has(row.test_id)}
                         loading={rowLoading.has(row.test_id)}
                         error={rowErrors[row.test_id]}
                         showDeltas={showDeltas}
-                        onVersion={selectTestVersion}
+                        onDefinition={selectTestDefinition}
                         onToggle={toggleDetails}
                       />
                     ))}

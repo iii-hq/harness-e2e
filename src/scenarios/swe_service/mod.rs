@@ -9,13 +9,12 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, ComplexityProfile, CriterionSpec,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CriterionSpec,
     DeliverableContract, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
     ProvenanceEvidence, ScenarioCase, ScenarioId, ScenarioSpec,
 };
 use crate::report::EvaluationDimension;
 
-pub const VERSION: u32 = 3;
 pub const REPORT_ID: &str = "swe_service_report";
 pub const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 pub const FIXTURE_REVISION: &str = "ab373b11ae167ef853f5b5c5184cdcd431a444ea";
@@ -96,25 +95,6 @@ impl Case {
             _ => "Evolve one profile service through eight SWE tickets in one continuing Harness session.",
         }
     }
-
-    pub fn profile(self) -> ComplexityProfile {
-        let adaptive = self.journey() || self.ticket == 5;
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 2,
-            external_systems: 2,
-            state_transitions: if self.journey() { 8 } else { 1 },
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 4,
-            agent_owned_decomposition: true,
-            material_invalidation_events: u8::from(adaptive),
-            replan_loops: u8::from(adaptive),
-            compensable_mutations: u8::from(adaptive),
-            coherent_long_horizon: self.journey(),
-            ..ComplexityProfile::default()
-        }
-    }
 }
 
 pub fn is_swe(scenario: ScenarioId) -> bool {
@@ -125,7 +105,6 @@ pub fn spec(scenario: ScenarioId) -> ScenarioSpec {
     let case = Case::from_scenario(scenario).expect("SWE scenario identity");
     ScenarioSpec {
         id: case.id,
-        version: VERSION,
         prompt: case.description().into(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -157,7 +136,6 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
     let selection = Case::from_scenario(scenario).expect("SWE scenario identity");
     let case = ScenarioCase::new(
         selection.id,
-        VERSION,
         super::stable_seed(selection.id),
         json!({
             "fixture_repository": FIXTURE_REPOSITORY,
@@ -170,7 +148,6 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
             "delegation": "optional",
             "curriculum_version": 1,
         }),
-        selection.profile(),
         vec![
             "iii::functions".into(),
             "e2e::control-plane-v1".into(),
@@ -181,7 +158,7 @@ pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
                 id: REPORT_ID.into(),
                 kind: "swe-service-report".into(),
                 media_type: "application/json".into(),
-                schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report/v1"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
+                schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
                 max_size_bytes: 16 * 1024 * 1024,
             }],
             invariants: vec![InvariantSpec {

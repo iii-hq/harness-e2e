@@ -223,7 +223,7 @@ describe('design system foundation primitives', () => {
   it('gives callouts a role that matches their urgency', () => {
     expect(
       renderToStaticMarkup(
-        <Callout title="Judge needs review">Two runs disagreed.</Callout>,
+        <Callout title="Run needs review">Two runs disagreed.</Callout>,
       ),
     ).toContain('class="ds-callout ds-callout-info" role="note"')
     expect(renderToStaticMarkup(<Callout tone="warning">x</Callout>)).toContain(
@@ -280,10 +280,7 @@ describe('design system foundation primitives', () => {
       </>,
     )
     expect(controls).toContain(
-      '<span class="ds-select"><select class="ds-input ds-select-control"',
-    )
-    expect(controls).toContain(
-      '<span class="ds-select-chevron" aria-hidden="true">',
+      '<select class="ds-input" id="s" aria-label="Lifecycle">',
     )
     expect(controls).toContain('<textarea class="ds-input ds-textarea"')
   })

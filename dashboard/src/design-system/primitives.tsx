@@ -1,4 +1,4 @@
-import { ChevronDown, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import {
   type ButtonHTMLAttributes,
   type CSSProperties,
@@ -645,17 +645,9 @@ export function Select({
   ...props
 }: SelectHTMLAttributes<HTMLSelectElement>) {
   return (
-    <span className="ds-select">
-      <select
-        className={classes('ds-input', 'ds-select-control', className)}
-        {...props}
-      >
-        {children}
-      </select>
-      <span className="ds-select-chevron" aria-hidden="true">
-        <ChevronDown size={14} />
-      </span>
-    </span>
+    <select className={inputClassName(className)} {...props}>
+      {children}
+    </select>
   )
 }
 

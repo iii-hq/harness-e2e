@@ -31,14 +31,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common::{self, ObservedFunctionCall};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
     ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "context_pressure";
-const VERSION: u32 = 5;
 const DELIVERABLE_ID: &str = "context_report";
 const SEGMENT_CHARS: usize = 8_192;
 
@@ -226,7 +225,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "segments": rung.segments,
@@ -234,20 +232,12 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "report_header": report_header(rung.segments),
             "token_derivation": "run-scoped",
         }),
-        ComplexityProfile {
-            planning_depth: 1,
-            dependency_depth: 2,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
         ],
         deliverable_contract(),
-    )?
-    // The ingest workload is charter + every segment + report.
-    .with_minimum_expected_work(u64::from(rung.segments) + 2)?;
+    )?;
     Ok(MaterializedScenario {
         spec: scenario_for_case(namespace, rung),
         case,
@@ -261,7 +251,6 @@ fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let last = rung.segments - 1;
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Complete a context-endurance run over {segments} large documents.
 
@@ -705,17 +694,10 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_scaled_to_the_maximum_load() {
-        use super::super::ComplexityTier;
-
         let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
         let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
-        assert_eq!(first.case.complexity.tier, ComplexityTier::L1Sequential);
-        assert_eq!(
-            first.case.work.minimum_expected_work,
-            u64::from(RUNG.segments) + 2
-        );
         assert_eq!(first.spec.execution.max_turns, 12 + RUNG.segments);
     }
 }

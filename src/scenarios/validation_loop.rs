@@ -17,13 +17,12 @@ use crate::context::E2eContext;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, ComplexityProfile,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
+    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
+    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_loop";
-const VERSION: u32 = 6;
 const DELIVERABLE_ID: &str = "validation_result";
 
 const HOOK_TYPE: &str = "harness::hook::post-turn";
@@ -54,7 +53,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "database": "primary",
@@ -63,7 +61,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "expected_rows": EXPECTED_ROWS,
             "minimum_nudges": 1,
         }),
-        validation_profile(),
         validation_capabilities(),
         deliverable_contract(),
     )?;
@@ -78,7 +75,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let table = table(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             "You are testing a self-installed validation loop. Follow these steps exactly.\n\n\
              Step 1 — prepare the goal table. Call database::execute (db \"primary\") twice: first \
@@ -222,20 +218,6 @@ fn deliverable_contract() -> DeliverableContract {
             "additionalProperties": true
         }),
     )
-}
-
-pub(super) fn validation_profile() -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: 2,
-        external_systems: 1,
-        state_transitions: 4,
-        validation_loops: 2,
-        artifact_count: 1,
-        coordination_edges: 1,
-        ambiguity_level: 3,
-        ..ComplexityProfile::default()
-    }
 }
 
 pub(super) fn validation_capabilities() -> Vec<String> {

@@ -32,14 +32,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "moving_target";
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "adaptation_receipt";
 const REPORT_BUDGET_CHARS: usize = 300;
 
@@ -273,7 +272,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "task": "manifest-with-revision",
@@ -281,14 +279,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "max_submissions": 2,
             "token_derivation": "run-scoped",
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 2,
-            validation_loops: 2,
-            ambiguity_level: 7,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -307,7 +297,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let submit_function = submit_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Deliver one manifest to a submission service whose requirements may be revised
 while you work. Two functions are already registered:
@@ -732,17 +721,13 @@ mod tests {
     }
 
     #[test]
-    fn materialized_case_is_l5_adaptive_and_reproducible_across_namespaces() {
+    fn materialized_case_is_reproducible_across_namespaces() {
         let first = materialize("attempt-a", 29).unwrap();
         let retry = materialize("attempt-b", 29).unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.capture.is_some());

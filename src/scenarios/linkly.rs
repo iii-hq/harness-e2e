@@ -28,7 +28,6 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 pub const ID: &str = "linkly_tutorial";
-pub const VERSION: u32 = 1;
 const EVIDENCE_ID: &str = "linkly_evidence";
 const HTTP_BASE: &str = "http://127.0.0.1:3111";
 const PROXY_ADDR: &str = "127.0.0.1:3110";
@@ -122,7 +121,6 @@ fn now_ms() -> u128 {
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: PROMPTS[0].trim_end().to_string(),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -168,7 +166,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
         spec: scenario(namespace),
         case: ScenarioCase::new(
             ID,
-            VERSION,
             super::stable_seed(ID),
             json!({
                 "template": TEMPLATE_SOURCE,
@@ -177,18 +174,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "exchanges": PROMPTS.len(),
                 "prompts_sha256": crate::artifact::sha256_bytes(PROMPTS.concat().as_bytes()),
             }),
-            ComplexityProfile {
-                planning_depth: 7,
-                dependency_depth: 4,
-                parallel_branches: 3,
-                external_systems: 4,
-                state_transitions: 12,
-                validation_loops: 3,
-                artifact_count: 1,
-                coordination_edges: 6,
-                ambiguity_level: 3,
-                ..Default::default()
-            },
             vec![
                 "e2e::control-plane-v1".into(),
                 "iii::functions".into(),

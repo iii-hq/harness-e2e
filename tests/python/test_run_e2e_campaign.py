@@ -14,10 +14,8 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_e2e_campaign import (
     CampaignError,
-    FAULT_PROFILE_WEIGHT,
-    RESULTS_SCHEMA_VERSION,
+    FAULT_PROFILES,
     RESULT_CONTRACT_SHA256,
-    SCORING_PROFILE_SHA256,
     RESULT_AGGREGATE_COUNT_FIELDS,
     RESULT_AGGREGATE_RATE_FIELDS,
     RESULT_AGGREGATE_TOKEN_FIELDS,
@@ -32,7 +30,6 @@ from run_e2e_campaign import (
     parse_campaign,
     score_campaign,
     validate_campaign_bundle,
-    _canonical_sha256,
 )
 
 
@@ -49,24 +46,20 @@ def native_scenario(scenario_id, *, deferred=False):
         "deferred_runs": 1 if deferred else 0,
         "completed_runs": 0 if deferred else 1,
         "technical_valid_runs": 0 if deferred else 1,
-        "objective_scored_runs": 0 if deferred else 1,
-        "objective_median_score": None if deferred else 90,
-        "quality_scored_completed_runs": 0 if deferred else 1,
-        "quality_score_completed": None if deferred else 90,
+        "scored_runs": 0 if deferred else 1,
+        "mean_score": None if deferred else 90,
     })
     scenario = {"scenario_id": scenario_id, "aggregate": aggregate}
     if deferred:
         scenario.update({"deferral_reason": "materialization failed", "runs": []})
     else:
-        scenario["case"] = {"complexity": {"tier": "l4_coordinated"}}
+        scenario["case"] = {"case_id": f"{scenario_id}@1"}
     return scenario
 
 
 def native_report(scenarios, *, partial=False):
     return {
-        "schema_version": RESULTS_SCHEMA_VERSION,
         "result_contract_sha256": RESULT_CONTRACT_SHA256,
-        "scoring_profile_sha256": SCORING_PROFILE_SHA256,
         "report_state": "partial" if partial else "complete",
         "objective_outcome": "inconclusive" if partial else "passed",
         "scenarios": scenarios,
@@ -86,27 +79,11 @@ def manifest(groups=None):
             }
         ]
     )
-    for group in selected:
-        if "difficulty_weight" in group:
-            continue
-        if group.get("execution_kind") == "fault_injection":
-            group["difficulty_weight"] = FAULT_PROFILE_WEIGHT.get(
-                group.get("fault_profile"), 1
-            )
-        else:
-            group["difficulty_weight"] = max(
-                (
-                    scenario_catalog().get(scenario, {}).get("difficulty_weight", 1)
-                    for scenario in group.get("scenarios", [])
-                ),
-                default=1,
-            )
     return {
         "kind": "harness-e2e-campaign",
         "campaign_id": "test-campaign",
         "lane": "daily",
         "failure_policy": "enforcing",
-        "scoring_profile": "difficulty-weighted-v1",
         "groups": selected,
     }
 
@@ -203,6 +180,33 @@ class CampaignValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(CampaignError, "missing required field"):
             parse_campaign(missing)
 
+    def test_a_manifest_that_still_states_a_difficulty_weight_is_rejected(self):
+        """Weights are gone from the contract, so they are an unknown field."""
+        weighted = manifest()
+        weighted["groups"][0]["difficulty_weight"] = 4
+        with self.assertRaisesRegex(CampaignError, "difficulty_weight"):
+            parse_campaign(weighted)
+        profiled = manifest()
+        profiled["scoring_profile"] = "difficulty-weighted"
+        with self.assertRaisesRegex(CampaignError, "scoring_profile"):
+            parse_campaign(profiled)
+
+    def test_only_canonical_fault_profiles_are_accepted(self):
+        fault = {
+            "id": "fault",
+            "execution_kind": "fault_injection",
+            "runs": 3,
+            "technical_retries": 0,
+            "fault_profile": "weekly-l9-recovery",
+            "fault_scenario": "stateful.2",
+            "soak_minutes": 60,
+        }
+        with self.assertRaisesRegex(CampaignError, "fault_profile is not canonical"):
+            parse_campaign(manifest([fault]))
+        fault["fault_profile"] = sorted(FAULT_PROFILES)[0]
+        campaign = parse_campaign(manifest([fault]))
+        self.assertEqual(campaign.groups[0].fault_profile, fault["fault_profile"])
+
 
 class CampaignRunnerTests(unittest.TestCase):
     def setUp(self):
@@ -245,44 +249,6 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertIn("--technical-retries", command)
         self.assertNotIn("--seed", command)
         self.assertNotIn("--rotating-seed", command)
-
-    def test_markdown_groups_require_and_freeze_an_explicit_auxiliary_model(self):
-        markdown_campaign = parse_campaign(manifest([{
-            "id": "markdown", "execution_kind": "harness_turn", "runs": 1,
-            "technical_retries": 1, "scenarios": ["insert_record"],
-        }]))
-        with tempfile.TemporaryDirectory() as directory:
-            with self.assertRaisesRegex(CampaignError, "explicit judge"):
-                execute_campaign(
-                    markdown_campaign,
-                    e2e_bin=pathlib.Path("bin/harness-e2e"),
-                    output_root=pathlib.Path(directory),
-                    execution_id="markdown-no-judge",
-                    dry_run=False,
-                    advisory=True,
-                    model="model",
-                    provider="provider",
-                    environ={},
-                )
-
-            summary = execute_campaign(
-                markdown_campaign,
-                e2e_bin=pathlib.Path("bin/harness-e2e"),
-                output_root=pathlib.Path(directory),
-                execution_id="markdown-with-judge",
-                dry_run=False,
-                advisory=True,
-                model="model",
-                provider="provider",
-                judge_model="judge-model",
-                judge_provider="judge-provider",
-                environ={},
-                run_process=lambda *_args, **_kwargs: types.SimpleNamespace(returncode=0),
-            )
-        command = summary["groups"][0]["command"]
-        self.assertIn("--judge-model", command)
-        self.assertIn("judge-model", command)
-        self.assertTrue(summary["groups"][0]["materialized_group_sha256"].startswith("sha256:"))
 
     def test_advisory_runs_every_group_and_returns_zero_with_failed_objective(self):
         calls = []
@@ -345,7 +311,7 @@ class CampaignRunnerTests(unittest.TestCase):
                     output = pathlib.Path(command[command.index("--output") + 1])
                     output.mkdir(parents=True, exist_ok=True)
                     scenario = native_scenario(command[command.index("--scenario") + 1])
-                    scenario["aggregate"]["objective_median_score"] = 65
+                    scenario["aggregate"]["mean_score"] = 65
                     report = native_report([scenario])
                     report["objective_outcome"] = "failed"
                     (output / "results.json").write_text(json.dumps(report), encoding="utf-8")
@@ -459,8 +425,7 @@ class CampaignRunnerTests(unittest.TestCase):
                         "group_id": "core",
                         "execution_kind": "harness_turn",
                         "status": "passed",
-                        "difficulty_weight": 4,
-                        "objective_score": 91.0,
+                        "score": 91.0,
                         "score_availability": "complete",
                         "output": str(group_output),
                     }
@@ -469,12 +434,10 @@ class CampaignRunnerTests(unittest.TestCase):
             summary_path.write_text(json.dumps(summary), encoding="utf-8")
             campaign_path = root / "campaign.json"
             campaign_path.write_text(json.dumps(manifest()), encoding="utf-8")
-            scoring_path = ROOT / "config" / "scoring" / "difficulty-weighted-v1.json"
             bundle = build_campaign_bundle(
                 summary,
                 summary_path=summary_path,
                 manifest_path=campaign_path,
-                scoring_profile_path=scoring_path,
             )
             validate_campaign_bundle(bundle, root=root)
             results.write_text('{"native":false}\n', encoding="utf-8")
@@ -498,8 +461,7 @@ class CampaignRunnerTests(unittest.TestCase):
                         "group_id": "core",
                         "execution_kind": "harness_turn",
                         "status": "failed",
-                        "difficulty_weight": 4,
-                        "objective_score": None,
+                        "score": None,
                         "score_availability": "unavailable",
                         "output": str(group_output),
                     }
@@ -512,7 +474,6 @@ class CampaignRunnerTests(unittest.TestCase):
                 summary,
                 summary_path=summary_path,
                 manifest_path=campaign_path,
-                scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
             )
 
             paths = [artifact["path"] for artifact in bundle["groups"][0]["artifacts"]]
@@ -545,7 +506,6 @@ class CampaignRunnerTests(unittest.TestCase):
                     summary,
                     summary_path=summary_path,
                     manifest_path=campaign_path,
-                    scoring_profile_path=ROOT / "config/scoring/difficulty-weighted-v1.json",
                 )
 
     def test_legacy_results_v3_shape_is_rejected(self):
@@ -557,7 +517,6 @@ class CampaignRunnerTests(unittest.TestCase):
                         "execution_kind": "harness_turn",
                         "runs": 1,
                         "technical_retries": 0,
-                        "difficulty_weight": 4,
                         "scenarios": ["tool_contract_recovery"],
                     }
                 ]
@@ -567,12 +526,10 @@ class CampaignRunnerTests(unittest.TestCase):
             output = pathlib.Path(directory) / "core"
             output.mkdir()
             (output / "results.json").write_text(
-                json.dumps({"schema_version": 3, "passed": True, "scenarios": []}),
+                json.dumps({"passed": True, "scenarios": []}),
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(
-                CampaignError, f"schema_version must be {RESULTS_SCHEMA_VERSION}"
-            ):
+            with self.assertRaisesRegex(CampaignError, "result_contract_sha256"):
                 score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
     def test_compact_aggregate_keeps_only_bundle_references(self):
@@ -599,7 +556,7 @@ class CampaignRunnerTests(unittest.TestCase):
     def test_partial_report_requires_every_planned_slot_explicitly(self):
         campaign = parse_campaign(manifest([{
             "id": "core", "execution_kind": "harness_turn", "runs": 1,
-            "technical_retries": 0, "difficulty_weight": 4,
+            "technical_retries": 0,
             "scenarios": ["tool_contract_recovery", "engineering_ticket"],
         }]))
         with tempfile.TemporaryDirectory() as directory:
@@ -614,7 +571,7 @@ class CampaignRunnerTests(unittest.TestCase):
             results.write_text(json.dumps(document), encoding="utf-8")
             scoring = score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
             self.assertEqual(scoring["harness_score"], 90)
-            self.assertEqual(scoring["objective_score_coverage"], 0.5)
+            self.assertEqual(scoring["score_coverage"], 0.5)
             self.assertEqual(scoring["score_availability"], "partial")
 
     def test_unmaterialized_scenario_requires_deferral_reason_without_observations(self):
@@ -640,24 +597,22 @@ class CampaignRunnerTests(unittest.TestCase):
             self.assertEqual(scoring["harness_score"], 90)
             self.assertFalse(scoring["infrastructure_valid"])
 
-    def test_difficulty_weighted_score_uses_native_scenario_medians(self):
+    def test_harness_score_is_the_plain_mean_of_the_group_scores(self):
         campaign = parse_campaign(
             manifest(
                 [
                     {
-                        "id": "l4",
+                        "id": "first",
                         "execution_kind": "harness_turn",
                         "runs": 1,
                         "technical_retries": 0,
-                        "difficulty_weight": 4,
                         "scenarios": ["tool_contract_recovery"],
                     },
                     {
-                        "id": "l2",
+                        "id": "second",
                         "execution_kind": "harness_turn",
                         "runs": 1,
                         "technical_retries": 0,
-                        "difficulty_weight": 2,
                         "scenarios": ["performance_regression"],
                     },
                 ]
@@ -666,60 +621,103 @@ class CampaignRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             groups = []
-            for group_id, tier, median in [
-                ("l4", "l4_coordinated", 80.0),
-                ("l2", "l2_stateful", 100.0),
-            ]:
+            for group_id, mean_score in [("first", 80.0), ("second", 100.0)]:
                 output = root / group_id
                 output.mkdir()
-                scoring_profile = json.loads(
-                    (ROOT / "config/scoring/difficulty-weighted-v1.json").read_text()
+                scenario = native_scenario(f"{group_id}_scenario")
+                scenario["aggregate"].update(
+                    {
+                        "mean_score": mean_score,
+                        "execution_reliability": 1.0,
+                        "completion_evidence_coverage": 1.0,
+                        "completion_rate": 1.0,
+                        "total_tokens_consumed": 1200,
+                        "tokens_completed_p50": 1200.0,
+                        "failed_attempt_tokens": 0,
+                        "tokens_per_completion": 1200.0,
+                    }
                 )
                 (output / "results.json").write_text(
+                    json.dumps(native_report([scenario])), encoding="utf-8"
+                )
+                groups.append({"group_id": group_id, "output": str(output)})
+            scoring = score_campaign(campaign, groups)
+        # No weights: an easy group and a hard group count exactly the same.
+        self.assertAlmostEqual(scoring["harness_score"], (80 + 100) / 2)
+        self.assertEqual(scoring["scored_groups"], 2)
+        self.assertEqual(scoring["expected_groups"], 2)
+        self.assertEqual(scoring["score_coverage"], 1.0)
+        self.assertEqual(scoring["score_availability"], "complete")
+
+    def test_group_score_and_coverage_come_from_the_native_aggregates(self):
+        campaign = parse_campaign(manifest([{
+            "id": "core", "execution_kind": "harness_turn", "runs": 1,
+            "technical_retries": 0,
+            "scenarios": ["tool_contract_recovery", "engineering_ticket"],
+        }]))
+        with tempfile.TemporaryDirectory() as directory:
+            output = pathlib.Path(directory)
+            scored = native_scenario("tool_contract_recovery")
+            scored["aggregate"]["mean_score"] = 70.0
+            unscored = native_scenario("engineering_ticket")
+            unscored["aggregate"].update({"scored_runs": 0, "mean_score": None})
+            (output / "results.json").write_text(
+                json.dumps(native_report([scored, unscored])), encoding="utf-8"
+            )
+            group = [{"group_id": "core", "output": str(output)}]
+            scoring = score_campaign(campaign, group)
+        # The group score is the mean of the scenarios that reported one.
+        self.assertEqual(group[0]["score"], 70.0)
+        # Coverage is scored_runs over planned_runs across the group.
+        self.assertEqual(group[0]["score_coverage"], 0.5)
+        self.assertEqual(group[0]["score_availability"], "partial")
+        self.assertEqual(scoring["harness_score"], 70.0)
+
+    def test_a_group_without_a_score_leaves_the_mean_and_makes_it_partial(self):
+        campaign = parse_campaign(
+            manifest(
+                [
+                    {
+                        "id": "scored",
+                        "execution_kind": "harness_turn",
+                        "runs": 1,
+                        "technical_retries": 0,
+                        "scenarios": ["tool_contract_recovery"],
+                    },
+                    {
+                        "id": "unscored",
+                        "execution_kind": "harness_turn",
+                        "runs": 1,
+                        "technical_retries": 0,
+                        "scenarios": ["performance_regression"],
+                    },
+                ]
+            )
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            groups = []
+            for group_id, deferred in [("scored", False), ("unscored", True)]:
+                output = root / group_id
+                output.mkdir()
+                (output / "results.json").write_text(
                     json.dumps(
-                        {
-                            "schema_version": RESULTS_SCHEMA_VERSION,
-                            "result_contract_sha256": RESULT_CONTRACT_SHA256,
-                            "scoring_profile_sha256": _canonical_sha256(scoring_profile),
-                            "report_state": "complete",
-                            "objective_outcome": "passed",
-                            "scenarios": [
-                                {
-                                    "case": {"complexity": {"tier": tier}},
-                                    "aggregate": {
-                                        "planned_runs": 1,
-                                        "observed_runs": 1,
-                                        "deferred_runs": 0,
-                                        "completed_runs": 1,
-                                        "task_incomplete_runs": 0,
-                                        "undetermined_runs": 0,
-                                        "technical_valid_runs": 1,
-                                        "technical_invalid_runs": 0,
-                                        "execution_reliability": 1.0,
-                                        "completion_evidence_coverage": 1.0,
-                                        "completion_rate": 1.0,
-                                        "objective_scored_runs": 1,
-                                        "objective_median_score": median,
-                                        "objective_score_coverage": 1.0,
-                                        "quality_scored_completed_runs": 1,
-                                        "quality_score_completed": median,
-                                        "quality_coverage": 1.0,
-                                        "total_tokens_consumed": 1200,
-                                        "tokens_completed_p50": 1200.0,
-                                        "failed_attempt_tokens": 0,
-                                        "tokens_per_completion": 1200.0,
-                                    },
-                                }
-                            ],
-                        }
+                        native_report(
+                            [native_scenario(f"{group_id}_scenario", deferred=deferred)],
+                            partial=deferred,
+                        )
                     ),
                     encoding="utf-8",
                 )
                 groups.append({"group_id": group_id, "output": str(output)})
             scoring = score_campaign(campaign, groups)
-        self.assertAlmostEqual(scoring["harness_score"], (80 * 4 + 100 * 2) / 6)
-        self.assertEqual(scoring["objective_score_coverage"], 1.0)
-        self.assertEqual(scoring["score_availability"], "complete")
+        self.assertIsNone(groups[1]["score"])
+        self.assertEqual(groups[1]["score_availability"], "unavailable")
+        # The unscored group never dilutes the mean, it only withholds it.
+        self.assertEqual(scoring["harness_score"], 90)
+        self.assertEqual(scoring["scored_groups"], 1)
+        self.assertEqual(scoring["expected_groups"], 2)
+        self.assertEqual(scoring["score_availability"], "partial")
 
     def test_fault_infrastructure_is_null_not_zero_and_reduces_coverage(self):
         campaign = parse_campaign(
@@ -730,7 +728,6 @@ class CampaignRunnerTests(unittest.TestCase):
                         "execution_kind": "fault_injection",
                         "runs": 3,
                         "technical_retries": 0,
-                        "difficulty_weight": 2,
                         "fault_profile": "weekly-l2-recovery",
                         "fault_scenario": "stateful.2",
                         "soak_minutes": 60,
@@ -752,7 +749,7 @@ class CampaignRunnerTests(unittest.TestCase):
                 campaign, [{"group_id": "fault", "output": str(output)}]
             )
         self.assertEqual(scoring["harness_score"], 100.0)
-        self.assertAlmostEqual(scoring["objective_score_coverage"], 1 / 3)
+        self.assertAlmostEqual(scoring["score_coverage"], 1 / 3)
         self.assertFalse(scoring["infrastructure_valid"])
         self.assertEqual(scoring["score_availability"], "partial")
 

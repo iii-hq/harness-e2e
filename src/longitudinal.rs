@@ -14,7 +14,6 @@ use crate::report::{
     CompletionState, DimensionReport, E2eReport, E2eRunReport, E2eScenarioReport,
     EvaluationDimension, RunStatus,
 };
-use crate::scenarios::ComplexityTier;
 
 const MINIMUM_ROBUSTNESS_SAMPLE: usize = 5;
 const MINIMUM_TAIL_SAMPLE: usize = 20;
@@ -244,8 +243,6 @@ pub struct ExecutionCohortIdentity {
     pub stack_mode: String,
     pub subject_provider: String,
     pub subject_model: String,
-    pub judge_provider: Option<String>,
-    pub judge_model: Option<String>,
     pub e2e_repository: Option<String>,
 }
 
@@ -253,7 +250,7 @@ pub struct ExecutionCohortIdentity {
 pub struct CaseCohortKey {
     pub execution: ExecutionCohortIdentity,
     pub scenario_id: String,
-    pub scenario_version: u32,
+    pub behavior_sha256: String,
     pub case_id: String,
     pub seed: u64,
     pub inputs_sha256: String,
@@ -428,7 +425,7 @@ pub struct CaseMetrics {
     pub structural_integrity: Option<RateEstimate>,
     pub technical_failure: Option<RateEstimate>,
     pub flaky_rate: Option<f64>,
-    pub median_score: Option<f64>,
+    pub mean_score: Option<f64>,
     pub p50_cost_usd: Option<f64>,
     pub p95_cost_usd: Option<f64>,
     pub p50_wall_time_ms: Option<f64>,
@@ -436,8 +433,6 @@ pub struct CaseMetrics {
     pub p50_turns: Option<f64>,
     pub p95_turns: Option<f64>,
     pub retry_rate: Option<f64>,
-    pub p50_work_amplification: Option<f64>,
-    pub p95_work_amplification: Option<f64>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unavailable: BTreeMap<String, String>,
 }
@@ -457,7 +452,7 @@ pub struct BenchmarkDelta {
     pub structural_integrity_rate: Option<DeltaValue>,
     pub technical_failure_rate: Option<DeltaValue>,
     pub flaky_rate: Option<DeltaValue>,
-    pub median_score: Option<DeltaValue>,
+    pub mean_score: Option<DeltaValue>,
     pub p50_cost_usd: Option<DeltaValue>,
     pub p95_cost_usd: Option<DeltaValue>,
     pub p50_wall_time_ms: Option<DeltaValue>,
@@ -465,8 +460,6 @@ pub struct BenchmarkDelta {
     pub p50_turns: Option<DeltaValue>,
     pub p95_turns: Option<DeltaValue>,
     pub retry_rate: Option<DeltaValue>,
-    pub p50_work_amplification: Option<DeltaValue>,
-    pub p95_work_amplification: Option<DeltaValue>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unavailable: BTreeMap<String, String>,
 }
@@ -504,7 +497,6 @@ pub struct RegressionSignal {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct CaseComparison {
     pub key: CaseCohortKey,
-    pub complexity_tier: ComplexityTier,
     pub from_run_ids: Vec<String>,
     pub to_run_ids: Vec<String>,
     pub from: CaseMetrics,
@@ -644,12 +636,6 @@ pub fn compare_reports(
         cohort.included_case_ids.push(from_case.case_id.clone());
         cases.push(CaseComparison {
             key: from_key,
-            complexity_tier: from_case
-                .case
-                .as_ref()
-                .context("comparable v2 scenario has no materialized case")?
-                .complexity
-                .tier,
             from_run_ids: from_runs.iter().map(|run| run.run_id.clone()).collect(),
             to_run_ids: to_runs.iter().map(|run| run.run_id.clone()).collect(),
             from: from_metrics,
@@ -747,8 +733,6 @@ fn execution_identity(lane: &str, report: &E2eReport) -> ExecutionCohortIdentity
         .into(),
         subject_provider: report.subject.provider.clone(),
         subject_model: report.subject.model.clone(),
-        judge_provider: report.judge.as_ref().map(|judge| judge.provider.clone()),
-        judge_model: report.judge.as_ref().map(|judge| judge.model.clone()),
         e2e_repository: Some(report.system_under_test.e2e_repository.clone()),
     }
 }
@@ -764,10 +748,6 @@ fn identity_differences(
         (
             "subject model identity differs",
             from.subject_provider != to.subject_provider || from.subject_model != to.subject_model,
-        ),
-        (
-            "judge model identity differs",
-            from.judge_provider != to.judge_provider || from.judge_model != to.judge_model,
         ),
         (
             "E2E repository identity differs",
@@ -804,14 +784,13 @@ fn case_key(
         .context("comparison requires a materialized v2 case")?;
     let contract_sha256 = artifact::sha256_value(&serde_json::json!({
         "scenario_id": scenario.scenario_id,
-        "scenario_version": scenario.scenario_version,
         "case": case,
         "execution_policy": scenario.execution_policy,
     }))?;
     Ok(CaseCohortKey {
         execution,
         scenario_id: scenario.scenario_id.clone(),
-        scenario_version: scenario.scenario_version,
+        behavior_sha256: case.behavior_sha256.clone(),
         case_id: scenario.case_id.clone(),
         seed: case.seed,
         inputs_sha256: case.inputs_sha256.clone(),
@@ -890,7 +869,7 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
                 .filter(|run| {
                     matches!(
                         run.status,
-                        RunStatus::SubjectError | RunStatus::JudgeError | RunStatus::ResourceLimit
+                        RunStatus::SubjectError | RunStatus::ResourceLimit
                     )
                 })
                 .count(),
@@ -926,7 +905,6 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
             .and_then(|value| value.root_turns.zip(value.child_turns))
             .map(|(root, child)| (root + child) as f64)
     });
-    let amplification = collect_complete(runs, |run| run.efficiency.as_ref()?.work_amplification);
     let retry_rate = (!runs.is_empty()).then(|| {
         runs.iter()
             .filter(|run| !run.retry_attempts.is_empty())
@@ -940,8 +918,6 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
         &mut unavailable,
     );
     let p95_turns = tail_metric(&turns, "p95_turns", &mut unavailable);
-    let p95_work_amplification =
-        tail_metric(&amplification, "p95_work_amplification", &mut unavailable);
     if costs.is_none() {
         unavailable.insert(
             "cost".into(),
@@ -952,12 +928,6 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
         unavailable.insert(
             "turns".into(),
             "one or more included runs lacks turn metrics".into(),
-        );
-    }
-    if amplification.is_none() {
-        unavailable.insert(
-            "work_amplification".into(),
-            "one or more included runs lacks work amplification".into(),
         );
     }
     CaseMetrics {
@@ -971,7 +941,7 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
         structural_integrity,
         technical_failure,
         flaky_rate,
-        median_score: median(&scores),
+        mean_score: mean(&scores),
         p50_cost_usd: costs.as_deref().and_then(median),
         p95_cost_usd,
         p50_wall_time_ms: median(&wall_times),
@@ -979,8 +949,6 @@ fn case_metrics(runs: &[&E2eRunReport], observed_runs: &[E2eRunReport]) -> CaseM
         p50_turns: turns.as_deref().and_then(median),
         p95_turns,
         retry_rate,
-        p50_work_amplification: amplification.as_deref().and_then(median),
-        p95_work_amplification,
         unavailable,
     }
 }
@@ -1017,7 +985,7 @@ fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
             to.technical_failure.as_ref().map(|value| value.rate)
         ),
         flaky_rate: delta!("flaky_rate", from.flaky_rate, to.flaky_rate),
-        median_score: delta!("median_score", from.median_score, to.median_score),
+        mean_score: delta!("mean_score", from.mean_score, to.mean_score),
         p50_cost_usd: delta!("p50_cost_usd", from.p50_cost_usd, to.p50_cost_usd),
         p95_cost_usd: delta!("p95_cost_usd", from.p95_cost_usd, to.p95_cost_usd),
         p50_wall_time_ms: delta!(
@@ -1033,16 +1001,6 @@ fn benchmark_delta(from: &CaseMetrics, to: &CaseMetrics) -> BenchmarkDelta {
         p50_turns: delta!("p50_turns", from.p50_turns, to.p50_turns),
         p95_turns: delta!("p95_turns", from.p95_turns, to.p95_turns),
         retry_rate: delta!("retry_rate", from.retry_rate, to.retry_rate),
-        p50_work_amplification: delta!(
-            "p50_work_amplification",
-            from.p50_work_amplification,
-            to.p50_work_amplification
-        ),
-        p95_work_amplification: delta!(
-            "p95_work_amplification",
-            from.p95_work_amplification,
-            to.p95_work_amplification
-        ),
         unavailable,
     }
 }
@@ -1252,6 +1210,13 @@ fn tail_metric(
     percentile(values, 95)
 }
 
+fn mean(values: &[f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    Some(values.iter().sum::<f64>() / values.len() as f64)
+}
+
 fn median(values: &[f64]) -> Option<f64> {
     percentile(values, 50)
 }
@@ -1357,7 +1322,7 @@ mod tests {
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
     use crate::report::{CostReport, E2eScenarioReport};
     use crate::scenarios::ExecutionPolicy;
-    use crate::scenarios::{ComplexityProfile, DeliverableContract, ScenarioCase};
+    use crate::scenarios::{DeliverableContract, ScenarioCase};
 
     #[test]
     fn wilson_interval_exposes_sample_size_and_uncertainty() {
@@ -1763,18 +1728,13 @@ mod tests {
     fn report(revision: &str, regress: bool, include_infra: bool) -> E2eReport {
         let case = ScenarioCase::new(
             "todo_worker_simple",
-            1,
             7,
             serde_json::json!({"variant": "canonical"}),
-            ComplexityProfile {
-                parallel_branches: 2,
-                artifact_count: 1,
-                ..ComplexityProfile::default()
-            },
             vec!["iii::state".into()],
             DeliverableContract::default(),
         )
-        .unwrap();
+        .unwrap()
+        .sealed_for_tests();
         let mut runs = (0..20)
             .map(|index| comparable_run(index, regress && index == 0, regress))
             .collect::<Vec<_>>();
@@ -1827,7 +1787,6 @@ mod tests {
                 supports_vision: Some(false),
             },
             None,
-            None,
             vec![scenario],
         )
     }
@@ -1836,15 +1795,15 @@ mod tests {
         let mut run = comparable_run(index, false, false);
         run.completion = CompletionState::Completed;
         run.technical = TechnicalState::Valid;
-        run.objective_score = Some(100);
+        run.score = Some(100);
         run.efficiency = Some(
             serde_json::from_value(serde_json::json!({
                 "wall_time_ms": 100, "root_turns": 2, "child_turns": 0, "child_sessions": 0,
                 "function_calls": 0, "function_call_errors": 0, "validation_retries": 0,
                 "transient_resumes": 0, "wake_resumes": 0, "effective_fan_out": 0,
                 "critical_path_ms": 100, "input_tokens": tokens, "output_tokens": 0,
-                "total_tokens": tokens, "cost_usd": null, "minimum_expected_work": 1,
-                "observed_work": 2, "work_amplification": 2.0, "technical_attempts": 1,
+                "total_tokens": tokens, "cost_usd": null,
+                "observed_work": 2, "technical_attempts": 1,
                 "observed_complexity": {}, "unavailable": {}
             }))
             .unwrap(),

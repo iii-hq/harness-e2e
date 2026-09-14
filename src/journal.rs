@@ -10,7 +10,7 @@ use serde_json::Value;
 
 use crate::artifact;
 
-pub const EXECUTION_JOURNAL_SCHEMA: &str = "harness-e2e-execution-journal/v1";
+pub const EXECUTION_JOURNAL_SCHEMA: &str = "harness-e2e-execution-journal";
 static JOURNAL_APPEND_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -20,7 +20,6 @@ pub struct ExecutionJournalHeader {
     pub execution_id: String,
     pub request_sha256: String,
     pub result_contract_sha256: String,
-    pub scoring_profile_sha256: String,
     pub created_at: String,
     pub request: Value,
     pub runner: Value,
@@ -157,7 +156,6 @@ impl ExecutionJournal {
         if header.execution_id.trim().is_empty()
             || header.request_sha256.trim().is_empty()
             || header.result_contract_sha256.trim().is_empty()
-            || header.scoring_profile_sha256.trim().is_empty()
         {
             bail!("execution journal identity must be non-empty");
         }
@@ -185,7 +183,12 @@ impl ExecutionJournal {
         let header: ExecutionJournalHeader =
             serde_json::from_slice(&bytes).with_context(|| format!("decode {}", path.display()))?;
         if header.schema != EXECUTION_JOURNAL_SCHEMA {
-            bail!("unsupported execution journal schema {}", header.schema);
+            tracing::warn!(
+                path = %path.display(),
+                schema = %header.schema,
+                current = EXECUTION_JOURNAL_SCHEMA,
+                "reading an execution journal written under another schema id"
+            );
         }
         Ok(header)
     }
@@ -435,7 +438,6 @@ mod tests {
             execution_id: "execution-1".into(),
             request_sha256: "sha256:request".into(),
             result_contract_sha256: crate::report::RESULT_CONTRACT_SHA256.into(),
-            scoring_profile_sha256: crate::report::SCORING_PROFILE_SHA256.into(),
             created_at: "2026-09-04T12:00:00Z".into(),
             request: serde_json::json!({"runs": 1}),
             runner: serde_json::json!({"version": "test"}),

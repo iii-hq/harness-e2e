@@ -1,114 +1,113 @@
 {
   "evaluated_versions": {
-    "revision": "preview-v5",
     "cohorts": [
       {
         "id": "preview-cohort",
         "lane": "preview",
-        "subject_provider": "zai",
         "subject_model": "glm-5.2",
-        "judge_provider": "openai",
-        "judge_model": "gpt-5.4"
+        "subject_provider": "zai"
       }
     ],
+    "revision": "preview-v5",
     "versions": [
       {
-        "id": "preview-system-b",
         "cohort_id": "preview-cohort",
-        "label": "Source bbbbbbbbbbbb",
-        "stack_mode": "source",
         "completed_at": "2026-08-15T12:00:00Z",
-        "execution_count": 1
+        "execution_count": 1,
+        "id": "preview-system-b",
+        "label": "Source bbbbbbbbbbbb",
+        "stack_mode": "source"
       },
       {
-        "id": "preview-system-a",
         "cohort_id": "preview-cohort",
-        "label": "Source aaaaaaaaaaaa",
-        "stack_mode": "source",
         "completed_at": "2026-08-14T12:00:00Z",
-        "execution_count": 1
+        "execution_count": 1,
+        "id": "preview-system-a",
+        "label": "Source aaaaaaaaaaaa",
+        "stack_mode": "source"
       }
     ]
   },
   "tests": {
+    "next_cursor": null,
     "revision": "preview-v5",
     "rows": [
       {
-        "test_id": "minimal_path",
-        "lifecycle": "active",
-        "current_version": 1,
         "available_versions": [
           {
-            "version": 1,
             "execution_count": 2,
+            "last_seen": "2026-08-15T12:00:00Z",
             "run_count": 6,
-            "last_seen": "2026-08-15T12:00:00Z"
+            "version": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba"
           }
         ],
-        "selected_version": 1,
+        "current_version": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba",
+        "lifecycle": "active",
         "result": null,
+        "selected_version": "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba",
         "shards": {
-          "1": "./tests/data/minimal-path-v1.json"
+          "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba": "./tests/data/10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba.json"
         },
+        "test_id": "minimal_path",
         "version_results": {
-          "1": {
+          "sha256:10ffba9088ad5bfe69c107eb9b2ffb8240ed0701dede8a29321bc7d358fa68ba": {
             "sides": {
               "preview-system-a": {
+                "contracts": {
+                  "minimal_path:seed-0000000000000008": "preview-contract"
+                },
                 "summary": {
+                  "case_count": 1,
                   "evaluated_version_id": "preview-system-a",
                   "execution_count": 1,
-                  "total_runs": 3,
-                  "scored_runs": 3,
-                  "case_count": 1,
-                  "median_score": 84,
-                  "pass_rate": 0.6666666667,
                   "median_cost_usd": 0.12,
-                  "median_tokens": 1840,
                   "median_duration_seconds": 18.4,
+                  "median_score": 84,
+                  "median_tokens": 1840,
                   "outcomes": {
-                    "passed": 2,
                     "hard_gate_failed": 1,
-                    "technical_failed": 0,
-                    "infra_failed": 0
+                    "infra_failed": 0,
+                    "passed": 2,
+                    "technical_failed": 0
                   },
+                  "pass_rate": 0.6666666667,
                   "samples": {
-                    "score": 3,
                     "cost_usd": 3,
-                    "tokens": 3,
-                    "duration_seconds": 3
-                  }
-                },
-                "contracts": {
-                  "minimal_path:v1:seed-8": "preview-contract"
+                    "duration_seconds": 3,
+                    "score": 3,
+                    "tokens": 3
+                  },
+                  "scored_runs": 3,
+                  "total_runs": 3
                 }
               },
               "preview-system-b": {
+                "contracts": {
+                  "minimal_path:seed-0000000000000008": "preview-contract"
+                },
                 "summary": {
+                  "case_count": 1,
                   "evaluated_version_id": "preview-system-b",
                   "execution_count": 1,
-                  "total_runs": 3,
-                  "scored_runs": 3,
-                  "case_count": 1,
-                  "median_score": 92,
-                  "pass_rate": 1,
                   "median_cost_usd": 0.1,
-                  "median_tokens": 1620,
                   "median_duration_seconds": 15.1,
+                  "median_score": 92,
+                  "median_tokens": 1620,
                   "outcomes": {
-                    "passed": 3,
                     "hard_gate_failed": 0,
-                    "technical_failed": 0,
-                    "infra_failed": 0
+                    "infra_failed": 0,
+                    "passed": 3,
+                    "technical_failed": 0
                   },
+                  "pass_rate": 1,
                   "samples": {
-                    "score": 3,
                     "cost_usd": 3,
-                    "tokens": 3,
-                    "duration_seconds": 3
-                  }
-                },
-                "contracts": {
-                  "minimal_path:v1:seed-8": "preview-contract"
+                    "duration_seconds": 3,
+                    "score": 3,
+                    "tokens": 3
+                  },
+                  "scored_runs": 3,
+                  "total_runs": 3
                 }
               }
             }
@@ -116,7 +115,6 @@
         }
       }
     ],
-    "total": 1,
-    "next_cursor": null
+    "total": 1
   }
 }

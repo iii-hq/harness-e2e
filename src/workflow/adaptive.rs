@@ -7,11 +7,10 @@ use serde_json::Value;
 
 use super::{
     ActivationPolicy, ControlSource, DependencyPolicy, StepCatalog, StepOperationalKind,
-    WorkflowCriterionDeclaration, WorkflowDefinitionV1, WorkflowInputBinding, WorkflowLimits,
-    WorkflowNodeV1, WORKFLOW_SCHEMA_VERSION,
+    WorkflowCriterionDeclaration, WorkflowDefinition, WorkflowInputBinding, WorkflowLimits,
+    WorkflowNode,
 };
 
-pub const ADAPTIVE_WORKFLOW_SCHEMA_VERSION: u32 = 1;
 pub const ADAPTIVE_MAX_PLAN_REVISIONS: u8 = 2;
 const DEFAULT_MAX_INSTRUCTION_BYTES: u32 = 8 * 1024;
 
@@ -19,10 +18,8 @@ const DEFAULT_MAX_INSTRUCTION_BYTES: u32 = 8 * 1024;
 /// document can reference this policy by hash but can never replace it.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptiveWorkflowPolicyV1 {
-    pub schema_version: u32,
+pub struct AdaptiveWorkflowPolicy {
     pub id: String,
-    pub scenario_version: u32,
     pub description: String,
     pub limits: WorkflowLimits,
     pub max_plan_nodes: u16,
@@ -31,8 +28,8 @@ pub struct AdaptiveWorkflowPolicyV1 {
     pub max_plan_revisions: u8,
     #[serde(default = "default_max_instruction_bytes")]
     pub max_instruction_bytes: u32,
-    pub templates: Vec<AdaptiveNodeTemplateV1>,
-    pub trusted_anchors: Vec<AdaptiveTrustedAnchorV1>,
+    pub templates: Vec<AdaptiveNodeTemplate>,
+    pub trusted_anchors: Vec<AdaptiveTrustedAnchor>,
     #[serde(default)]
     pub criteria: Vec<WorkflowCriterionDeclaration>,
 }
@@ -47,11 +44,10 @@ fn default_max_instruction_bytes() -> u32 {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptiveNodeTemplateV1 {
+pub struct AdaptiveNodeTemplate {
     pub id: String,
     pub description: String,
     pub step_type: String,
-    pub step_version: u32,
     #[serde(default)]
     pub base_config: Value,
     #[serde(default)]
@@ -91,18 +87,18 @@ pub enum AdaptiveAnchorPlacement {
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptiveTrustedAnchorV1 {
+pub struct AdaptiveTrustedAnchor {
     pub placement: AdaptiveAnchorPlacement,
     #[serde(default)]
     pub terminal: bool,
-    pub node: WorkflowNodeV1,
+    pub node: WorkflowNode,
 }
 
 /// The only agent-authored shape. Step types, functions, workspaces, budgets,
 /// activation, inputs, criteria and mutation controls stay in the policy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptivePlanNodeV1 {
+pub struct AdaptivePlanNode {
     pub id: String,
     pub template_id: String,
     #[serde(default)]
@@ -115,8 +111,7 @@ pub struct AdaptivePlanNodeV1 {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AdaptiveWorkflowPlanV1 {
-    pub schema_version: u32,
+pub struct AdaptiveWorkflowPlan {
     pub policy_sha256: String,
     pub revision: u8,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -125,10 +120,10 @@ pub struct AdaptiveWorkflowPlanV1 {
     pub reason: Option<String>,
     #[serde(default)]
     pub evidence_ids: Vec<String>,
-    pub nodes: Vec<AdaptivePlanNodeV1>,
+    pub nodes: Vec<AdaptivePlanNode>,
 }
 
-impl AdaptiveWorkflowPlanV1 {
+impl AdaptiveWorkflowPlan {
     pub fn canonical_sha256(&self) -> Result<String> {
         crate::artifact::sha256_value(self)
     }
@@ -149,13 +144,13 @@ pub struct AdaptivePlanRevisionEvidence {
 
 #[derive(Debug, Clone)]
 pub struct AdaptiveMaterializedWorkflow {
-    pub definition: WorkflowDefinitionV1,
+    pub definition: WorkflowDefinition,
     pub policy_sha256: String,
     pub latest_plan_sha256: String,
     pub revisions: Vec<AdaptivePlanRevisionEvidence>,
 }
 
-impl AdaptiveWorkflowPolicyV1 {
+impl AdaptiveWorkflowPolicy {
     pub fn canonical_sha256(&self) -> Result<String> {
         crate::artifact::sha256_value(self)
     }
@@ -166,7 +161,7 @@ impl AdaptiveWorkflowPolicyV1 {
     /// prevents the agent from changing or removing already-completed work.
     pub fn materialize(
         &self,
-        plans: &[AdaptiveWorkflowPlanV1],
+        plans: &[AdaptiveWorkflowPlan],
         completed_node_ids: &BTreeSet<String>,
         catalog: &StepCatalog,
     ) -> Result<AdaptiveMaterializedWorkflow> {
@@ -196,7 +191,7 @@ impl AdaptiveWorkflowPolicyV1 {
             .map(|anchor| anchor.node.id.as_str())
             .collect::<HashSet<_>>();
         let mut evidence = Vec::with_capacity(plans.len());
-        let mut previous: Option<(&AdaptiveWorkflowPlanV1, String)> = None;
+        let mut previous: Option<(&AdaptiveWorkflowPlan, String)> = None;
         for (index, plan) in plans.iter().enumerate() {
             let expected_revision = u8::try_from(index + 1).unwrap_or(u8::MAX);
             self.validate_plan(
@@ -256,18 +251,9 @@ impl AdaptiveWorkflowPolicyV1 {
     }
 
     fn validate_policy(&self, catalog: &StepCatalog) -> Result<()> {
-        if self.schema_version != ADAPTIVE_WORKFLOW_SCHEMA_VERSION {
-            bail!(
-                "adaptive policy '{}' uses an unsupported schema version",
-                self.id
-            );
-        }
         validate_identifier(&self.id, "adaptive policy id")?;
-        if self.scenario_version == 0 || self.description.trim().is_empty() {
-            bail!(
-                "adaptive policy '{}' requires a version and description",
-                self.id
-            );
+        if self.description.trim().is_empty() {
+            bail!("adaptive policy '{}' requires a description", self.id);
         }
         if self.limits.technical_retries != 0 {
             bail!("adaptive workflows prohibit technical retries");
@@ -313,14 +299,12 @@ impl AdaptiveWorkflowPolicyV1 {
                     template.id
                 );
             }
-            let registered = catalog
-                .get(&template.step_type, template.step_version)
-                .with_context(|| {
-                    format!(
-                        "adaptive template '{}' references an unregistered step",
-                        template.id
-                    )
-                })?;
+            let registered = catalog.get(&template.step_type).with_context(|| {
+                format!(
+                    "adaptive template '{}' references an unregistered step",
+                    template.id
+                )
+            })?;
             if registered.descriptor.operational_kind == StepOperationalKind::Product
                 && matches!(template.activation, ActivationPolicy::Always)
             {
@@ -381,16 +365,13 @@ impl AdaptiveWorkflowPolicyV1 {
 
     fn validate_plan(
         &self,
-        plan: &AdaptiveWorkflowPlanV1,
+        plan: &AdaptiveWorkflowPlan,
         expected_revision: u8,
         policy_sha256: &str,
         before_ids: &HashSet<&str>,
         after_ids: &HashSet<&str>,
     ) -> Result<()> {
-        if plan.schema_version != ADAPTIVE_WORKFLOW_SCHEMA_VERSION
-            || plan.revision != expected_revision
-            || plan.policy_sha256 != policy_sha256
-        {
+        if plan.revision != expected_revision || plan.policy_sha256 != policy_sha256 {
             bail!(
                 "adaptive plan revision {} does not match its frozen policy/sequence",
                 plan.revision
@@ -509,9 +490,9 @@ impl AdaptiveWorkflowPolicyV1 {
 
     fn materialize_plan(
         &self,
-        plan: &AdaptiveWorkflowPlanV1,
+        plan: &AdaptiveWorkflowPlan,
         catalog: &StepCatalog,
-    ) -> Result<WorkflowDefinitionV1> {
+    ) -> Result<WorkflowDefinition> {
         let templates = self
             .templates
             .iter()
@@ -564,10 +545,9 @@ impl AdaptiveWorkflowPolicyV1 {
             }
             depends_on.sort();
             depends_on.dedup();
-            planned.push(WorkflowNodeV1 {
+            planned.push(WorkflowNode {
                 id: proposed.id.clone(),
                 step_type: template.step_type.clone(),
-                step_version: template.step_version,
                 config,
                 depends_on,
                 inputs: template.inputs.clone(),
@@ -596,10 +576,8 @@ impl AdaptiveWorkflowPolicyV1 {
         let mut nodes = before;
         nodes.extend(planned);
         nodes.extend(wired_after);
-        let definition = WorkflowDefinitionV1 {
-            schema_version: WORKFLOW_SCHEMA_VERSION,
+        let definition = WorkflowDefinition {
             id: self.id.clone(),
-            scenario_version: self.scenario_version,
             description: self.description.clone(),
             limits: self.limits,
             nodes,
@@ -613,8 +591,8 @@ impl AdaptiveWorkflowPolicyV1 {
 }
 
 fn validate_completed_nodes_unchanged(
-    previous: &AdaptiveWorkflowPlanV1,
-    next: &AdaptiveWorkflowPlanV1,
+    previous: &AdaptiveWorkflowPlan,
+    next: &AdaptiveWorkflowPlan,
     completed: &BTreeSet<String>,
 ) -> Result<()> {
     let prior = previous
@@ -641,10 +619,10 @@ fn validate_completed_nodes_unchanged(
     Ok(())
 }
 
-fn plan_depth(nodes: &[AdaptivePlanNodeV1], anchors: &HashSet<&str>) -> Result<usize> {
+fn plan_depth(nodes: &[AdaptivePlanNode], anchors: &HashSet<&str>) -> Result<usize> {
     fn visit<'a>(
         id: &'a str,
-        nodes: &HashMap<&'a str, &'a AdaptivePlanNodeV1>,
+        nodes: &HashMap<&'a str, &'a AdaptivePlanNode>,
         anchors: &HashSet<&str>,
         visiting: &mut HashSet<&'a str>,
         memo: &mut HashMap<&'a str, usize>,
@@ -681,7 +659,7 @@ fn plan_depth(nodes: &[AdaptivePlanNodeV1], anchors: &HashSet<&str>) -> Result<u
     Ok(maximum)
 }
 
-fn leaf_ids(nodes: &[WorkflowNodeV1]) -> Vec<String> {
+fn leaf_ids(nodes: &[WorkflowNode]) -> Vec<String> {
     let dependencies = nodes
         .iter()
         .flat_map(|node| node.depends_on.iter().map(String::as_str))
@@ -694,12 +672,12 @@ fn leaf_ids(nodes: &[WorkflowNodeV1]) -> Vec<String> {
 }
 
 fn validate_product_activation_is_deterministic(
-    definition: &WorkflowDefinitionV1,
+    definition: &WorkflowDefinition,
     catalog: &StepCatalog,
 ) -> Result<()> {
     for node in &definition.nodes {
         let descriptor = &catalog
-            .get(&node.step_type, node.step_version)
+            .get(&node.step_type)
             .expect("validated step")
             .descriptor;
         if descriptor.operational_kind != StepOperationalKind::Product {
@@ -716,7 +694,7 @@ fn validate_product_activation_is_deterministic(
                 .find(|candidate| candidate.id == condition.node_id)
                 .expect("validated producer");
             let output = &catalog
-                .get(&producer.step_type, producer.step_version)
+                .get(&producer.step_type)
                 .expect("validated producer descriptor")
                 .descriptor
                 .outputs[&condition.port];
@@ -732,8 +710,8 @@ fn validate_product_activation_is_deterministic(
 }
 
 fn validate_terminal_anchors_are_leaves(
-    definition: &WorkflowDefinitionV1,
-    anchors: &[AdaptiveTrustedAnchorV1],
+    definition: &WorkflowDefinition,
+    anchors: &[AdaptiveTrustedAnchor],
 ) -> Result<()> {
     for terminal in anchors.iter().filter(|anchor| anchor.terminal) {
         if definition.nodes.iter().any(|node| {
@@ -802,7 +780,6 @@ mod tests {
     fn descriptor(id: &str, kind: StepOperationalKind) -> StepTypeDescriptor {
         StepTypeDescriptor {
             id: id.into(),
-            version: 1,
             description: "test".into(),
             config_schema: json!({
                 "type": "object",
@@ -825,11 +802,10 @@ mod tests {
         }
     }
 
-    fn node(id: &str, step_type: &str) -> WorkflowNodeV1 {
-        WorkflowNodeV1 {
+    fn node(id: &str, step_type: &str) -> WorkflowNode {
+        WorkflowNode {
             id: id.into(),
             step_type: step_type.into(),
-            step_version: 1,
             config: json!({}),
             depends_on: Vec::new(),
             inputs: BTreeMap::new(),
@@ -839,7 +815,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (AdaptiveWorkflowPolicyV1, StepCatalog) {
+    fn fixture() -> (AdaptiveWorkflowPolicy, StepCatalog) {
         let mut catalog = StepCatalog::new();
         for (id, kind) in [
             ("trusted", StepOperationalKind::Assessment),
@@ -849,10 +825,8 @@ mod tests {
                 .register(descriptor(id, kind), Arc::new(Noop))
                 .unwrap();
         }
-        let policy = AdaptiveWorkflowPolicyV1 {
-            schema_version: 1,
+        let policy = AdaptiveWorkflowPolicy {
             id: "adaptive.test".into(),
-            scenario_version: 1,
             description: "adaptive test".into(),
             limits: WorkflowLimits {
                 max_nodes: 8,
@@ -863,11 +837,10 @@ mod tests {
             max_plan_depth: 3,
             max_plan_revisions: 2,
             max_instruction_bytes: 64,
-            templates: vec![AdaptiveNodeTemplateV1 {
+            templates: vec![AdaptiveNodeTemplate {
                 id: "analysis".into(),
                 description: "bounded analysis".into(),
                 step_type: "analysis".into(),
-                step_version: 1,
                 base_config: json!({}),
                 inputs: BTreeMap::new(),
                 activation: ActivationPolicy::Always,
@@ -880,12 +853,12 @@ mod tests {
                 max_occurrences: 4,
             }],
             trusted_anchors: vec![
-                AdaptiveTrustedAnchorV1 {
+                AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::BeforePlan,
                     terminal: false,
                     node: node("preflight", "trusted"),
                 },
-                AdaptiveTrustedAnchorV1 {
+                AdaptiveTrustedAnchor {
                     placement: AdaptiveAnchorPlacement::AfterPlan,
                     terminal: true,
                     node: node("finalize", "trusted"),
@@ -896,15 +869,14 @@ mod tests {
         (policy, catalog)
     }
 
-    fn first_plan(policy: &AdaptiveWorkflowPolicyV1) -> AdaptiveWorkflowPlanV1 {
-        AdaptiveWorkflowPlanV1 {
-            schema_version: 1,
+    fn first_plan(policy: &AdaptiveWorkflowPolicy) -> AdaptiveWorkflowPlan {
+        AdaptiveWorkflowPlan {
             policy_sha256: policy.canonical_sha256().unwrap(),
             revision: 1,
             supersedes_sha256: None,
             reason: None,
             evidence_ids: Vec::new(),
-            nodes: vec![AdaptivePlanNodeV1 {
+            nodes: vec![AdaptivePlanNode {
                 id: "inspect".into(),
                 template_id: "analysis".into(),
                 depends_on: Vec::new(),
@@ -949,7 +921,7 @@ mod tests {
             .contains("unknown template"));
 
         let mut plan = first_plan(&policy);
-        plan.nodes.push(AdaptivePlanNodeV1 {
+        plan.nodes.push(AdaptivePlanNode {
             id: "other".into(),
             template_id: "analysis".into(),
             depends_on: vec!["inspect".into()],
@@ -973,7 +945,7 @@ mod tests {
         second.supersedes_sha256 = Some(first.canonical_sha256().unwrap());
         second.reason = Some("initial hypothesis was falsified".into());
         second.evidence_ids = vec!["falsification.receipt".into()];
-        second.nodes.push(AdaptivePlanNodeV1 {
+        second.nodes.push(AdaptivePlanNode {
             id: "verify".into(),
             template_id: "analysis".into(),
             depends_on: vec!["inspect".into()],
@@ -996,7 +968,6 @@ mod tests {
     #[test]
     fn agent_plan_wire_shape_rejects_runner_owned_fields() {
         let value = json!({
-            "schema_version": 1,
             "policy_sha256": format!("sha256:{}", "1".repeat(64)),
             "revision": 1,
             "nodes": [{
@@ -1007,7 +978,7 @@ mod tests {
             }],
             "criteria": []
         });
-        let error = serde_json::from_value::<AdaptiveWorkflowPlanV1>(value)
+        let error = serde_json::from_value::<AdaptiveWorkflowPlan>(value)
             .unwrap_err()
             .to_string();
         assert!(

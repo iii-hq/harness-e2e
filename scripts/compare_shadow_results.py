@@ -65,7 +65,7 @@ def deliverable_projection(run: dict[str, Any]) -> list[dict[str, Any]]:
 def scenario_projection(scenario: dict[str, Any]) -> dict[str, Any]:
     contract = {
         "scenario_id": scenario.get("scenario_id"),
-        "scenario_version": scenario.get("scenario_version"),
+        "behavior_sha256": scenario.get("behavior_sha256"),
         "case_id": scenario.get("case_id"),
         "case": scenario.get("case"),
         "execution_policy": scenario.get("execution_policy"),
@@ -140,7 +140,7 @@ def compare(primary: dict[str, Any], shadow: dict[str, Any]) -> dict[str, Any]:
         primary["system_under_test"].get("stack"),
         shadow["system_under_test"].get("stack"),
     )
-    for field in ["subject", "judge"]:
+    for field in ["subject"]:
         append_difference(mismatches, field, primary.get(field), shadow.get(field))
     primary_cases = report_cases(primary)
     shadow_cases = report_cases(shadow)

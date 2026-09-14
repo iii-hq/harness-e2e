@@ -71,7 +71,6 @@ pub struct ValidatedSubject {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ValidationEvidenceBundle {
-    pub scenario_version: u32,
     pub contract_sha256: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_sha256: Option<String>,
@@ -178,9 +177,8 @@ pub(super) fn validation_deliverable_contract(
             media_type: "application/json".into(),
             schema: json!({
                 "type": "object",
-                "required": ["scenario_version", "contract_sha256", "validator", "subject", "coverage", "attempts", "nudges", "repeatability", "limitations"],
+                "required": ["contract_sha256", "validator", "subject", "coverage", "attempts", "nudges", "repeatability", "limitations"],
                 "properties": {
-                    "scenario_version": {"const": VERSION},
                     "contract_sha256": {"type": "string"},
                     "plan_sha256": {"type": "string"},
                     "validator": {"type": "object"},

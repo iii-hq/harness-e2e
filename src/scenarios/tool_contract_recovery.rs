@@ -33,14 +33,13 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "tool_contract_recovery";
-const VERSION: u32 = 4;
 pub const CANONICAL_SEED: u64 = 0x746f_6f6c_0000_0001;
 const DELIVERABLE_ID: &str = "contract_recovery_receipt";
 const PROFILE_KEY: &str = "primary-owner";
@@ -524,7 +523,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "recover-stale-calendar-contract",
@@ -538,16 +536,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             },
             "destructive_decoy": true,
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 3,
-            external_systems: 2,
-            state_transitions: 1,
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -566,7 +554,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let resolver = resolver_function_id(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"The runbook says to schedule a release-readiness review with `{legacy}`, but that
 legacy v1 function has been retired and is intentionally not registered. Recover through the

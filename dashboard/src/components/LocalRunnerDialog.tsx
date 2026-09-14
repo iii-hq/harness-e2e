@@ -12,17 +12,12 @@ import type {
   DashboardDataBridge,
   JsonObject,
 } from '@/lib/dashboard-data-source'
-import {
-  type LocalScenarioSummary,
-  localScenariosFromCatalog,
-} from '@/lib/local-scenario-catalog'
 
 type RunnerModel = { provider: string; model: string }
 type RunnerCatalog = {
   url: string
   models: RunnerModel[]
   scenarios: string[]
-  localScenarios: LocalScenarioSummary[]
 }
 type RunnerJob = {
   id?: string
@@ -38,7 +33,6 @@ type RunnerForm = {
   label: string
   url: string
   subject: string
-  judge: string
   scenarios: string[]
   runs: string
   technicalRetries: string
@@ -49,7 +43,6 @@ const initialForm: RunnerForm = {
   label: '',
   url: '',
   subject: '',
-  judge: '',
   scenarios: [],
   runs: '1',
   technicalRetries: '1',
@@ -97,12 +90,10 @@ function asCatalog(value: JsonObject): RunnerCatalog {
         (scenario): scenario is string => typeof scenario === 'string',
       )
     : []
-  const localScenarios = localScenariosFromCatalog(value)
   return {
     url: typeof value.url === 'string' ? value.url : '',
     models,
     scenarios,
-    localScenarios,
   }
 }
 
@@ -156,7 +147,7 @@ export function LocalRunnerDialog({
   const [error, setError] = useState<string | null>(null)
 
   const refreshJob = useCallback(async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     try {
       const response = asJob(await bridge.getRunSnapshot(logOffset))
       setJob(response)
@@ -171,7 +162,7 @@ export function LocalRunnerDialog({
   }, [bridge, logOffset, onCompleted])
 
   const refreshCatalog = useCallback(async () => {
-    if (bridge?.mode !== 'local') return
+    if (!bridge) return
     setLoadingCatalog(true)
     setError(null)
     try {
@@ -195,7 +186,7 @@ export function LocalRunnerDialog({
   }, [bridge, form.url])
 
   useEffect(() => {
-    if (!open || !bridge || bridge.mode !== 'local') return
+    if (!open || !bridge) return
     setError(null)
     setOwnJob(false)
     if (initialScenarios.length > 0)
@@ -228,9 +219,6 @@ export function LocalRunnerDialog({
   const selectedSubject = catalog?.models.find(
     (model) => modelKey(model) === form.subject,
   )
-  const selectedJudge = catalog?.models.find(
-    (model) => modelKey(model) === form.judge,
-  )
   const groupedModels = useMemo(
     () => modelGroups(catalog?.models ?? []),
     [catalog],
@@ -244,11 +232,6 @@ export function LocalRunnerDialog({
   }))
   const runsPerScenario = Math.max(1, Number(form.runs) || 1)
   const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  const needsJudge = form.scenarios.some(
-    (id) =>
-      id === 'registry_planning' ||
-      (catalog?.localScenarios ?? []).some((scenario) => scenario.id === id),
-  )
   const showJobStatus = Boolean(job?.status) && (ownJob || active)
   const testCount = form.scenarios.length
   const runLabel = submitting
@@ -269,8 +252,6 @@ export function LocalRunnerDialog({
         subject: form.subject,
         selectedScenarios: form.scenarios,
         url: form.url,
-        judge: form.judge,
-        judgeRequired: needsJudge,
       })
     : {}
   const pending = Object.values(errors)
@@ -279,9 +260,6 @@ export function LocalRunnerDialog({
     setForm((current) => ({ ...current, [key]: value }))
   }
 
-  // The catalog's own local list is the source of truth for which selected
-  // tests are Markdown; the "markdown_" prefix the compiler no longer emits
-  // used to decide it.
   const updateScenarios = (scenarios: string[]) => {
     setForm((current) => ({ ...current, scenarios }))
   }
@@ -294,8 +272,6 @@ export function LocalRunnerDialog({
       subject: form.subject,
       selectedScenarios: form.scenarios,
       url: form.url,
-      judge: form.judge,
-      judgeRequired: needsJudge,
     })
     if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {
       setAttempted(true)
@@ -306,7 +282,6 @@ export function LocalRunnerDialog({
     setSubmitting(true)
     setError(null)
     try {
-      const judge = needsJudge ? selectedJudge : null
       const response = await bridge.startRun({
         // RunRequest.label is intentionally a string: empty labels remain
         // compatible with persisted execution metadata.
@@ -314,8 +289,6 @@ export function LocalRunnerDialog({
         url: form.url,
         model: selectedSubject.model,
         provider: selectedSubject.provider,
-        judge_model: judge?.model || '',
-        judge_provider: judge?.provider || '',
         scenarios: form.scenarios,
         runs: Number(form.runs),
         technical_retries: Number(form.technicalRetries),
@@ -350,10 +323,6 @@ export function LocalRunnerDialog({
     subject: selectedSubject
       ? `${selectedSubject.provider} / ${selectedSubject.model}`
       : '',
-    judge:
-      needsJudge && selectedJudge
-        ? `${selectedJudge.provider} / ${selectedJudge.model}`
-        : '',
     url: form.url,
   }
   // statusLabel already ends its running states with an ellipsis.
@@ -369,7 +338,6 @@ export function LocalRunnerDialog({
         : job?.status
           ? `Previous runner job: ${statusLabel(job.status).toLowerCase()}.`
           : null
-  const localCount = catalog?.localScenarios.length ?? 0
 
   return (
     <Dialog
@@ -467,19 +435,8 @@ export function LocalRunnerDialog({
           label={form.label}
           url={form.url}
           subject={form.subject}
-          judge={form.judge}
-          judgeRequired={needsJudge}
           modelGroups={modelOptions}
           availableScenarios={catalog?.scenarios ?? []}
-          localScenarioIds={
-            catalog?.localScenarios.map((scenario) => scenario.id) ?? []
-          }
-          scenarioTitles={Object.fromEntries(
-            catalog?.localScenarios.map((scenario) => [
-              scenario.id,
-              scenario.title,
-            ]) ?? [],
-          )}
           selectedScenarios={form.scenarios}
           query={scenarioQuery}
           runs={form.runs}
@@ -493,7 +450,7 @@ export function LocalRunnerDialog({
               : catalog
                 ? {
                     tone: 'ready',
-                    text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}${localCount > 0 ? ` · ${localCount} local` : ''}`,
+                    text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}`,
                   }
                 : { tone: 'unavailable', text: 'catalog unavailable' }
           }
@@ -502,7 +459,6 @@ export function LocalRunnerDialog({
           onLabelChange={(value) => update('label', value)}
           onUrlChange={(value) => update('url', value)}
           onSubjectChange={(value) => update('subject', value)}
-          onJudgeChange={(value) => update('judge', value)}
           onSelectedScenariosChange={updateScenarios}
           onQueryChange={setScenarioQuery}
           onRunsChange={(value) => update('runs', value)}

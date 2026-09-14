@@ -10,20 +10,19 @@ import {
   routeFromHash,
   routeRenderIdentity,
 } from '@/hooks/use-hash-route'
-import { configureDashboardRuntime } from '@/lib/dashboard-runtime'
 
 describe('dashboard hash routes', () => {
-  it('routes the evidence workspace without an html page name', () => {
-    expect(routeFromHash('')).toEqual({ page: 'overview', view: 'overview' })
-    expect(routeFromHash('#/scenarios')).toEqual({
-      page: 'overview',
+  it('opens executions in the Console and rejects standalone routes', () => {
+    expect(routeFromHash('#/ext/harness-e2e')).toEqual({
+      page: 'workspace',
+      view: 'executions',
+    })
+    expect(routeFromHash('#/tests')).toBeNull()
+    expect(routeFromHash('#/ext/harness-e2e/tests')).toEqual({
+      page: 'workspace',
       view: 'tests',
     })
-    expect(routeFromHash('#/tests')).toEqual({
-      page: 'overview',
-      view: 'tests',
-    })
-    expect(hashForWorkspace('executions')).toBe('#/executions')
+    expect(hashForWorkspace()).toBe('#/ext/harness-e2e/executions')
   })
 
   it('round-trips execution ids and diagnostic anchors', () => {
@@ -32,7 +31,7 @@ describe('dashboard hash routes', () => {
       'scenario-direct_answer',
     )
     expect(hash).toBe(
-      '#/execution/run%2Fid%20with%20spaces/scenario-direct_answer',
+      '#/ext/harness-e2e/execution/run%2Fid%20with%20spaces/scenario-direct_answer',
     )
     expect(routeFromHash(hash)).toEqual({
       page: 'execution',
@@ -45,7 +44,7 @@ describe('dashboard hash routes', () => {
   // Audit AW-09: the evidence record has its own route under the execution.
   it('routes an evidence record under its execution', () => {
     const hash = hashForExecution('exec-1', null, 'run/1')
-    expect(hash).toBe('#/execution/exec-1/run/run%2F1')
+    expect(hash).toBe('#/ext/harness-e2e/execution/exec-1/run/run%2F1')
     expect(routeFromHash(hash)).toEqual({
       page: 'execution',
       executionId: 'exec-1',
@@ -65,14 +64,16 @@ describe('dashboard hash routes', () => {
   })
 
   it('keeps local plans and test metric history as independent routes', () => {
-    expect(hashForTestHistory('direct/answer')).toBe('#/tests/direct%2Fanswer')
-    expect(routeFromHash('#/tests/direct%2Fanswer')).toEqual({
+    expect(hashForTestHistory('direct/answer')).toBe(
+      '#/ext/harness-e2e/tests/direct%2Fanswer',
+    )
+    expect(routeFromHash('#/ext/harness-e2e/tests/direct%2Fanswer')).toEqual({
       page: 'test-history',
       testId: 'direct/answer',
     })
-    expect(hashForPlans()).toBe('#/plans')
+    expect(hashForPlans()).toBe('#/ext/harness-e2e/plans')
     expect(routeFromHash(hashForPlans())).toEqual({ page: 'plans' })
-    expect(hashForNewPlan()).toBe('#/plans/new')
+    expect(hashForNewPlan()).toBe('#/ext/harness-e2e/plans/new')
     expect(routeFromHash(hashForNewPlan())).toEqual({ page: 'plan-create' })
     expect(routeFromHash(hashForPlan('plan/one'))).toEqual({
       page: 'plan-detail',
@@ -80,35 +81,14 @@ describe('dashboard hash routes', () => {
     })
   })
 
-  it('keeps every route inside the injectable Console page', () => {
-    const restore = configureDashboardRuntime({
-      embedded: true,
-      hashBase: '#/ext/harness-e2e',
-    })
-    try {
-      expect(hashForWorkspace()).toBe('#/ext/harness-e2e/overview')
-      expect(hashForPlan('plan/one')).toBe('#/ext/harness-e2e/plans/plan%2Fone')
-      expect(routeFromHash('#/ext/harness-e2e/execution/run%2Fone')).toEqual({
-        page: 'execution',
-        executionId: 'run/one',
-        anchor: null,
-        runId: null,
-      })
-      expect(routeFromHash('#/workers')).toBeNull()
-    } finally {
-      restore()
-    }
-  })
-
-  it('reloads only when navigation swaps the legacy workspace renderer', () => {
-    expect(routeRenderIdentity({ page: 'overview', view: 'overview' })).toBe(
-      'overview:workspace',
+  it('does not claim routes belonging to another Console page', () => {
+    expect(routeFromHash('#/workers')).toBeNull()
+    expect(routeFromHash('#/ext/other/execution/run')).toBeNull()
+    expect(routeRenderIdentity({ page: 'workspace', view: 'executions' })).toBe(
+      'workspace:executions',
     )
-    expect(routeRenderIdentity({ page: 'overview', view: 'executions' })).toBe(
-      'overview:workspace',
-    )
-    expect(routeRenderIdentity({ page: 'overview', view: 'tests' })).toBe(
-      'overview:tests',
+    expect(routeRenderIdentity({ page: 'workspace', view: 'tests' })).toBe(
+      'workspace:tests',
     )
   })
 })

@@ -36,14 +36,13 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
 };
 
 pub const ID: &str = "typescript_chat_service";
-pub const VERSION: u32 = 2;
 pub const CANONICAL_SEED: u64 = 7_311;
 
 /// One-paragraph editorial description shown above the prompt on the dashboard.
@@ -185,7 +184,6 @@ pub fn allowed_functions(_run_id: &str) -> Vec<String> {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "task": "streaming-typescript-chat-service",
@@ -198,17 +196,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "hidden_check_families": 6,
             "final_token": FINAL_TOKEN,
         }),
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 3,
-            external_systems: 1,
-            state_transitions: 6,
-            validation_loops: 2,
-            artifact_count: 1,
-            coordination_edges: 2,
-            ambiguity_level: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -229,7 +216,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = workspace_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Build a streaming chat service in TypeScript inside the isolated workspace `{root}`.
 

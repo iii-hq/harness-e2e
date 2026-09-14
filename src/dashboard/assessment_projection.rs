@@ -39,7 +39,6 @@ pub(super) struct StatusCounts {
     pub passed: usize,
     pub hard_gate_failed: usize,
     pub subject_error: usize,
-    pub judge_error: usize,
     pub resource_limit: usize,
     pub infrastructure_error: usize,
 }
@@ -108,7 +107,7 @@ pub(super) fn contracts_for_scenario<'a>(
 }
 
 pub(super) fn assessment_profile_sha256(
-    scenario_version: u32,
+    behavior_sha256: Option<&str>,
     contracts: &[&RunAssessmentContract],
 ) -> Result<String> {
     let mut definitions = BTreeSet::new();
@@ -124,7 +123,7 @@ pub(super) fn assessment_profile_sha256(
         }
     }
     artifact::sha256_value(&json!({
-        "scenario_version": scenario_version,
+        "behavior_sha256": behavior_sha256,
         "assessments": definitions,
     }))
 }
@@ -212,7 +211,6 @@ fn increment_system_status(counts: &mut StatusCounts, value: SystemStatus) {
         SystemStatus::Passed => counts.passed += 1,
         SystemStatus::HardGateFailed => counts.hard_gate_failed += 1,
         SystemStatus::SubjectError => counts.subject_error += 1,
-        SystemStatus::JudgeError => counts.judge_error += 1,
         SystemStatus::ResourceLimit => counts.resource_limit += 1,
         SystemStatus::InfrastructureError => counts.infrastructure_error += 1,
     }
@@ -239,11 +237,7 @@ mod tests {
             expected["summary"]
         );
         assert_eq!(
-            assessment_profile_sha256(
-                expected["scenario_version"].as_u64().unwrap() as u32,
-                &runs,
-            )
-            .unwrap(),
+            assessment_profile_sha256(expected["behavior_sha256"].as_str(), &runs,).unwrap(),
             expected["assessment_profile_sha256"]
         );
     }

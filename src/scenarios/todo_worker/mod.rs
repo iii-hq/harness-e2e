@@ -24,14 +24,13 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, CriterionSpec, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, CriterionSpec, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const SIMPLE_ID: &str = "todo_worker_simple";
 pub const PLANNED_ID: &str = "todo_worker_planned";
-pub const VERSION: u32 = 4;
 pub const VALIDATION_ASSET_ID: &str = "todo_validation_evidence";
 pub const RAW_PLAN_FILE: &str = "validation-plan.json";
 pub const OWNER_MARKER: &str = ".harness-e2e-owner";

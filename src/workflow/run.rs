@@ -7,22 +7,22 @@ use crate::artifact;
 use crate::context::E2eContext;
 use crate::report::ObservedWorkerContract;
 
-use super::{StepCatalog, WorkflowDefinitionV1};
+use super::{StepCatalog, WorkflowDefinition};
 
 pub(crate) async fn observe_worker_contracts(
     context: &E2eContext,
     catalog: &StepCatalog,
-    definitions: &[WorkflowDefinitionV1],
+    definitions: &[WorkflowDefinition],
 ) -> Result<Vec<ObservedWorkerContract>> {
     let used = definitions
         .iter()
         .flat_map(|definition| &definition.nodes)
-        .map(|node| (node.step_type.as_str(), node.step_version))
+        .map(|node| node.step_type.as_str())
         .collect::<BTreeSet<_>>();
     let mut expected_contracts = HashMap::new();
-    for (step_type, version) in used {
+    for step_type in used {
         let registered = catalog
-            .get(step_type, version)
+            .get(step_type)
             .context("validated step type disappeared from catalog")?;
         for required in &registered.descriptor.required_functions {
             let expectation = (

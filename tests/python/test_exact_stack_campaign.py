@@ -72,7 +72,6 @@ def campaign_contract(versions: dict[str, str] | None = None):
             "seed": 4404,
             "progress_interval_seconds": 15,
             "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-            "judge": {"provider": "zai", "model": "glm-5.3"},
             "groups": [
                 {
                     "id": "daily-core",
@@ -80,14 +79,12 @@ def campaign_contract(versions: dict[str, str] | None = None):
                     "scenarios": ["direct_answer"],
                     "runs": 1,
                     "technical_retries": 1,
-                    "weight": 4,
                 },
                 {
                     "id": "weekly-fault-l2",
                     "execution_kind": "fault_injection",
                     "runs": 3,
                     "technical_retries": 0,
-                    "weight": 2,
                     "fault_profile": "weekly-l2-recovery",
                     "fault_scenario": "stateful.2",
                     "soak_minutes": 60,
@@ -99,7 +96,7 @@ def campaign_contract(versions: dict[str, str] | None = None):
 
 def catalog():
     return {
-        "schema": "e2e-scenario-catalog/v4",
+        "schema": "e2e-scenario-catalog",
         "runner": {
             "name": "harness-e2e",
             "version": "0.6.0-experimental",
@@ -109,7 +106,7 @@ def catalog():
         "scenarios": [
             {
                 "scenario_id": "direct_answer",
-                "scenario_version": 2,
+                "behavior_sha256": "sha256:" + "c" * 64,
                 "case_id": "direct_answer:4404",
                 "seed": 4404,
                 "inputs_sha256": f"sha256:{'1' * 64}",
@@ -120,6 +117,54 @@ def catalog():
 
 
 class ReleaseControlCampaignTest(unittest.TestCase):
+    def test_linkly_requires_a_fresh_group_for_its_whole_dialogue(self):
+        contract = campaign_contract()
+        group = contract['suite']['groups'][0]
+        group.update(scenarios=['linkly_tutorial'], execution_kind='scripted_dialogue', technical_retries=0)
+        self.assertEqual(MODULE.group_template(contract, group['id']), 'linkly-agentic')
+        for overrides in ({'runs': 2}, {'technical_retries': 1}, {'scenarios': ['linkly_tutorial', 'direct_answer']}):
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(ValueError, 'fresh'):
+                changed = json.loads(json.dumps(contract))
+                changed['suite']['groups'][0].update(overrides)
+                MODULE.group_template(changed, group['id'])
+        self.assertEqual(MODULE.group_template(campaign_contract(), 'daily-core'), '')
+
+    def test_template_keeps_runtime_settings_but_uses_only_contract_versions(self):
+        contract = campaign_contract()
+        template = {'engine': {'workers': {'iii-stream': {}}}, 'containers': {
+            'state': {'worker': 'package://state', 'version': '0.1.0', 'config_override': {'adapter': {'name': 'kv'}}},
+            'harness': {'worker': 'package://harness', 'version': '0.1.0', 'working_dir': '.', 'start_after': ['state'], 'env_file': ['./.env']},
+        }}
+        original = json.loads(json.dumps(template))
+        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, template)
+        self.assertEqual(template, original)
+        self.assertEqual(project['containers']['state']['version'], '0.22.1')
+        self.assertEqual(project['containers']['state']['config_override'], {'adapter': {'name': 'kv'}})
+        self.assertEqual(project['containers']['harness']['version'], '1.9.0')
+        self.assertEqual(project['containers']['harness']['working_dir'], '.')
+        self.assertNotIn('env_file', project['containers']['harness'])
+        self.assertIn('harness-e2e', project['containers'])
+        self.assertEqual(project['engine'], template['engine'])
+        engine = MODULE.project_engine_config(project, 49999)
+        self.assertEqual(engine['workers'][0]['config']['port'], 49999)
+        self.assertIn({'name': 'iii-stream', 'config': {}}, engine['workers'])
+
+    def test_template_cannot_introduce_an_unresolved_worker(self):
+        with self.assertRaisesRegex(ValueError, 'not in the exact stack'):
+            MODULE.project_scaffold(campaign_contract(), 'project-one', Path('/data'), {}, {}, {
+                'containers': {'http': {'worker': 'package://http', 'version': 'latest'}}
+            })
+
+    def test_template_legacy_container_uses_the_targets_canonical_package_pin(self):
+        contract = campaign_contract({'harness': '1.9.0', 'state': '0.22.1', 'ide': '0.11.14'})
+        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, {
+            'containers': {'shell': {'worker': 'package://shell', 'version': '0.12.8', 'working_dir': '.'}}
+        }, {'shell': 'ide'})
+        self.assertEqual(project['containers']['shell'], {
+            'worker': 'package://ide', 'version': '0.11.14', 'working_dir': '.'
+        })
+        self.assertNotIn('ide', project['containers'])
+
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("compose::add", runner)
@@ -134,6 +179,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         runner = RUNNER_SCRIPT.read_text()
         self.assertIn("chmod 600", runner)
         self.assertLess(runner.index("validate-layout"), runner.index('secrets_dir="$run_root/secrets"'))
+
+    def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
+        runner = RUNNER_SCRIPT.read_text()
+        self.assertIn('evaluation_dir="$run_root/evaluation"', runner)
+        self.assertIn('harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir', runner)
+        self.assertNotIn('harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir', runner)
 
     def test_runtime_layout_requires_canonical_disjoint_roots(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -363,7 +414,6 @@ fail() {
         request = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
         self.assertEqual(request["scenarios"], ["direct_answer"])
         self.assertEqual(request["model"], "deepseek-v4-flash")
-        self.assertEqual(request["judge_model"], "glm-5.3")
         self.assertEqual(request["run_contract"]["mode"]["decision"], "observe_only")
         self.assertEqual(
             set(request["run_contract"]["plan"]),
@@ -412,7 +462,15 @@ fail() {
         self.assertEqual(manifest["campaign_id"], "daily")
         self.assertEqual(manifest["lane"], "daily")
         self.assertEqual([group["id"] for group in manifest["groups"]], ["daily-core", "weekly-fault-l2"])
-        self.assertEqual(manifest["groups"][0]["difficulty_weight"], 4)
+        # Every case counts the same: no weight and no profile travel.
+        self.assertEqual(
+            sorted(manifest),
+            ["campaign_id", "failure_policy", "groups", "kind", "lane"],
+        )
+        self.assertEqual(
+            sorted(manifest["groups"][0]),
+            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
+        )
         self.assertEqual(manifest["groups"][0]["scenarios"], ["direct_answer"])
         self.assertEqual(manifest["groups"][1]["fault_profile"], "weekly-l2-recovery")
         self.assertNotIn("scenarios", manifest["groups"][1])
@@ -633,13 +691,13 @@ fail() {
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             group = root / "groups" / "daily-core"
-            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state-v1.json"
+            checkpoint = group / "native/executions/.workflow-state/workflow-resume/state.json"
             checkpoint.parent.mkdir(parents=True)
             payload = b'{"state_sha256":"sha256:checkpoint","state":{"sequence":3}}\n'
             checkpoint.write_bytes(payload)
             for package_root in [group, root]:
                 manifest = MODULE.package_bundle(package_root, campaign_contract(), {})
-                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state-v1.json"))
+                reference = next(entry for entry in manifest["files"] if entry["path"].endswith("state.json"))
                 self.assertEqual(reference["path"], checkpoint.relative_to(package_root).as_posix())
                 self.assertEqual(reference["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
                 self.assertEqual(reference["size_bytes"], len(payload))

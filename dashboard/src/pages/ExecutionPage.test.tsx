@@ -9,9 +9,9 @@ import type {
   ScenarioMatrixSummary,
 } from '@/lib/scenario-matrix'
 import {
-  buildSummaryExecutionMetrics,
   CountsSection,
   countsScent,
+  EvidenceBundleUnavailable,
   executionOutcome,
   NarrativeSection,
   narrativeScent,
@@ -44,7 +44,8 @@ const run: AssessmentRunView = {
   key: 'security-review',
   subjectId: 'terra',
   scenarioId: 'security_review',
-  scenarioVersion: 2,
+  behaviorSha256:
+    'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
   runId: 'run-1',
   attemptId: 'attempt-1',
   metrics: {
@@ -61,7 +62,7 @@ const run: AssessmentRunView = {
     turns: null,
   },
   systemStatus: 'passed',
-  objectiveScore: 100,
+  score: 100,
   assessments: [],
   evidence: [],
 }
@@ -80,6 +81,36 @@ function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
 }
 
 describe('execution verdict', () => {
+  it('reports an unavailable evidence bundle without losing the execution', () => {
+    const retained = {
+      ...detail,
+      availability: 'unavailable',
+      evidence_error: 'native bundle checksum mismatch',
+      reports: [],
+      totals: {
+        received_reports: 3,
+        total_tokens: 12_345,
+        total_cost_usd: 0.42,
+        wall_time_seconds: 125,
+      },
+    } as DashboardExecutionDetail
+    const html = renderToStaticMarkup(
+      <EvidenceBundleUnavailable detail={retained} />,
+    )
+
+    expect(html).toContain('Evidence bundle unavailable')
+    expect(html).toContain('native bundle checksum mismatch')
+    expect(html).toContain('Retained execution snapshot')
+    expect(html).toContain('>3<')
+    expect(html).toContain('12,345')
+    expect(html).toContain('$0.4200')
+    expect(html).toContain('2m 05s')
+    expect(html).toContain('Full per-test metrics and evidence require')
+    expect(html).not.toContain('0 tests')
+    expect(html).not.toContain('no test results yet')
+    expect(html).not.toContain('Execution not found')
+  })
+
   // Audit ED-03: one aggregated verdict, never a per-scenario headline
   // contradicting the objective one.
   it('aggregates the scenario outcomes into one sentence', () => {
@@ -159,14 +190,13 @@ describe('execution layers', () => {
       <CountsSection
         detail={detail}
         presentation={buildExecutionPresentation(detail)}
-        metrics={null}
         scenarioSummary={scenarioSummary()}
       />,
     )
     expect(html).toContain('1/2')
     expect(html).toContain('46')
     expect(html).toContain('17 evidence references')
-    expect(html).toContain('not captured for this run')
+    expect(html).not.toContain('reported cost')
     // The layer row is the heading: no second title, no second anchor.
     expect(html).not.toContain('execution summary')
     expect(html).not.toContain('id="metrics"')
@@ -180,19 +210,21 @@ describe('execution layers', () => {
     const items = [
       {
         scenarioId: 'minimal_path',
-        scenarioVersion: 2,
+        behaviorSha256:
+          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
         durationMs: 167_000,
       },
       {
         scenarioId: 'persistent_state',
-        scenarioVersion: 1,
+        behaviorSha256:
+          'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
         objective: { label: 'Passed', status: 'passed', raw: 'passed' },
         durationMs: 128_000,
       },
       {
         scenarioId: 'research_pipeline',
-        scenarioVersion: null,
+        behaviorSha256: null,
         objective: {
           label: 'Unavailable',
           status: 'unavailable',
@@ -205,8 +237,8 @@ describe('execution layers', () => {
     // inside each one.
     expect(resultsScent(items)).toBe(
       [
-        'minimal path v2 passed · 2m 47s',
-        'persistent state v1 passed · 2m 08s',
+        'minimal path · definition a1a1a1a1 passed · 2m 47s',
+        'persistent state · definition b2b2b2b2 passed · 2m 08s',
         'research pipeline unavailable',
       ].join(' \u00a0·\u00a0 '),
     )
@@ -246,81 +278,5 @@ describe('execution provenance', () => {
     expect(byKey.completed).toMatch(/· 4m 00s$/)
     expect(byKey.completed).not.toContain('2026-08-26T20:11:31Z')
     expect(byKey.actor).toBe('layon')
-  })
-
-  it('prefers consolidated execution totals for primary usage metrics', () => {
-    const metrics = buildSummaryExecutionMetrics(
-      buildExecutionPresentation(detail),
-      {
-        totalTokens: 100,
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        reasoningTokens: null,
-        functionCalls: 2,
-        functionCallErrors: 1,
-        durationMs: 1_000,
-        sessions: null,
-        turns: null,
-      },
-      1,
-      null,
-      {
-        total_tokens: 445_900,
-        function_calls: 58,
-        function_call_errors: 3,
-        total_cost_usd: 1.2345,
-        turns: 24,
-      },
-    )
-
-    expect(metrics).toMatchObject({
-      totalTokens: 445_900,
-      functionCalls: 58,
-      functionCallErrors: 3,
-      totalCostUsd: 1.2345,
-      turns: 24,
-    })
-  })
-
-  it('prefers the sum of retained test metrics over partial execution totals', () => {
-    const metrics = buildSummaryExecutionMetrics(
-      buildExecutionPresentation(detail),
-      {
-        totalTokens: 4_509,
-        inputTokens: null,
-        outputTokens: null,
-        cacheReadTokens: null,
-        cacheWriteTokens: null,
-        reasoningTokens: null,
-        functionCalls: 3,
-        functionCallErrors: 0,
-        durationMs: 1_000,
-        sessions: null,
-        turns: 7,
-      },
-      3,
-      null,
-      {
-        total_tokens: 4_509,
-        function_calls: 3,
-        function_call_errors: 0,
-      },
-      {
-        totalTokens: 9_145,
-        functionCalls: 16,
-        functionCallErrors: 0,
-        costUsd: null,
-      },
-    )
-
-    expect(metrics).toMatchObject({
-      totalTokens: 9_145,
-      functionCalls: 16,
-      functionCallErrors: 0,
-      totalCostUsd: null,
-      turns: 7,
-    })
   })
 })

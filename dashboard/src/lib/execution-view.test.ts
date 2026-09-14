@@ -3,6 +3,7 @@ import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
 import {
   attentionState,
   buildExecutionPresentation,
+  executionTitle,
   failureBreakdown,
   primaryIssue,
 } from '@/lib/execution-view'
@@ -19,7 +20,6 @@ function execution(
         id: 'terra',
         model: 'gpt-5.6-terra',
         provider: 'openai-codex',
-        judge: { model: 'gpt-5.6-sol', provider: 'openai-codex' },
         scenarios: [],
       },
     ],
@@ -34,7 +34,6 @@ function execution(
         infrastructure_error: 1,
         resource_limit: 1,
         subject_error: 0,
-        judge_error: 0,
         unavailable: 0,
       },
       assessment_outcomes: {} as never,
@@ -76,10 +75,6 @@ describe('execution presentation view model', () => {
       provider: 'openai-codex',
       model: 'gpt-5.6-terra',
     })
-    expect(presentation.judges[0]).toEqual({
-      provider: 'openai-codex',
-      model: 'gpt-5.6-sol',
-    })
   })
 
   it('treats an execution with only passed scenarios as healthy', () => {
@@ -91,5 +86,30 @@ describe('execution presentation view model', () => {
       } as never,
     })
     expect(buildExecutionPresentation(passed).attention).toBe('passed')
+  })
+})
+
+describe('execution identity', () => {
+  it('titles an unlabelled execution by its subject and date', () => {
+    const labelled = buildExecutionPresentation(
+      execution({
+        id: 'a',
+        label: 'e2e::* control-plane run',
+        workflow_name: 'e2e::* control-plane run',
+      }),
+    )
+    expect(executionTitle(labelled)).toEqual({
+      title: 'e2e::* control-plane run',
+      detail: 'e2e::* control-plane run',
+    })
+    const unlabelled = buildExecutionPresentation(
+      execution({
+        id: 'b',
+        label: undefined,
+        workflow_name: 'e2e::* control-plane run',
+      }),
+    )
+    expect(executionTitle(unlabelled).title).toMatch(/^gpt-5\.6-terra · /)
+    expect(executionTitle(unlabelled).detail).toBe('e2e::* control-plane run')
   })
 })

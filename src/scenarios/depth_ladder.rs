@@ -11,9 +11,6 @@
 //! terminal token. Exact rows prove the deliverable; the per-depth session
 //! chain and per-child transcripts prove each row was produced at its own
 //! depth rather than by the coordinator itself.
-//!
-//! The retained case derives `L4Coordinated` from its dependency and
-//! coordination depth.
 
 use serde_json::{json, Value};
 
@@ -24,13 +21,12 @@ use crate::wire::SessionUsage;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
+    ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "depth_ladder";
-const VERSION: u32 = 4;
 const ROWS_DELIVERABLE_ID: &str = "relay_rows";
 const MAX_REPORT_CHARS: usize = 300;
 
@@ -111,7 +107,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     let rung = RUNG;
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "depth": rung.depth,
@@ -119,7 +114,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "report_marker": report_marker(rung.depth),
             "token_derivation": "run-scoped",
         }),
-        complexity_profile(rung.depth),
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -136,24 +130,10 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
     })
 }
 
-/// Depth 6 derives `L4Coordinated` from its dependency and coordination edges.
-fn complexity_profile(depth: u8) -> ComplexityProfile {
-    ComplexityProfile {
-        planning_depth: 2,
-        dependency_depth: depth,
-        state_transitions: u16::from(depth),
-        wake_cycles: 1,
-        artifact_count: 1,
-        coordination_edges: u16::from(depth),
-        ..ComplexityProfile::default()
-    }
-}
-
 fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
     let names = Names::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(&names, run_id, rung.depth),
         filesystem_root: None,
         execution: ExecutionPolicy {
@@ -664,14 +644,6 @@ mod tests {
         assert_ne!(relay_token("attempt-a", 3), relay_token("attempt-a", 4));
         assert_ne!(relay_token("attempt-a", 3), relay_token("attempt-b", 3));
         assert!(relay_token("attempt-a", 1).starts_with("DPT-"));
-    }
-
-    #[test]
-    fn retained_case_is_coordinated() {
-        use super::super::ComplexityTier;
-
-        let retained = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        assert_eq!(retained.case.complexity.tier, ComplexityTier::L4Coordinated);
     }
 
     #[test]

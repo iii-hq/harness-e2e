@@ -1,11 +1,12 @@
 # Harness E2E
 
-`harness-e2e` measures which complexity levels a Harness stack can execute
-with correct deliverables, structural integrity, bounded work, and repeatable
-outcomes.
+`harness-e2e` measures what a Harness stack can execute with correct
+deliverables, structural integrity, bounded work, and repeatable outcomes.
 
-Objective scores preserve measured criterion points independently of completion
-or resource limits. Criteria do not veto the score or approve a run. Completion,
+A run's score is the plain sum of the points its evaluated criteria awarded; a
+criterion nobody evaluated adds nothing and nothing is normalized or rescaled.
+Scores preserve measured criterion points independently of completion or
+resource limits. Criteria do not veto the score or approve a run. Completion,
 technical validity, artifact evidence, and runtime controls are reported
 separately; infrastructure and execution failures still fail the CLI.
 
@@ -26,9 +27,9 @@ remain outside that boundary.
 ## Binaries
 
 - `harness-e2e` is started by Compose and registers the asynchronous `e2e::*`
-  control plane plus the injectable Console dashboard. Explicit
-  subcommands keep direct scenario execution, report inspection, and the
-  standalone dashboard available from the same binary.
+  control plane plus the injectable Console page. Explicit subcommands keep
+  direct scenario execution and report inspection available from the same
+  binary.
 
 Build and validate the repository:
 
@@ -44,12 +45,11 @@ node --test tests/dashboard/*.test.cjs
 HARNESS_E2E_BIN="$PWD/target/debug/harness-e2e" python3 -m unittest discover -s tests/python -p 'test_*.py'
 ```
 
-List the materialized scenarios and their scenario versions:
+List the materialized scenarios and their definition digests:
 
 ```bash
 cargo run --locked --bin harness-e2e -- list
 cargo run --locked --bin harness-e2e -- catalog
-cargo run --locked --bin harness-e2e -- validate-scenarios
 ```
 
 The four [Registry scenarios](tests/fixtures/registry-version-comparison/README.md)
@@ -73,19 +73,10 @@ checks have no award and remain `not_evaluated`; an incomplete criterion set has
 no total score. Product failures stay technically valid, while infrastructure
 failures invalidate the run without erasing prior criterion observations.
 
-New declarative scenarios are authored only as `scenarios/*.md`. The compiler
-embeds the exact source, validates the canonical English section structure,
-and exposes the resulting file-stem id through the CLI, worker catalog,
-campaign runner, dashboard, and canonical result artifacts. Required sections are
-Version, Before Test, Prompt and Validations. Plans select their scenarios explicitly.
-
-Replay an archived input only through its immutable plan (the runner rejects
-any scenario, model, policy, budget, stack, runner, run-count, or retry drift):
-
-```bash
-cargo run --locked -- replay-materialized \
-  target/e2e/evidence/<run-id>/<attempt-id>/materialized-plan.json
-```
+Every scenario is a built-in module under `src/scenarios/` that owns its
+prompt, setup, deterministic evaluator, and cleanup; the module id is exposed
+through the CLI, worker catalog, campaign runner, dashboard, and canonical
+result artifacts. Plans select their scenarios explicitly.
 
 Run against an existing stack:
 
@@ -115,11 +106,12 @@ group, and are advisory by default while their longitudinal history is being
 calibrated. Release Control owns scheduling and dispatch; the executor keeps
 the result advisory and archives each materialized group through the
 environment-owned durable archiver.
-The code-focused campaigns use protected disposable checkouts of
-`iii-hq/e2e-fixture`. The engineering handoff uses its dedicated pinned
-revision, while `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog`
-share a second pinned revision through `HARNESS_E2E_FIXTURE_PATH`. The protected
-launcher enforces the fixture and cleanup boundary.
+The engineering handoff uses a protected disposable checkout of its dedicated
+pinned revision of `iii-hq/e2e-fixture`. `shell_coder_sandbox`,
+`chess_engine_build`, and `trend_blog` prepare their reviewed fixture automatically
+from an embedded Git bundle. They require Git, but no fixture checkout or
+`HARNESS_E2E_FIXTURE_PATH` configuration. Each attempt operates on a private
+workspace; temporary source checkouts are removed after their contents are read.
 `typescript_chat_service` carries its own frozen skeleton in the repository and
 needs no checkout, but it does require Node 22.6 or newer on the runner host: the
 subject's TypeScript application is executed directly through Node type
@@ -128,7 +120,7 @@ stripping, both by the public suite and by the runner-owned behavioral probe.
 resilience, endurance, and software-engineering. In the dashboard these profiles are starting templates
 for the same plan form and baseline/candidate visualization used by existing plans.
 Choose **New plan**, optionally select a template, edit the scope, and select the
-execution model, plus the judge model when the scope includes a Markdown test.
+execution model.
 **Save draft**, **Save and run**, and **Duplicate plan** use one shared lifecycle
 and retain native evidence. Fault-injection plans export
 to the protected executor. See [executable profile plans](dashboard/README.md#executable-profile-plans).
@@ -137,11 +129,16 @@ to the protected executor. See [executable profile plans](dashboard/README.md#ex
 cargo run --locked -- test-plan list
 ```
 
-The `software-engineering` profile selects only the seven incremental Kanban
-cases and four Registry cases, once each with no technical retries. Its ten
+The `software-engineering` profile selects the seven incremental Kanban cases,
+four Registry cases, the trending-topics blog build and the Linkly tutorial,
+once each with no technical retries: 13 cases and 13 planned runs. Its twelve
 execution groups keep Registry implementation and verification together, in
-that order, so verification receives the implementation delivery. Registry
-planning requires an explicit auxiliary judge model.
+that order, so verification receives the implementation delivery. Trending
+topics runs in its own `case-trending-topics-build` group using the existing
+pinned fixture workflow.
+Linkly runs its eight exchanges in one `case-linkly-tutorial` group. The executor
+creates a fresh pinned `linkly-agentic` scaffold as that group's Compose project,
+with baseline worker versions taken from the resolved stack contract.
 
 ```bash
 cargo run --locked -- test-plan materialize --profile software-engineering
@@ -178,21 +175,19 @@ execution is silently lost.
 `workers` supplies versioned components of the stack under test; it does not
 orchestrate campaigns.
 
-## Dashboard
+## Console page
 
-Build and start the dashboard from the repository root:
+Build the worker and its injectable Console page from the repository root:
 
 ```bash
 cargo build --locked --bin harness-e2e
-target/debug/harness-e2e dashboard
 ```
 
-The Rust build follows the same embedded-SPA contract as `workers/console`: it
-builds the React bundle with pnpm when `dashboard/dist/` is missing or stale,
-then embeds the Vite output in the binary. Node and pnpm must be available on
-`PATH`. For frontend development with HMR, use `pnpm --dir dashboard dev`; the
-Vite server proxies runtime data, the scoped iii WebSocket, and local-run APIs
-to the Rust dashboard on port 4173.
+The Rust build creates `dashboard/dist-console/page.js` and `styles.css`, then
+embeds both assets in the worker. Node and pnpm must be available on `PATH`.
+When Console connects to the same iii namespace, the worker registers those
+assets and the `e2e::dashboard::*` read, plan, run, status and cancellation
+functions used by the page.
 
 Rust-defined composite scenarios, including the multi-test `security_review`
 example, use the current shared result schema and read-only execution projection.
@@ -201,23 +196,15 @@ The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight; no
 payload-version compatibility mode is available.
 
-The server listens on `0.0.0.0:4173` by default. Open
-`http://localhost:4173/#/overview` on the same machine, or replace `localhost`
-with the machine's address when accessing it remotely. Use `--listen
-0.0.0.0:PORT` to select another port, `III_URL` to select the running Harness
-stack, and `--runs-dir` to select another local history directory.
-
-Local mode loads data incrementally through iii: 25 compact summaries on the
+The page loads data incrementally through iii: 25 compact summaries on the
 first overview page, one complete report when an execution is opened, only the
 selected pair for comparison, and the model/scenario catalog when the run dialog
 opens. Server-side filtering and cursor pagination keep history growth out of
-the initial payload. Static published and `--view-only` presentations preserve
-the generated-file fallback.
+the initial payload. Transport failures stay visible in Console.
 
-Local mode exposes controls that can start and cancel E2E runs, so expose the
-port only on a trusted network. Use `--listen 127.0.0.1:4173` when access should
-remain local. See [dashboard/README.md](dashboard/README.md) for view-only mode
-and the complete dashboard behavior.
+The trusted publisher still writes the bounded JSON report archive used by CI
+and downstream consumers. It does not publish a Harness E2E web application.
+See [dashboard/README.md](dashboard/README.md) for the page contract.
 
 ### Compare a local change with Release Control
 
@@ -244,7 +231,7 @@ this is a personal experiment, not an exact-stack certification. No build/Git
 tracking or matching remote stack is required. Fault-injection groups still
 require the protected executor; they are not silently omitted. References without
 shard seeds for every scenario cannot be reproduced. Differences in local
-scenario version or case identity are shown as advisory information.
+scenario definition or case identity are shown as advisory information.
 
 Results stay in the local plan store. The RC execution remains a reference,
 never a locally recreated official execution. Native result validation remains
@@ -264,8 +251,13 @@ namespace for both Compose and the project functions it starts.
 
 Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and `III_CONFIG`
 to the `harness-e2e` process. All four values are mandatory. The referenced
-configuration file contains the execution-specific `data_dir`; there is no
-local fallback, command-line override, or runtime self-registration.
+configuration contains the execution-specific evidence directory and the
+separate control-plane database namespace. Start
+`worker-compose.control.yaml` before `worker-compose.yaml`: it provisions the
+single-connection `harness_e2e` SQLite pool at the configured control-plane
+path, with SQL history disabled.
+The Harness exits explicitly when that database or its schema is unavailable;
+the subject namespace never receives its database client or filesystem path.
 
 Publication validates the locally built binary through a `path://` Compose
 container before the package is uploaded. Published campaigns use only exact
@@ -275,17 +267,43 @@ Compose, evidence, or archive artifacts.
 
 The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 `e2e::results-get`, `e2e::results-list`, `e2e::compare`,
-`e2e::scenarios-list`, `e2e::scenarios-create`,
-`e2e::scenarios-authoring-guide`, `e2e::archive`, `e2e::archive-head`,
+`e2e::scenarios-list`, `e2e::archive`, `e2e::archive-head`,
 `e2e::archive-restore`,
 `e2e::history-list`, and `e2e::retention-sweep`.
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
 materialization and recovery classification stay on the same iii control plane.
 Subject policies deny `e2e::*`.
 
-Durable artifacts are chunked through `storage::*`, while longitudinal series
-are ingested through `database::*`. The runner has no S3, GCS, R2, SQL-driver,
-or Harness dependency.
+Durable artifacts are chunked through `storage::*`. Admissions, executions,
+runs, attempts and artifact references are written through the control-plane
+`database::*` worker. Execution records retain compact dashboard summaries and
+observations, so lists and history do not load native reports. Storage carries
+no version number and has no migration step: every table records the
+fingerprint of the statements that create it, and at start the worker
+recreates the tables whose fingerprint moved in one transaction, keeping the
+execution records, local plans and receipts it can still read and rebuilding
+run projections from the native bundles. Rows it cannot read, missing bundles
+and imported Release Control history in a recreated table are logged as
+warnings; the history comes back by importing it again, and nothing is
+reconstructed as a scored result. A report or plan written under another
+results contract is read with a warning, never refused.
+
+Plan definitions and composed execution receipts are stored in `saved_plans` and
+`saved_plan_executions` through the database worker. A saved plan or receipt this
+binary cannot read is deleted on the next read; plans written by another binary
+are never migrated.
+
+Release Control history imports use `harness-e2e-history`, wrapped as
+`{json, sha256}` with a `sha256:` digest of the exact UTF-8 JSON. Use **Import
+history** in the Console to import a file or explicitly fetch a plan from the RC
+bridge. Plans and executions retain source identities, revisions and every
+retained report; repeated imports do not create duplicates. Imported active work
+never enters local admission or recovery. History remains readable without RC.
+Evidence uses local `gh` credentials and Python 3 to verify the GitHub bundle
+manifest, execution/attempt identity and file checksums, independently of RC.
+Missing, expired, inaccessible and invalid evidence are separate states. Native bundles retain
+full reports, manifests and transcripts, loaded on demand for investigation.
+The runner has no S3, GCS, R2, SQL-driver, or Harness dependency.
 
 Weekly Stress materializes deterministic fault plans and evaluates journals from a
 protected supervisor.
@@ -296,13 +314,12 @@ Lane promotion is governed by
 
 - `src/` owns the runner, local wire adapters, scenarios, evaluation,
   longitudinal comparison, and the E2E control worker.
-- `config/` owns reviewed comparison and cutover policies, fault profiles, and
-  standalone stack configuration.
+- `config/` owns reviewed comparison and cutover policies and fault profiles.
 - `tests/` owns test-only fixtures, golden wire schemas, and the Node/Python
   validation suites.
 - `schemas/` contains the public contracts for generated E2E artifacts.
-- `dashboard/` contains the React, TypeScript, Vite, and Tailwind dashboard
-  embedded in the Rust binary.
+- `dashboard/` contains the React, TypeScript, Vite, and Tailwind Console page
+  embedded in the worker binary.
 - generated reports, transcripts, logs, and deliverables stay outside Git.
 
 The crate may depend on the iii SDK and generic libraries. It must not declare
@@ -312,9 +329,9 @@ Contract compatibility is established at runtime from
 are parity fixtures, not a linked product API.
 
 The deterministic assessment boundary has one current payload shape, written
-only to `results.json`; scenario contracts are the only versioned domain. The
-judge model is auxiliary: Markdown tests use it for their validators and
-instruction adherence, and only those tests require it.
+only to `results.json`; scenario contracts are the only versioned domain. No
+scenario uses a second model: every score and every audit flag is
+deterministic.
 
 Deterministic, pre-cleanup asset capture applies explicit safety limits and
 writes an unversioned sidecar containing the canonical deterministic validation
@@ -350,19 +367,16 @@ the source repository, revision, E2E ref, and credential boundary are approved.
 ## Comparison
 
 Every completed execution records the subject and E2E revisions, observed wire
-contracts, scenario version, materialized inputs, seed, policies, artifacts,
+contracts, definition digest, materialized inputs, seed, policies, artifacts,
 and raw structural evidence. `e2e::compare` accepts two distinct completed
 execution ids (`from_execution_id` and `to_execution_id`) and writes a unique
 `comparisons/<comparison-id>/e2e-delta.json` plus `e2e-summary.md`. Numeric
 deltas remain disabled when the case set or canonical contract differs.
 
-Deliverable, structural, technical, cost, latency, turns, retries, and work
-amplification deltas remain independent. Cost and wall-time are reported as
-observed metrics and compared only within a compatible baseline/candidate
-cohort.
-amplification deltas remain independent. A tier is repeatable after five local
-runs satisfy the deliverable, structural, and technical thresholds. Cost and
-wall-time are reported as observed metrics and compared only within a compatible
+Deliverable, structural, technical, cost, latency, turns, and retry deltas
+remain independent. A case is repeatable after five local runs satisfy the
+deliverable, structural, and technical thresholds. Cost and wall-time are
+reported as observed metrics and compared only within a compatible
 baseline/candidate cohort.
 
 ## Runtime-only package boundary

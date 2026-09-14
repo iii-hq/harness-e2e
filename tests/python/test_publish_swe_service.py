@@ -52,7 +52,7 @@ def valid_report(*, accepted=True):
         else []
     )
     return {
-        "schema": "swe-service-report/v1",
+        "schema": "swe-service-report",
         "scenario_id": "swe_service_journey",
         "mode": "journey",
         "fixture_revision": "f" * 40,
@@ -424,7 +424,7 @@ class PublisherContractTests(unittest.TestCase):
             loaded = load_report(self.write_report(directory, value))
             projection = public_projection(loaded, "large-envelope")
 
-        self.assertEqual(loaded["schema"], "swe-service-report/v1")
+        self.assertEqual(loaded["schema"], "swe-service-report")
         self.assertNotIn("transcript", projection)
 
     def test_repository_and_execution_id_are_rejected_before_network(self):

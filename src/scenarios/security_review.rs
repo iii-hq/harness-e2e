@@ -5,17 +5,15 @@ use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 use super::{
-    ComplexityProfile, CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CriterionSpec, DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "security_review";
-pub const VERSION: u32 = 5;
 
 pub fn scenario(_run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         // Composite scenarios do not send this text to Harness. It is retained as
         // the code-owned scenario purpose in the ordinary scenario contract.
         prompt: "Exercise the complete on-demand security-scan lifecycle against the manually prepared local fixture, including scan deduplication, optional suggestions, GitHub reconciliation, a second immediate exact-SHA scan, final listing, and repository integrity.".into(),
@@ -58,31 +56,12 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
     let spec = scenario(namespace);
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "variant": "full_local_security_scan",
             "repository": "iii-hq/security-scan-e2e-fixture",
             "fixture_source": "HARNESS_E2E_SECURITY_FIXTURE_PATH",
         }),
-        ComplexityProfile {
-            planning_depth: 4,
-            dependency_depth: 4,
-            parallel_branches: 2,
-            external_systems: 3,
-            state_transitions: 8,
-            wake_cycles: 2,
-            validation_loops: 2,
-            artifact_count: 12,
-            coordination_edges: 6,
-            ambiguity_level: 1,
-            agent_owned_decomposition: false,
-            material_invalidation_events: 0,
-            replan_loops: 0,
-            compensable_mutations: 0,
-            durable_resume_cycles: 0,
-            coherent_long_horizon: false,
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "security_scan::v1".to_string(),
@@ -118,7 +97,6 @@ mod tests {
         let retry = materialize("attempt-b", 42).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
-        assert_eq!(first.case.scenario_version, VERSION);
         assert!(first
             .case
             .required_capabilities
@@ -128,9 +106,5 @@ mod tests {
             .required_capabilities
             .iter()
             .any(|capability| capability.contains("cron")));
-        assert_eq!(
-            first.case.complexity.tier,
-            crate::scenarios::ComplexityTier::L4Coordinated
-        );
     }
 }

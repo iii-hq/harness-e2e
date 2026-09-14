@@ -12,11 +12,7 @@ import {
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  RESULT_CONTRACT_SHA256,
-  RESULTS_SCHEMA_VERSION,
-  SCORING_PROFILE_SHA256,
-} from '@/lib/result-contract.generated'
+import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 
 const transcriptEvidence: EvidenceReference[] = [
   {
@@ -78,9 +74,7 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
         scenario_id: 'direct_answer',
         available: true,
         report: {
-          schema_version: RESULTS_SCHEMA_VERSION,
           result_contract_sha256: RESULT_CONTRACT_SHA256,
-          scoring_profile_sha256: SCORING_PROFILE_SHA256,
           report_state: 'complete',
           objective_outcome: 'passed',
           assessment_availability: 'available',
@@ -89,7 +83,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
           scenarios: [
             {
               scenario_id: 'direct_answer',
-              scenario_version: 4,
+              behavior_sha256:
+                'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
               assessment_summary: {} as never,
               aggregate: {
                 planned_runs: 1,
@@ -103,12 +98,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
                 execution_reliability: 1,
                 completion_evidence_coverage: 1,
                 completion_rate: 1,
-                objective_scored_runs: 1,
-                objective_median_score: 100,
-                objective_score_coverage: 1,
-                quality_scored_completed_runs: 1,
-                quality_score_completed: 100,
-                quality_coverage: 1,
+                scored_runs: 1,
+                mean_score: 100,
                 total_tokens_consumed: 1200,
                 tokens_completed_p50: 1200,
                 failed_attempt_tokens: 0,
@@ -124,10 +115,8 @@ function detail(run: RunAssessmentContract): DashboardExecutionDetail {
                   technical: 'valid',
                   evaluators: {
                     completion: 'available',
-                    quality: 'available',
                   },
-                  objective_score: 100,
-                  quality_score_completed: 100,
+                  score: 100,
                   assessment: run,
                 },
               ],
@@ -235,11 +224,39 @@ describe('assessment presentation model', () => {
   })
 
   it('derives next-run guidance from authoritative harness status', () => {
-    const infrastructure = buildAssessmentWorkspace(
+    const infrastructureInput = detail(
+      contract({ system_status: 'infrastructure_error' }),
+    )
+    const projectedRun =
+      infrastructureInput.reports[0].report?.scenarios[0].runs[0]
+    if (!projectedRun) throw new Error('test run is missing')
+    projectedRun.failures = [
+      {
+        status: 'subject_error',
+        domain: 'subject',
+        phase: 'execute',
+        message: 'earlier subject transport failure',
+      },
+      {
+        status: 'infrastructure_error',
+        domain: 'e2e_infrastructure',
+        phase: 'setup',
+        message: 'missing runtime HARNESS_E2E_KANBAN_BASE_DIR',
+      },
+    ]
+    const infrastructure = buildAssessmentWorkspace(infrastructureInput).runs[0]
+    expect(buildHarnessRecommendation(infrastructure)).toMatch(
+      /missing runtime HARNESS_E2E_KANBAN_BASE_DIR/i,
+    )
+    expect(buildHarnessRecommendation(infrastructure)).not.toMatch(
+      /collection or serialization path|subject transport/i,
+    )
+
+    const infrastructureWithoutCause = buildAssessmentWorkspace(
       detail(contract({ system_status: 'infrastructure_error' })),
     ).runs[0]
-    expect(buildHarnessRecommendation(infrastructure)).toMatch(
-      /collection or serialization path/i,
+    expect(buildHarnessRecommendation(infrastructureWithoutCause)).toMatch(
+      /infrastructure failure/i,
     )
 
     const resource = buildAssessmentWorkspace(
@@ -249,6 +266,36 @@ describe('assessment presentation model', () => {
 
     const passing = buildAssessmentWorkspace(detail(contract())).runs[0]
     expect(buildHarnessRecommendation(passing)).toMatch(/comparable scenario/i)
+  })
+
+  it('keeps invalid asset guidance separate from infrastructure failures', () => {
+    const invalidAsset = contract({ system_status: 'infrastructure_error' })
+    if (!invalidAsset.assets?.[0]) throw new Error('test asset is missing')
+    invalidAsset.assets[0].outcome = 'invalid'
+
+    expect(
+      buildHarnessRecommendation(
+        buildAssessmentWorkspace(detail(invalidAsset)).runs[0],
+      ),
+    ).toMatch(/invalid or missing asset/i)
+
+    invalidAsset.assets[0].outcome = 'not_evaluated'
+    const infrastructureInput = detail(invalidAsset)
+    const projectedRun =
+      infrastructureInput.reports[0].report?.scenarios[0].runs[0]
+    if (!projectedRun) throw new Error('test run is missing')
+    projectedRun.failures = [
+      {
+        status: 'infrastructure_error',
+        domain: 'e2e_infrastructure',
+        message: 'required runtime is unavailable',
+      },
+    ]
+    expect(
+      buildHarnessRecommendation(
+        buildAssessmentWorkspace(infrastructureInput).runs[0],
+      ),
+    ).toMatch(/required runtime is unavailable/i)
   })
 
   it('preserves technical failures without translating them into quality failures', () => {

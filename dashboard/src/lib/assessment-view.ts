@@ -35,13 +35,18 @@ export type AssessmentRunView = {
   key: string
   subjectId: string
   scenarioId: string
-  scenarioVersion: number
+  /** Digest of the definition that evaluated the run, when the report carries
+   *  one; an unmaterialized slot produces no assessment at all. */
+  behaviorSha256: string | null
   runId: string
   attemptId: string
   metrics: AssessmentRunMetrics
   transcript?: { messages?: unknown }
   systemStatus: SystemStatus
-  objectiveScore: number | null
+  failureMessages?: string[]
+  /** Plain sum of the points the evaluated criteria awarded; null when the run
+   *  evaluated nothing. */
+  score: number | null
   assessments: AssessmentEntry[]
   evidence: EvidenceReference[]
 }
@@ -127,7 +132,7 @@ export function buildAssessmentWorkspace(
           assessmentRunView(
             record.subject_id,
             scenario.scenario_id,
-            scenario.scenario_version,
+            scenario.behavior_sha256 ?? null,
             contract,
             projectedRun,
             projectedRun.transcript,
@@ -150,11 +155,7 @@ export function buildAssessmentWorkspace(
 function assessmentRunPriority(run: AssessmentRunView) {
   if (run.systemStatus === 'infrastructure_error') return 0
   if (run.systemStatus === 'resource_limit') return 0
-  if (
-    run.systemStatus === 'subject_error' ||
-    run.systemStatus === 'judge_error'
-  )
-    return 1
+  if (run.systemStatus === 'subject_error') return 1
   if (run.systemStatus === 'unavailable') return 3
   return 4
 }
@@ -166,20 +167,25 @@ function assessmentRunPriority(run: AssessmentRunView) {
 export function buildHarnessRecommendation(run: AssessmentRunView): string {
   const failedAsset = run.assessments.some(
     (entry) =>
-      entry.kind === 'asset_validation' && entry.validationOutcome !== 'valid',
+      entry.kind === 'asset_validation' &&
+      entry.validationOutcome != null &&
+      FAILED_ASSET_OUTCOMES.has(entry.validationOutcome),
   )
 
-  if (run.systemStatus === 'infrastructure_error' || failedAsset) {
-    return 'Fix the harness collection or serialization path, validate every expected artifact against its schema before assessment, and rerun the scenario.'
+  if (failedAsset) {
+    return 'Fix the invalid or missing asset, validate it against its schema before assessment, and rerun the scenario.'
+  }
+  if (run.systemStatus === 'infrastructure_error') {
+    const cause = run.failureMessages?.[0]
+    return cause
+      ? `Resolve the observed infrastructure failure (${cause}) and rerun the scenario.`
+      : 'Inspect the harness infrastructure failure, restore the unavailable runtime or service, and rerun the scenario.'
   }
   if (run.systemStatus === 'resource_limit') {
     return 'Reduce the scenario resource footprint or adjust its execution budget, verify collection completes within the limit, and rerun the scenario.'
   }
   if (run.systemStatus === 'subject_error') {
     return 'Fix the subject execution or transport path, confirm a complete response is captured, and rerun the scenario.'
-  }
-  if (run.systemStatus === 'judge_error') {
-    return 'Fix the Markdown validator invocation or its schema path, validate the JSON contract, and rerun the scenario.'
   }
   if (run.systemStatus === 'unavailable') {
     return 'Restore the missing report or assessment contract, add a readiness check, and rerun the scenario.'
@@ -190,7 +196,7 @@ export function buildHarnessRecommendation(run: AssessmentRunView): string {
 function assessmentRunView(
   subjectId: string,
   scenarioId: string,
-  scenarioVersion: number,
+  behaviorSha256: string | null,
   contract: RunAssessmentContract,
   projectedRun: DashboardRunProjection,
   transcript?: { messages?: unknown },
@@ -226,13 +232,20 @@ function assessmentRunView(
     key: `${subjectId}:${scenarioId}:${contract.run_id}:${contract.attempt_id}`,
     subjectId,
     scenarioId,
-    scenarioVersion,
+    behaviorSha256,
     runId: contract.run_id,
     attemptId: contract.attempt_id,
     metrics: assessmentRunMetrics(projectedRun),
     ...(transcript ? { transcript } : {}),
     systemStatus: contract.system_status,
-    objectiveScore: finiteNumber(projectedRun.objective_score),
+    failureMessages: (projectedRun.failures ?? []).flatMap((failure) =>
+      (failure.status === 'infrastructure_error' ||
+        failure.domain === 'e2e_infrastructure') &&
+      typeof failure.message === 'string'
+        ? [failure.message]
+        : [],
+    ),
+    score: finiteNumber(projectedRun.score),
     assessments,
     evidence,
   }

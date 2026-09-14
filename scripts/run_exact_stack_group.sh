@@ -17,7 +17,6 @@ fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering
 fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
 kanban_bootstrap=${HARNESS_E2E_KANBAN_BOOTSTRAP:-"$repo_root/scripts/kanban_eval/bootstrap.py"}
 engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
-shared_fixture_revision=16f6b9e05e34e09c824191eed0631d77f85be6a9
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
@@ -37,6 +36,7 @@ campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
   '.suite.groups | any(.id == $group and .execution_kind != "fault_injection")' \
   "$contract_path" >/dev/null
+project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
@@ -51,8 +51,14 @@ if ! python3 "$contract_tool" validate-layout \
   exit 2
 fi
 project_dir="$run_root/project"
+evaluation_dir="$run_root/evaluation"
 engine_config="$project_dir/iii.config.yaml"
 compose_file="$artifact_dir/stack/worker-compose.yaml"
+compose_working_dir="$repo_root"
+if [[ -n "$project_template" ]]; then
+  compose_file="$project_dir/worker-compose.yaml"
+  compose_working_dir="$project_dir"
+fi
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
 secrets_dir="$run_root/secrets"
@@ -62,7 +68,7 @@ secrets_dir="$run_root/secrets"
 e2e_data="$artifact_dir/native"
 engine_url="ws://127.0.0.1:${engine_port}"
 mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$secrets_dir" "$e2e_data" \
-  "$artifact_dir/logs" "$artifact_dir/stack"
+  "$evaluation_dir" "$artifact_dir/logs" "$artifact_dir/stack"
 chmod 700 "$secrets_dir" "$compose_state"
 
 iii_bin="$tools_dir/iii"
@@ -73,7 +79,6 @@ compose_down=false
 failure_phase=bootstrap
 failure_reason=""
 engineering_fixture_lease=""
-shared_fixture_lease=""
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
@@ -173,9 +178,6 @@ cleanup() {
     kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
     wait "$engine_pid" 2>/dev/null || true
   fi
-  if [[ -n "$shared_fixture_lease" ]]; then
-    "$fixture_launcher" cleanup --lease-id "$shared_fixture_lease" || fixture_cleanup_failed=1
-  fi
   if [[ -n "$engineering_fixture_lease" ]]; then
     "$fixture_launcher" cleanup --lease-id "$engineering_fixture_lease" || fixture_cleanup_failed=1
   fi
@@ -194,7 +196,7 @@ cleanup() {
         && -f "$artifact_dir/stack/processes-before.json" && -f "$artifact_dir/stack/processes-during.json" ]]; then
     python3 "$contract_tool" compose-evidence \
       --contract "$contract_path" \
-      --compose "$compose_file" \
+      --compose "$artifact_dir/stack/worker-compose.yaml" \
       --namespace "$namespace" \
       --add "$artifact_dir/stack/add.json" \
       --up "$artifact_dir/stack/up.json" \
@@ -205,6 +207,9 @@ cleanup() {
       --process-during "$artifact_dir/stack/processes-during.json" \
       --process-after "$artifact_dir/stack/processes-after.json" \
       --output "$artifact_dir/compose-evidence.json" || status=1
+  fi
+  if [[ -n "$project_template" && -f "$compose_file" ]]; then
+    cp "$compose_file" "$artifact_dir/stack/worker-compose-final.yaml"
   fi
   rm -rf "$run_root"
   exit "$status"
@@ -222,39 +227,22 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 prepare_code_fixtures() {
-  local requires_engineering requires_shared fixture_json execution_prefix
-  requires_shared=$(jq -r --arg group "$campaign_group_id" '
-    .suite.groups[] | select(.id == $group) |
-    any(.scenarios[]?; . == "shell_coder_sandbox" or . == "chess_engine_build" or . == "trend_blog")
-  ' "$contract_path")
+  local requires_engineering fixture_json execution_prefix
   requires_engineering=$(jq -r --arg group "$campaign_group_id" '
     .suite.groups[] | select(.id == $group) |
     any(.scenarios[]?; . == "engineering_ticket_git_handoff")
   ' "$contract_path")
-  if [[ "$requires_shared" != true && "$requires_engineering" != true ]]; then
-    return 0
-  fi
+  [[ "$requires_engineering" == true ]] || return 0
   [[ -x "$fixture_launcher" ]] || fail "fixture launcher is unavailable: $fixture_launcher"
   export HARNESS_E2E_ENGINEERING_FIXTURE_ROOT="$run_root/fixture-leases"
   execution_prefix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${campaign_group_id}"
-  if [[ "$requires_engineering" == true ]]; then
-    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
-    fixture_json="$run_root/engineering-fixture.json"
-    "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
-      --revision "$engineering_fixture_revision" >"$fixture_json"
-    engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
-    export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
-  fi
-  if [[ "$requires_shared" == true ]]; then
-    export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/shared-fixture.bundle"
-    fixture_json="$run_root/shared-fixture.json"
-    "$fixture_launcher" prepare --execution-id "${execution_prefix}-shared" \
-      --revision "$shared_fixture_revision" >"$fixture_json"
-    shared_fixture_lease=$(jq -er .lease_id "$fixture_json")
-    HARNESS_E2E_FIXTURE_PATH=$(jq -er .path "$fixture_json")
-    export HARNESS_E2E_FIXTURE_PATH
-  fi
+  export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
+  fixture_json="$run_root/engineering-fixture.json"
+  "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
+    --revision "$engineering_fixture_revision" >"$fixture_json"
+  engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
+  HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
+  export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
 }
 
 write_provider_secret() {
@@ -306,6 +294,7 @@ curl -fsSL --retry 3 --retry-all-errors --retry-delay 5 "$cli_url" -o "$cli_arch
 printf '%s  %s\n' "$cli_sha" "$cli_archive" | sha256sum --check --status
 tar -xzf "$cli_archive" -C "$tools_dir"
 chmod +x "$iii_bin"
+export PATH="$tools_dir:$PATH"
 observed_cli_version=$("$iii_bin" --version 2>&1)
 printf '%s\n' "$observed_cli_version" >"$artifact_dir/iii-version.txt"
 [[ "$observed_cli_version" == *"$cli_version"* ]] || fail \
@@ -330,22 +319,36 @@ if [[ "$campaign_group_id" == case-kanban-* ]]; then
   export HARNESS_E2E_KANBAN_RUNTIME="$kanban_runtime"
 fi
 
+if [[ -n "$project_template" ]]; then
+  failure_phase=template_scaffold
+  template_root="$repo_root/target/linkly-templates"
+  template_revision=ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
+  [[ "$(git -C "$template_root" rev-parse HEAD)" == "$template_revision" ]] || fail "Linkly template revision mismatch"
+  "$iii_bin" project init --directory "$project_dir" --template "$project_template" \
+    --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/template-scaffold.log" 2>&1
+  jq -n --arg template "$project_template" --arg revision "$template_revision" \
+    '{repository:"iii-hq/templates",revision:$revision,template:$template}' >"$artifact_dir/stack/template.json"
+fi
+
 project_args=(
   --contract "$contract_path"
   --namespace "$namespace"
   --data-dir "$e2e_data"
-  --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$project_dir"
+  --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir"
   --environment "harness-e2e.HARNESS_E2E_LANE=$(jq -r '.suite.lane' "$contract_path")"
   --environment "harness-e2e.HARNESS_E2E_CAMPAIGN_GROUP=$campaign_group_id"
   --output "$compose_file"
+  --engine-config "$engine_config"
+  --engine-port "$engine_port"
 )
+if [[ -n "$project_template" ]]; then
+  project_args+=(--template-compose "$compose_file"
+    --template-package shell=ide --template-package console=ade)
+fi
 for secret_file in "$secrets_dir"/*.env; do
   [[ -f "$secret_file" ]] || continue
   project_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
 done
-if [[ -n "${HARNESS_E2E_FIXTURE_PATH:-}" ]]; then
-  project_args+=(--environment "harness-e2e.HARNESS_E2E_FIXTURE_PATH=$HARNESS_E2E_FIXTURE_PATH")
-fi
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
@@ -360,17 +363,14 @@ fi
 python3 "$contract_tool" project "${project_args[@]}"
 
 failure_phase=engine_start
-manager_name="iii""-worker-manager"
-printf 'workers:\n  - name: %s\n    config:\n      host: 127.0.0.1\n      port: %s\n' \
-  "$manager_name" "$engine_port" >"$engine_config"
 (cd "$project_dir" && exec setsid "$iii_bin" -c "$engine_config" --no-update-check) \
   >"$artifact_dir/logs/engine.log" 2>&1 &
 engine_pid=$!
 wait_for_engine
 
 failure_phase=compose_start
-III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
-  --engine "$engine_url" --namespace "$namespace" \
+(cd "$compose_working_dir" && exec env III_COMPOSE_STATE_DIR="$compose_state" setsid "$iii_bin" compose \
+  --engine "$engine_url" --namespace "$namespace") \
   >"$artifact_dir/logs/compose.log" 2>&1 &
 compose_pid=$!
 compose_started=true
@@ -383,6 +383,9 @@ while IFS= read -r root; do
 done < <(python3 "$contract_tool" roots --contract "$contract_path")
 compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
 await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+if [[ -n "$project_template" ]]; then
+  cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
+fi
 
 failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"

@@ -109,10 +109,10 @@ class KanbanRunnerTest(unittest.TestCase):
     def test_probe_requires_complete_consistent_evidence_and_normal_exit(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)
-            result = {'schema': 'kanban-evaluation/v1', 'case_id': 'test',
+            result = {'schema': 'kanban-evaluation', 'case_id': 'test',
                       'status': 'passed', 'functional_status': 'passed',
                       'checks': [{'id': 'criterion_1', 'status': 'passed', 'detail': 'observed'}]}
-            coverage = {'schema': 'kanban-evaluation-coverage/v1', 'case_id': 'test',
+            coverage = {'schema': 'kanban-evaluation-coverage', 'case_id': 'test',
                         'complete': True, 'criteria': result['checks']}
             (evidence / 'result.json').write_text(json.dumps(result))
             with self.assertRaisesRegex(RuntimeError, 'incomplete evidence'):

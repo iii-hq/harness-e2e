@@ -20,7 +20,7 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture, ComplexityProfile,
+    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
     DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
     InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
     ScenarioSpec,
@@ -28,7 +28,6 @@ use super::{
 
 pub const ID: &str = "cross_app_transaction";
 pub const CANONICAL_SEED: u64 = 0x6372_6f73_7361_7070;
-const VERSION: u32 = 3;
 const DELIVERABLE_ID: &str = "cross_app_transaction_audit";
 const TARGET_ACCOUNT: &str = "acct-42";
 const SENTINEL_ACCOUNT: &str = "acct-99";
@@ -687,7 +686,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "account_id": TARGET_ACCOUNT,
@@ -698,16 +696,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedSc
             "injected_fault": "one billing version_conflict",
             "sentinels": [SENTINEL_ACCOUNT, SENTINEL_TICKET],
         }),
-        ComplexityProfile {
-            planning_depth: 3,
-            dependency_depth: 3,
-            external_systems: 3,
-            state_transitions: 4,
-            validation_loops: 1,
-            artifact_count: 1,
-            ambiguity_level: 3,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -726,7 +714,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let ids = FunctionIds::new(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Move account `{TARGET_ACCOUNT}` from `{INITIAL_TEAM}` to `{TARGET_TEAM}` consistently across CRM and billing, then close support ticket `{TARGET_TICKET}`.
 

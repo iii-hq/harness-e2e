@@ -20,6 +20,7 @@ import type {
   SemanticTestReport,
   TechnicalState,
 } from '@/lib/dashboard-data-source'
+import { shortDefinition } from '@/lib/definition-digest'
 import { formatPercent, titleCase } from '@/lib/execution-view'
 import {
   buildScenarioMatrix,
@@ -116,16 +117,19 @@ export function contractScent(
   return [
     `results contract ${distinct(contracts.map((c) => c.reportState ?? 'unavailable'))}`,
     distinct(contracts.map((c) => c.objectiveOutcome ?? 'unavailable')),
-    distinct(
-      contracts.map((c) =>
-        c.schemaVersion === null
-          ? 'schema unavailable'
-          : `Results v${c.schemaVersion}`,
-      ),
-    ),
-    distinct(contracts.map((c) => shortHash(c.resultContractSha256))),
-    `scoring profile ${distinct(contracts.map((c) => shortHash(c.scoringProfileSha256)))}`,
+    `contract ${distinct(contracts.map((c) => shortDigest(c.resultContractSha256)))}`,
+    ...(contracts.some((c) => !c.resultContractCurrent)
+      ? ['differs from this console']
+      : []),
   ].join(' · ')
+}
+
+/** What differs from the contract this Console was built with, if anything. */
+export function contractDrift(contract: {
+  resultContractCurrent: boolean
+}): string | null {
+  if (contract.resultContractCurrent) return null
+  return 'Written under another results contract than this Console; figures are shown as reported.'
 }
 
 export function ResultContractStrip({
@@ -157,11 +161,11 @@ export function ResultContractStrip({
       {contracts.map((contract) => (
         <div
           key={contract.key}
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"
+          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
           data-results-contract={contract.valid ? 'valid' : 'invalid'}
         >
           {/* Audit ED-30: title case belongs to words. Applied to every value it
-              turned a hash into "Sha256:A7eb…" and a version into "Results V4". */}
+              turned a hash into "Sha256:A7eb…". */}
           <ContractFact
             label="report state"
             value={titleCase(contract.reportState ?? 'unavailable')}
@@ -170,22 +174,20 @@ export function ResultContractStrip({
             label="objective outcome"
             value={titleCase(contract.objectiveOutcome ?? 'unavailable')}
           />
+          {/* The report is identified by the contract it was written against,
+              the digest the runner also refuses to read across. */}
           <ContractFact
-            label="schema"
-            value={
-              contract.schemaVersion === null
-                ? 'unavailable'
-                : `Results v${contract.schemaVersion}`
-            }
+            label="results contract"
+            value={shortDigest(contract.resultContractSha256)}
           />
-          <ContractFact
-            label="result contract"
-            value={shortHash(contract.resultContractSha256)}
-          />
-          <ContractFact
-            label="scoring profile"
-            value={shortHash(contract.scoringProfileSha256)}
-          />
+          {contractDrift(contract) ? (
+            <p
+              className="m-0 text-xs text-warning sm:col-span-2 lg:col-span-3"
+              data-results-contract-drift="true"
+            >
+              {contractDrift(contract)}
+            </p>
+          ) : null}
         </div>
       ))}
     </Panel>
@@ -203,9 +205,11 @@ function ContractFact({ label, value }: { label: string; value: string }) {
   )
 }
 
-function shortHash(value: string | null) {
+/** Digests are shown as the first hex chars of the SHA-256, as elsewhere in
+ *  the Console; the `sha256:` prefix carries no identity. */
+function shortDigest(value: string | null) {
   if (!value) return 'unavailable'
-  return value.length > 19 ? `${value.slice(0, 19)}…` : value
+  return value.replace(/^sha256:/, '').slice(0, 12)
 }
 
 const MATRIX_COLUMNS =
@@ -286,8 +290,9 @@ function ScenarioRow({
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
   const panelId = `${safeId(item.key)}-scenario-panel`
+  const definition = shortDefinition(item.behaviorSha256)
   const scenarioTitle = `${titleCase(item.scenarioId)}${
-    item.scenarioVersion != null ? ` v${item.scenarioVersion}` : ''
+    definition ? ` · definition ${definition}` : ''
   }`
   const structure = item.workflowSteps.length
     ? `Workflow · ${item.workflowSteps.length} ${item.workflowSteps.length === 1 ? 'step' : 'steps'}`
@@ -494,7 +499,7 @@ function ScenarioReliabilityBand({
         className="m-0 bg-panel-raised px-4 py-3 text-xs text-ink-muted md:px-5"
         data-scenario-aggregate="unavailable"
       >
-        Required Results v3 aggregate is unavailable; no completion or
+        The required results aggregate is unavailable; no completion or
         reliability metric was inferred.
       </p>
     )
@@ -513,8 +518,6 @@ function ScenarioReliabilityBand({
     ['execution reliability', aggregate.execution_reliability],
     ['completion evidence coverage', aggregate.completion_evidence_coverage],
     ['completion rate', aggregate.completion_rate],
-    ['objective score coverage', aggregate.objective_score_coverage],
-    ['quality coverage', aggregate.quality_coverage],
   ] as const
   const tokenMetrics = [
     ['subject tokens', aggregate.total_tokens_consumed],
@@ -545,13 +548,13 @@ function ScenarioReliabilityBand({
           />
         ))}
         <AggregateFact
-          label="quality score completed"
+          label="mean score"
           value={
-            aggregate.quality_score_completed == null
+            aggregate.mean_score == null
               ? '—'
-              : `${formatDecimal(aggregate.quality_score_completed)}/100`
+              : `${formatDecimal(aggregate.mean_score)}/100`
           }
-          detail={`${aggregate.quality_scored_completed_runs}/${aggregate.completed_runs} completed runs scored`}
+          detail={`${aggregate.scored_runs}/${aggregate.technical_valid_runs} technically valid runs scored`}
         />
       </dl>
       <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
@@ -596,8 +599,7 @@ type PhysicalAttempt = {
   completion?: CompletionState
   technical?: TechnicalState
   evaluators?: DashboardRunProjection['evaluators']
-  objectiveScore?: number | null
-  qualityScoreCompleted?: number | null
+  score?: number | null
 }
 
 function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
@@ -609,8 +611,7 @@ function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
       completion: attempt.completion,
       technical: attempt.technical,
       evaluators: attempt.evaluators,
-      objectiveScore: attempt.objective_score,
-      qualityScoreCompleted: attempt.quality_score_completed,
+      score: attempt.score,
     })),
     {
       key: `${run.attempt_id}:terminal`,
@@ -619,8 +620,7 @@ function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
       completion: run.completion,
       technical: run.technical,
       evaluators: run.evaluators,
-      objectiveScore: run.objective_score,
-      qualityScoreCompleted: run.quality_score_completed,
+      score: run.score,
     },
   ])
 }
@@ -641,16 +641,14 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
         </span>
       </summary>
       <div className="overflow-x-auto bg-panel">
-        <table className="w-full min-w-[860px] border-collapse text-left text-xs">
+        <table className="w-full min-w-[620px] border-collapse text-left text-xs">
           <thead className="bg-panel-raised font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
             <tr>
               <th className="px-4 py-2 font-semibold">run / attempt</th>
               <th className="px-4 py-2 font-semibold">completion</th>
               <th className="px-4 py-2 font-semibold">technical</th>
               <th className="px-4 py-2 font-semibold">completion evaluator</th>
-              <th className="px-4 py-2 font-semibold">quality evaluator</th>
-              <th className="px-4 py-2 font-semibold">objective</th>
-              <th className="px-4 py-2 font-semibold">quality</th>
+              <th className="px-4 py-2 font-semibold">score</th>
             </tr>
           </thead>
           <tbody>
@@ -667,14 +665,8 @@ function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
                 <td className="px-4 py-3">
                   {evaluatorLabel(attempt.evaluators?.completion)}
                 </td>
-                <td className="px-4 py-3">
-                  {evaluatorLabel(attempt.evaluators?.quality)}
-                </td>
                 <td className="px-4 py-3 font-mono tabular-nums">
-                  {scoreLabel(attempt.objectiveScore)}
-                </td>
-                <td className="px-4 py-3 font-mono tabular-nums">
-                  {scoreLabel(attempt.qualityScoreCompleted)}
+                  {scoreLabel(attempt.score)}
                 </td>
               </tr>
             ))}
@@ -711,16 +703,10 @@ function formatCount(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
 }
 
-/** Audit ED-24: eleven facts in one seven-column grid wrapped into a ragged
- *  second row with a visible empty cell. Three bands, each sized to its own
+/** Audit ED-24: the facts in one seven-column grid wrapped into a ragged
+ *  second row with a visible empty cell. Two bands, each sized to its own
  *  count, divide evenly and say what kind of number each one is. */
 function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
-  const scoring = item.primaryMetrics.filter(
-    (metric) => metric.band === 'scoring',
-  )
-  const execution = item.primaryMetrics.filter(
-    (metric) => metric.band === 'execution',
-  )
   return (
     <div className="grid gap-4" data-scenario-primary-metrics>
       <MetricBandGroup label="outcome" columns="sm:grid-cols-1">
@@ -731,36 +717,19 @@ function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
           detail="Authoritative system result"
         />
       </MetricBandGroup>
-      {scoring.length > 0 ? (
-        <MetricBandGroup
-          label="scoring"
-          columns="sm:grid-cols-2 lg:grid-cols-4"
-        >
-          {scoring.map((metric) => (
-            <ResultFact
-              key={metric.label}
-              label={metric.label}
-              value={metric.value}
-              detail={metric.detail}
-            />
-          ))}
-        </MetricBandGroup>
-      ) : null}
-      {execution.length > 0 ? (
-        <MetricBandGroup
-          label="execution"
-          columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
-        >
-          {execution.map((metric) => (
-            <ResultFact
-              key={metric.label}
-              label={metric.label}
-              value={metric.value}
-              detail={metric.detail}
-            />
-          ))}
-        </MetricBandGroup>
-      ) : null}
+      <MetricBandGroup
+        label="execution"
+        columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
+      >
+        {item.primaryMetrics.map((metric) => (
+          <ResultFact
+            key={metric.label}
+            label={metric.label}
+            value={metric.value}
+            detail={metric.detail}
+          />
+        ))}
+      </MetricBandGroup>
     </div>
   )
 }

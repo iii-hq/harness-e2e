@@ -283,7 +283,7 @@ function SemanticTestCard({
     test.status !== 'succeeded'
 
   return (
-    <li className="min-w-0 overflow-hidden rounded-[var(--ds-radius-sm)] border border-line bg-panel shadow-sm">
+    <li className="min-w-0 overflow-hidden rounded-[var(--ds-radius-sm)] border border-line bg-panel">
       <header className="grid gap-4 px-4 py-4 sm:px-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
         <div className="flex min-w-0 items-start gap-3">
           <span
@@ -451,7 +451,7 @@ function SemanticTestCard({
               <div>
                 <dt className="text-ink-muted">Step type</dt>
                 <dd className="m-0 mt-0.5 break-all font-mono text-label text-ink-soft">
-                  {test.step_type}@{test.step_version}
+                  {test.step_type}
                 </dd>
               </div>
               {test.cost_usd != null && (

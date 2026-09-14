@@ -1,5 +1,5 @@
 {
-  "schema": "kanban-scenarios/v1",
+  "schema": "kanban-scenarios",
   "status": "specification-only",
   "shared_prompt": "Work in the supplied repository snapshot. Implement only the requested increment as a standalone browser application with a Node backend using iii and Compose. Do not add a Console dependency or iii.worker.yaml. Preserve existing behavior and data. First record a short implementation plan, then implement, add meaningful tests, run the available checks, and report results and any unverified behavior. Use the existing application conventions. Do not inspect other repositories or attempt to obtain later versions of this repository. No tasklist comparison or skill modification is in scope.",
   "reference_checks": ["pnpm --dir kanban install --frozen-lockfile", "pnpm --dir kanban typecheck", "pnpm --dir kanban test", "pnpm --dir kanban build"],

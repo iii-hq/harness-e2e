@@ -13,6 +13,7 @@ pub(super) struct StoredRun {
     pub(super) live_progress_error: Option<String>,
 }
 
+#[cfg(test)]
 pub(super) fn write_metadata(run_dir: &Path, metadata: &RunMetadata) -> Result<()> {
     fs::create_dir_all(run_dir).with_context(|| format!("create {}", run_dir.display()))?;
     let target = run_dir.join("metadata.json");
@@ -101,7 +102,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
     let requested_runs = report
         .scenarios
         .iter()
-        .map(|scenario| scenario.aggregate.runs)
+        .map(|scenario| scenario.aggregate.observed_runs)
         .max()
         .unwrap_or(1);
     let seed = report
@@ -123,16 +124,6 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
             url: String::new(),
             model: report.subject.model.clone(),
             provider: report.subject.provider.clone(),
-            judge_model: report
-                .judge
-                .as_ref()
-                .map(|judge| judge.model.clone())
-                .unwrap_or_default(),
-            judge_provider: report
-                .judge
-                .as_ref()
-                .map(|judge| judge.provider.clone())
-                .unwrap_or_default(),
             scenarios: report
                 .scenarios
                 .iter()
@@ -145,6 +136,7 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
     })
 }
 
+#[cfg(test)]
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {
     let mut runs = Vec::new();
     for entry in fs::read_dir(runs_dir)? {
@@ -170,10 +162,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn listing_rejects_unsupported_and_corrupt_results() {
+    fn listing_rejects_unreadable_results() {
         let root = tempfile::tempdir().unwrap();
         for (name, bytes) in [
-            ("old", br#"{"schema_version":2}"#.as_slice()),
+            (
+                "partial",
+                br#"{"result_contract_sha256":"sha256:foreign"}"#.as_slice(),
+            ),
             ("corrupt", b"not-json".as_slice()),
         ] {
             let directory = root.path().join(name);

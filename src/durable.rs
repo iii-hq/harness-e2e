@@ -170,7 +170,6 @@ pub struct HistoryRecord {
     pub subject_model: String,
     pub passed: bool,
     pub result_contract_sha256: String,
-    pub scoring_profile_sha256: String,
     pub baseline_comparable: bool,
     pub case_count: u32,
     pub stack_mode: String,
@@ -824,7 +823,7 @@ impl DurableHistory {
                 DATABASE_EXECUTE,
                 json!({
                     "db": self.config.database,
-                    "sql": format!("INSERT INTO {HISTORY_TABLE} (ingestion_id, identity_sha256, execution_id, lane, occurred_at, expires_at, result_contract_sha256, scoring_profile_sha256, baseline_comparable, record_json, record_sha256, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)"),
+                    "sql": format!("INSERT INTO {HISTORY_TABLE} (ingestion_id, identity_sha256, execution_id, lane, occurred_at, expires_at, result_contract_sha256, baseline_comparable, record_json, record_sha256, deleted_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)"),
                     "params": [
                         record.ingestion_id,
                         record.identity_sha256,
@@ -833,7 +832,6 @@ impl DurableHistory {
                         record.occurred_at,
                         record.archive.expires_at,
                         record.result_contract_sha256,
-                        record.scoring_profile_sha256,
                         record.baseline_comparable,
                         encoded,
                         digest,
@@ -893,7 +891,7 @@ impl DurableHistory {
                 DATABASE_EXECUTE,
                 json!({
                     "db": self.config.database,
-                    "sql": format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (ingestion_id TEXT PRIMARY KEY, identity_sha256 TEXT NOT NULL, execution_id TEXT NOT NULL, lane TEXT NOT NULL, occurred_at TEXT NOT NULL, expires_at TEXT NULL, result_contract_sha256 TEXT NOT NULL, scoring_profile_sha256 TEXT NOT NULL, baseline_comparable INTEGER NOT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL, deleted_at TEXT NULL)"),
+                    "sql": format!("CREATE TABLE IF NOT EXISTS {HISTORY_TABLE} (ingestion_id TEXT PRIMARY KEY, identity_sha256 TEXT NOT NULL, execution_id TEXT NOT NULL, lane TEXT NOT NULL, occurred_at TEXT NOT NULL, expires_at TEXT NULL, result_contract_sha256 TEXT NOT NULL, baseline_comparable INTEGER NOT NULL, record_json TEXT NOT NULL, record_sha256 TEXT NOT NULL, deleted_at TEXT NULL)"),
                     "params": [],
                 }),
             )
@@ -912,7 +910,6 @@ struct ArchiveBasis {
     subject_model: String,
     passed: bool,
     result_contract_sha256: String,
-    scoring_profile_sha256: String,
     baseline_comparable: bool,
     case_count: u32,
     stack_mode: String,
@@ -989,9 +986,6 @@ fn archive_basis(
             result_contract_sha256: report
                 .map(|report| report.result_contract_sha256.clone())
                 .unwrap_or_else(|| crate::report::RESULT_CONTRACT_SHA256.into()),
-            scoring_profile_sha256: report
-                .map(|report| report.scoring_profile_sha256.clone())
-                .unwrap_or_else(|| crate::report::SCORING_PROFILE_SHA256.into()),
             baseline_comparable: report.is_some_and(baseline_comparable),
             case_count: u32::try_from(
                 observation
@@ -1029,7 +1023,6 @@ fn archive_basis(
         subject_model: report.subject.model.clone(),
         passed: report.passed,
         result_contract_sha256: report.result_contract_sha256.clone(),
-        scoring_profile_sha256: report.scoring_profile_sha256.clone(),
         baseline_comparable: baseline_comparable(report),
         case_count: u32::try_from(report.scenarios.len()).unwrap_or(u32::MAX),
         stack_mode,
@@ -1078,7 +1071,6 @@ fn history_record(basis: &ArchiveBasis, archive: DurableArchiveReference) -> Res
         subject_model: basis.subject_model.clone(),
         passed: basis.passed,
         result_contract_sha256: basis.result_contract_sha256.clone(),
-        scoring_profile_sha256: basis.scoring_profile_sha256.clone(),
         baseline_comparable: basis.baseline_comparable,
         case_count: basis.case_count,
         stack_mode: basis.stack_mode.clone(),
@@ -1098,16 +1090,10 @@ fn validate_history_record(record: &HistoryRecord) -> Result<()> {
     {
         bail!("history identity differs from its archive reference");
     }
-    for (name, value) in [
-        (
-            "result_contract_sha256",
-            record.result_contract_sha256.as_str(),
-        ),
-        (
-            "scoring_profile_sha256",
-            record.scoring_profile_sha256.as_str(),
-        ),
-    ] {
+    for (name, value) in [(
+        "result_contract_sha256",
+        record.result_contract_sha256.as_str(),
+    )] {
         if value.len() != 71
             || !value.starts_with("sha256:")
             || !value[7..].bytes().all(|byte| byte.is_ascii_hexdigit())

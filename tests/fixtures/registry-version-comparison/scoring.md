@@ -6,7 +6,7 @@ Each metric answers one question. Change its description or weight directly in `
 
 ## Who validates
 
-- **Planning:** a separate model call reads the submitted plan and the requirements, then answers each planning question with a binary result and cited plan evidence. Its response is retained. This is a model judgment, not a deterministic proof of plan quality.
+- **Planning:** deterministic checks over the submitted `plan.md` answer each planning question with a binary result and the cited plan lines. Contract questions look for the stated terms, location questions for pinned-source paths, sequence and test questions for document structure, and scope for excluded work that is not ruled out. The checks prove that the plan states the contract, not that the stated plan would work.
 - **Implementation:** independent HTTP, browser, database, and patch-replay checks validate the delivered feature. The subject's report does not award points.
 - **Environment:** the validator invokes the submitted environment commands in its private Docker daemon and checks the resulting database, API, frontend, artifacts, isolation, restart, and cleanup behavior.
 - **Verification:** independent contract probes establish which required check IDs fail in the supplied implementation. The validator compares the tester's structured report with those observations and checks source preservation.

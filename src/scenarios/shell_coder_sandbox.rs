@@ -23,13 +23,12 @@ use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
     common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    ComplexityProfile, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
+    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "shell_coder_sandbox";
-const VERSION: u32 = 7;
 pub const CANONICAL_SEED: u64 = 2_051;
 const DIFFICULTY_PROFILE: &str = "code-hard-2026-08";
 
@@ -43,7 +42,6 @@ const DIAGNOSIS_PATH: &str = "evidence/diagnosis.md";
 const HOST_DEMO_STDOUT: &str = r#"{"accounts":[{"account":"alpha","balance_cents":825},{"account":"beta","balance_cents":0}]}"#;
 const MAX_SOURCE_BYTES: u64 = 64 * 1024;
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(90);
-const FIXTURE_PATH_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
 const FIXTURE_REPOSITORY: &str = "iii-hq/e2e-fixture";
 const FIXTURE_SUBTREE: &str = "shell-coder-sandbox";
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
@@ -232,7 +230,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         CANONICAL_SEED,
         json!({
             "difficulty_profile": DIFFICULTY_PROFILE,
@@ -247,17 +244,6 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
             "host_demo_stdout": HOST_DEMO_STDOUT,
             "hidden_probe_families": 7,
         }),
-        ComplexityProfile {
-            planning_depth: 5,
-            dependency_depth: 4,
-            external_systems: 2,
-            state_transitions: 8,
-            validation_loops: 2,
-            artifact_count: 2,
-            coordination_edges: 2,
-            ambiguity_level: 5,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -278,7 +264,6 @@ fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     let root = workspace_root(run_id);
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: format!(
             r#"Repair the event reconciliation implementation in the isolated workspace `{root}`.
 
@@ -336,14 +321,10 @@ fn expected_fixture_files(assets: &FixtureAssets) -> BTreeMap<&'static str, &str
     ])
 }
 
-/// Read-only readiness check shared by profile admission and native setup.
-pub(crate) fn validate_fixture() -> Result<()> {
-    load_fixture_assets().map(|_| ())
-}
-
-fn load_fixture_assets() -> Result<FixtureAssets> {
-    let checkout = fixture_root_from_env()?;
-    validate_fixture_revision(&checkout)?;
+async fn load_fixture_assets() -> Result<FixtureAssets> {
+    let fixture = super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
+    let checkout = &fixture.root;
+    validate_fixture_revision(checkout)?;
     let subtree = checkout.join(FIXTURE_SUBTREE);
     if !subtree.is_dir() {
         bail!(
@@ -372,18 +353,6 @@ fn load_fixture_assets() -> Result<FixtureAssets> {
         public_tests: read_fixture_asset(&subtree, PUBLIC_TEST_PATH)?,
         task: read_fixture_asset(&subtree, TASK_PATH)?,
     })
-}
-
-fn fixture_root_from_env() -> Result<PathBuf> {
-    let raw = std::env::var_os(FIXTURE_PATH_ENV)
-        .filter(|value| !value.is_empty())
-        .with_context(|| format!("{FIXTURE_PATH_ENV} must point to the fixture checkout"))?;
-    let path = PathBuf::from(raw);
-    if !path.is_absolute() {
-        bail!("{FIXTURE_PATH_ENV} must be absolute: {}", path.display());
-    }
-    path.canonicalize()
-        .with_context(|| format!("canonicalize fixture checkout {}", path.display()))
 }
 
 fn validate_fixture_revision(checkout: &Path) -> Result<()> {
@@ -455,7 +424,7 @@ fn reset_fixture(root: &Path, assets: &FixtureAssets) -> Result<()> {
 
 fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
-        let assets = load_fixture_assets()?;
+        let assets = load_fixture_assets().await?;
         let root = workspace_root(run_id);
         reset_fixture(&root, &assets)?;
         let public = run_public_tests(&root).await?;
@@ -658,7 +627,7 @@ fn evaluate<'a>(
 ) -> EvaluationFuture<'a> {
     Box::pin(async move {
         let root = workspace_root(run_id);
-        let assets = load_fixture_assets()?;
+        let assets = load_fixture_assets().await?;
         let fixture = audit_fixture(run_id, &assets).await?;
         let workflow = workflow_audit(observation, &root);
         let shell_ready = context.function_exists("shell::exec").await?;
@@ -758,7 +727,7 @@ fn capture<'a>(
 ) -> DeliverableCaptureFuture<'a> {
     Box::pin(async move {
         let root = workspace_root(run_id);
-        let assets = load_fixture_assets()?;
+        let assets = load_fixture_assets().await?;
         let fixture = audit_fixture(run_id, &assets).await?;
         let workflow = workflow_audit(observation, &root);
         let scope = fixture.scope_valid() && workflow.evidence_ordered;
@@ -1241,10 +1210,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn host_only_case_has_a_distinct_version_and_cohort() {
+    fn host_only_case_has_a_stable_identity_and_cohort() {
         let materialized = materialize("catalog", CANONICAL_SEED).unwrap();
         let rotated = materialize("catalog", 7).unwrap();
-        assert_eq!(materialized.case.scenario_version, 7);
         assert_eq!(materialized.case.seed, CANONICAL_SEED);
         assert_eq!(rotated.case.case_id, materialized.case.case_id);
         assert_eq!(
@@ -1267,10 +1235,6 @@ mod tests {
         assert_eq!(
             materialized.case.inputs["fixture_manifest_sha256"],
             FIXTURE_MANIFEST_SHA256
-        );
-        assert_eq!(
-            materialized.case.complexity.tier,
-            super::super::ComplexityTier::L4Coordinated
         );
         assert!(!materialized
             .case
@@ -1308,9 +1272,8 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires the pinned HARNESS_E2E_FIXTURE_PATH checkout"]
-    async fn pinned_external_fixture_is_valid_and_starts_red() {
-        let assets = load_fixture_assets().unwrap();
+    async fn embedded_fixture_is_valid_and_starts_red() {
+        let assets = load_fixture_assets().await.unwrap();
         let temporary = tempfile::tempdir().unwrap();
         write_fixture(temporary.path(), &assets).unwrap();
 

@@ -25,11 +25,10 @@ def report(execution_id: str, e2e_revision: str = "1" * 40) -> dict:
             "e2e_revision": e2e_revision,
         },
         "subject": {"provider": "provider", "model": "model"},
-        "judge": None,
         "scenarios": [
             {
                 "scenario_id": "todo_worker_simple",
-                "scenario_version": 1,
+                "behavior_sha256": "sha256:" + "b" * 64,
                 "case_id": "todo_worker_simple:v1:seed-1",
                 "case": {"seed": 1, "inputs_sha256": "sha256:" + "b" * 64},
                 "execution_policy": {"max_turns": 5},

@@ -21,8 +21,13 @@ use super::{
 };
 
 pub const HARNESS_STEP_ID: &str = "harness.prompt";
-pub const HARNESS_STEP_VERSION: u32 = 1;
-pub const HARNESS_STEP_VERSION_V2: u32 = 2;
+pub const BOUNDED_HARNESS_STEP_ID: &str = "harness.bounded";
+
+/// Both built-in steps open a subject Harness session, so a workflow that
+/// declares either one needs the turn-completed observation bound.
+pub fn opens_harness_session(step_type: &str) -> bool {
+    step_type == HARNESS_STEP_ID || step_type == BOUNDED_HARNESS_STEP_ID
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -41,7 +46,7 @@ pub struct HarnessStepConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct HarnessStepConfigV2 {
+pub struct BoundedHarnessStepConfig {
     pub prompt: String,
     #[serde(default = "default_max_turns")]
     pub max_turns: u32,
@@ -87,7 +92,7 @@ impl HarnessStepPolicy {
             })
             .collect::<Result<Vec<_>>>()?;
         if approved_roots.is_empty() {
-            bail!("Harness prompt v2 requires at least one approved workspace root");
+            bail!("bounded Harness prompt requires at least one approved workspace root");
         }
         let mandatory_denials = normalized_patterns(mandatory_denials, "mandatory denial")?;
         Ok(Self {
@@ -126,7 +131,7 @@ impl HarnessStepPolicy {
         Ok(Some(json!({ "fs_scope": { "root": canonical } })))
     }
 
-    fn function_policy(&self, config: &HarnessStepConfigV2) -> Result<FunctionPolicy> {
+    fn function_policy(&self, config: &BoundedHarnessStepConfig) -> Result<FunctionPolicy> {
         let allow = normalized_patterns(config.function_allow.clone(), "function allow")?;
         let deny = normalized_patterns(
             config
@@ -183,7 +188,7 @@ struct HarnessStepExecutor {
     sessions: Mutex<HashMap<(String, String), String>>,
 }
 
-struct HarnessStepExecutorV2 {
+struct BoundedHarnessStepExecutor {
     context: Arc<E2eContext>,
     model: String,
     provider: String,
@@ -208,7 +213,7 @@ pub fn register_harness_step(
     )
 }
 
-pub fn register_harness_step_v2(
+pub fn register_bounded_harness_step(
     catalog: &mut StepCatalog,
     context: Arc<E2eContext>,
     model: impl Into<String>,
@@ -216,8 +221,8 @@ pub fn register_harness_step_v2(
     policy: HarnessStepPolicy,
 ) -> Result<()> {
     catalog.register(
-        harness_descriptor_v2()?,
-        Arc::new(HarnessStepExecutorV2 {
+        bounded_harness_descriptor()?,
+        Arc::new(BoundedHarnessStepExecutor {
             context,
             model: model.into(),
             provider: provider.into(),
@@ -231,7 +236,6 @@ pub fn harness_descriptor() -> Result<StepTypeDescriptor> {
     let schema = schemars::schema_for!(HarnessStepConfig);
     Ok(StepTypeDescriptor {
         id: HARNESS_STEP_ID.into(),
-        version: HARNESS_STEP_VERSION,
         description: "Start one independent Harness session with bounded untrusted inputs.".into(),
         config_schema: serde_json::to_value(schema)?,
         inputs: BTreeMap::from([(
@@ -271,11 +275,10 @@ pub fn harness_descriptor() -> Result<StepTypeDescriptor> {
     })
 }
 
-pub fn harness_descriptor_v2() -> Result<StepTypeDescriptor> {
-    let schema = schemars::schema_for!(HarnessStepConfigV2);
+pub fn bounded_harness_descriptor() -> Result<StepTypeDescriptor> {
+    let schema = schemars::schema_for!(BoundedHarnessStepConfig);
     Ok(StepTypeDescriptor {
-        id: HARNESS_STEP_ID.into(),
-        version: HARNESS_STEP_VERSION_V2,
+        id: BOUNDED_HARNESS_STEP_ID.into(),
         description:
             "Start one independent Harness session with runtime-approved filesystem and function boundaries."
                 .into(),
@@ -491,10 +494,10 @@ impl StepExecutor for HarnessStepExecutor {
 }
 
 #[async_trait]
-impl StepExecutor for HarnessStepExecutorV2 {
+impl StepExecutor for BoundedHarnessStepExecutor {
     async fn preflight(&self, context: &StepExecutorContext) -> Result<()> {
-        let config = decode_config_v2(context)?;
-        validate_v2_config(&config)?;
+        let config = decode_bounded_config(context)?;
+        validate_bounded_config(&config)?;
         let workspace_root = optional_text_input(context, "workspace_root")?;
         self.policy.workspace_metadata(workspace_root)?;
         self.policy.function_policy(&config)?;
@@ -514,8 +517,8 @@ impl StepExecutor for HarnessStepExecutorV2 {
     }
 
     async fn execute(&self, context: StepExecutorContext) -> Result<StepExecutorOutput> {
-        let config = decode_config_v2(&context)?;
-        validate_v2_config(&config)?;
+        let config = decode_bounded_config(&context)?;
+        validate_bounded_config(&config)?;
         let workspace_root = optional_text_input(&context, "workspace_root")?;
         let metadata = self.policy.workspace_metadata(workspace_root)?;
         let functions = self.policy.function_policy(&config)?;
@@ -654,7 +657,7 @@ impl HarnessStepExecutor {
     }
 }
 
-impl HarnessStepExecutorV2 {
+impl BoundedHarnessStepExecutor {
     fn lock_sessions(&self) -> std::sync::MutexGuard<'_, HashMap<(String, String), String>> {
         self.sessions
             .lock()
@@ -671,16 +674,16 @@ fn decode_config(context: &StepExecutorContext) -> Result<HarnessStepConfig> {
     })
 }
 
-fn decode_config_v2(context: &StepExecutorContext) -> Result<HarnessStepConfigV2> {
+fn decode_bounded_config(context: &StepExecutorContext) -> Result<BoundedHarnessStepConfig> {
     serde_json::from_value(context.node.config.clone()).with_context(|| {
         format!(
-            "decode Harness v2 configuration for node '{}'",
+            "decode bounded Harness configuration for node '{}'",
             context.node.id
         )
     })
 }
 
-fn validate_v2_config(config: &HarnessStepConfigV2) -> Result<()> {
+fn validate_bounded_config(config: &BoundedHarnessStepConfig) -> Result<()> {
     if config.prompt.trim().is_empty()
         || config.max_turns == 0
         || config.max_total_tokens == Some(0)
@@ -690,7 +693,7 @@ fn validate_v2_config(config: &HarnessStepConfigV2) -> Result<()> {
             .max_output_tokens
             .is_some_and(|maximum| config.max_total_tokens.is_some_and(|total| maximum > total))
     {
-        bail!("Harness v2 step prompt and limits must be non-empty, positive, and ordered");
+        bail!("bounded Harness step prompt and limits must be non-empty, positive, and ordered");
     }
     normalized_patterns(config.function_allow.clone(), "function allow")?;
     normalized_patterns(config.function_deny.clone(), "function denial")?;
@@ -719,8 +722,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v2_harness_step_accepts_an_unbounded_token_budget() {
-        let config: HarnessStepConfigV2 = serde_json::from_value(serde_json::json!({
+    fn bounded_harness_step_accepts_an_unbounded_token_budget() {
+        let config: BoundedHarnessStepConfig = serde_json::from_value(serde_json::json!({
             "prompt": "continue",
             "max_turns": 4,
             "max_output_tokens": 16_384,
@@ -730,7 +733,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(config.max_total_tokens, None);
-        validate_v2_config(&config).unwrap();
+        validate_bounded_config(&config).unwrap();
     }
 
     #[test]
@@ -743,9 +746,9 @@ mod tests {
     }
 
     #[test]
-    fn harness_step_v2_declares_scoped_workspace_and_code_owned_policy() {
-        let descriptor = harness_descriptor_v2().unwrap();
-        assert_eq!(descriptor.version, HARNESS_STEP_VERSION_V2);
+    fn bounded_harness_step_declares_scoped_workspace_and_code_owned_policy() {
+        let descriptor = bounded_harness_descriptor().unwrap();
+        assert_eq!(descriptor.id, BOUNDED_HARNESS_STEP_ID);
         assert_eq!(descriptor.replay_policy, ReplayPolicy::NonRepeatable);
         assert_eq!(
             descriptor.inputs["workspace_root"].kind,
@@ -758,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_policy_enforces_approved_canonical_roots_and_mandatory_denials() {
+    fn bounded_policy_enforces_approved_canonical_roots_and_mandatory_denials() {
         let approved = tempfile::tempdir().unwrap();
         let outside = tempfile::tempdir().unwrap();
         let approved_path = approved.path().canonicalize().unwrap();
@@ -782,7 +785,7 @@ mod tests {
             .contains("outside"));
 
         let functions = policy
-            .function_policy(&HarnessStepConfigV2 {
+            .function_policy(&BoundedHarnessStepConfig {
                 prompt: "analyze".into(),
                 max_turns: 1,
                 max_output_tokens: Some(10),

@@ -10,7 +10,7 @@
           "expected": "The planned route is GET /w/:slug/compare/:from...:to.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -20,7 +20,7 @@
           "expected": "The plan rejects tags and ranges instead of substituting a version.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -30,7 +30,7 @@
           "expected": "Invalid SemVer produces HTTP 400 with error.code invalid_version.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -40,7 +40,7 @@
           "expected": "Missing workers produce HTTP 404 with error.code worker_not_found.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -50,7 +50,7 @@
           "expected": "A missing version produces HTTP 404 with error.code version_not_found and the first missing version in error.version.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -60,7 +60,7 @@
           "expected": "Absent metadata is marked unavailable rather than interpreted as an empty value.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -70,7 +70,7 @@
           "expected": "Reversal swaps added and removed kinds.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -80,7 +80,7 @@
           "expected": "Reversal swaps before and after values.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -90,7 +90,7 @@
           "expected": "Reversal applies the impact policy to the reversed change instead of retaining the original impact.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -100,7 +100,7 @@
           "expected": "Object-key permutations do not produce differences.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -110,7 +110,7 @@
           "expected": "Reordering a schema required array does not produce a difference.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -120,7 +120,7 @@
           "expected": "Reordering a schema enum array does not produce a difference.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -130,7 +130,7 @@
           "expected": "A configuration-array permutation remains a detectable change.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -140,7 +140,7 @@
           "expected": "The cited backend location exists in the pinned source and can host or call the comparison behavior.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -150,7 +150,7 @@
           "expected": "The cited frontend location exists in the pinned source and participates in the worker page.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -160,7 +160,7 @@
           "expected": "No step depends on a deliverable scheduled only after that step; an equivalent parallel ordering is accepted.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -170,7 +170,7 @@
           "expected": "Every proposed test has an observable expected result rather than only a test name.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -180,7 +180,7 @@
           "expected": "The plan restores independent from and to values from the public Changelog URL.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -190,7 +190,7 @@
           "expected": "The plan prevents a previous result being shown as current after a new request fails.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         },
@@ -200,7 +200,7 @@
           "expected": "Every proposed product change belongs to the public deliverable; no excluded work is required for completion.",
           "measurement": "binary",
           "evidence": [
-            "Cited plan passage and independent repository or requirements check."
+            "Plan lines matched by the deterministic plan check."
           ],
           "weight": 5
         }

@@ -25,28 +25,35 @@ pub mod contention_ledger;
 pub mod context_pressure;
 pub mod cross_app_transaction;
 pub mod cross_repo_contract_migration;
+pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
 pub mod engineering_endurance_ladder;
 pub mod engineering_ticket;
 pub mod fanout_ladder;
+pub(crate) mod fixture;
 pub mod git_regression_forensics;
 pub mod incident_response;
+pub mod insert_record;
 pub mod kanban;
 pub mod linkly;
 pub mod mechanical_reaction;
+pub mod minimal_path;
 pub mod moving_target;
 pub mod performance_regression;
+pub mod persistent_state;
 pub mod poison_message;
 pub mod policy_bound_action;
 pub mod prompt_injection_resilience;
 pub mod quorum_fan_in;
 pub mod receiving_operation;
 pub mod registry;
+mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
 pub mod security_review;
+pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
@@ -65,11 +72,10 @@ pub mod validation_self_repair;
 pub mod wake_chain_soak;
 
 pub use domain::{
-    scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
-    CapturedDeliverableContent, CapturedInvariant, ComplexityClassification, ComplexityMethod,
-    ComplexityProfile, ComplexityTier, DeliverableContract, ExecutionRealism, HumanHorizon,
-    HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase, ScenarioCharacterization,
-    ScenarioRealism, ShadowMode, WorkExpectation,
+    is_sha256, scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
+    CapturedDeliverableContent, CapturedInvariant, DeliverableContract, ExecutionRealism,
+    HumanHorizon, HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase,
+    ScenarioCharacterization, ScenarioRealism, ShadowMode,
 };
 
 pub type EvaluationFuture<'a> =
@@ -168,9 +174,6 @@ impl ExecutionPolicy {
 #[derive(Debug)]
 pub struct ScenarioSpec {
     pub id: &'static str,
-    /// Increment when the scenario's behavioral contract changes. Structural
-    /// refactors that preserve prompts, gates, criteria, and policy keep it.
-    pub version: u32,
     pub prompt: String,
     pub filesystem_root: Option<PathBuf>,
     pub execution: ExecutionPolicy,
@@ -191,20 +194,17 @@ pub struct MaterializedScenario {
 impl MaterializedScenario {
     pub fn validate(&self) -> Result<()> {
         self.spec.validate()?;
-        self.case.validate()?;
+        // A scenario module materializes an unsealed case; `ScenarioId::materialize`
+        // seals it with the definition digest before the case leaves the crate.
+        self.case.validate_shape()?;
+        if !self.case.behavior_sha256.is_empty() {
+            self.case.validate()?;
+        }
         if self.spec.id != self.case.scenario_id {
             bail!(
                 "materialized scenario id '{}' differs from case id '{}'",
                 self.spec.id,
                 self.case.scenario_id
-            );
-        }
-        if self.spec.version != self.case.scenario_version {
-            bail!(
-                "scenario '{}' version {} differs from case version {}",
-                self.spec.id,
-                self.spec.version,
-                self.case.scenario_version
             );
         }
         // Composite workflows capture through their trusted steps and cleanup hook.
@@ -233,9 +233,6 @@ impl ScenarioSpec {
                 "scenario '{}': prompt is empty after trimming; provide a non-empty task prompt",
                 self.id
             );
-        }
-        if self.version == 0 {
-            bail!("scenario '{}': version=0; expected version >= 1", self.id);
         }
         self.execution.validate(self.id)?;
         let mut ids = HashMap::new();
@@ -371,6 +368,16 @@ pub enum ScenarioId {
     LinklyTutorial,
     #[value(name = "context_pressure")]
     ContextPressure,
+    #[value(name = "minimal_path")]
+    MinimalPath,
+    #[value(name = "persistent_state")]
+    PersistentState,
+    #[value(name = "insert_record")]
+    InsertRecord,
+    #[value(name = "sequential_pipeline")]
+    SequentialPipeline,
+    #[value(name = "database_migration_recovery")]
+    DatabaseMigrationRecovery,
     #[value(name = "shell_coder_sandbox")]
     ShellCoderSandbox,
     #[value(name = "research_pipeline")]
@@ -474,7 +481,7 @@ pub enum ScenarioId {
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 68] = [
         Self::RegistryPlanning,
         Self::RegistryImplementation,
         Self::RegistryEnvironment,
@@ -488,6 +495,11 @@ impl ScenarioId {
         Self::KanbanC7Live,
         Self::LinklyTutorial,
         Self::ContextPressure,
+        Self::MinimalPath,
+        Self::PersistentState,
+        Self::InsertRecord,
+        Self::SequentialPipeline,
+        Self::DatabaseMigrationRecovery,
         Self::ShellCoderSandbox,
         Self::ResearchPipeline,
         Self::FanoutLadder,
@@ -567,6 +579,11 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::IDS[6],
             Self::LinklyTutorial => linkly::ID,
             Self::ContextPressure => context_pressure::ID,
+            Self::MinimalPath => minimal_path::ID,
+            Self::PersistentState => persistent_state::ID,
+            Self::InsertRecord => insert_record::ID,
+            Self::SequentialPipeline => sequential_pipeline::ID,
+            Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
             Self::ShellCoderSandbox => shell_coder_sandbox::ID,
             Self::ResearchPipeline => research_pipeline::ID,
             Self::FanoutLadder => fanout_ladder::ID,
@@ -635,6 +652,11 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::spec(6, run_id),
             Self::LinklyTutorial => linkly::scenario(run_id),
             Self::ContextPressure => context_pressure::scenario(run_id),
+            Self::MinimalPath => minimal_path::scenario(run_id),
+            Self::PersistentState => persistent_state::scenario(run_id),
+            Self::InsertRecord => insert_record::scenario(run_id),
+            Self::SequentialPipeline => sequential_pipeline::scenario(run_id),
+            Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
             Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
             Self::ResearchPipeline => research_pipeline::scenario(run_id),
             Self::FanoutLadder => fanout_ladder::scenario(run_id),
@@ -689,7 +711,7 @@ impl ScenarioId {
     }
 
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-        let materialized = match self {
+        let mut materialized = match self {
             Self::RegistryPlanning => registry::materialize(1, namespace, seed)?,
             Self::RegistryImplementation => registry::materialize(2, namespace, seed)?,
             Self::RegistryEnvironment => registry::materialize(3, namespace, seed)?,
@@ -703,6 +725,13 @@ impl ScenarioId {
             Self::KanbanC7Live => kanban::materialize(6, namespace)?,
             Self::LinklyTutorial => linkly::materialize(namespace, seed)?,
             Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
+            Self::MinimalPath => minimal_path::materialize(namespace, seed)?,
+            Self::PersistentState => persistent_state::materialize(namespace, seed)?,
+            Self::InsertRecord => insert_record::materialize(namespace, seed)?,
+            Self::SequentialPipeline => sequential_pipeline::materialize(namespace, seed)?,
+            Self::DatabaseMigrationRecovery => {
+                database_migration_recovery::materialize(namespace, seed)?
+            }
             Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
             Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
             Self::FanoutLadder => fanout_ladder::materialize(namespace, seed)?,
@@ -766,6 +795,9 @@ impl ScenarioId {
             | Self::SweReleaseHandoff
             | Self::SweServiceJourney => swe_service::materialize(self)?,
         };
+        let behavior_sha256 =
+            behavior_sha256(self, &materialized.case, materialized.capture.is_some())?;
+        materialized.case = materialized.case.seal(behavior_sha256)?;
         materialized.validate()?;
         Ok(materialized)
     }
@@ -958,6 +990,59 @@ pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
     }
 }
 
+impl std::fmt::Display for ScenarioId {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ScenarioId {
+    type Err = anyhow::Error;
+
+    fn from_str(value: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|candidate| candidate.as_str() == value)
+            .ok_or_else(|| anyhow::anyhow!("unknown E2E scenario '{value}'"))
+    }
+}
+
+/// Namespace used to render the definition a behavior digest covers. Run
+/// identifiers, attempt namespaces, and seeds must not leak into the digest,
+/// so the canonical spec is rendered under this fixed name.
+pub const CONTRACT_NAMESPACE: &str = "contract";
+
+/// Digest of a scenario definition: what the subject is asked, how the run is
+/// bounded, how it is scored, and the case-independent contract. Seed-specific
+/// inputs are excluded so every seed of one definition shares the digest.
+pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase, captures: bool) -> Result<String> {
+    let spec = id.spec(CONTRACT_NAMESPACE);
+    crate::artifact::sha256_value(&serde_json::json!({
+        "scenario_id": id.as_str(),
+        "prompt": spec.prompt,
+        "execution": spec.execution,
+        "denied_functions": spec.denied_functions,
+        "criteria": spec
+            .criteria
+            .iter()
+            .map(|criterion| serde_json::json!({
+                "id": criterion.id,
+                "weight": criterion.weight,
+                "description": criterion.description,
+                "kind": criterion.kind,
+                "policy": criterion.policy,
+                "dimension": criterion.dimension,
+            }))
+            .collect::<Vec<_>>(),
+        "setup": spec.setup.is_some(),
+        "cleanup": spec.cleanup.is_some(),
+        "captures": captures,
+        "characterization": case.characterization,
+        "required_capabilities": case.required_capabilities,
+        "deliverable_contract": case.deliverable_contract,
+    }))
+}
+
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
     if requested.is_empty() {
         return ScenarioId::ALL.into_iter().collect();
@@ -976,7 +1061,7 @@ mod tests {
 
     use super::*;
     #[test]
-    fn registry_contains_sixty_three_unique_valid_scenarios() {
+    fn registry_contains_sixty_eight_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -985,7 +1070,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 63);
+        assert_eq!(ids.len(), 68);
     }
 
     #[test]
@@ -1015,86 +1100,6 @@ mod tests {
     }
 
     #[test]
-    fn classification_v2_covers_all_38_retained_scenario_contracts() {
-        // These are the 38 built-in scenarios that remain from the catalog
-        // present when capability_v2 was introduced.
-        // The two AdaptiveFlow scenarios added by the following delivery stages
-        // started independently at v1 and brought that catalog generation to 40 entries.
-        let expected = [
-            (ScenarioId::ContextPressure, 5),
-            (ScenarioId::ShellCoderSandbox, 7),
-            (ScenarioId::ResearchPipeline, 7),
-            (ScenarioId::FanoutLadder, 4),
-            (ScenarioId::SecurityReview, 5),
-            (ScenarioId::IncidentResponse, 4),
-            (ScenarioId::TodoWorkerSimple, 4),
-            (ScenarioId::TodoWorkerPlanned, 4),
-            (ScenarioId::EngineeringTicket, 4),
-            (ScenarioId::EngineeringTicketGitHandoff, 4),
-            (ScenarioId::EngineeringEnduranceLadder, 3),
-            (ScenarioId::GitRegressionForensics, 4),
-            (ScenarioId::MechanicalReaction, 6),
-            (ScenarioId::TimerWake, 8),
-            (ScenarioId::ReceivingOperation, 7),
-            (ScenarioId::ValidationLoop, 6),
-            (ScenarioId::SubagentValidation, 6),
-            (ScenarioId::SubagentValidationFailure, 6),
-            (ScenarioId::ValidationSelfRepair, 6),
-            (ScenarioId::ValidationScopeEnforcement, 6),
-            (ScenarioId::ValidationChain, 6),
-            (ScenarioId::SecretHygiene, 3),
-            (ScenarioId::PromptInjectionResilience, 3),
-            (ScenarioId::MovingTarget, 3),
-            (ScenarioId::PoisonMessage, 3),
-            (ScenarioId::CleanupUnderFailure, 3),
-            (ScenarioId::DepthLadder, 4),
-            (ScenarioId::QuorumFanIn, 3),
-            (ScenarioId::ContentionLedger, 4),
-            (ScenarioId::WakeChainSoak, 5),
-            (ScenarioId::ChessEngineBuild, 3),
-            (ScenarioId::ChessPlayLadder, 4),
-            (ScenarioId::TrendBlog, 4),
-            (ScenarioId::ToolContractRecovery, 4),
-            (ScenarioId::PolicyBoundAction, 3),
-            (ScenarioId::CrossAppTransaction, 3),
-            (ScenarioId::PerformanceRegression, 3),
-            (ScenarioId::BrowserCrossSite, 3),
-        ];
-        assert_eq!(expected.len(), 38);
-        for (scenario, version) in expected {
-            let materialized = scenario
-                .materialize("classification-v2", scenario.canonical_seed())
-                .unwrap();
-            assert_eq!(materialized.case.scenario_version, version, "{scenario:?}");
-            assert_eq!(
-                materialized.case.complexity.method,
-                domain::ComplexityMethod::CapabilityV2,
-                "{scenario:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn capability_v2_reclassifies_the_former_l5_cases() {
-        for (scenario, tier) in [
-            (ScenarioId::MovingTarget, domain::ComplexityTier::L2Stateful),
-            (
-                ScenarioId::PolicyBoundAction,
-                domain::ComplexityTier::L4Coordinated,
-            ),
-            (
-                ScenarioId::IncidentResponse,
-                domain::ComplexityTier::L5Adaptive,
-            ),
-        ] {
-            let materialized = scenario
-                .materialize("classification-v2", scenario.canonical_seed())
-                .unwrap();
-            assert_eq!(materialized.case.complexity.tier, tier, "{scenario:?}");
-        }
-    }
-
-    #[test]
     fn materialized_cases_are_stable_across_attempt_namespaces() {
         let first = ScenarioId::MechanicalReaction
             .materialize("attempt-a", 42)
@@ -1112,24 +1117,18 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_ne!(first.case.case_id, other_seed.case.case_id);
         assert_ne!(first.case.inputs, other_seed.case.inputs);
-        assert_eq!(first.case.scenario_version, 6);
+        assert_eq!(first.case.behavior_sha256, retry.case.behavior_sha256);
+        assert_eq!(first.case.behavior_sha256, other_seed.case.behavior_sha256);
+        assert!(is_sha256(&first.case.behavior_sha256));
     }
 
     #[test]
-    fn converted_scenarios_publish_expected_complexity_tiers_and_contracts() {
+    fn converted_scenarios_publish_deliverable_contracts() {
         let state = ScenarioId::MovingTarget.materialize("state", 7).unwrap();
         let coordination = ScenarioId::SubagentValidation
             .materialize("coordination", 7)
             .unwrap();
 
-        assert_eq!(
-            state.case.complexity.tier,
-            domain::ComplexityTier::L2Stateful
-        );
-        assert_eq!(
-            coordination.case.complexity.tier,
-            domain::ComplexityTier::L4Coordinated
-        );
         assert!(state.case.deliverable_contract.capture_before_cleanup);
         assert!(coordination.case.deliverable_contract.provenance_required);
     }
@@ -1145,11 +1144,6 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 91).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,
@@ -1169,11 +1163,6 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 127).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first
@@ -1194,16 +1183,6 @@ mod tests {
             ScenarioId::SubagentValidationFailure,
         ] {
             let materialized = scenario.materialize("delegation", 211).unwrap();
-            assert_eq!(
-                materialized.case.complexity.tier,
-                domain::ComplexityTier::L4Coordinated,
-                "{scenario:?}"
-            );
-            assert_eq!(
-                usize::from(materialized.case.complexity.profile.artifact_count),
-                materialized.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(materialized.capture.is_some(), "{scenario:?}");
             assert!(
                 materialized
@@ -1242,15 +1221,6 @@ mod tests {
                 continue;
             }
 
-            assert!(
-                first.case.complexity.tier != domain::ComplexityTier::L0Atomic,
-                "{scenario:?}"
-            );
-            assert_eq!(
-                usize::from(first.case.complexity.profile.artifact_count),
-                first.case.deliverable_contract.artifacts.len(),
-                "{scenario:?}"
-            );
             assert!(first.capture.is_some(), "{scenario:?}");
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,
@@ -1264,14 +1234,29 @@ mod tests {
     }
 
     #[test]
-    fn validation_rejects_a_zero_scenario_version() {
-        let mut spec = ScenarioId::ContextPressure.spec("run");
-        spec.version = 0;
-
-        assert_eq!(
-            spec.validate().unwrap_err().to_string(),
-            "scenario 'context_pressure': version=0; expected version >= 1"
-        );
+    fn behavior_digests_are_stable_per_definition_and_distinct_across_scenarios() {
+        let mut digests = HashSet::new();
+        for scenario in ScenarioId::ALL {
+            let seed = scenario.canonical_seed();
+            let first = scenario.materialize("attempt-a", seed).unwrap();
+            let again = scenario.materialize("attempt-b", seed).unwrap();
+            let other_seed = scenario
+                .materialize("attempt-c", seed.wrapping_add(1))
+                .unwrap();
+            assert!(is_sha256(&first.case.behavior_sha256), "{scenario:?}");
+            assert_eq!(
+                first.case.behavior_sha256, again.case.behavior_sha256,
+                "{scenario:?} digest depends on the attempt namespace"
+            );
+            assert_eq!(
+                first.case.behavior_sha256, other_seed.case.behavior_sha256,
+                "{scenario:?} digest depends on the seed"
+            );
+            assert!(
+                digests.insert(first.case.behavior_sha256.clone()),
+                "{scenario:?} shares a digest with another scenario"
+            );
+        }
     }
 
     #[test]

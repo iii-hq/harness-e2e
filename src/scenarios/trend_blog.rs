@@ -3,7 +3,7 @@
 //! gates).
 //!
 //! The subject is handed a frozen trends feed (copied from the pinned
-//! `iii-hq/e2e-fixture` repo, subtree `trends/`, via `HARNESS_E2E_FIXTURE_PATH`)
+//! `iii-hq/e2e-fixture` repo, subtree `trends/`, embedded in the runner)
 //! and must author a small static site covering the top-ranked topics. The
 //! runner then reads the produced files and verifies, deterministically:
 //!
@@ -32,21 +32,18 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::{
     ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, ComplexityProfile, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
+    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
+    ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "trend_blog";
-const VERSION: u32 = 4;
 const DELIVERABLE_ID: &str = "blog_site";
 const TOP_K: usize = 3;
 const MIN_QUOTE_CHARS: usize = 20;
 
-/// The trends fixture lives in the shared `iii-hq/e2e-fixture` repo, consumed
-/// through a local checkout the environment points at. Pinned by revision +
-/// subtree manifest sha256 so each edition is a reproducible cohort.
-const FIXTURE_ENV: &str = "HARNESS_E2E_FIXTURE_PATH";
+/// The embedded fixture is pinned by revision and subtree manifest so each
+/// edition is a reproducible cohort.
 const FIXTURE_SUBTREE: &str = "trends";
 const FEED_IN_SUBTREE: &str = "feed.json";
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
@@ -233,7 +230,6 @@ pub fn scenario(run_id: &str) -> ScenarioSpec {
 pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
     let case = ScenarioCase::new(
         ID,
-        VERSION,
         seed,
         json!({
             "edition": EDITION,
@@ -245,13 +241,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
             "outputs": [OUTPUT_INDEX, OUTPUT_FEED, OUTPUT_MANIFEST],
             "rule": "cover the top-ranked topics using only the provided sources; never invent facts, quotes, URLs, or figures the sources withhold",
         }),
-        ComplexityProfile {
-            planning_depth: 2,
-            dependency_depth: 2,
-            external_systems: 1,
-            artifact_count: 1,
-            ..ComplexityProfile::default()
-        },
         vec![
             "e2e::control-plane-v1".to_string(),
             "iii::functions".to_string(),
@@ -269,7 +258,6 @@ pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedSce
 fn scenario_for_case(run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: ID,
-        version: VERSION,
         prompt: prompt(),
         filesystem_root: Some(workspace_root(run_id)),
         execution: ExecutionPolicy {
@@ -324,14 +312,9 @@ Finish only after all three files exist."#,
 
 fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
     Box::pin(async move {
-        let checkout = std::env::var_os(FIXTURE_ENV)
-            .map(PathBuf::from)
-            .filter(|path| !path.as_os_str().is_empty())
-            .ok_or_else(|| {
-                anyhow::anyhow!(
-                    "{FIXTURE_ENV} is not set; a checkout of iii-hq/e2e-fixture is required"
-                )
-            })?;
+        let fixture =
+            super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
+        let checkout = &fixture.root;
         let subtree = checkout.join(FIXTURE_SUBTREE);
         let feed_path = subtree.join(FEED_IN_SUBTREE);
         if !feed_path.is_file() {
@@ -348,7 +331,7 @@ fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         if checkout.join(".git").exists() {
             if let Ok(output) = std::process::Command::new("git")
                 .arg("-C")
-                .arg(&checkout)
+                .arg(checkout)
                 .args(["rev-parse", "HEAD"])
                 .output()
             {
@@ -697,6 +680,20 @@ fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn automatic_setup_copies_the_reviewed_feed_and_cleans_up() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let run_id = uuid::Uuid::new_v4().simple().to_string();
+        setup(&context, &run_id).await.unwrap();
+        let root = workspace_root(&run_id);
+        let feed: Value = serde_json::from_str(&load_feed(&root)).unwrap();
+        let site_exists = root.join("site").is_dir();
+        cleanup(&context, &run_id).await.unwrap();
+        assert_eq!(feed["edition"], EDITION);
+        assert!(site_exists);
+        assert!(!root.exists());
+    }
+
     // A synthetic feed with the same shape and planted gaps as the real
     // fixture, so tests need no checkout. quantum-funding withholds a figure;
     // reef-restoration withholds a date.
@@ -940,15 +937,11 @@ mod tests {
     }
 
     #[test]
-    fn materialize_is_reproducible_and_l2_stateful() {
+    fn materialize_is_reproducible() {
         let first = materialize("attempt-a", 7).unwrap();
         let retry = materialize("attempt-b", 7).unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
-        assert_eq!(
-            first.case.complexity.tier,
-            super::super::ComplexityTier::L2Stateful
-        );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.capture.is_some());
         first.validate().unwrap();

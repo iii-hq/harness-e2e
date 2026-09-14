@@ -44,7 +44,6 @@ describe('new plan form dirtiness', () => {
 })
 
 const candidateRunningPlan: LocalPlan = {
-  schema_version: 1,
   id: 'plan-1',
   label: 'Focused regression check',
   purpose: 'Confirm the affected local flow.',
@@ -56,8 +55,6 @@ const candidateRunningPlan: LocalPlan = {
   url: 'https://example.invalid/catalog',
   model: 'codex/gpt-5.6-terra',
   provider: 'openai-codex',
-  judge_model: 'codex/gpt-5.6-sol',
-  judge_provider: 'openai-codex',
   scenarios: [],
   scenario_ids: ['direct_answer'],
   runs: 1,
@@ -291,8 +288,8 @@ describe('local plan execution comparison', () => {
     expect(overviewHtml.match(/data-point-role="other"/g)).toHaveLength(7)
     expect(overviewHtml).not.toContain('<table')
     // The layers carry the exact numbers.
-    expect(layersHtml).toContain('id="plan-metrics"')
-    expect(layersHtml).toContain('all metrics · ')
+    expect(layersHtml).toContain('id="plan-diagnostic-metrics"')
+    expect(layersHtml).toContain('Run statistics · ')
     expect(html).toContain('baseline and candidates')
     expect(tableHtml).toContain('<th scope="col">Metric</th>')
     expect(tableHtml).toContain('>Reference<')
@@ -590,9 +587,8 @@ describe('local plan execution comparison', () => {
       '-1 · -50.0%',
     ])
     expect(groups[0].subtitle).toBe('3 of 3 metrics moved')
-    // Dumbbells draw the magnitude the percentages hide.
-    expect(layersHtml).toContain('data-dumbbell-metric="tokens"')
-    expect(layersHtml).toContain('data-dumbbell-metric="duration"')
+    expect(layersHtml).not.toContain('data-dumbbell-metric="tokens"')
+    expect(layersHtml).not.toContain('data-dumbbell-metric="duration"')
     expect(layersHtml).not.toContain('data-dumbbell-metric="quality"')
   })
 
@@ -608,7 +604,8 @@ describe('local plan execution comparison', () => {
             scenarios: [
               {
                 id: 'security_review',
-                scenario_version: 3,
+                behavior_sha256:
+                  'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
                 pass_rate: 100,
               },
             ],
@@ -617,8 +614,9 @@ describe('local plan execution comparison', () => {
         scenario_metrics: [
           {
             scenario_id: 'security_review',
-            scenario_version: 3,
-            contract_fingerprint: 'security-v3',
+            behavior_sha256:
+              'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3',
+            contract_fingerprint: 'security-contract',
             run_count: 1,
             averages: {
               cost_usd: 0.1,
@@ -762,12 +760,12 @@ describe('local plan scope and provenance', () => {
       scenarios: [
         {
           scenario_id: 'minimal_path',
-          scenario_version: 2,
+          behavior_sha256:
+            'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
           case_id: 'case-a',
           seed: 7,
           inputs_sha256: 'sha256:1111111111111111111111',
           contract_sha256: 'sha256:2222222222222222222222',
-          complexity_tier: 'baseline',
         },
       ],
     }
@@ -775,8 +773,8 @@ describe('local plan scope and provenance', () => {
       <PlanScope plan={plan} baselineSummary={execution('baseline-1')} />,
     )
     expect(html).toContain('data-plan-scope')
-    expect(html).toContain('scope · locked')
-    expect(html).toContain('minimal_path v2')
+    expect(html).toContain('scope · saved')
+    expect(html).toContain('minimal_path · a1a1a1a1')
     expect(html).toContain('1 per test · 0 retries · canonical seed')
     expect(html).toContain('baseline captured')
     expect(html).toContain(captured)
@@ -789,8 +787,8 @@ describe('local plan scope and provenance', () => {
     ])
     expect(entries).toContainEqual(['scope hash', 'sha256:scope'])
     expect(entries).toContainEqual([
-      'minimal_path v2',
-      'case case-a · seed 7 · tier baseline · contract sha256:222222222222… · inputs sha256:111111111111…',
+      'minimal_path · a1a1a1a1',
+      'case case-a · seed 7 · contract sha256:222222222222… · inputs sha256:111111111111…',
     ])
     expect(planProvenanceScent(plan)).toContain(
       'plan-1 · scope sha256:scope · endpoint https://example.invalid/catalog',

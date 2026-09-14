@@ -11,6 +11,7 @@ export type ScenarioChatTarget = {
   attemptId: string
   attemptNumber: number
   sessionId: string
+  messages: unknown
   status: string | null
   current: boolean
 }
@@ -18,14 +19,11 @@ export type ScenarioChatTarget = {
 export type ScenarioChatSource = {
   executionId: string
   scenarioId: string
+  /** Digest of the scenario definition the transcript belongs to. */
+  behaviorSha256?: string | null
   subjectId?: string | null
   runId?: string | null
 }
-
-const executionDetailCache = new Map<
-  string,
-  Promise<DashboardExecutionDetail>
->()
 
 function nonEmpty(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value.trim() : null
@@ -36,6 +34,7 @@ export function scenarioChatTargets(
   scenarioId: string,
   subjectId?: string | null,
   runId?: string | null,
+  behaviorSha256?: string | null,
 ): ScenarioChatTarget[] {
   const targets: ScenarioChatTarget[] = []
   const seen = new Set<string>()
@@ -44,6 +43,11 @@ export function scenarioChatTargets(
     if (subjectId && record.subject_id !== subjectId) continue
     for (const scenario of record.report?.scenarios ?? []) {
       if (scenario.scenario_id !== scenarioId) continue
+      if (
+        behaviorSha256 !== undefined &&
+        (scenario.behavior_sha256 ?? null) !== behaviorSha256
+      )
+        continue
       for (const run of [...(scenario.runs ?? [])].reverse()) {
         if (runId && run.run_id !== runId) continue
         const attempts = [
@@ -53,6 +57,7 @@ export function scenarioChatTargets(
             attempt_number:
               run.attempt_number ?? (run.retry_attempts?.length ?? 0) + 1,
             session_id: run.session_id,
+            transcript: run.transcript,
             status: run.status,
             current: true,
           },
@@ -77,6 +82,7 @@ export function scenarioChatTargets(
                 ? attempt.attempt_number
                 : 1,
             sessionId,
+            messages: attempt.transcript?.messages,
             status: nonEmpty(attempt.status),
             current: attempt.current,
           })
@@ -91,21 +97,17 @@ export function scenarioChatTargets(
 export async function loadScenarioChatTargets({
   executionId,
   scenarioId,
+  behaviorSha256,
   subjectId,
   runId,
 }: ScenarioChatSource): Promise<ScenarioChatTarget[]> {
-  let request = executionDetailCache.get(executionId)
-  if (!request) {
-    request = getDashboardDataBridge().then((bridge) =>
-      bridge.getExecution(executionId),
-    )
-    executionDetailCache.set(executionId, request)
-    request.catch(() => executionDetailCache.delete(executionId))
-  }
-  const detail = await request
-  return scenarioChatTargets(detail, scenarioId, subjectId, runId)
-}
-
-export function clearScenarioChatDetailCache() {
-  executionDetailCache.clear()
+  const bridge = await getDashboardDataBridge()
+  const detail = await bridge.getExecution(executionId)
+  return scenarioChatTargets(
+    detail,
+    scenarioId,
+    subjectId,
+    runId,
+    behaviorSha256,
+  )
 }

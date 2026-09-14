@@ -18,8 +18,8 @@ describe('execution overview', () => {
   // Audit ED-27: three ratios that are 100% by construction are one fact.
   it('folds the three completion ratios into one tile when nothing went wrong', () => {
     const detail = executionMetricsFixture([
-      { runs: [metricRun('a', 4_000, { quality_score_completed: 90 })] },
-      { runs: [metricRun('b', 3_781, { quality_score_completed: 100 })] },
+      { runs: [metricRun('a', 4_000, { score: 90 })] },
+      { runs: [metricRun('b', 3_781, { score: 100 })] },
     ])
     const metrics = buildExecutionMetrics(detail)
     expect(completionIsTrivial(metrics)).toBe(true)
@@ -37,12 +37,12 @@ describe('execution overview', () => {
 
   it('keeps the three ratios apart as soon as one run did not complete', () => {
     const detail = executionMetricsFixture([
-      { runs: [metricRun('a', 100_000, { quality_score_completed: 60 })] },
+      { runs: [metricRun('a', 100_000, { score: 60 })] },
       {
         runs: [
           metricRun('b', 20_000, {
             completion: 'task_incomplete',
-            quality_score_completed: null,
+            score: null,
           }),
         ],
       },
