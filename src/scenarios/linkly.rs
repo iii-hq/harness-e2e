@@ -571,6 +571,36 @@ fn sum_counts(rows: &[Value]) -> f64 {
     rows.iter().filter_map(|row| row["count"].as_f64()).sum()
 }
 /// Parse "imported N … skipped M" out of a client's output (prose or JSON).
+/// Whether the second import run proved idempotency, given what the first one
+/// reported.
+///
+/// The property is "re-running imports nothing and recognises every row it
+/// already saw", and both halves are read from the FIRST run rather than from
+/// the fixture's length. Pinning a literal row count instead made this
+/// criterion fail an importer whose idempotency was perfect, because the agent
+/// had written a five-row CSV where the check expected two (MOT-4767).
+fn idempotent_verdict(first: Option<(u64, u64)>, second: Option<(u64, u64)>) -> Outcome {
+    let Some((imported, skipped)) = first else {
+        return fail(
+            "the first run reported no counts, so there is nothing to be idempotent about",
+        );
+    };
+    let rows = imported + skipped;
+    if rows == 0 {
+        return fail("the first run moved no rows; an empty import is idempotent for free");
+    }
+    match second {
+        Some((0, again)) if again == rows => {
+            pass(format!("second run imported 0, skipped all {rows}"))
+        }
+        Some((0, again)) => fail(format!(
+            "second run skipped {again} of the {rows} rows the first run saw; the rest were dropped, not recognised"
+        )),
+        Some((again, _)) => fail(format!("second run imported {again} rows again")),
+        None => fail("second run reported no counts"),
+    }
+}
+
 fn import_counts(text: &str) -> Option<(u64, u64)> {
     let lower = text.to_ascii_lowercase();
     let number_after = |keyword: &str| {
@@ -1299,6 +1329,12 @@ impl Probe<'_> {
                 Duration::from_secs(120),
             )
             .await;
+        // The row count belongs to the agent's CSV, not to idempotency.
+        let first_counts = first
+            .as_ref()
+            .ok()
+            .filter(|(code, _, _)| *code == 0)
+            .and_then(|(_, stdout, _)| import_counts(stdout));
         self.record(
             "channels.import_runs",
             first.map(|(code, stdout, stderr)| {
@@ -1318,16 +1354,13 @@ impl Probe<'_> {
             .await;
         self.record(
             "channels.idempotent",
-            second.map(
-                |(code, stdout, stderr)| match (code, import_counts(&stdout)) {
-                    (0, Some((0, 2))) => pass("second run imported 0, skipped 2"),
-                    (0, counts) => fail(format!(
-                        "second run counts {counts:?}: {}",
-                        truncate_text(&stdout)
-                    )),
-                    (code, _) => fail(format!("exit {code}: {}", truncate_text(&stderr))),
-                },
-            ),
+            second.map(|(code, stdout, stderr)| {
+                if code == 0 {
+                    idempotent_verdict(first_counts, import_counts(&stdout))
+                } else {
+                    fail(format!("exit {code}: {}", truncate_text(&stderr)))
+                }
+            }),
         );
         let mut resolved = Vec::new();
         for code in ["mylink", "mydocslink"] {
@@ -1796,6 +1829,30 @@ mod tests {
         assert!(totals.get("context").is_none());
         assert!(totals.get("depth").is_none());
         assert!(tree_totals(&Value::Null).is_null());
+    }
+
+    // The row count is the agent's, the property is ours: whatever the first
+    // run moved, the second must import nothing and recognise all of it.
+    #[test]
+    fn idempotency_is_measured_against_the_first_run_not_a_fixed_row_count() {
+        // Two rows imported, two skipped on the re-run — and five, the shape
+        // that failed a working importer before this (MOT-4767).
+        assert!(idempotent_verdict(Some((2, 0)), Some((0, 2))).pass);
+        assert!(idempotent_verdict(Some((5, 0)), Some((0, 5))).pass);
+        // A first run that already skipped everything still sets the bar.
+        assert!(idempotent_verdict(Some((0, 3)), Some((0, 3))).pass);
+
+        // Rows dropped rather than recognised, or imported twice, both fail.
+        let short = idempotent_verdict(Some((5, 0)), Some((0, 2)));
+        assert!(!short.pass);
+        assert!(short.reason.contains("2 of the 5"), "{}", short.reason);
+        assert!(!idempotent_verdict(Some((2, 0)), Some((2, 0))).pass);
+
+        // Nothing to conclude from: no counts either side, and an empty
+        // import, which would otherwise pass for free.
+        assert!(!idempotent_verdict(None, Some((0, 2))).pass);
+        assert!(!idempotent_verdict(Some((2, 0)), None).pass);
+        assert!(!idempotent_verdict(Some((0, 0)), Some((0, 0))).pass);
     }
 
     #[test]
