@@ -1831,7 +1831,6 @@ mod tests {
         assert!(tree_totals(&Value::Null).is_null());
     }
 
-    #[test]
     // The row count is the agent's, the property is ours: whatever the first
     // run moved, the second must import nothing and recognise all of it.
     #[test]
