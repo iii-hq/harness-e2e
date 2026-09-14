@@ -343,6 +343,10 @@ pub struct CatalogModelPayload {
     pub supports_tools: Option<bool>,
     #[serde(default)]
     pub supports_vision: Option<bool>,
+    /// Per-token pricing. Absent for subscription-billed models (Claude Code,
+    /// Copilot), which is what makes a cost cap unenforceable.
+    #[serde(default)]
+    pub pricing: Option<Value>,
 }
 
 pub type Model = Observed<CatalogModelPayload>;

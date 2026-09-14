@@ -315,6 +315,7 @@ async fn run(args: RunArgs) -> Result<()> {
         model: args.model,
         provider: args.provider,
         agent: args.agent,
+        priced: None,
     };
     let execution_id = args
         .runs_dir

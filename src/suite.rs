@@ -49,6 +49,16 @@ const MAX_TECHNICAL_RETRIES: u8 = 3;
 /// five dollars; the Linkly tutorial is a 65-minute agentic build that cost
 /// about a dollar on DeepSeek V4 Pro at 2026-08 prices, so ten covers a slow
 /// run on a pricier provider without hiding a runaway loop.
+/// The Harness refuses a send carrying a `max_cost_usd` it cannot enforce, and
+/// a subscription-billed model (Claude Code, Copilot) has no per-token pricing
+/// to enforce it against. Drop the cap there instead of failing the run.
+fn subject_cost_cap(subject: &SubjectConfig, scenario_id: &str) -> Option<f64> {
+    if subject.priced == Some(false) {
+        return None;
+    }
+    subject_cost_cap_usd(scenario_id)
+}
+
 fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
     if crate::scenarios::kanban::IDS.contains(&scenario_id) {
         Some(5.0)
@@ -88,6 +98,9 @@ pub struct SubjectConfig {
     /// Directory agent profile the subject session runs as. `None` keeps the
     /// Harness built-in identity.
     pub agent: Option<String>,
+    /// Whether the router catalog prices the subject model per token. `None`
+    /// until `run_suite` resolves the catalog record; callers pass `None`.
+    pub priced: Option<bool>,
 }
 
 pub struct SuiteRunConfig {
@@ -205,7 +218,7 @@ pub struct SuiteControl {
     pub adaptive_resume: Option<AdaptiveResumeAttempt>,
 }
 
-pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
+pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let suite_started = Instant::now();
     let suite_deadline = config.slot_start_deadline_seconds.map(Duration::from_secs);
     validate_config(&config)?;
@@ -241,6 +254,7 @@ pub async fn run_suite(config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;
+    config.subject.priced = Some(subject_model.pricing.is_some());
     let built_in_scenarios = config.scenarios.to_vec();
     if built_in_scenarios.contains(&ScenarioId::SecurityReview) {
         crate::workflow::security_scan::register_local_adapter_if_configured(context.as_ref())
@@ -2309,7 +2323,7 @@ async fn execute(
                         // an existing session, and a dialogue reuses one.
                         agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
                         max_turns: Some(spec.execution.max_turns),
-                        max_cost_usd: subject_cost_cap_usd(spec.id),
+                        max_cost_usd: subject_cost_cap(subject, spec.id),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
                         max_validation_retries: spec.execution.max_validation_retries,
@@ -3235,6 +3249,33 @@ mod tests {
         assert!(report.deliverables.is_empty());
         assert_eq!(report.evidence.len(), 1);
         report.evidence[0].verify(output.path()).unwrap();
+    }
+
+    // Subscription-billed models carry no pricing, and the Harness rejects a
+    // send whose cost cap it cannot enforce; the cap has to go, not the run.
+    #[test]
+    fn unpriced_subject_models_drop_the_cost_cap() {
+        let mut subject = SubjectConfig {
+            model: "claude-code/claude-sonnet-5".into(),
+            provider: "claude-code".into(),
+            agent: None,
+            thinking_level: None,
+            provider_options: None,
+            priced: None,
+        };
+        let capped = crate::scenarios::linkly::ID;
+        // Unknown pricing and priced both keep whatever the scenario asks for.
+        assert_eq!(
+            subject_cost_cap(&subject, capped),
+            subject_cost_cap_usd(capped)
+        );
+        subject.priced = Some(true);
+        assert_eq!(
+            subject_cost_cap(&subject, capped),
+            subject_cost_cap_usd(capped)
+        );
+        subject.priced = Some(false);
+        assert_eq!(subject_cost_cap(&subject, capped), None);
     }
 
     #[test]

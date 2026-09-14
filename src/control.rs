@@ -903,6 +903,7 @@ impl ControlPlane {
                 agent: None,
                 thinking_level: None,
                 provider_options: None,
+                priced: None,
             },
             output: output.clone(),
             scenarios,
