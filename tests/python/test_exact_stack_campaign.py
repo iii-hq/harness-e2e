@@ -277,6 +277,15 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertIn("compose::operation", runner)
         self.assertNotIn('e2e_data="$run_root/e2e-data"', runner)
 
+    def test_common_runner_waits_for_the_runner_function_after_compose_starts(self):
+        runner = RUNNER_SCRIPT.read_text()
+        self.assertIn("failure_phase=runner_readiness", runner)
+        self.assertIn("E2E runner did not register e2e::scenarios-list", runner)
+        self.assertLess(
+            runner.index("failure_phase=runner_readiness"),
+            runner.index("failure_phase=materialization"),
+        )
+
     def test_common_runner_reports_terminal_failure_and_keeps_partial_results(self):
         runner = RUNNER_SCRIPT.read_text()
         results_block = runner.split("terminal_phase=$(", 1)[1].split(
