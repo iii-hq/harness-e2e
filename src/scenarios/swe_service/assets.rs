@@ -150,8 +150,9 @@ async fn command_with_env(
     for (name, value) in environment {
         command.env(name, value);
     }
-    // Backend selection is operator configuration, never supplied by a subject.
+    // Operator configuration is never supplied by a subject.
     for name in [
+        "TMPDIR",
         "HARNESS_E2E_SWE_ISOLATION_BACKEND",
         "HARNESS_E2E_SWE_DOCKER_IMAGE",
         "DOCKER_HOST",
@@ -269,6 +270,20 @@ fn signal_group(_pid: u32, _signal: i32) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn trusted_commands_use_the_operator_temporary_directory() {
+        let output = command(
+            "python3",
+            &["-I".into(), "-c".into(),
+              "import pathlib,tempfile; f=tempfile.TemporaryFile(); f.write(b'probe'); f.flush(); print(pathlib.Path(tempfile.gettempdir()).resolve())".into()],
+            Duration::from_secs(10),
+        ).await.unwrap();
+        assert_eq!(
+            Path::new(String::from_utf8_lossy(&output).trim()),
+            std::env::temp_dir().canonicalize().unwrap(),
+        );
+    }
 
     #[tokio::test]
     async fn embedded_bundle_unpacks_exact_pin() {
