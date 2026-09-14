@@ -53,6 +53,19 @@ def runtime_roots(snapshot: dict[str, Any]) -> tuple[str, ...]:
     # The template's shell/console roles use the target graph's ide/ade packages.
     return RUNTIME_ROOTS + (("http",) if "linkly_tutorial" in scenarios else ())
 
+
+def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
+    """An explicit stack pin wins; otherwise use Release Control's release."""
+    if RUNNER_ROOT in pinned:
+        return str(pinned[RUNNER_ROOT])
+    runner = plan.get("runner")
+    version = runner.get("version") if isinstance(runner, dict) else None
+    if version is None:
+        return "latest"
+    if not isinstance(version, str) or not EXACT_VERSION.fullmatch(version):
+        raise ResolutionError("plan runner version is not an exact version")
+    return version
+
 EXACT_VERSION = re.compile(
     r"^[0-9]+\.[0-9]+\.[0-9]+"
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
@@ -306,7 +319,7 @@ def main() -> int:
     runtime = runtime_roots(snapshot)
     roles |= {worker: "runtime" for worker in runtime}
     graphs = [
-        resolve_graph(worker, str(pinned.get(worker, "latest")), CLI_TARGET)
+        resolve_graph(worker, runner_selector(plan, pinned) if worker == RUNNER_ROOT else str(pinned.get(worker, "latest")), CLI_TARGET)
         for worker in (TARGET_ROOT, *runtime, RUNNER_ROOT)
     ]
     orchestration = merge_graphs(roles, graphs)
