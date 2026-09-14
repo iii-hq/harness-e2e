@@ -10,7 +10,7 @@ const SWE_CASES: [&str; 9] = [
     "swe_tenant_isolation",
     "swe_replay_performance",
     "swe_release_handoff",
-    "swe_service_journey",
+    "software_company_lifecycle",
 ];
 
 #[test]
@@ -37,17 +37,17 @@ fn every_swe_case_is_discoverable_and_materializes_a_non_retryable_workflow() {
         assert_eq!(definition.limits.technical_retries, 0);
         assert_eq!(
             definition.limits.workflow_timeout_seconds,
-            if name == "swe_service_journey" {
-                5400
+            if name == "software_company_lifecycle" {
+                None
             } else {
-                900
+                Some(900)
             }
         );
     }
 }
 
 #[test]
-fn isolated_cases_and_journey_have_distinct_reproducible_case_identities() {
+fn isolated_cases_and_lifecycle_have_distinct_reproducible_case_identities() {
     let mut identities = std::collections::BTreeSet::new();
     for name in SWE_CASES {
         let scenario: ScenarioId = serde_json::from_value(serde_json::json!(name))

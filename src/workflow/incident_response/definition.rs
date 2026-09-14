@@ -7,8 +7,8 @@ pub fn definition() -> WorkflowDefinition {
         limits: WorkflowLimits {
             max_parallel: 3,
             max_nodes: 20,
-            step_timeout_seconds: 600,
-            workflow_timeout_seconds: 3_600,
+            step_timeout_seconds: Some(600),
+            workflow_timeout_seconds: Some(3_600),
             // Reserve 64k tokens for the agent-owned two-revision planner.
             max_total_tokens: Some(686_000),
             max_cost_usd: Some(25.0),

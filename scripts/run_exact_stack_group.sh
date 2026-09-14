@@ -36,6 +36,10 @@ campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
   '.suite.groups | any(.id == $group and .execution_kind != "fault_injection")' \
   "$contract_path" >/dev/null
+lifecycle_group=$(jq -r --arg group "$campaign_group_id" '
+  .suite.groups[] | select(.id == $group) |
+  any(.scenarios[]?; . == "software_company_lifecycle")
+' "$contract_path")
 project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
@@ -280,6 +284,10 @@ failure_phase=fixture_setup
 prepare_code_fixtures
 write_provider_secret provider-deepseek DEEPSEEK_API_KEY
 write_provider_secret provider-zai ZAI_API_KEY
+if [[ "$lifecycle_group" == true ]]; then
+  write_provider_secret harness-e2e GH_TOKEN
+fi
+unset GH_TOKEN
 
 capture_processes "$artifact_dir/stack/processes-before.json"
 
@@ -418,7 +426,7 @@ while true; do
     >"$artifact_dir/status.json"
   jq -e --arg id "$remote_execution_id" '.execution_id == $id' "$artifact_dir/status.json" >/dev/null
   [[ "$(jq -r '.terminal // false' "$artifact_dir/status.json")" == true ]] && break
-  if ((SECONDS - started_at >= run_timeout_seconds)); then
+  if [[ "$lifecycle_group" != true ]] && ((SECONDS - started_at >= run_timeout_seconds)); then
     fail "E2E execution exceeded ${run_timeout_seconds}s"
   fi
   case "$poll_index" in 0) delay=2 ;; 1) delay=5 ;; 2) delay=10 ;; *) delay=30 ;; esac

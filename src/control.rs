@@ -347,8 +347,10 @@ pub struct ScenarioResourceEnvelope {
 pub struct WorkflowResourceEnvelope {
     pub max_parallel: u16,
     pub max_nodes: u16,
-    pub step_timeout_seconds: u64,
-    pub workflow_timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step_timeout_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow_timeout_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_total_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1973,37 +1975,41 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             budget.max_technical_retries
         );
     }
-    let turns_per_run = scenarios
-        .iter()
-        .try_fold(0_u64, |total, scenario| -> Result<u64> {
-            let max_turns = u64::from(scenario.spec("budget").execution.max_turns);
-            let physical_attempts = if scenario.execution_kind().replay_safe() {
-                u64::from(request.technical_retries) + 1
-            } else {
-                1
-            };
-            let scenario_seed_count = if scenario.canonical_seed_only() {
-                1_u64
-            } else {
-                seed_count.try_into().unwrap_or(u64::MAX)
-            };
-            total
-                .checked_add(
-                    max_turns
-                        .checked_mul(physical_attempts)
-                        .and_then(|turns| turns.checked_mul(scenario_seed_count))
-                        .context("declared turn budget overflow")?,
-                )
-                .context("declared turn budget overflow")
-        })?;
-    let declared_turns = turns_per_run
-        .checked_mul(u64::from(request.runs))
-        .context("declared turn budget overflow")?;
-    if declared_turns > budget.max_declared_turns {
+    let mut turns_per_run = Some(0_u64);
+    for scenario in &scenarios {
+        let Some(max_turns) = scenario.spec("budget").execution.max_turns.map(u64::from) else {
+            turns_per_run = None;
+            break;
+        };
+        let physical_attempts = if scenario.execution_kind().replay_safe() {
+            u64::from(request.technical_retries) + 1
+        } else {
+            1
+        };
+        let scenario_seed_count = if scenario.canonical_seed_only() {
+            1_u64
+        } else {
+            seed_count.try_into().unwrap_or(u64::MAX)
+        };
+        turns_per_run = turns_per_run.and_then(|total| {
+            max_turns
+                .checked_mul(physical_attempts)
+                .and_then(|turns| turns.checked_mul(scenario_seed_count))
+                .and_then(|turns| total.checked_add(turns))
+        });
+        if turns_per_run.is_none() {
+            bail!("declared turn budget overflow");
+        }
+    }
+    let declared_turns = turns_per_run.and_then(|turns| turns.checked_mul(u64::from(request.runs)));
+    if turns_per_run.is_some() && declared_turns.is_none() {
+        bail!("declared turn budget overflow");
+    }
+    if declared_turns.is_some_and(|declared_turns| declared_turns > budget.max_declared_turns) {
         bail!(
             "lane '{}' declared {} possible turns, above its {} turn budget",
             request.lane,
-            declared_turns,
+            declared_turns.expect("checked above"),
             budget.max_declared_turns
         );
     }
@@ -3031,10 +3037,10 @@ mod tests {
             vec![crate::report::E2eScenarioReport::aggregate(
                 "direct_answer",
                 ExecutionPolicy {
-                    max_turns: 1,
+                    max_turns: Some(1),
                     max_output_tokens: Some(10),
                     max_total_tokens: Some(100),
-                    stuck_timeout_seconds: 10,
+                    stuck_timeout_seconds: Some(10),
                     max_validation_retries: None,
                 },
                 vec![run],

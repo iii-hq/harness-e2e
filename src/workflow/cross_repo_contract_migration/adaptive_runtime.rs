@@ -143,8 +143,8 @@ pub fn adaptive_policy() -> AdaptiveWorkflowPolicy {
         limits: WorkflowLimits {
             max_parallel: 1,
             max_nodes: 16,
-            step_timeout_seconds: 60,
-            workflow_timeout_seconds: 600,
+            step_timeout_seconds: Some(60),
+            workflow_timeout_seconds: Some(600),
             max_total_tokens: Some(636_000),
             max_cost_usd: Some(25.0),
             technical_retries: 0,

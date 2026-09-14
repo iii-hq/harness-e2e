@@ -384,9 +384,9 @@ pub struct WorkflowLimits {
     #[serde(default = "default_max_nodes")]
     pub max_nodes: u16,
     #[serde(default = "default_step_timeout_seconds")]
-    pub step_timeout_seconds: u64,
+    pub step_timeout_seconds: Option<u64>,
     #[serde(default = "default_workflow_timeout_seconds")]
-    pub workflow_timeout_seconds: u64,
+    pub workflow_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub max_total_tokens: Option<u64>,
     #[serde(default)]
@@ -423,10 +423,14 @@ impl WorkflowLimits {
                 self.max_nodes
             );
         }
-        if self.step_timeout_seconds == 0 || self.workflow_timeout_seconds == 0 {
-            bail!("step and workflow timeouts must be positive");
+        if self.step_timeout_seconds == Some(0) || self.workflow_timeout_seconds == Some(0) {
+            bail!("step and workflow timeouts must be positive when set");
         }
-        if self.step_timeout_seconds > self.workflow_timeout_seconds {
+        if self
+            .step_timeout_seconds
+            .zip(self.workflow_timeout_seconds)
+            .is_some_and(|(step, workflow)| step > workflow)
+        {
             bail!("step timeout cannot exceed workflow timeout");
         }
         if self.max_total_tokens == Some(0) {
@@ -450,12 +454,12 @@ fn default_max_nodes() -> u16 {
     64
 }
 
-fn default_step_timeout_seconds() -> u64 {
-    300
+fn default_step_timeout_seconds() -> Option<u64> {
+    Some(300)
 }
 
-fn default_workflow_timeout_seconds() -> u64 {
-    1_800
+fn default_workflow_timeout_seconds() -> Option<u64> {
+    Some(1_800)
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -1046,6 +1050,24 @@ mod tests {
             nodes,
             criteria: Vec::new(),
         }
+    }
+
+    #[test]
+    fn workflow_timeouts_default_to_bounded_and_serialize_none() {
+        let bounded = WorkflowLimits::default();
+        assert_eq!(bounded.step_timeout_seconds, Some(300));
+        assert_eq!(bounded.workflow_timeout_seconds, Some(1_800));
+
+        let unlimited = WorkflowLimits {
+            step_timeout_seconds: None,
+            workflow_timeout_seconds: None,
+            ..WorkflowLimits::default()
+        };
+        assert_eq!(unlimited.step_timeout_seconds, None);
+        assert_eq!(unlimited.workflow_timeout_seconds, None);
+        let value = serde_json::to_value(unlimited).unwrap();
+        assert!(value["step_timeout_seconds"].is_null());
+        assert!(value["workflow_timeout_seconds"].is_null());
     }
 
     #[test]

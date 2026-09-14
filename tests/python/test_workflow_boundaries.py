@@ -340,6 +340,27 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", scenario)
         self.assertNotIn("hidden_output", publisher.split("def public_projection", 1)[1].split("def create_blob", 1)[0])
 
+    def test_lifecycle_github_authority_reaches_only_harness_e2e(self):
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
+        runner = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
+        plan = json.loads((ROOT / "config/test-plan.json").read_text())
+
+        endurance = next(profile for profile in plan["profiles"] if profile["id"] == "endurance")
+        self.assertIn("software_company_lifecycle", endurance["scenarios"])
+        self.assertIn("E2E_LIFECYCLE_GITHUB_TOKEN", workflow)
+        self.assertIn("matrix.group_id == 'case-software-company-lifecycle'", workflow)
+        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", workflow)
+        self.assertNotIn("Publish software company lifecycle handoff", workflow)
+        self.assertIn('write_provider_secret harness-e2e GH_TOKEN', runner)
+        self.assertNotIn('harness-e2e.GH_TOKEN=', runner)
+        self.assertIn('harness-e2e.HARNESS_E2E_RUN_DIR=', runner)
+        self.assertIn('--env-file "$(basename "$secret_file" .env)=$secret_file"', runner)
+
+    def test_lifecycle_group_has_no_runner_deadline(self):
+        runner = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
+        self.assertIn('"software_company_lifecycle"', runner)
+        self.assertIn('[[ "$lifecycle_group" != true ]] && ((SECONDS - started_at >= run_timeout_seconds))', runner)
+
 
 if __name__ == "__main__":
     unittest.main()

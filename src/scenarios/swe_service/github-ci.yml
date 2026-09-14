@@ -1,0 +1,83 @@
+name: software-company-ci
+run-name: company-ci-${{ inputs.run_namespace }}-${{ inputs.operation_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_sha:
+        required: true
+        type: string
+      run_namespace:
+        required: true
+        type: string
+      operation_id:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Validate dispatch identity
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RUN_NAMESPACE: ${{ inputs.run_namespace }}
+          OPERATION_ID: ${{ inputs.operation_id }}
+        run: |
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$RUN_NAMESPACE" =~ ^[0-9a-f]{32}$ ]]
+          [[ "$OPERATION_ID" =~ ^[0-9a-f]{32}$ ]]
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.candidate_sha }}
+          persist-credentials: false
+      - name: Verify candidate in isolated container
+        id: tests
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RUN_NAMESPACE: ${{ inputs.run_namespace }}
+          OPERATION_ID: ${{ inputs.operation_id }}
+        run: |
+          set -euo pipefail
+          actual=$(git rev-parse HEAD)
+          test "$actual" = "$CANDIDATE_SHA"
+          mkdir -p "$RUNNER_TEMP/company-ci"
+          container=(--rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --pids-limit 256 --memory 2g --cpus 2 \
+            --tmpfs /tmp:rw,nosuid,nodev,size=256m \
+            --mount "type=bind,src=$GITHUB_WORKSPACE,dst=/workspace,readonly" \
+            -e PYTHONDONTWRITEBYTECODE=1 -e PYTHONPATH=/workspace/src
+            mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6)
+          public=0
+          docker run "${container[@]}" python3 -m unittest discover -s /workspace/tests/reference -p 'test_*.py' || public=$?
+          authored=0
+          docker run "${container[@]}" python3 -m unittest discover -s /workspace/tests/agent -p 'test_*.py' || authored=$?
+          PUBLIC_EXIT="$public" AUTHORED_EXIT="$authored" ACTUAL_SHA="$actual" python3 -I - <<'PY'
+          import json, os, pathlib
+          public, authored = int(os.environ['PUBLIC_EXIT']), int(os.environ['AUTHORED_EXIT'])
+          result = {
+              'schema': 'company-ci-evidence/v1',
+              'candidate_sha': os.environ['CANDIDATE_SHA'],
+              'checked_out_sha': os.environ['ACTUAL_SHA'],
+              'run_namespace': os.environ['RUN_NAMESPACE'],
+              'operation_id': os.environ['OPERATION_ID'],
+              'public_exit': public,
+              'authored_exit': authored,
+              'passed': public == authored == 0,
+              'infrastructure_error': 'container launch failed' if public >= 125 or authored >= 125 else None,
+          }
+          pathlib.Path(os.environ['RUNNER_TEMP'], 'company-ci', 'result.json').write_text(json.dumps(result, sort_keys=True))
+          PY
+          test "$public" -eq 0 && test "$authored" -eq 0
+      - name: Upload exact-SHA evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: company-ci-${{ inputs.run_namespace }}-${{ inputs.operation_id }}
+          path: ${{ runner.temp }}/company-ci/result.json
+          if-no-files-found: error
+          retention-days: 30

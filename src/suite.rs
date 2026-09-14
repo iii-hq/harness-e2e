@@ -2229,7 +2229,10 @@ async fn execute(
         control,
         output,
     } = request;
-    let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
+    let stuck_timeout = spec
+        .execution
+        .stuck_timeout_seconds
+        .map(Duration::from_secs);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
     module
         .setup(context, run_id)
@@ -2285,7 +2288,7 @@ async fn execute(
                         })),
                     }),
                     options: Some(SendOptions {
-                        max_turns: Some(spec.execution.max_turns),
+                        max_turns: spec.execution.max_turns,
                         max_cost_usd: subject_cost_cap_usd(spec.id),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
@@ -3820,10 +3823,10 @@ mod tests {
             prompt: "prompt".into(),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
-                stuck_timeout_seconds: 1,
+                stuck_timeout_seconds: Some(1),
                 max_validation_retries: None,
             },
             denied_functions: &[],

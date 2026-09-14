@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -12,6 +13,7 @@ use super::FIXTURE_REVISION;
 #[derive(RustEmbed)]
 #[folder = "src/scenarios/swe_service/"]
 #[include = "*.py"]
+#[include = "github-ci.yml"]
 struct PythonAssets;
 
 #[derive(RustEmbed)]
@@ -21,7 +23,14 @@ struct FixtureAssets;
 
 pub async fn unpack(root: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(root)?;
-    for name in ["controller.py", "probes.py", "isolation.py"] {
+    for name in [
+        "controller.py",
+        "probes.py",
+        "isolation.py",
+        "lifecycle.py",
+        "github_ops.py",
+        "github-ci.yml",
+    ] {
         let data = PythonAssets::get(name)
             .with_context(|| format!("missing embedded SWE asset {name}"))?;
         std::fs::write(root.join(name), data.data.as_ref())?;
@@ -79,16 +88,49 @@ pub async fn unpack(root: &Path) -> Result<PathBuf> {
 }
 
 pub async fn controller(root: &Path, args: &[String]) -> Result<Value> {
+    controller_with_env(root, args, Vec::new()).await
+}
+
+/// Run trusted GitHub operations and lifecycle checkpoint readbacks with the
+/// operator's local CLI credentials. Subject commands never receive them.
+pub async fn github_controller(root: &Path, args: &[String]) -> Result<Value> {
+    let environment = ["GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "HOME"]
+        .into_iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (name, value)))
+        .collect();
+    controller_with_env(root, args, environment).await
+}
+
+async fn controller_with_env(
+    root: &Path,
+    args: &[String],
+    environment: Vec<(&'static str, OsString)>,
+) -> Result<Value> {
     let mut parameters = vec![
         "-I".into(),
         root.join("controller.py").to_string_lossy().into_owned(),
     ];
     parameters.extend(args.iter().cloned());
-    let bytes = command("python3", &parameters, Duration::from_secs(245)).await?;
+    let bytes = command_with_env(
+        "python3",
+        &parameters,
+        Duration::from_secs(245),
+        environment,
+    )
+    .await?;
     serde_json::from_slice(&bytes).context("SWE controller returned invalid JSON")
 }
 
 pub async fn command(program: &str, args: &[String], timeout: Duration) -> Result<Vec<u8>> {
+    command_with_env(program, args, timeout, Vec::new()).await
+}
+
+async fn command_with_env(
+    program: &str,
+    args: &[String],
+    timeout: Duration,
+    environment: Vec<(&'static str, OsString)>,
+) -> Result<Vec<u8>> {
     #[cfg(not(unix))]
     bail!("SWE trusted commands require Unix process isolation");
     let mut command = Command::new(program);
@@ -105,6 +147,9 @@ pub async fn command(program: &str, args: &[String], timeout: Duration) -> Resul
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(false);
+    for (name, value) in environment {
+        command.env(name, value);
+    }
     // Backend selection is operator configuration, never supplied by a subject.
     for name in [
         "HARNESS_E2E_SWE_ISOLATION_BACKEND",
@@ -249,11 +294,13 @@ mod tests {
         for cancelled in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let controller = temp.path().join("controller.py");
-            std::fs::write(
-                &controller,
-                PythonAssets::get("controller.py").unwrap().data.as_ref(),
-            )
-            .unwrap();
+            for name in ["controller.py", "lifecycle.py", "github_ops.py"] {
+                std::fs::write(
+                    temp.path().join(name),
+                    PythonAssets::get(name).unwrap().data.as_ref(),
+                )
+                .unwrap();
+            }
             let ready = temp.path().join("ready");
             let stopped = temp.path().join("stopped");
             let wrapper = temp.path().join("wrapper.py");

@@ -22,6 +22,10 @@ import tempfile
 import time
 import uuid
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import lifecycle
+import github_ops
+
 
 MAX_BYTES = 64 * 1024 * 1024
 MAX_FILES = 10000
@@ -44,7 +48,8 @@ def interrupted(signum, frame):
 def run(args, cwd=None, timeout=120, allowed_codes=(0,)):
     if OPERATION_DEADLINE is not None:
         timeout = min(timeout, max(0.001, OPERATION_DEADLINE - time.monotonic()))
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")
+           and k not in ("GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "HOME")}
     env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT="0", GIT_NO_REPLACE_OBJECTS="1")
     process = subprocess.Popen(args, cwd=cwd, env=env, stdout=subprocess.PIPE,
@@ -251,24 +256,39 @@ def validate_live(state, head, entries=None):
                 raise IntegrityError("Working file modes differ from the submitted commit")
 
 
-def probe(state, export_path, through, canary):
+def probe(state, export_path, through, canary, previous=None, authored=False):
     for component in ("probes", "isolation"):
         if digest(Path(state[component]).read_bytes()) != state[component + "_digest"]:
             raise RuntimeError("Trusted verification component changed during this run")
-    args = [sys.executable, "-I", state["isolation"], "--probes", state["probes"],
+    probe_path = state["probes"]
+    if authored:
+        probe_path = str(Path(state["assets"]) / "authored-probe.py")
+        Path(probe_path).write_text(lifecycle.AUTHORED_PROBE)
+    args = [sys.executable, "-I", state["isolation"], "--probes", probe_path,
             "--workspace", str(export_path), "--through", str(through)]
     if canary:
         args.append("--canary")
+    if state["mode"] == "lifecycle" and not authored:
+        args.append("--lifecycle")
+        if previous:
+            args.extend(["--previous-workspace", str(previous)])
     result = json.loads(run(args, cwd=state["assets"], timeout=150))
     if not isinstance(result, dict) or type(result.get("passed")) is not bool:
         raise RuntimeError("Trusted verifier returned an invalid result")
-    # Raw check output is private evidence, never forwarded to subject/publisher.
-    return result["passed"]
+    if result.get("infrastructure_error"):
+        raise RuntimeError(result["infrastructure_error"])
+    return result
 
 
 def public_ticket(state, number):
     ticket = state["tickets"][number - 1]
-    return {key: ticket[key] for key in ("number", "id", "title", "prompt")}
+    result = {key: ticket[key] for key in ("number", "id", "title", "prompt")}
+    if state["mode"] == "lifecycle":
+        result["prompt"] += (f"\nPreceding accepted HEAD: {state['accepted_head']}. "
+                             f"Published release HEAD: {state.get('release_head')}. "
+                             "No run time, token, turn or rejected-checkpoint budget is enforced. "
+                             "Quality, rejected submissions and measured resource use affect the final score.")
+    return result
 
 
 def response(state, status, feedback, next_ticket=None):
@@ -289,7 +309,7 @@ def prepare(args):
     isolation = Path(args.isolation).resolve()
     if not SHA.fullmatch(args.fixture_revision):
         raise RuntimeError("Fixture revision must be a full commit SHA")
-    if not 1 <= args.ticket <= 8 or (args.mode == "journey" and args.ticket != 1):
+    if not 1 <= args.ticket <= 8 or (args.mode == "lifecycle" and args.ticket != 1):
         raise RuntimeError("Invalid initial ticket")
     if workspace.exists() and any(workspace.iterdir()):
         raise RuntimeError("Workspace must be empty")
@@ -303,7 +323,7 @@ def prepare(args):
     tickets = json.loads((fixture / "curriculum.json").read_text())["tickets"]
     if [ticket["number"] for ticket in tickets] != list(range(1, 9)):
         raise RuntimeError("Invalid curriculum")
-    stage = 0 if args.mode == "journey" else args.ticket - 1
+    stage = 0 if args.mode == "lifecycle" else args.ticket - 1
     snapshot = fixture / "snapshots" / f"{stage:02}"
     snapshot_files = files_in(snapshot)
     if not snapshot_files or (snapshot / ".git").exists():
@@ -348,7 +368,8 @@ def prepare(args):
              "refs": refs(workspace), "branch": "refs/heads/main", "mode": args.mode,
              "fixture_revision": args.fixture_revision, "run_id": args.run_id or token,
              "initial_head": head, "accepted_head": head, "accepted_tickets": [],
-             "current_ticket": args.ticket, "initial_ticket": args.ticket, "tickets": tickets,
+             "current_ticket": args.ticket, "initial_ticket": args.ticket,
+             "tickets": lifecycle.curriculum(tickets) if args.mode == "lifecycle" else tickets,
              "protected": {name: entry for name, entry in initial_tree.items() if not allowed(name)},
              "started_at": time.time(), "checkpoints": [], "responses": {}, "rejections": 0,
              "canary_revealed": args.mode == "isolated" and args.ticket > 5,
@@ -360,6 +381,8 @@ def prepare(args):
 
 def checkpoint(args, state):
     key = f"{args.ticket}:{args.head}:{args.revision_id or ''}"
+    if state["mode"] == "lifecycle":
+        key += f":{len(state.get('github', {}).get('journal', []))}"
     if key in state["responses"]:
         return state["responses"][key]
     if state["terminal_status"]:
@@ -371,6 +394,8 @@ def checkpoint(args, state):
         return response(state, "rejected", "Submit the current ticket before advancing.")
     status = "rejected"
     canary_observation = None
+    verification = None
+    lifecycle_checks = []
     feedback = "Candidate does not satisfy the current or previously accepted service contracts."
     try:
         if args.revision_id is not None and (
@@ -393,6 +418,11 @@ def checkpoint(args, state):
         protected = {name: entry for name, entry in entries.items() if not allowed(name)}
         if protected != state["protected"]:
             raise IntegrityError("Public tests and benchmark control files must remain unchanged")
+        if state["mode"] == "lifecycle" and args.ticket <= 2:
+            initial = tree(objects, state["initial_head"])
+            if {name: entry for name, entry in entries.items() if name.startswith("src/")} != {
+                    name: entry for name, entry in initial.items() if name.startswith("src/")}:
+                raise IntegrityError("Record demand and planning before changing source code")
         with tempfile.TemporaryDirectory(prefix="candidate-", dir=state["assets"]) as temporary:
             export(objects, args.head, temporary)
             immutable = files_in(temporary)
@@ -401,9 +431,47 @@ def checkpoint(args, state):
             for name in entries:
                 entries[name]["sha256"] = digest(immutable[name])
             validate_live(state, args.head, entries)
-            passed = probe(state, temporary, args.ticket, state["canary_revealed"] and args.ticket >= 5)
+            through = lifecycle.THROUGH[args.ticket - 1] if state["mode"] == "lifecycle" else args.ticket
+            previous = None
+            with tempfile.TemporaryDirectory(prefix="release-", dir=state["assets"]) as release:
+                if state["mode"] == "lifecycle" and args.ticket >= 7:
+                    export(objects, state["release_head"], release)
+                    previous = release
+                verification = probe(state, temporary, through, state["canary_revealed"] and args.ticket >= 5, previous)
+            passed = verification["passed"]
+            if state["mode"] == "lifecycle":
+                lifecycle_checks = lifecycle.document_checks(args.ticket, immutable, state)
+                if args.ticket >= 3:
+                    lifecycle_checks.append({"id": "continuous_integration", "passed": passed,
+                                             "reason": "Public tests, authored tests and cumulative behavioral checks ran on this Git export"})
+                if args.ticket == 3:
+                    lifecycle_checks.append({"id": "authored_regressions", "passed": any(
+                        name.startswith("tests/agent/") and Path(name).name.startswith("test_")
+                        and name.endswith(".py") for name in immutable)})
+                if args.ticket == 4:
+                    green = probe(state, temporary, 0, False, authored=True)
+                    with tempfile.TemporaryDirectory(prefix="defective-base-", dir=state["assets"]) as original:
+                        export(objects, state["initial_head"], original)
+                        test_root = Path(original) / "tests/agent"
+                        if test_root.exists():
+                            shutil.rmtree(test_root)
+                        authored_root = Path(temporary) / "tests/agent"
+                        if authored_root.is_dir():
+                            shutil.copytree(authored_root, test_root)
+                        red = probe(state, original, 0, False, authored=True)
+                    lifecycle_checks.append({"id": "regressions_detect_original_defect",
+                        "passed": green["passed"] and red.get("failures", 0) > 0 and red.get("errors") == 0,
+                        "green": green, "red": red})
+                lifecycle_checks.extend(check for check in verification.get("checks", [])
+                                        if check["id"].startswith("lifecycle."))
+                github_ops.refresh(state, lambda updated: save(args.state_file, updated))
+                lifecycle_checks.extend(github_ops.checks(state, args.ticket, args.head))
+                failed_checks = [check for check in lifecycle_checks if not check["passed"]]
+                if failed_checks:
+                    passed = False
+                    feedback = failed_checks[0].get("reason", failed_checks[0]["id"] + " failed")
             if passed and args.ticket == 5 and not state["canary_revealed"]:
-                canary_observation = {"passed": probe(state, temporary, 5, True)}
+                canary_observation = {"passed": probe(state, temporary, 5, True)["passed"]}
             if files_in(temporary) != immutable:
                 raise IntegrityError("Candidate modified its committed verification export")
             validate_live(state, args.head, entries)
@@ -417,6 +485,8 @@ def checkpoint(args, state):
             else:
                 state["accepted_head"] = args.head
                 state["accepted_tickets"].append(args.ticket)
+                if state["mode"] == "lifecycle" and args.ticket == 5:
+                    state["release_head"] = args.head
                 git(objects, "update-ref", "refs/heads/accepted", args.head)
                 finished = state["mode"] == "isolated" or args.ticket == 8
                 status = "completed" if finished else "accepted"
@@ -430,7 +500,7 @@ def checkpoint(args, state):
         feedback = str(error)
     if status == "rejected":
         state["rejections"] += 1
-        if state["rejections"] >= 3:
+        if state["mode"] == "isolated" and state["rejections"] >= 3:
             status = "capability_failure"
             state["terminal_status"] = status
             feedback += " Three checkpoint rejections reached; this task is closed."
@@ -445,9 +515,43 @@ def checkpoint(args, state):
                                  "feedback": feedback, "status": status})
     if status == "revision_required":
         state["checkpoints"][-1]["canary_observation"] = canary_observation
+    if state["mode"] == "lifecycle":
+        state["checkpoints"][-1]["lifecycle_checks"] = lifecycle_checks
+        state["checkpoints"][-1]["verification"] = verification
+        state["checkpoints"][-1]["elapsed_ms"] = max(0, int((time.time() - state["started_at"]) * 1000))
     state["responses"][key] = result
     save(args.state_file, state)
     return result
+
+
+def github(args, state):
+    request = json.loads(args.request)
+
+    def validate():
+        if state["mode"] != "lifecycle" or state["terminal_status"] or state.get("quiesced"):
+            raise IntegrityError("GitHub operations require an active lifecycle attempt")
+        if request.get("operation") not in ("push", "pr", "ci", "review", "merge", "release"):
+            return
+        head = request.get("head")
+        if not isinstance(head, str) or not SHA.fullmatch(head):
+            raise IntegrityError("Provide the full current committed HEAD for this operation")
+        validate_live(state, head)
+        objects = Path(state["objects"])
+        git(objects, "fetch", "--no-tags", state["workspace"], head)
+        try:
+            git(objects, "merge-base", "--is-ancestor", state["accepted_head"], head)
+        except RuntimeError:
+            raise IntegrityError("Candidate must retain the accepted history") from None
+        entries = tree(objects, head)
+        if {name: entry for name, entry in entries.items() if not allowed(name)} != state["protected"]:
+            raise IntegrityError("Public tests and benchmark control files must remain unchanged")
+        if state["current_ticket"] <= 2:
+            initial = tree(objects, state["initial_head"])
+            if {name: entry for name, entry in entries.items() if name.startswith("src/")} != {
+                    name: entry for name, entry in initial.items() if name.startswith("src/")}:
+                raise IntegrityError("Record demand and planning before changing source code")
+
+    return github_ops.operate(state, request, lambda updated: save(args.state_file, updated), validate=validate)
 
 
 def copy_evidence(source, destination):
@@ -580,7 +684,7 @@ def capture(args, state):
         return state["final_report"]
     terminal = state["terminal_status"] or getattr(args, "terminal_status", None) or "cancelled"
     report = {"schema": "swe-service-report",
-              "scenario_id": "swe_service_journey" if state["mode"] == "journey" else state["tickets"][state["initial_ticket"] - 1]["id"],
+              "scenario_id": "software_company_lifecycle" if state["mode"] == "lifecycle" else state["tickets"][state["initial_ticket"] - 1]["id"],
               "mode": state["mode"], "fixture_revision": state["fixture_revision"],
               "run_id": state["run_id"], "initial_head": state["initial_head"],
               "accepted_head": state["accepted_head"], "accepted_tickets": state["accepted_tickets"][:],
@@ -590,6 +694,11 @@ def capture(args, state):
               "accepted_patch": git(state["objects"], "diff", "--no-ext-diff", "--no-textconv", "--binary",
                                     state["initial_head"], state["accepted_head"], "--").decode("utf-8", "replace"),
               "unaccepted_patch": ""}
+    if state["mode"] == "lifecycle":
+        report["lifecycle"] = {"stages": lifecycle.assessments(state["checkpoints"]),
+                               "release_head": state.get("release_head"),
+                               "rejected_checkpoints": sum(item["status"] == "rejected" for item in state["checkpoints"])}
+        report["github"] = state.get("github", {"journal": []})
     try:
         report["unaccepted_patch"] = unaccepted_patch(state)
     except (IntegrityError, OSError, RuntimeError) as error:
@@ -626,7 +735,7 @@ def main():
     prep = sub.add_parser("prepare")
     for name in ("fixture-root", "workspace", "state-file", "probes", "isolation", "fixture-revision"):
         prep.add_argument("--" + name, required=True)
-    prep.add_argument("--mode", choices=("journey", "isolated"), required=True)
+    prep.add_argument("--mode", choices=("lifecycle", "isolated"), required=True)
     prep.add_argument("--ticket", type=int, required=True)
     prep.add_argument("--run-id")
     checkpoint_parser = sub.add_parser("checkpoint")
@@ -634,6 +743,9 @@ def main():
     checkpoint_parser.add_argument("--ticket", type=int, required=True)
     checkpoint_parser.add_argument("--head", required=True)
     checkpoint_parser.add_argument("--revision-id")
+    github_parser = sub.add_parser("github")
+    github_parser.add_argument("--state-file", required=True)
+    github_parser.add_argument("--request", required=True)
     cap = sub.add_parser("capture")
     cap.add_argument("--state-file", required=True)
     cap.add_argument("--terminal-status", choices=("completed", "capability_failure", "resource_limit", "cancelled", "infrastructure_error"))

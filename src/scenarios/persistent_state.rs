@@ -124,10 +124,10 @@ impl Scenario for PersistentState {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 8,
+                max_turns: Some(8),
                 max_output_tokens: Some(4_096),
                 max_total_tokens: Some(80_000),
-                stuck_timeout_seconds: 180,
+                stuck_timeout_seconds: Some(180),
                 max_validation_retries: None,
             },
             denied_functions: &[],

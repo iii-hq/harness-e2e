@@ -706,10 +706,10 @@ before replying, and include the genuine receipt in the final response."#,
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 20,
+                max_turns: Some(20),
                 max_output_tokens: Some(20_480),
                 max_total_tokens: Some(300_000),
-                stuck_timeout_seconds: 600,
+                stuck_timeout_seconds: Some(600),
                 max_validation_retries: None,
             },
             denied_functions: &[

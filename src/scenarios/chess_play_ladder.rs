@@ -350,13 +350,13 @@ impl Scenario for ChessPlayLadder {
                 // occasional illegal-move retry, and the final report. This exceeds
                 // the other scenarios' turn counts on purpose; `ExecutionPolicy`
                 // only rejects zero and total < output, so a long game is allowed.
-                max_turns: 8 + MOVE_CAP,
+                max_turns: Some(8 + MOVE_CAP),
                 max_output_tokens: Some(8_192),
                 // Unbounded on purpose: this is a measurement ladder — capping the
                 // shared token budget would distort the strength signal the ladder
                 // exists to observe. Spend surfaces in the Efficiency dimension.
                 max_total_tokens: None,
-                stuck_timeout_seconds: 600,
+                stuck_timeout_seconds: Some(600),
                 max_validation_retries: None,
             },
             denied_functions: &["state::*"],
@@ -727,7 +727,7 @@ mod tests {
             Some(3)
         );
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
+        assert_eq!(first.spec.execution.max_turns, Some(8 + MOVE_CAP));
         assert!(first.spec.execution.max_total_tokens.is_none());
         first.validate().unwrap();
     }

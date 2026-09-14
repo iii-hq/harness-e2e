@@ -35,7 +35,7 @@ def cli(workspace, *args, timeout=15):
 
 
 @contextlib.contextmanager
-def server(workspace, db, config=None):
+def server(workspace, db, config=None, stop_signal=signal.SIGTERM, stopped=None):
     args = [sys.executable, '-m', 'profile_service', 'serve', '--db', str(db), '--port', '0']
     if config:
         args += ['--config', str(config)]
@@ -53,12 +53,14 @@ def server(workspace, db, config=None):
         yield 'http://127.0.0.1:' + str(json.loads(line)['port'])
     finally:
         if process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
+            os.killpg(process.pid, stop_signal)
         try:
             process.communicate(timeout=3)
         except subprocess.TimeoutExpired:
             os.killpg(process.pid, signal.SIGKILL)
             process.communicate()
+        if stopped is not None:
+            stopped.append(process.returncode)
 
 
 def request(base, path, token='alpha-token', data=None):
@@ -78,7 +80,7 @@ def event(event_id, delta, tenant='alpha', profile_id='p', name='Ada'):
     return {'event_id': event_id, 'tenant': tenant, 'profile_id': profile_id, 'delta': delta, 'name': name}
 
 
-def run_check(name, workspace, scratch):
+def run_check(name, workspace, scratch, previous=None, canary=False):
     sys.dont_write_bytecode = True
     sys.path.insert(0, str(workspace / 'src'))
     from profile_service.service import Service
@@ -373,6 +375,154 @@ runpy.run_module('profile_service', run_name='__main__')
         delivery = workspace / 'docs/delivery.md'
         require(delivery.is_file() and bool(delivery.read_text().strip()), 'a nonempty authored docs/delivery.md is required for handoff')
         return {}
+
+    if name == 'lifecycle.rollout':
+        seed = event('rollout-seed', 5, profile_id='rollout', name='Rollout Customer')
+        observations = {'starts': 0}
+        for start in range(2):
+            with server(workspace, db) as base:
+                observations['starts'] += 1
+                if start == 0:
+                    status, acknowledgement = request(base, '/replay', data={'events': [seed]})
+                    require(status == 200 and acknowledgement == {'received': 1, 'applied': 1},
+                            'rollout HTTP seed write failed')
+                    observations['seed_acknowledgement'] = acknowledgement
+                status, v2 = request(base, '/v2/profiles/rollout')
+                require(status == 200 and v2 == {'schema_version': 2, 'profile': {
+                    'id': 'rollout', 'display_name': 'Rollout Customer', 'score': 5}},
+                    'rollout v2 contract failed')
+                observations[f'start_{start}'] = {'v2': v2}
+                if canary:
+                    from profile_service.client import LegacyClient
+                    expected = {'id': 'rollout', 'name': 'Rollout Customer', 'score': 5}
+                    status, v1 = request(base, '/v1/profiles/rollout')
+                    require(status == 200 and v1 == expected, 'rollout v1 contract failed')
+                    status, legacy = request(base, '/profiles/rollout')
+                    require(status == 200 and legacy == expected
+                            and LegacyClient(base, 'alpha-token').profile_name('rollout') == 'Rollout Customer',
+                            'rollout legacy client contract failed')
+                    observations[f'start_{start}'].update({'v1': v1, 'legacy': legacy})
+        with sqlite3.connect(db) as connection:
+            observations['acknowledgement_rows'] = connection.execute(
+                'SELECT tenant, event_id FROM applied_events ORDER BY tenant, event_id').fetchall()
+        require(observations['acknowledgement_rows'] == [('alpha', 'rollout-seed')],
+                'rollout acknowledgement was not durable')
+        return observations
+
+    if name == 'lifecycle.recovery':
+        require(previous is not None and (previous / 'src/profile_service').is_dir(),
+                'previous release export is required for recovery')
+        events = [event('release-seed', 5, profile_id='release', name='Release Customer'),
+                  event('candidate-update', 7, profile_id='release', name='Release Customer'),
+                  event('rollback-update', 3, profile_id='release', name='Release Customer'),
+                  event('upgrade-update', 2, profile_id='release', name='Release Customer')]
+        observations = {'stages': [], 'signal': 'SIGKILL'}
+
+        def inspect(base, stage, score):
+            expected = {'id': 'release', 'name': 'Release Customer', 'score': score}
+            v1_status, v1 = request(base, '/v1/profiles/release')
+            require(v1_status == 200 and v1 == expected, stage + ' lost v1 profile data')
+            legacy_status, legacy = request(base, '/profiles/release')
+            require(legacy_status == 200 and legacy == expected, stage + ' broke legacy API')
+            v2_status, v2 = request(base, '/v2/profiles/release')
+            require(v2_status == 200 and v2 == {'schema_version': 2, 'profile': {
+                    'id': 'release', 'display_name': 'Release Customer', 'score': score}},
+                    stage + ' broke v2 API')
+            observations['stages'].append({'stage': stage, 'score': score,
+                                           'v1_status': v1_status, 'legacy_status': legacy_status,
+                                           'v2_status': v2_status, 'v1': v1, 'legacy': legacy, 'v2': v2})
+
+        def apply(base, item, expected_applied):
+            status, acknowledgement = request(base, '/replay', data={'events': [item]})
+            require(status == 200 and acknowledgement == {'received': 1, 'applied': expected_applied},
+                    'replay acknowledgement failed for ' + item['event_id'])
+            observations.setdefault('replay_acknowledgements', []).append({
+                'event_id': item['event_id'], **acknowledgement})
+
+        with server(previous, db) as base:
+            apply(base, events[0], 1)
+            inspect(base, 'previous_seed', 5)
+        stopped = []
+        with server(workspace, db, stop_signal=signal.SIGKILL, stopped=stopped) as base:
+            inspect(base, 'candidate_upgrade', 5)
+            apply(base, events[0], 0)
+            apply(base, events[1], 1)
+            inspect(base, 'candidate_update', 12)
+        require(stopped == [-signal.SIGKILL], 'candidate process was not killed with SIGKILL')
+        observations['killed_returncode'] = stopped[0]
+        with server(workspace, db) as base:
+            inspect(base, 'candidate_restart', 12)
+            apply(base, events[1], 0)
+        with server(previous, db) as base:
+            inspect(base, 'previous_rollback', 12)
+            apply(base, events[2], 1)
+            apply(base, events[2], 0)
+            inspect(base, 'previous_update', 15)
+        with server(workspace, db) as base:
+            inspect(base, 'candidate_reupgrade', 15)
+            apply(base, events[3], 1)
+            for item in events:
+                apply(base, item, 0)
+            inspect(base, 'candidate_final', 17)
+        with sqlite3.connect(db) as connection:
+            observations['persisted_profile'] = connection.execute(
+                'SELECT tenant, id, name, score, revision FROM profiles').fetchall()
+            observations['acknowledgement_rows'] = connection.execute(
+                'SELECT tenant, event_id FROM applied_events ORDER BY tenant, event_id').fetchall()
+        require(observations['persisted_profile'] == [('alpha', 'release', 'Release Customer', 17, 4)],
+                'release cycle lost or duplicated a profile effect')
+        require(observations['acknowledgement_rows'] == [('alpha', item['event_id']) for item in sorted(
+            events, key=lambda item: item['event_id'])], 'release cycle lost or duplicated an event acknowledgement')
+        return observations
+
+    if name == 'lifecycle.performance_repair':
+        require(previous is not None and (previous / 'src/profile_service').is_dir(),
+                'previous release export is required for performance comparison')
+        selected = [event(f'performance-{index}', 1, profile_id='performance') for index in range(600)]
+        events_path = scratch / 'performance-events.json'
+        events_path.write_text(json.dumps(selected))
+        instrument = r'''
+import json, pathlib, runpy, sqlite3, sys
+workspace, db, events = sys.argv[1:]
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(pathlib.Path(workspace) / 'src'))
+original_connect = sqlite3.connect
+samples = [0]
+def connect(*args, **kwargs):
+    connection = original_connect(*args, **kwargs)
+    def progress():
+        samples[0] += 100
+        return 0
+    connection.set_progress_handler(progress, 100)
+    return connection
+sqlite3.connect = connect
+sys.argv = ['profile_service', 'replay', '--db', db, '--events', events, '--batch-size', '50']
+runpy.run_module('profile_service', run_name='__main__')
+print(json.dumps({'sqlite_vm_instructions_sampled': samples[0]}))
+'''
+        observations = {}
+        for label, export in (('published', previous), ('repaired', workspace)):
+            database = scratch / f'{label}.sqlite'
+            process = subprocess.run([sys.executable, '-I', '-c', instrument, str(export), str(database), str(events_path)],
+                                     cwd=export, env=clean_env(export), capture_output=True, text=True, timeout=20)
+            require(process.returncode == 0, label + ' replay CLI failed')
+            lines = process.stdout.splitlines()
+            require(len(lines) == 2, label + ' replay CLI did not return a measurement')
+            acknowledgement, sample = map(json.loads, lines)
+            require(acknowledgement == {'received': 600, 'applied': 600}, label + ' replay CLI lost events')
+            require(isinstance(sample.get('sqlite_vm_instructions_sampled'), int)
+                    and sample['sqlite_vm_instructions_sampled'] > 0, label + ' SQLite work was not measured')
+            with sqlite3.connect(database) as connection:
+                score = connection.execute('SELECT score FROM profiles WHERE tenant = ? AND id = ?',
+                                           ('alpha', 'performance')).fetchone()[0]
+                acknowledged = connection.execute('SELECT COUNT(*) FROM applied_events').fetchone()[0]
+            require(score == 600 and acknowledged == 600, label + ' replay persistence is incomplete')
+            observations[label] = {**sample, 'acknowledgement': acknowledgement,
+                                   'profile_score': score, 'acknowledged_events': acknowledged}
+        observations['published_to_repaired_work_ratio'] = (
+            observations['published']['sqlite_vm_instructions_sampled'] /
+            observations['repaired']['sqlite_vm_instructions_sampled'])
+        return observations
     raise ValueError('unknown check')
 
 
@@ -381,13 +531,16 @@ def main():
     parser.add_argument('--workspace', type=Path, required=True)
     parser.add_argument('--through', type=int, choices=range(9), default=0)
     parser.add_argument('--canary', action='store_true')
+    parser.add_argument('--lifecycle', action='store_true')
+    parser.add_argument('--previous-workspace', type=Path)
     parser.add_argument('--worker', help=argparse.SUPPRESS)
     parser.add_argument('--scratch', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     workspace = args.workspace.resolve()
+    previous = args.previous_workspace.resolve() if args.previous_workspace else None
     if args.worker:
         try:
-            evidence = run_check(args.worker, workspace, args.scratch)
+            evidence = run_check(args.worker, workspace, args.scratch, previous, args.canary)
             print(json.dumps({'id': args.worker, 'passed': True, 'reason': 'behavior verified', 'evidence': evidence}))
         except Exception as error:
             print(json.dumps({'id': args.worker, 'passed': False, 'reason': str(error)[:300], 'error_type': type(error).__name__}))
@@ -399,12 +552,21 @@ def main():
              'ticket5.v2', 'ticket6.tenants', 'ticket7.performance', 'ticket8.release'][:args.through + 1]
     if args.canary and args.through >= 5:
         names.append('ticket5.legacy_canary')
+    if args.lifecycle and args.through >= 5:
+        names.append('lifecycle.rollout')
+    if args.lifecycle and args.through >= 7:
+        names.append('lifecycle.recovery')
+        names.append('lifecycle.performance_repair')
     checks = []
     with tempfile.TemporaryDirectory(prefix='swe-trusted-probe-') as directory:
         for name in names:
             scratch = Path(directory) / name
             scratch.mkdir()
             command = [sys.executable, '-I', str(Path(__file__).resolve()), '--workspace', str(workspace), '--worker', name, '--scratch', str(scratch)]
+            if previous:
+                command += ['--previous-workspace', str(previous)]
+            if args.canary:
+                command.append('--canary')
             process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
             try:
                 stdout, stderr = process.communicate(timeout=25)
@@ -417,7 +579,8 @@ def main():
                 checks.append({'id': name, 'passed': False, 'reason': 'behavioral check exceeded its time limit'})
             except Exception:
                 checks.append({'id': name, 'passed': False, 'reason': 'application prevented the behavioral check from completing'})
-    print(json.dumps({'passed': all(check['passed'] for check in checks), 'checks': checks, 'through': args.through, 'canary': args.canary}))
+    print(json.dumps({'passed': all(check['passed'] for check in checks), 'checks': checks,
+                      'through': args.through, 'canary': args.canary, 'lifecycle': args.lifecycle}))
     return 0
 
 

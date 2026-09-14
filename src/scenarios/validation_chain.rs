@@ -133,10 +133,10 @@ impl Scenario for ValidationChain {
                 // 24, not 16: three registrations + two correction rounds cost
                 // real steps — run 1 burned the 16-step cap mid-loop (which also
                 // exposed that the cap used to bypass the post-turn gate; fixed).
-                max_turns: 24,
+                max_turns: Some(24),
                 max_output_tokens: Some(8_192),
                 max_total_tokens: Some(250_000),
-                stuck_timeout_seconds: 300,
+                stuck_timeout_seconds: Some(300),
                 max_validation_retries: None,
             },
             denied_functions: &[],

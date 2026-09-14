@@ -162,10 +162,10 @@ impl Scenario for TrendingTopicsBuild {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 96,
+                max_turns: Some(96),
                 max_output_tokens: Some(32_768),
                 max_total_tokens: Some(1_200_000),
-                stuck_timeout_seconds: 1_200,
+                stuck_timeout_seconds: Some(1_200),
                 max_validation_retries: None,
             },
             denied_functions: &[],

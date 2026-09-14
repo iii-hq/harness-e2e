@@ -7,7 +7,7 @@ use anyhow::{bail, Context, Result};
 use async_trait::async_trait;
 use iii_sdk::{runtime::FunctionRef, RegisterFunction};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::context::E2eContext;
@@ -36,6 +36,7 @@ struct Attempt {
     session_id: String,
     checkpoint_id: String,
     exec_id: String,
+    github_id: String,
     prepared: Value,
 }
 
@@ -84,6 +85,37 @@ struct WorkspaceExecRequest {
     args: Vec<String>,
     #[serde(default = "default_exec_timeout_ms")]
     timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+enum GithubOperation {
+    Issue,
+    Push,
+    Pr,
+    Ci,
+    Review,
+    Merge,
+    Release,
+    Inspect,
+    CloseIssue,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+struct GithubRequest {
+    #[serde(rename = "_caller_worker_id", default, skip_serializing)]
+    #[schemars(skip)]
+    _caller_worker_id: Option<String>,
+    operation: GithubOperation,
+    #[serde(default)]
+    head: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
 }
 
 fn default_exec_timeout_ms() -> u64 {
@@ -168,7 +200,7 @@ impl Harness for E2eContext {
             case.id,
             session,
             turn,
-            Duration::from_secs(600),
+            (!case.lifecycle()).then_some(Duration::from_secs(600)),
             true,
             Some(cancellation),
         )
@@ -222,6 +254,28 @@ impl Shared {
         self: &Arc<Self>,
         execution: &StepExecutorContext,
     ) -> Result<StepExecutorOutput> {
+        if self.case.lifecycle() {
+            let info = self
+                .harness
+                .trigger_value(
+                    "engine::functions::info",
+                    json!({"function_ids":["harness::status"]}),
+                )
+                .await?;
+            let schema = info
+                .get("functions")
+                .and_then(Value::as_array)
+                .and_then(|functions| {
+                    functions
+                        .iter()
+                        .find(|function| function["function_id"] == "harness::status")
+                })
+                .and_then(|function| function.get("response_schema"))
+                .context("Lifecycle requires the registered harness::status contract")?;
+            if crate::wire::schema_at_path(schema, "stop_reason").is_none() {
+                bail!("software_company_lifecycle requires harness::status.stop_reason to continue native max_turns boundaries without a run limit; update the Harness runtime");
+            }
+        }
         if self
             .state
             .lock()
@@ -260,6 +314,7 @@ impl Shared {
             session_id: format!("swe_{}", execution.attempt_id),
             checkpoint_id: format!("e2etest::swe_checkpoint_{}", execution.attempt_id),
             exec_id: format!("e2etest::swe_exec_{}", execution.attempt_id),
+            github_id: format!("e2etest::swe_github_{}", execution.attempt_id),
             prepared: Value::Null,
         };
         self.state
@@ -339,10 +394,32 @@ impl Shared {
                 }
             }).description("Submit a committed SWE ticket. Returns factual acceptance, a revision to acknowledge, or the next ticket. Supply ticket, full head SHA, and revision_id only when acknowledging revealed requirements."),
         );
+        let mut registrations = vec![exec_registration, checkpoint_registration];
+        if self.case.lifecycle() {
+            let callback = self.clone();
+            let github_registration = self.harness.client().register_function(
+                attempt.github_id.clone(),
+                RegisterFunction::new_async(move |request: GithubRequest| {
+                    let shared = callback.clone();
+                    async move {
+                        shared
+                            .github(request)
+                            .await
+                            .map_err(|error| iii_sdk::errors::Error::from(format!("{error:#}")))
+                    }
+                })
+                .description(
+                    "Perform one trusted lifecycle GitHub operation. Use issue, push, pr, ci, review, \
+                     merge, release, inspect, or close_issue; provide head, title, body, and version only \
+                     when relevant. The operation is recorded against this lifecycle attempt and returns an operation_id.",
+                ),
+            );
+            registrations.push(github_registration);
+        }
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .registrations = vec![exec_registration, checkpoint_registration];
+            .registrations = registrations;
         Ok(completed(true))
     }
 
@@ -475,113 +552,206 @@ impl Shared {
         if let Some(revision) = request.revision_id {
             args.extend(["--revision-id".into(), revision]);
         }
-        assets::controller(&attempt.private_root, &args).await
+        if self.case.lifecycle() {
+            assets::github_controller(&attempt.private_root, &args).await
+        } else {
+            assets::controller(&attempt.private_root, &args).await
+        }
+    }
+
+    async fn github(&self, request: GithubRequest) -> Result<Value> {
+        if !self.case.lifecycle() {
+            bail!("GitHub lifecycle operations are unavailable for isolated SWE tickets");
+        }
+        let attempt = self.attempt()?;
+        let request = serde_json::to_string(&request)?;
+        let response = assets::github_controller(
+            &attempt.private_root,
+            &[
+                "github".into(),
+                "--state-file".into(),
+                attempt.state_file.to_string_lossy().into_owned(),
+                "--request".into(),
+                request,
+            ],
+        )
+        .await?;
+        if response
+            .get("operation_id")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
+        {
+            bail!("trusted GitHub callback returned no operation_id");
+        }
+        Ok(response)
     }
 
     async fn subject(&self, execution: &StepExecutorContext) -> Result<StepExecutorOutput> {
         let attempt = self.attempt()?;
+        let github = if self.case.lifecycle() {
+            format!(
+            "For every observable company lifecycle operation, use {}: issue, push, pr, ci, review, merge, release, inspect, and close_issue. It is the only GitHub surface, has no token exposure, and returns an operation_id that you must retain in your delivery evidence.\n\n",
+            attempt.github_id
+        )
+        } else {
+            String::new()
+        };
         let prompt = format!(
-            "Work as the software engineer responsible for the service in {}. Read its public contracts, investigate the request, implement it, add your own regression tests under tests/agent, and maintain useful documentation. You may delegate when useful; you remain responsible for integration. Only this workspace is authorized. Preserve tests/reference and benchmark controls. Use {} for every command and file read or write; it always starts at the repository root.\n\n{}\n\nDeliver a clean committed change by calling {} with the current ticket number and full HEAD SHA. Preserve accepted commits. If requirements are revealed, acknowledge their revision_id on the next submission; a compatible implementation may reuse the same SHA. Continue in this same session when a next ticket is returned. On rejected, address the evidence; on completed or capability_failure, stop and summarize the last accepted work. Do not invent future tickets.",
-            attempt.workspace.display(), attempt.exec_id, attempt.prepared.get("prompt").and_then(Value::as_str).context("missing first ticket")?, attempt.checkpoint_id,
+            "Work as the software engineer responsible for the service in {}. Read its public contracts, investigate the request, implement it, add your own regression tests under tests/agent, and maintain useful documentation. You may delegate when useful; you remain responsible for integration. Only this workspace is authorized. Preserve tests/reference and benchmark controls. Use {} for every command and file read or write; it always starts at the repository root.\n\n{}{}\n\nDeliver a clean committed change by calling {} with the current ticket number and full HEAD SHA. Preserve accepted commits. If requirements are revealed, acknowledge their revision_id on the next submission; a compatible implementation may reuse the same SHA. Continue in this same session when a next ticket is returned. On rejected, address the evidence; on completed or capability_failure, stop and summarize the last accepted work. Do not invent future tickets.",
+            attempt.workspace.display(), attempt.exec_id, github, attempt.prepared.get("prompt").and_then(Value::as_str).context("missing first ticket")?, attempt.checkpoint_id,
         );
         // Harness may accept the unique ID even when its response is lost or malformed.
         self.state
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .send_attempted = true;
-        let response = self
-            .harness
-            .send(SendRequest {
-                session_id: Some(attempt.session_id.clone()),
-                message: MessageInput::Text(prompt),
-                model: Some(self.model.clone()),
-                provider: Some(self.provider.clone()),
-                idempotency_key: Some(format!("swe:{}:{}", execution.run_id, execution.attempt_id)),
-                session: Some(SessionInit {
-                    title: Some(self.case.description().into()),
-                    metadata: Some(
-                        json!({"e2e_scenario":self.case.id,"e2e_attempt_id":execution.attempt_id}),
-                    ),
+        let mut request = SendRequest {
+            session_id: Some(attempt.session_id.clone()),
+            message: MessageInput::Text(prompt),
+            model: Some(self.model.clone()),
+            provider: Some(self.provider.clone()),
+            idempotency_key: Some(format!("swe:{}:{}", execution.run_id, execution.attempt_id)),
+            session: Some(SessionInit {
+                title: Some(self.case.description().into()),
+                metadata: Some(
+                    json!({"e2e_scenario":self.case.id,"e2e_attempt_id":execution.attempt_id}),
+                ),
+            }),
+            options: Some(SendOptions {
+                max_turns: self.case.generations(),
+                max_cost_usd: None,
+                max_output_tokens: (!self.case.lifecycle()).then_some(32_768),
+                max_total_tokens: self.case.tokens(),
+                max_validation_retries: None,
+                functions: Some(FunctionPolicy {
+                    allow: [
+                        "engine::functions::list",
+                        "engine::functions::info",
+                        "engine::triggers::list",
+                        "engine::triggers::info",
+                        "harness::spawn",
+                        "harness::status",
+                        "harness::session-tree",
+                        "harness::trigger::*",
+                        "state::*",
+                    ]
+                    .into_iter()
+                    .map(str::to_string)
+                    .chain([attempt.exec_id.clone(), attempt.checkpoint_id.clone()])
+                    .chain(self.case.lifecycle().then(|| attempt.github_id.clone()))
+                    .collect(),
+                    deny: [
+                        "e2e::*",
+                        "coder::*",
+                        "shell::*",
+                        "github::*",
+                        "configuration::*",
+                        "compose::*",
+                        "router::*",
+                        "harness::send",
+                        "harness::run",
+                    ]
+                    .into_iter()
+                    .map(str::to_string)
+                    .collect(),
+                    ..FunctionPolicy::default()
                 }),
-                options: Some(SendOptions {
-                    max_turns: Some(self.case.generations()),
-                    max_cost_usd: None,
-                    max_output_tokens: Some(32_768),
-                    max_total_tokens: Some(self.case.tokens()),
-                    max_validation_retries: None,
-                    functions: Some(FunctionPolicy {
-                        allow: [
-                            "engine::functions::list",
-                            "engine::functions::info",
-                            "engine::triggers::list",
-                            "engine::triggers::info",
-                            "harness::spawn",
-                            "harness::status",
-                            "harness::session-tree",
-                            "harness::trigger::*",
-                            "state::*",
-                        ]
-                        .into_iter()
-                        .map(str::to_string)
-                        .chain([attempt.exec_id.clone(), attempt.checkpoint_id.clone()])
-                        .collect(),
-                        deny: [
-                            "e2e::*",
-                            "coder::*",
-                            "shell::*",
-                            "github::*",
-                            "configuration::*",
-                            "compose::*",
-                            "router::*",
-                            "harness::send",
-                            "harness::run",
-                        ]
-                        .into_iter()
-                        .map(str::to_string)
-                        .collect(),
-                        ..FunctionPolicy::default()
-                    }),
-                    metadata: Some(json!({"fs_scope":{"root":attempt.workspace}})),
-                }),
-            })
-            .await?;
-        if !response.accepted
-            || response.session_id != attempt.session_id
-            || response.merged == Some(true)
-            || response.queued == Some(true)
-        {
-            bail!("SWE Harness session was not accepted independently");
-        }
-        let waiting = self.harness.wait(
-            self.case,
-            &attempt.session_id,
-            &response.turn_id,
-            &execution.cancellation,
-        );
-        tokio::pin!(waiting);
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
+                metadata: Some(json!({"fs_scope":{"root":attempt.workspace}})),
+            }),
+        };
         let result = loop {
-            tokio::select! {
-                result = &mut waiting => break result,
-                _ = interval.tick() => {
-                    let stored_stop = self.state.lock().unwrap_or_else(|error| error.into_inner()).stop_reason.clone();
-                    if stored_stop.is_some() {
-                        self.stop_tree(&attempt.session_id).await;
-                        break Err(anyhow::anyhow!("SWE trusted checkpoint failed"));
-                    }
-                    match self.harness.metrics(&attempt.session_id).await {
-                        Ok(metrics) => {
-                            self.state.lock().unwrap_or_else(|error| error.into_inner()).metrics = Some(serde_json::to_value(&metrics)?);
-                            if aggregate_limit(&metrics, self.case).is_some() {
-                                self.stop_reason("resource_limit");
-                                self.stop_tree(&attempt.session_id).await;
-                                break Err(anyhow::anyhow!("SWE aggregate generation or token limit reached"));
-                            }
-                        },
-                        Err(error) => tracing::warn!(error = %error, "SWE resource watchdog could not sample metrics"),
-                    }
-                },
+            let response = {
+                let _lock = self.stopping.lock().await;
+                if *execution.cancellation.borrow()
+                    || self
+                        .state
+                        .lock()
+                        .unwrap_or_else(|error| error.into_inner())
+                        .stop_reason
+                        .is_some()
+                {
+                    break Err(anyhow::anyhow!("Lifecycle cancelled before continuation"));
+                }
+                self.state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .tree_stopped = false;
+                self.harness.send(request.clone()).await?
+            };
+            if !response.accepted
+                || response.session_id != attempt.session_id
+                || response.merged == Some(true)
+                || response.queued == Some(true)
+            {
+                bail!("SWE Harness session was not accepted independently");
             }
+            let waiting = self.harness.wait(
+                self.case,
+                &attempt.session_id,
+                &response.turn_id,
+                &execution.cancellation,
+            );
+            tokio::pin!(waiting);
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            let result = loop {
+                tokio::select! {
+                    result = &mut waiting => break result,
+                    _ = interval.tick() => {
+                        let stored_stop = self.state.lock().unwrap_or_else(|error| error.into_inner()).stop_reason.clone();
+                        if stored_stop.is_some() {
+                            self.stop_tree(&attempt.session_id).await;
+                            break Err(anyhow::anyhow!("SWE trusted checkpoint failed"));
+                        }
+                        match self.harness.metrics(&attempt.session_id).await {
+                            Ok(metrics) => {
+                                self.state.lock().unwrap_or_else(|error| error.into_inner()).metrics = Some(serde_json::to_value(&metrics)?);
+                                if aggregate_limit(&metrics, self.case).is_some() {
+                                    self.stop_reason("resource_limit");
+                                    self.stop_tree(&attempt.session_id).await;
+                                    break Err(anyhow::anyhow!("SWE aggregate generation or token limit reached"));
+                                }
+                            },
+                            Err(error) => tracing::warn!(error = %error, "SWE resource watchdog could not sample metrics"),
+                        }
+                    },
+                }
+            };
+            if result.is_ok() && self.case.lifecycle() {
+                let status = self
+                    .harness
+                    .trigger_value(
+                        "harness::status",
+                        json!({
+                            "session_id":attempt.session_id,"verbose":true,
+                        }),
+                    )
+                    .await?;
+                if status.get("stop_reason").and_then(Value::as_str) == Some("max_turns") {
+                    if status.get("session_id").and_then(Value::as_str) != Some(&attempt.session_id)
+                        || status.get("turn_id").and_then(Value::as_str) != Some(&response.turn_id)
+                    {
+                        bail!("Lifecycle continuation received status for a different session or turn");
+                    }
+                    let checkpoint: Value =
+                        serde_json::from_slice(&std::fs::read(&attempt.state_file)?)?;
+                    if checkpoint
+                        .get("terminal_status")
+                        .is_some_and(Value::is_null)
+                    {
+                        request.message = MessageInput::Text(format!(
+                        "Continue the software company lifecycle from checkpoint {} using {} and {}. The platform's native turn ended; the benchmark has no generation budget. Preserve all accepted work and finish the remaining stages.",
+                        checkpoint["current_ticket"], attempt.exec_id, attempt.checkpoint_id,
+                    ));
+                        request.session = None;
+                        request.idempotency_key = Some(format!(
+                            "swe:{}:{}:continue:{}",
+                            execution.run_id, execution.attempt_id, response.turn_id
+                        ));
+                        continue;
+                    }
+                }
+            }
+            break result;
         };
         let metrics = match result {
             Ok(metrics) => Some(metrics),
@@ -772,48 +942,38 @@ impl StepExecutor for Executor {
                 let report = self.shared.capture_report().await?;
                 let passed =
                     report.get("terminal_status").and_then(Value::as_str) == Some("completed");
-                let accepted = report
-                    .get("accepted_tickets")
-                    .and_then(Value::as_array)
-                    .map_or(0, Vec::len);
-                let total = if self.shared.case.journey() { 8 } else { 1 };
-                let evaluation = WorkflowEvaluationResult {
-                    id: "swe_delivery".into(),
-                    outcome: if passed {
-                        WorkflowEvaluationOutcome::Passed
-                    } else {
-                        WorkflowEvaluationOutcome::Failed
-                    },
-                    summary: format!(
-                        "{accepted}/{total} committed SWE tickets accepted; terminal={}",
-                        report["terminal_status"]
-                    ),
-                    score: Some(accepted.min(total) as f64 / total as f64),
-                    evidence_ids: vec![REPORT_ID.into()],
-                };
+                let evaluations = evaluations(self.shared.case, &report)?;
                 Ok(StepExecutorOutput {
-                    outputs: BTreeMap::from([(
-                        "delivery".into(),
-                        TypedPortValue {
-                            kind: PortValueKind::Assessment,
-                            value: serde_json::to_value(&evaluation)?,
-                        },
-                    )]),
+                    outputs: evaluations
+                        .iter()
+                        .map(|evaluation| {
+                            Ok((
+                                evaluation.id.clone(),
+                                TypedPortValue {
+                                    kind: PortValueKind::Assessment,
+                                    value: serde_json::to_value(evaluation)?,
+                                },
+                            ))
+                        })
+                        .collect::<Result<_>>()?,
                     captured_assets: vec![CapturedWorkflowAsset {
                         id: REPORT_ID.into(),
                         kind: "swe-service-report".into(),
                         media_type: "application/json".into(),
-                        content: WorkflowAssetContent::Json(report),
+                        content: WorkflowAssetContent::Json(report.clone()),
                         provenance: Vec::new(),
                     }],
                     evaluation: StepEvaluation {
                         hard_gates: vec![WorkflowGateResult {
                             id: "delivery_complete".into(),
                             passed,
-                            reason: evaluation.summary.clone(),
+                            reason: format!(
+                                "Lifecycle or ticket terminal state: {}",
+                                report["terminal_status"]
+                            ),
                             evidence_ids: vec![REPORT_ID.into()],
                         }],
-                        evaluations: vec![evaluation],
+                        evaluations,
                     },
                     ..StepExecutorOutput::default()
                 })
@@ -1016,18 +1176,121 @@ fn isolated_argv(workspace: &Path, command: String, args: Vec<String>) -> Vec<St
 }
 
 fn aggregate_limit(metrics: &SessionMetricsResponse, case: Case) -> Option<&'static str> {
-    if metrics.totals.turns > u64::from(case.generations()) {
+    if case
+        .generations()
+        .is_some_and(|limit| metrics.totals.turns > u64::from(limit))
+    {
         return Some("generations");
     }
     if metrics
         .totals
         .input_tokens
         .zip(metrics.totals.output_tokens)
-        .is_some_and(|(input, output)| input.saturating_add(output) > case.tokens())
+        .zip(case.tokens())
+        .is_some_and(|((input, output), limit)| input.saturating_add(output) > limit)
     {
         return Some("tokens");
     }
     None
+}
+
+fn evaluations(case: Case, report: &Value) -> Result<Vec<WorkflowEvaluationResult>> {
+    let completed = report["terminal_status"] == "completed";
+    if !case.lifecycle() {
+        let accepted = report["accepted_tickets"].as_array().map_or(0, Vec::len);
+        return Ok(vec![WorkflowEvaluationResult {
+            id: "swe_delivery".into(),
+            outcome: if completed {
+                WorkflowEvaluationOutcome::Passed
+            } else {
+                WorkflowEvaluationOutcome::Failed
+            },
+            summary: format!(
+                "{accepted}/1 committed SWE ticket accepted; terminal={}",
+                report["terminal_status"]
+            ),
+            score: Some(accepted.min(1) as f64),
+            evidence_ids: vec![REPORT_ID.into()],
+        }]);
+    }
+    let stages = report["lifecycle"]["stages"]
+        .as_array()
+        .context("missing lifecycle stage evidence")?;
+    super::LIFECYCLE_CRITERIA
+        .iter()
+        .map(|(id, _, description)| {
+            let score = match *id {
+                "convergence" => {
+                    let accepted = report["accepted_tickets"]
+                        .as_array()
+                        .context("missing accepted lifecycle checkpoints")?
+                        .len() as f64;
+                    let rejected = report["lifecycle"]["rejected_checkpoints"]
+                        .as_u64()
+                        .context("missing rejected checkpoints")?
+                        as f64;
+                    Some(if completed {
+                        accepted / (accepted + rejected).max(1.0)
+                    } else {
+                        0.0
+                    })
+                }
+                "resource_efficiency" if !completed => Some(0.0),
+                "resource_efficiency" => {
+                    let measured = report["elapsed_ms"]
+                        .as_u64()
+                        .zip(
+                            report
+                                .pointer("/metrics/totals/turns")
+                                .and_then(Value::as_u64),
+                        )
+                        .zip(
+                            report
+                                .pointer("/metrics/totals/input_tokens")
+                                .and_then(Value::as_u64),
+                        )
+                        .zip(
+                            report
+                                .pointer("/metrics/totals/output_tokens")
+                                .and_then(Value::as_u64),
+                        );
+                    measured
+                        .filter(|_| report.pointer("/metrics/complete") == Some(&Value::Bool(true)))
+                        .map(|(((elapsed, turns), input), output)| {
+                            [
+                                (5_400_000.0, elapsed),
+                                (320.0, turns),
+                                (1_500_000.0, input.saturating_add(output)),
+                            ]
+                            .iter()
+                            .map(|(reference, value)| (reference / (*value).max(1) as f64).min(1.0))
+                            .sum::<f64>()
+                                / 3.0
+                        })
+                }
+                _ => Some(
+                    stages
+                        .iter()
+                        .find(|stage| stage["id"] == *id)
+                        .and_then(|stage| stage["score"].as_f64())
+                        .filter(|score| (0.0..=1.0).contains(score))
+                        .with_context(|| format!("missing or invalid lifecycle {id} assessment"))?,
+                ),
+            };
+            Ok(WorkflowEvaluationResult {
+                id: (*id).into(),
+                outcome: match score {
+                    None => WorkflowEvaluationOutcome::NotEvaluated,
+                    Some(1.0) => WorkflowEvaluationOutcome::Passed,
+                    Some(score) if score > 0.0 => WorkflowEvaluationOutcome::Advisory,
+                    _ => WorkflowEvaluationOutcome::Failed,
+                },
+                summary: (*description).into(),
+                score,
+                evidence_ids: vec![REPORT_ID.into()],
+            })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -1058,6 +1321,8 @@ mod tests {
         calls: Mutex<Vec<String>>,
         sent: Mutex<Vec<Value>>,
         slow_stops: bool,
+        native_turns: usize,
+        send_gate: Option<Arc<tokio::sync::Semaphore>>,
     }
 
     impl FakeHarness {
@@ -1069,6 +1334,8 @@ mod tests {
                 calls: Mutex::new(Vec::new()),
                 sent: Mutex::new(Vec::new()),
                 slow_stops: false,
+                native_turns: 0,
+                send_gate: None,
             }
         }
         fn record(&self, call: String) {
@@ -1081,8 +1348,13 @@ mod tests {
         fn client(&self) -> &iii_sdk::IIIClient {
             panic!("fixture does not register RPC handlers")
         }
-        async fn trigger_value(&self, _: &str, _: Value) -> Result<Value> {
-            bail!("unexpected boundary call")
+        async fn trigger_value(&self, function: &str, payload: Value) -> Result<Value> {
+            assert_eq!(function, "harness::status");
+            let sends = self.sent.lock().unwrap().len();
+            Ok(
+                json!({"session_id":payload["session_id"],"turn_id":format!("turn-{sends}"),
+                "status":"completed","stop_reason":(sends <= self.native_turns).then_some("max_turns")}),
+            )
         }
         async fn send(&self, request: SendRequest) -> Result<SendResponse> {
             self.sent
@@ -1091,13 +1363,16 @@ mod tests {
                 .push(serde_json::to_value(&request).unwrap());
             let id = request.session_id.unwrap();
             self.record(format!("send:{id}"));
+            if let Some(gate) = &self.send_gate {
+                gate.acquire().await.unwrap().forget();
+            }
             if self.lose_send {
                 bail!("response lost after session accepted");
             }
             Ok(SendResponse::from_normalized(
                 crate::wire::SendResponsePayload {
                     session_id: id,
-                    turn_id: "turn-1".into(),
+                    turn_id: format!("turn-{}", self.sent.lock().unwrap().len()),
                     accepted: true,
                     merged: None,
                     queued: None,
@@ -1220,6 +1495,7 @@ mod tests {
                     session_id: "swe_attempt-test".into(),
                     checkpoint_id: "test::checkpoint".into(),
                     exec_id: "test::exec".into(),
+                    github_id: "test::github".into(),
                     prepared,
                 }),
                 ..Default::default()
@@ -1236,6 +1512,136 @@ mod tests {
             attempt_id: context.attempt_id.clone(),
             output_dir: context.output_dir.clone(),
         }
+    }
+
+    #[tokio::test]
+    async fn lifecycle_continues_native_turns_without_aggregate_limits_in_the_same_session() {
+        let mut api = FakeHarness::new(50_000, 100_000_000, 10_000_000);
+        api.native_turns = 2;
+        let api = Arc::new(api);
+        let (_temp, mut shared, context) = fixture(api.clone()).await;
+        Arc::get_mut(&mut shared).unwrap().case = Case {
+            ticket: 0,
+            id: "software_company_lifecycle",
+        };
+        shared.subject(&context).await.unwrap();
+        {
+            let sent = api.sent.lock().unwrap();
+            assert_eq!(sent.len(), 3);
+            for request in sent.iter() {
+                assert_eq!(request["session_id"], "swe_attempt-test");
+                for key in [
+                    "max_turns",
+                    "max_total_tokens",
+                    "max_output_tokens",
+                    "max_cost_usd",
+                ] {
+                    assert!(request["options"].get(key).is_none());
+                }
+            }
+            assert!(sent[1]["idempotency_key"]
+                .as_str()
+                .unwrap()
+                .ends_with(":continue:turn-1"));
+            assert!(sent[2]["idempotency_key"]
+                .as_str()
+                .unwrap()
+                .ends_with(":continue:turn-2"));
+            assert!(shared.state.lock().unwrap().stop_reason.is_none());
+        }
+        shared.cleanup(&cleanup_context(&context)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancellation_waits_for_in_flight_send_then_stops_the_created_session() {
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        let mut api = FakeHarness::new(1, 1, 1);
+        api.send_gate = Some(gate.clone());
+        api.wait_for_cancel = true;
+        let api = Arc::new(api);
+        let (_temp, shared, mut context) = fixture(api.clone()).await;
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        context.cancellation = receiver;
+        let running = {
+            let shared = shared.clone();
+            let context = context.clone();
+            tokio::spawn(async move { shared.subject(&context).await })
+        };
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while api.sent.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        cancel.send(true).unwrap();
+        context
+            .termination
+            .set(WorkflowTerminationReason::Cancelled);
+        let stopping = {
+            let shared = shared.clone();
+            let context = context.clone();
+            tokio::spawn(async move {
+                Executor {
+                    shared,
+                    step: workflow::SUBJECT,
+                }
+                .cancel(&context)
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!api
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.starts_with("stop:")));
+        gate.add_permits(1);
+        running.await.unwrap().unwrap();
+        stopping.await.unwrap().unwrap();
+        assert!(api
+            .calls
+            .lock()
+            .unwrap()
+            .contains(&"stop:swe_attempt-test".to_owned()));
+        shared.cleanup(&cleanup_context(&context)).await.unwrap();
+        assert!(!shared.attempt().unwrap().workspace.exists());
+    }
+
+    #[test]
+    fn lifecycle_efficiency_is_scored_after_completion_and_missing_metrics_are_not_zero() {
+        let case = Case {
+            ticket: 0,
+            id: "software_company_lifecycle",
+        };
+        let mut report = json!({"terminal_status":"completed","accepted_tickets":[1,2,3,4,5,6,7,8],
+            "elapsed_ms":10_800_000,"metrics":{"complete":true,"totals":{"turns":640,"input_tokens":2_000_000,"output_tokens":1_000_000}},
+            "lifecycle":{"rejected_checkpoints":8,"stages":super::super::LIFECYCLE_CRITERIA[..8].iter().map(|(id,_,_)|json!({"id":id,"score":1.0})).collect::<Vec<_>>()}});
+        let result = evaluations(case, &report).unwrap();
+        for id in ["convergence", "resource_efficiency"] {
+            let criterion = result.iter().find(|item| item.id == id).unwrap();
+            assert_eq!(criterion.score, Some(0.5));
+            assert_eq!(criterion.outcome, WorkflowEvaluationOutcome::Advisory);
+        }
+        report["metrics"]["totals"]["output_tokens"] = Value::Null;
+        let result = evaluations(case, &report).unwrap();
+        let missing = result
+            .iter()
+            .find(|item| item.id == "resource_efficiency")
+            .unwrap();
+        assert_eq!(missing.score, None);
+        assert_eq!(missing.outcome, WorkflowEvaluationOutcome::NotEvaluated);
+        report["terminal_status"] = "capability_failure".into();
+        assert_eq!(
+            evaluations(case, &report)
+                .unwrap()
+                .iter()
+                .find(|item| item.id == "resource_efficiency")
+                .unwrap()
+                .score,
+            Some(0.0)
+        );
     }
 
     #[tokio::test]
@@ -1367,7 +1773,7 @@ mod tests {
                 workflow::definition(crate::scenarios::ScenarioId::SweConfigIsolation);
             definition.nodes.remove(0);
             definition.nodes[0].depends_on.clear();
-            definition.limits.workflow_timeout_seconds = if cancelled { 10 } else { 1 };
+            definition.limits.workflow_timeout_seconds = Some(if cancelled { 10 } else { 1 });
             definition.limits.step_timeout_seconds = definition.limits.workflow_timeout_seconds;
             let mut catalog = StepCatalog::default();
             for descriptor in workflow::descriptors()
@@ -1481,18 +1887,15 @@ mod tests {
             aggregate_limit(&metrics(3, u64::MAX, 5), case),
             Some("tokens")
         );
-        let journey = Case {
+        let lifecycle = Case {
             ticket: 0,
-            id: "swe_service_journey",
+            id: "software_company_lifecycle",
         };
         assert_eq!(
-            aggregate_limit(&metrics(320, 1_400_000, 100_000), journey),
+            aggregate_limit(&metrics(320, 1_400_000, 100_000), lifecycle),
             None
         );
-        assert_eq!(
-            aggregate_limit(&metrics(321, 1, 1), journey),
-            Some("generations")
-        );
+        assert_eq!(aggregate_limit(&metrics(321, 1, 1), lifecycle), None);
     }
 
     #[test]
@@ -1503,6 +1906,27 @@ mod tests {
         assert_eq!(request.revision_id.as_deref(), Some("revision-1"));
         assert!(serde_json::from_value::<CheckpointRequest>(json!({
             "ticket":1,"head":"a".repeat(40),"state_file":"/foreign/state.json",
+        }))
+        .is_err());
+    }
+
+    #[test]
+    fn github_callback_accepts_only_the_lifecycle_operation_contract() {
+        let request: GithubRequest = serde_json::from_value(json!({
+            "operation":"close_issue", "title":"close", "_caller_worker_id":"worker",
+        }))
+        .unwrap();
+        assert!(matches!(request.operation, GithubOperation::CloseIssue));
+        assert!(serde_json::to_value(&request)
+            .unwrap()
+            .get("_caller_worker_id")
+            .is_none());
+        assert!(serde_json::from_value::<GithubRequest>(json!({
+            "operation":"delete_repository",
+        }))
+        .is_err());
+        assert!(serde_json::from_value::<GithubRequest>(json!({
+            "operation":"issue", "ticket":1,
         }))
         .is_err());
     }

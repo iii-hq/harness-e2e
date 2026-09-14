@@ -161,7 +161,7 @@ impl Scenario for WakeChainSoak {
             execution: ExecutionPolicy {
                 // One live turn plus one woken turn per tick, with slack for
                 // discovery and the odd re-prompt.
-                max_turns: 8 + 2 * u32::from(RUNG.ticks),
+                max_turns: Some(8 + 2 * u32::from(RUNG.ticks)),
                 max_output_tokens: Some(32_768),
                 // Unbounded on purpose: a soak run is long because the subject
                 // waits, not because it spends. Capping total tokens would turn
@@ -170,7 +170,7 @@ impl Scenario for WakeChainSoak {
                 max_total_tokens: None,
                 // Each tick resolves in about five seconds, so 120 seconds with
                 // no observable progress is decisively stuck rather than waiting.
-                stuck_timeout_seconds: 120,
+                stuck_timeout_seconds: Some(120),
                 max_validation_retries: None,
             },
             denied_functions: &[],
@@ -1017,7 +1017,7 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert_eq!(
             first.spec.execution.max_turns,
-            8 + 2 * u32::from(RUNG.ticks)
+            Some(8 + 2 * u32::from(RUNG.ticks))
         );
         assert_eq!(first.spec.execution.max_output_tokens, Some(32_768));
         assert_eq!(

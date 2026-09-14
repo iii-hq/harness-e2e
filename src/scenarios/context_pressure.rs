@@ -353,13 +353,13 @@ seal=<seal from the charter>
         ),
         filesystem_root: None,
         execution: ExecutionPolicy {
-            max_turns: 12 + rung.segments,
+            max_turns: Some(12 + rung.segments),
             max_output_tokens: Some(16_384),
             // Unbounded on purpose: capping total tokens would distort the
             // measurement this ladder exists for; spend shows up in the
             // Efficiency dimension instead.
             max_total_tokens: None,
-            stuck_timeout_seconds: 600,
+            stuck_timeout_seconds: Some(600),
             max_validation_retries: None,
         },
         denied_functions: &["state::*"],
@@ -708,6 +708,6 @@ mod tests {
             .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
-        assert_eq!(first.spec.execution.max_turns, 12 + RUNG.segments);
+        assert_eq!(first.spec.execution.max_turns, Some(12 + RUNG.segments));
     }
 }

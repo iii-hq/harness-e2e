@@ -738,7 +738,7 @@ fn validate_schema(detail: &Value, key: &str, fields: &[SchemaField]) -> Result<
     Ok(())
 }
 
-fn schema_at_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
+pub(crate) fn schema_at_path<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
     let mut current = schema_variant(root, root)?;
     for segment in path.split('.') {
         let (name, descend_array) = segment

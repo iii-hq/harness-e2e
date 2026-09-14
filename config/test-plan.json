@@ -55,6 +55,7 @@
       "scenarios": [
         "contention_ledger",
         "quorum_fan_in",
+        "subagent_explicit_configuration",
         "subagent_validation",
         "subagent_validation_failure",
         "fanout_ladder",
@@ -116,7 +117,7 @@
       "label": "Continuous engineering",
       "scenarios": [
         "engineering_endurance_ladder",
-        "swe_service_journey"
+        "software_company_lifecycle"
       ]
     }
   ],
@@ -134,6 +135,9 @@
     "linkly_tutorial"
   ],
   "requirements": {
+    "subagent_explicit_configuration": [
+      "Directory agent and skill write APIs, and readable Harness turn evidence"
+    ],
     "swe_config_isolation": [
       "Isolated service workspace and trusted SWE grader"
     ],
@@ -158,8 +162,8 @@
     "swe_release_handoff": [
       "Isolated service workspace and trusted SWE grader"
     ],
-    "swe_service_journey": [
-      "Isolated service workspace and trusted SWE grader"
+    "software_company_lifecycle": [
+      "Isolated company service, trusted lifecycle evaluator and Harness native-turn continuation"
     ],
     "shell_coder_sandbox": [
       "Pinned shared engineering fixture"
@@ -235,6 +239,7 @@
       "modules": [],
       "scenarios": [
         "minimal_path",
+        "subagent_explicit_configuration",
         "tool_contract_recovery",
         "persistent_state",
         "timer_wake",
@@ -404,7 +409,7 @@
       "modules": [],
       "scenarios": [
         "engineering_endurance_ladder",
-        "swe_service_journey",
+        "software_company_lifecycle",
         "wake_chain_soak",
         "fanout_ladder",
         "depth_ladder"

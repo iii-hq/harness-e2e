@@ -1,7 +1,7 @@
 # Harness E2E
 
 `harness-e2e` measures what a Harness stack can execute with correct
-deliverables, structural integrity, bounded work, and repeatable outcomes.
+deliverables, structural integrity, measured work, and repeatable outcomes.
 
 A run's score is the plain sum of the points its evaluated criteria awarded; a
 criterion nobody evaluated adds nothing and nothing is normalized or rescaled.
@@ -15,10 +15,52 @@ Runtime discovery, execution, observation, state access, and cleanup all happen
 through functions registered in iii. The only product input is an immutable
 subject artifact or an already-running iii stack.
 
-The SWE service suite provides eight isolated engineering
-tasks and a continuous eight-ticket journey over the same Python service, with
-optional delegation, immutable checkpoints, isolated verification, and a trusted
-GitHub handoff.
+The SWE service suite provides eight isolated engineering tasks. The
+`software_company_lifecycle` scenario replaces `swe_service_journey` in continuous
+engineering and endurance: customer demand, technical planning, implementation,
+review and CI, release, changed requirements, incident recovery, and handoff.
+It uses the same versioned Python service, optional delegation, immutable Git
+checkpoints, and isolated verification. Publication and rollback run real HTTP
+processes against the submitted versions inside simulated local production.
+
+GitHub operations run against the private
+[`iii-hq/software-company-lifecycle-e2e`](https://github.com/iii-hq/software-company-lifecycle-e2e)
+repository through an attempt-specific trusted callback. The subject explicitly
+requests issues, pushes, PRs, CI, technical COMMENT reviews, merges, releases and
+issue closure. Each attempt owns its branches and tags; main contains only the
+initial product and trusted CI infrastructure. Demand and planning must be accepted
+before source changes. Checkpoints require remote evidence at the submitted SHA,
+including a fresh readback before acceptance. A COMMENT from the submitting actor
+is self-review, not independent approval.
+
+The final SWE report includes the GitHub operation journal: persisted intent,
+request, actor, timestamps, failures, readbacks, resource URLs, candidate/merge SHAs,
+Actions run and artifact identifiers, and evidence digests. CI runs the candidate
+inside the same pinned container infrastructure used by the Kanban evaluator,
+without network, credentials or writable source. Its artifact distinguishes the
+candidate checkout SHA from the workflow infrastructure SHA. Remote records remain
+available after local workspace cleanup.
+
+Authenticate the trusted local runner with `gh auth login`. Exact-stack CI requires
+the protected `E2E_LIFECYCLE_GITHUB_TOKEN` secret with contents, issues, pull requests
+and Actions read/write access to the dedicated repository. The token belongs only
+to the trusted evaluator; subject commands and verification processes receive no
+GitHub credentials. Configuring that CI secret is separate from local CLI login.
+
+The lifecycle has no execution deadline, aggregate turn/token/cost budget, or
+checkpoint retry cap. The runner continues in the same session when Harness ends
+a native turn at `max_turns`; this requires `harness::status.stop_reason`.
+An older runtime fails preflight before a model call. Native per-request/model
+limits still apply.
+Explicit cancellation and operational timeouts for RPCs, commands, verification,
+and cleanup remain active. Eight deliverable criteria total 90 points; convergence
+and measured efficiency contribute 5 each after completion. Efficiency averages
+`min(1, reference / observed)` for elapsed time, generations and tokens, using
+5400 seconds, 320 generations and 1500000 tokens as scoring references, never
+execution cutoffs. Missing metrics remain unevaluated. Documents are checked for
+traceability and real references; their prose is not treated as proof of software
+quality. Public/private tests, authored tests against the defective base, HTTP
+checks and durable recovery provide behavioral evidence.
 SWE execution requires Linux with `/usr/bin/bwrap` and enabled unprivileged user
 namespaces. CI installs the distribution AppArmor profile needed by Bubblewrap.
 Commands and file operations run inside the attempt workspace; controller files
@@ -67,6 +109,11 @@ per-attempt Git remote and independent Playwright acceptance against the deliver
 SHA. Its [runtime and controls](tests/fixtures/trending-topics-build/README.md)
 require Linux amd64, Docker, Git, Python 3, Node and access to the pinned fixture.
 Design is free; screenshots are evidence, not an aesthetic score.
+
+The `subagent_explicit_configuration` smoke scenario asks for two children with
+explicit model, profile, and skill settings. It checks their resolved configuration,
+profile and skill use, and verified results from Harness turn evidence. Each attempt
+creates temporary Directory profiles and skills through its agent and skill write APIs.
 
 Native criteria preserve known awards when dependent checks cannot run. Those
 checks have no award and remain `not_evaluated`; an incomplete criterion set has

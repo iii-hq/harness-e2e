@@ -1016,8 +1016,11 @@ async fn execute_materialized_workflow(
     resume_state: Option<WorkflowResumeState>,
 ) -> Result<MaterializedRunOutcome> {
     let started = Instant::now();
-    let workflow_deadline = tokio::time::Instant::now()
-        + Duration::from_secs(materialized.definition.limits.workflow_timeout_seconds);
+    let workflow_deadline = materialized
+        .definition
+        .limits
+        .workflow_timeout_seconds
+        .map(|seconds| tokio::time::Instant::now() + Duration::from_secs(seconds));
     let started_at = timestamp();
     let checkpoint_store = CheckpointStore::new(&request.output_dir, &request.run_id, &attempt_id);
     let (abort_sender, abort_receiver) = watch::channel(false);
@@ -1088,13 +1091,19 @@ async fn execute_materialized_workflow(
             let _ = abort_sender.send(true);
             cancel_active(&catalog, &active_contexts).await;
         }
-        if tokio::time::Instant::now() >= workflow_deadline && !technical_failure {
+        if workflow_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+            && !technical_failure
+        {
             technical_failure = true;
             workflow_failure = Some(WorkflowStepFailure {
                 phase: WorkflowFailurePhase::Execute,
                 message: format!(
                     "workflow timed out after {} seconds",
-                    materialized.definition.limits.workflow_timeout_seconds
+                    materialized
+                        .definition
+                        .limits
+                        .workflow_timeout_seconds
+                        .expect("deadline checked")
                 ),
                 technical: true,
             });
@@ -1194,8 +1203,11 @@ async fn execute_materialized_workflow(
                     report.status = WorkflowStepStatus::Running;
                     report.started_at = Some(timestamp());
                     active_contexts.insert(id.clone(), context.clone());
-                    let timeout =
-                        Duration::from_secs(materialized.definition.limits.step_timeout_seconds);
+                    let timeout = materialized
+                        .definition
+                        .limits
+                        .step_timeout_seconds
+                        .map(Duration::from_secs);
                     let resume_for_step = resume.clone();
                     running.spawn(async move {
                         let report = run_step(registered, context, timeout, resume_for_step).await;
@@ -1246,13 +1258,13 @@ async fn execute_materialized_workflow(
                 }
                 continue;
             }
-            _ = tokio::time::sleep_until(workflow_deadline), if !technical_failure => {
+            _ = async { if let Some(deadline) = workflow_deadline { tokio::time::sleep_until(deadline).await } }, if workflow_deadline.is_some() && !technical_failure => {
                 technical_failure = true;
                 workflow_failure = Some(WorkflowStepFailure {
                     phase: WorkflowFailurePhase::Execute,
                     message: format!(
                         "workflow timed out after {} seconds",
-                        materialized.definition.limits.workflow_timeout_seconds
+                        materialized.definition.limits.workflow_timeout_seconds.expect("deadline checked")
                     ),
                     technical: true,
                 });
@@ -1425,7 +1437,7 @@ async fn preflight_all(
 async fn run_step(
     registered: super::RegisteredStepType,
     context: StepExecutorContext,
-    timeout: Duration,
+    timeout: Option<Duration>,
     resume: Option<ResumeCoordinator>,
 ) -> WorkflowStepReport {
     let started = Instant::now();
@@ -1433,31 +1445,39 @@ async fn run_step(
     report.status = WorkflowStepStatus::Running;
     report.started_at = Some(timestamp());
 
-    let mut execution =
-        match tokio::time::timeout(timeout, registered.executor.execute(context.clone())).await {
-            Ok(Ok(execution)) => execution,
-            Ok(Err(error)) => {
+    let execute = registered.executor.execute(context.clone());
+    tokio::pin!(execute);
+    let result = match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, execute).await,
+        None => Ok(execute.await),
+    };
+    let mut execution = match result {
+        Ok(Ok(execution)) => execution,
+        Ok(Err(error)) => {
+            report
+                .failures
+                .push(step_failure(WorkflowFailurePhase::Execute, error));
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
+            return report;
+        }
+        Err(_) => {
+            report.failures.push(WorkflowStepFailure {
+                phase: WorkflowFailurePhase::Execute,
+                message: format!(
+                    "step timed out after {} seconds",
+                    timeout.expect("only timeout path").as_secs()
+                ),
+                technical: true,
+            });
+            if let Err(error) = registered.executor.cancel(&context).await {
                 report
                     .failures
-                    .push(step_failure(WorkflowFailurePhase::Execute, error));
-                finish_failed_step(&registered, &context, &mut report, started, &resume).await;
-                return report;
+                    .push(step_failure(WorkflowFailurePhase::Cancel, error));
             }
-            Err(_) => {
-                report.failures.push(WorkflowStepFailure {
-                    phase: WorkflowFailurePhase::Execute,
-                    message: format!("step timed out after {} seconds", timeout.as_secs()),
-                    technical: true,
-                });
-                if let Err(error) = registered.executor.cancel(&context).await {
-                    report
-                        .failures
-                        .push(step_failure(WorkflowFailurePhase::Cancel, error));
-                }
-                finish_failed_step(&registered, &context, &mut report, started, &resume).await;
-                return report;
-            }
-        };
+            finish_failed_step(&registered, &context, &mut report, started, &resume).await;
+            return report;
+        }
+    };
 
     report.harness_session_id = execution.harness_session_id.clone();
     if !persist_resume_phase(&resume, &registered, StepResumePhase::Executed, &mut report).await {
@@ -2351,7 +2371,11 @@ mod tests {
         let definition = WorkflowDefinition {
             id: "branch.test".into(),
             description: "branch scheduler".into(),
-            limits: WorkflowLimits::default(),
+            limits: WorkflowLimits {
+                step_timeout_seconds: None,
+                workflow_timeout_seconds: None,
+                ..WorkflowLimits::default()
+            },
             nodes: vec![root, branch, join],
             criteria: Vec::new(),
         };
@@ -2380,7 +2404,11 @@ mod tests {
         let definition = WorkflowDefinition {
             id: "cancel.test".into(),
             description: "cancel active workflow".into(),
-            limits: WorkflowLimits::default(),
+            limits: WorkflowLimits {
+                step_timeout_seconds: None,
+                workflow_timeout_seconds: None,
+                ..WorkflowLimits::default()
+            },
             nodes: vec![active],
             criteria: Vec::new(),
         };

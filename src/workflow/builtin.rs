@@ -427,7 +427,7 @@ impl StepExecutor for HarnessStepExecutor {
             .wait_for_tree(
                 &context.node.id,
                 &session_id,
-                Duration::from_secs(config.stuck_timeout_seconds),
+                Some(Duration::from_secs(config.stuck_timeout_seconds)),
                 false,
                 Some(&context.cancellation),
             )
@@ -580,7 +580,7 @@ impl StepExecutor for BoundedHarnessStepExecutor {
             .wait_for_tree(
                 &context.node.id,
                 &session_id,
-                Duration::from_secs(config.stuck_timeout_seconds),
+                Some(Duration::from_secs(config.stuck_timeout_seconds)),
                 false,
                 Some(&context.cancellation),
             )

@@ -127,10 +127,10 @@ impl Scenario for SubagentValidation {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 16,
+                max_turns: Some(16),
                 max_output_tokens: Some(8_192),
                 max_total_tokens: Some(400_000),
-                stuck_timeout_seconds: 420,
+                stuck_timeout_seconds: Some(420),
                 max_validation_retries: None,
             },
             denied_functions: &[],

@@ -40,6 +40,7 @@ OUTPUT_LIMIT = 1024 * 1024
 PREFLIGHT_INPUTS = """
 import os, pathlib, stat, sys
 workspace, probes = map(pathlib.Path, sys.argv[1:3])
+previous = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None
 def input_error(error):
     raise error
 list(workspace.iterdir())
@@ -51,6 +52,14 @@ for directory, _, files in os.walk(workspace, onerror=input_error, followlinks=F
                 source.read(1)
 with probes.open('rb') as source:
     source.read(1)
+if previous:
+    list(previous.iterdir())
+    for directory, _, files in os.walk(previous, onerror=input_error, followlinks=False):
+        for name in files:
+            path = pathlib.Path(directory) / name
+            if stat.S_ISREG(path.lstat().st_mode):
+                with path.open('rb') as source:
+                    source.read(1)
 """
 
 
@@ -63,7 +72,7 @@ def _probe(command):
         return False
 
 
-def _bwrap_command(binary, workspace, probes):
+def _bwrap_command(binary, workspace, probes, previous=None):
     command = [binary, '--unshare-all', '--die-with-parent', '--new-session',
                '--cap-drop', 'ALL', '--clearenv']
     # Runtime roots only. In particular, never bind /, /home, /root, /tmp,
@@ -75,38 +84,43 @@ def _bwrap_command(binary, workspace, probes):
                 '--ro-bind', str(workspace), '/workspace',
                 '--dir', '/trusted', '--ro-bind', str(probes), '/trusted/probes.py',
                 '--chdir', '/workspace']
+    if previous:
+        command += ['--ro-bind', str(previous), '/previous']
     for key, value in {**ENV, 'TMPDIR': '/tmp', 'HOME': '/tmp',
                        'PYTHONDONTWRITEBYTECODE': '1'}.items():
         command += ['--setenv', key, value]
     return command
 
 
-def _docker_command(binary, image, workspace, probes, name):
+def _docker_command(binary, image, workspace, probes, name, previous=None):
     # Bind mounts preserve mode0700 export ownership. Match the controller's
     # identity rather than chmod inputs or exposing their private parent paths.
-    for path in (workspace, probes):
+    for path in (workspace, probes, *([previous] if previous else [])):
         if ',' in str(path) or '\n' in str(path):
             raise IsolationError('unsupported mount path')
-    return [binary, 'run', '--rm', '--pull=never', '--name', name, '--init',
+    command = [binary, 'run', '--rm', '--pull=never', '--name', name, '--init',
             '--network', 'none', '--read-only', '--cap-drop=ALL',
             '--security-opt=no-new-privileges', '--pids-limit=128',
             '--memory=512m', '--cpus=2', f'--user={os.getuid()}:{os.getgid()}',
             '--tmpfs', '/tmp:rw,nosuid,nodev,size=256m,mode=1777',
             '--mount', f'type=bind,src={workspace},dst=/workspace,readonly',
-            '--mount', f'type=bind,src={probes},dst=/trusted/probes.py,readonly',
-            '--workdir', '/workspace', '--entrypoint', '/usr/local/bin/python3',
+            '--mount', f'type=bind,src={probes},dst=/trusted/probes.py,readonly']
+    if previous:
+        command += ['--mount', f'type=bind,src={previous},dst=/previous,readonly']
+    return command + ['--workdir', '/workspace', '--entrypoint', '/usr/local/bin/python3',
             '--env', 'PATH=/usr/local/bin:/usr/bin:/bin', '--env', 'HOME=/tmp',
             '--env', 'TMPDIR=/tmp', '--env', 'LANG=C.UTF-8',
             '--env', 'PYTHONDONTWRITEBYTECODE=1', image]
 
 
-def select_backend(workspace, probes):
+def select_backend(workspace, probes, previous=None):
     """Preflight the actual boundary without loading any candidate code."""
     check = PREFLIGHT_INPUTS + '\nimport socket,tempfile; s=socket.socket(); s.bind(("127.0.0.1",0)); tempfile.TemporaryFile()'
+    preflight_args = ['/workspace', '/trusted/probes.py'] + (['/previous'] if previous else [])
     bwrap = shutil.which('bwrap') if platform.system() == 'Linux' else None
     if bwrap:
-        command = _bwrap_command(bwrap, workspace, probes)
-        if _probe(command + ['/usr/bin/python3', '-I', '-c', check, '/workspace', '/trusted/probes.py']):
+        command = _bwrap_command(bwrap, workspace, probes, previous)
+        if _probe(command + ['/usr/bin/python3', '-I', '-c', check, *preflight_args]):
             return ('bwrap', command + ['/usr/bin/python3'], None)
     docker = shutil.which('docker')
     if docker:
@@ -121,11 +135,11 @@ def select_backend(workspace, probes):
             images = []
         for image in images:
             name = 'swe-probe-preflight-' + uuid.uuid4().hex
-            command = _docker_command(docker, image, workspace, probes, name)
+            command = _docker_command(docker, image, workspace, probes, name, previous)
             try:
-                if _probe(command + ['-I', '-c', check, '/workspace', '/trusted/probes.py']):
+                if _probe(command + ['-I', '-c', check, *preflight_args]):
                     run_name = 'swe-probe-' + uuid.uuid4().hex
-                    return ('docker', _docker_command(docker, image, workspace, probes, run_name), (docker, run_name))
+                    return ('docker', _docker_command(docker, image, workspace, probes, run_name, previous), (docker, run_name))
             finally:
                 _remove_container(docker, name)
     raise IsolationError('no usable OS isolation backend; requires Linux bubblewrap or Docker with a cached Python image')
@@ -146,9 +160,13 @@ def _remove_container(binary, name):
         return False
 
 
-def run(workspace, probes, through, canary=False, timeout=120):
-    backend, command, container = select_backend(workspace, probes)
+def run(workspace, probes, through, canary=False, timeout=120, lifecycle=False, previous=None):
+    backend, command, container = select_backend(workspace, probes, previous)
     probe_args = ['-I', '/trusted/probes.py', '--workspace', '/workspace', '--through', str(through)]
+    if lifecycle:
+        probe_args.append('--lifecycle')
+    if previous:
+        probe_args += ['--previous-workspace', '/previous']
     if backend == 'docker':
         # Independent in-container deadline also bounds lifetime if the host
         # wrapper is forcibly killed before its finally block can run.
@@ -223,6 +241,8 @@ def main():
     parser.add_argument('--probes', type=Path, required=True)
     parser.add_argument('--through', type=int, choices=range(9), required=True)
     parser.add_argument('--canary', action='store_true')
+    parser.add_argument('--lifecycle', action='store_true')
+    parser.add_argument('--previous-workspace', type=Path)
     parser.add_argument('--timeout', type=float, default=120)
     args = parser.parse_args()
     try:
@@ -230,11 +250,17 @@ def main():
             raise IsolationError('workspace and probe paths must be absolute')
         workspace = args.workspace.resolve(strict=True)
         probes = args.probes.resolve(strict=True)
+        previous = args.previous_workspace.resolve(strict=True) if args.previous_workspace else None
         if not workspace.is_dir() or not probes.is_file() or probes.is_relative_to(workspace):
             raise IsolationError('expected an export directory and an external trusted probe file')
+        if previous and (not args.previous_workspace.is_absolute() or not previous.is_dir()
+                         or previous == workspace or previous.is_relative_to(workspace)
+                         or workspace.is_relative_to(previous) or probes.is_relative_to(previous)):
+            raise IsolationError('previous workspace must be a separate absolute export directory')
         if not math.isfinite(args.timeout) or args.timeout <= 0 or args.timeout > 120:
             raise IsolationError('probe timeout must be greater than zero and at most 120 seconds')
-        code, output, errors = run(workspace, probes, args.through, args.canary, args.timeout)
+        code, output, errors = run(workspace, probes, args.through, args.canary, args.timeout,
+                                   args.lifecycle, previous)
         sys.stdout.buffer.write(output)
         sys.stderr.buffer.write(errors)
         return code

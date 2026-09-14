@@ -428,7 +428,7 @@ async fn run_fresh_planner(
             &request.metadata.scenario_id,
             session_id,
             &response.turn_id,
-            PLANNER_STUCK_TIMEOUT,
+            Some(PLANNER_STUCK_TIMEOUT),
             false,
             request.cancellation,
         )

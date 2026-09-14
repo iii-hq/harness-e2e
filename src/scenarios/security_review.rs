@@ -55,10 +55,10 @@ impl Scenario for SecurityReview {
             prompt: "Exercise the complete on-demand security-scan lifecycle against the manually prepared local fixture, including scan deduplication, optional suggestions, GitHub reconciliation, a second immediate exact-SHA scan, final listing, and repository integrity.".into(),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: None,
                 max_total_tokens: Some(500_000),
-                stuck_timeout_seconds: 420,
+                stuck_timeout_seconds: Some(420),
                 max_validation_retries: None,
             },
             denied_functions: &[],

@@ -52,8 +52,8 @@ pub fn definition() -> WorkflowDefinition {
         limits: WorkflowLimits {
             max_parallel: 1,
             max_nodes: 5,
-            step_timeout_seconds: 600,
-            workflow_timeout_seconds: 1_800,
+            step_timeout_seconds: Some(600),
+            workflow_timeout_seconds: Some(1_800),
             max_total_tokens: None,
             max_cost_usd: Some(30.0),
             technical_retries: 0,

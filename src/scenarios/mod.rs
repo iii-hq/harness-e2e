@@ -54,6 +54,7 @@ pub mod secret_hygiene;
 pub mod security_review;
 pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
+pub mod subagent_explicit_configuration;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
 pub mod swe_service;
@@ -191,7 +192,8 @@ impl CriterionSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionPolicy {
-    pub max_turns: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
     /// Shared Harness token budget. `None` leaves the Harness budget
@@ -200,7 +202,8 @@ pub struct ExecutionPolicy {
     pub max_total_tokens: Option<u64>,
     /// Stop only after this many seconds without observable useful progress.
     /// Large scenarios have no fixed wall-clock deadline.
-    pub stuck_timeout_seconds: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stuck_timeout_seconds: Option<u64>,
     /// Optional per-session cap for post-turn validation denials. `None`
     /// preserves the Harness-configured default.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -209,7 +212,7 @@ pub struct ExecutionPolicy {
 
 impl ExecutionPolicy {
     fn validate(self, scenario_id: &str) -> Result<()> {
-        if self.max_turns == 0 {
+        if self.max_turns == Some(0) {
             bail!("scenario '{scenario_id}': execution.max_turns=0; expected at least 1");
         }
         if self.max_output_tokens == Some(0) {
@@ -220,7 +223,7 @@ impl ExecutionPolicy {
         if self.max_total_tokens == Some(0) {
             bail!("scenario '{scenario_id}': execution.max_total_tokens=0; expected None (unbounded) or at least 1");
         }
-        if self.stuck_timeout_seconds == 0 {
+        if self.stuck_timeout_seconds == Some(0) {
             bail!(
                 "scenario '{scenario_id}': execution.stuck_timeout_seconds=0; expected at least 1"
             );
@@ -458,6 +461,7 @@ scenarios! {
     TimerWake = "timer_wake" => timer_wake::TimerWake,
     ReceivingOperation = "receiving_operation" => receiving_operation::ReceivingOperation,
     ValidationLoop = "validation_loop" => validation_loop::ValidationLoop,
+    SubagentExplicitConfiguration = "subagent_explicit_configuration" => subagent_explicit_configuration::SubagentExplicitConfiguration,
     SubagentValidation = "subagent_validation" => subagent_validation::SubagentValidation,
     SubagentValidationFailure = "subagent_validation_failure" => subagent_validation_failure::SubagentValidationFailure,
     ValidationSelfRepair = "validation_self_repair" => validation_self_repair::ValidationSelfRepair,
@@ -492,7 +496,7 @@ scenarios! {
     SweTenantIsolation = "swe_tenant_isolation" => swe_service::SweService(ScenarioId::SweTenantIsolation),
     SweReplayPerformance = "swe_replay_performance" => swe_service::SweService(ScenarioId::SweReplayPerformance),
     SweReleaseHandoff = "swe_release_handoff" => swe_service::SweService(ScenarioId::SweReleaseHandoff),
-    SweServiceJourney = "swe_service_journey" => swe_service::SweService(ScenarioId::SweServiceJourney),
+    SoftwareCompanyLifecycle = "software_company_lifecycle" => swe_service::SweService(ScenarioId::SoftwareCompanyLifecycle),
 }
 
 impl ScenarioId {
@@ -656,7 +660,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_sixty_eight_unique_valid_scenarios() {
+    fn registry_contains_sixty_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -665,7 +669,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 68);
+        assert_eq!(ids.len(), 69);
     }
 
     #[test]
@@ -872,7 +876,7 @@ mod tests {
         let cases: [ValidationCase; 5] = [
             (
                 "max_turns",
-                |execution| execution.max_turns = 0,
+                |execution| execution.max_turns = Some(0),
                 "scenario 'context_pressure': execution.max_turns=0; expected at least 1",
             ),
             (
@@ -887,7 +891,7 @@ mod tests {
             ),
             (
                 "stuck_timeout_seconds",
-                |execution| execution.stuck_timeout_seconds = 0,
+                |execution| execution.stuck_timeout_seconds = Some(0),
                 "scenario 'context_pressure': execution.stuck_timeout_seconds=0; expected at least 1",
             ),
             (
@@ -906,6 +910,17 @@ mod tests {
                 "{field}"
             );
         }
+    }
+
+    #[test]
+    fn execution_policy_allows_omitted_turn_and_stuck_limits() {
+        let mut spec = ScenarioId::ContextPressure.spec("run");
+        spec.execution.max_turns = None;
+        spec.execution.stuck_timeout_seconds = None;
+        spec.validate().unwrap();
+        let value = serde_json::to_value(spec.execution).unwrap();
+        assert!(value.get("max_turns").is_none());
+        assert!(value.get("stuck_timeout_seconds").is_none());
     }
 
     #[test]
