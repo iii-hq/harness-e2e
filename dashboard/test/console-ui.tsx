@@ -8,6 +8,96 @@ import {
   useState,
 } from 'react'
 
+export function ConfirmDialog({
+  open,
+  title,
+  description,
+  confirmLabel = 'Continue',
+  cancelLabel = 'Cancel',
+  onConfirm,
+  onCancel,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  title: string
+  description?: ReactNode
+  details?: readonly string[]
+  confirmLabel?: string
+  cancelLabel?: string
+  onConfirm: () => void
+  onCancel?: () => void
+}) {
+  if (!open) return null
+  return (
+    <dialog open data-ui="confirm-dialog">
+      <h2>{title}</h2>
+      {description}
+      <button type="button" onClick={onCancel}>
+        {cancelLabel}
+      </button>
+      <button type="button" onClick={onConfirm}>
+        {confirmLabel}
+      </button>
+    </dialog>
+  )
+}
+
+const CollapsibleContext = createContext<{
+  open: boolean
+  toggle(): void
+}>({ open: false, toggle() {} })
+
+export function CollapsibleCard({
+  open,
+  defaultOpen = false,
+  onOpenChange,
+  disabled: _disabled,
+  children,
+  ...props
+}: HTMLAttributes<HTMLDivElement> & {
+  open?: boolean
+  defaultOpen?: boolean
+  onOpenChange?(open: boolean): void
+  disabled?: boolean
+}) {
+  const [internal, setInternal] = useState(defaultOpen)
+  const current = open ?? internal
+  return (
+    <CollapsibleContext.Provider
+      value={{
+        open: current,
+        toggle() {
+          setInternal(!current)
+          onOpenChange?.(!current)
+        },
+      }}
+    >
+      <div className="iii-ui-collapsible-card" data-open={current} {...props}>
+        {children}
+      </div>
+    </CollapsibleContext.Provider>
+  )
+}
+
+export function CollapsibleCardTrigger(
+  props: ButtonHTMLAttributes<HTMLButtonElement>,
+) {
+  const card = useContext(CollapsibleContext)
+  return (
+    <button
+      type="button"
+      aria-expanded={card.open}
+      {...props}
+      onClick={() => card.toggle()}
+    />
+  )
+}
+
+export function CollapsibleCardContent(props: HTMLAttributes<HTMLElement>) {
+  const card = useContext(CollapsibleContext)
+  return <section hidden={!card.open} {...props} />
+}
+
 export function PageShell(props: HTMLAttributes<HTMLDivElement>) {
   return <div {...props} />
 }

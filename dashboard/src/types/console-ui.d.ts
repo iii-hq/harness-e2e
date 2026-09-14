@@ -175,8 +175,9 @@ declare module '@iii-dev/console-ui' {
     pulse?: boolean
   }
   export const StatusDot: React.ComponentType<StatusDotProps>
+  export type StatusVariant = 'info' | 'success' | 'warn' | 'alert'
   export interface StatusPanelProps {
-    variant?: 'info' | 'success' | 'warn' | 'alert'
+    variant?: StatusVariant
     icon?: React.ReactNode
     headline: React.ReactNode
     detail?: React.ReactNode
@@ -195,6 +196,32 @@ declare module '@iii-dev/console-ui' {
     onOpenChange?(open: boolean): void
     children?: React.ReactNode
   }>
+  export interface ConfirmDialogProps {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    title: string
+    description?: React.ReactNode
+    details?: readonly string[]
+    confirmLabel?: string
+    cancelLabel?: string
+    onConfirm: () => void
+    onCancel?: () => void
+  }
+  export const ConfirmDialog: React.ComponentType<ConfirmDialogProps>
+  export interface CollapsibleCardProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    open?: boolean
+    defaultOpen?: boolean
+    onOpenChange?(open: boolean): void
+    disabled?: boolean
+  }
+  export const CollapsibleCard: React.ComponentType<CollapsibleCardProps>
+  export const CollapsibleCardTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement>
+  >
+  export const CollapsibleCardContent: React.ComponentType<
+    React.HTMLAttributes<HTMLElement>
+  >
   export const DropdownMenu: React.ComponentType<{ children?: React.ReactNode }>
   export const PageSidebar: React.ComponentType<
     React.HTMLAttributes<HTMLElement> & { width?: number }

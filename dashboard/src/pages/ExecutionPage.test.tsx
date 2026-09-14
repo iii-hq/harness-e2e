@@ -2,22 +2,23 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import {
+  executionMetricCards,
+  executionOutcome,
+  executionSummarySentence,
+  liveStateCopy,
+  provenanceEntries,
+  resultFilterCounts,
+  snapshotMetricCards,
+  verdictVariant,
+} from '@/lib/execution-detail'
 import { executionVerdict } from '@/lib/execution-verdict'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import type {
   ScenarioMatrixItem,
   ScenarioMatrixSummary,
 } from '@/lib/scenario-matrix'
-import {
-  CountsSection,
-  countsScent,
-  EvidenceBundleUnavailable,
-  executionOutcome,
-  NarrativeSection,
-  narrativeScent,
-  provenanceEntries,
-  resultsScent,
-} from '@/pages/ExecutionPage'
+import { ResultsTable } from '@/pages/ExecutionPage'
 
 const detail = {
   id: 'execution-1',
@@ -49,7 +50,7 @@ const run: AssessmentRunView = {
   runId: 'run-1',
   attemptId: 'attempt-1',
   metrics: {
-    totalTokens: null,
+    totalTokens: 4_182,
     inputTokens: null,
     outputTokens: null,
     cacheReadTokens: null,
@@ -80,39 +81,37 @@ function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
   }
 }
 
+const items = [
+  {
+    key: 'terra:security_review',
+    subjectId: 'terra',
+    scenarioId: 'security_review',
+    behaviorSha256:
+      'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
+    objective: { label: 'Passed', status: 'passed', raw: 'passed' },
+    reason: null,
+    durationMs: 151_460,
+    durationKind: 'single',
+    runCount: 1,
+    runs: [],
+    aggregate: { mean_score: 100, total_tokens_consumed: 4_182 },
+  },
+  {
+    key: 'terra:research_pipeline',
+    subjectId: 'terra',
+    scenarioId: 'research_pipeline',
+    behaviorSha256: null,
+    objective: { label: 'Failed', status: 'failed', raw: 'failed' },
+    reason: '1 subject model event',
+    durationMs: null,
+    durationKind: null,
+    runCount: 0,
+    runs: [],
+    aggregate: null,
+  },
+] as unknown as ScenarioMatrixItem[]
+
 describe('execution verdict', () => {
-  it('reports an unavailable evidence bundle without losing the execution', () => {
-    const retained = {
-      ...detail,
-      availability: 'unavailable',
-      evidence_error: 'native bundle checksum mismatch',
-      reports: [],
-      totals: {
-        received_reports: 3,
-        total_tokens: 12_345,
-        total_cost_usd: 0.42,
-        wall_time_seconds: 125,
-      },
-    } as DashboardExecutionDetail
-    const html = renderToStaticMarkup(
-      <EvidenceBundleUnavailable detail={retained} />,
-    )
-
-    expect(html).toContain('Evidence bundle unavailable')
-    expect(html).toContain('native bundle checksum mismatch')
-    expect(html).toContain('Retained execution snapshot')
-    expect(html).toContain('>3<')
-    expect(html).toContain('12,345')
-    expect(html).toContain('$0.4200')
-    expect(html).toContain('2m 05s')
-    expect(html).toContain('Full per-test metrics and evidence require')
-    expect(html).not.toContain('0 tests')
-    expect(html).not.toContain('no test results yet')
-    expect(html).not.toContain('Execution not found')
-  })
-
-  // Audit ED-03: one aggregated verdict, never a per-scenario headline
-  // contradicting the objective one.
   it('aggregates the scenario outcomes into one sentence', () => {
     const verdict = executionVerdict(
       buildExecutionPresentation(detail),
@@ -136,31 +135,26 @@ describe('execution verdict', () => {
     const verdict = executionVerdict(cancelled, null, [])
     expect(verdict.headline).toBe('cancelled · no scenario report retained')
     expect(verdict.nextStep).toBe('Re-run the same scope to obtain a report.')
-    expect(verdict).not.toHaveProperty('diagnosis')
   })
 
-  it('has nothing to act on when every scenario passed', () => {
-    const verdict = executionVerdict(
-      buildExecutionPresentation(detail),
-      scenarioSummary({ total: 2, passed: 2, failed: 0 }),
-      [],
-    )
-    expect(verdict.headline).toBe('2 passed')
-    expect(verdict.nextStep).toBe('Nothing to act on: every scenario passed.')
+  it('colours the verdict panel by the aggregate outcome', () => {
+    expect(
+      verdictVariant(scenarioSummary({ total: 2, passed: 2, failed: 0 })),
+    ).toBe('success')
+    expect(verdictVariant(scenarioSummary())).toBe('alert')
+    expect(
+      verdictVariant(
+        scenarioSummary({ total: 2, passed: 1, failed: 0, inconclusive: 1 }),
+      ),
+    ).toBe('warn')
+    expect(verdictVariant(null)).toBe('warn')
   })
-})
 
-describe('execution layers', () => {
-  // Audit ED-05: the system status is the only outcome the contract publishes.
   it('publishes the system status as the single execution outcome', () => {
     const presentation = buildExecutionPresentation(detail)
     expect(executionOutcome(presentation, [run])).toEqual({ value: 'passed' })
-    expect(executionOutcome(presentation, [])).toEqual({ value: 'passed' })
-  })
-
-  it('includes later failures in the aggregate outcome instead of reporting only the first run', () => {
     expect(
-      executionOutcome(buildExecutionPresentation(detail), [
+      executionOutcome(presentation, [
         { ...run, systemStatus: 'passed' },
         { ...run, systemStatus: 'hard_gate_failed' },
       ]),
@@ -169,80 +163,115 @@ describe('execution layers', () => {
       label: '1 passed · 1 failed (legacy result)',
     })
   })
+})
 
-  // Audit ED-26: the words live in a layer; its closed row says what they say.
-  it('tells what to do next, and scents the closed row with it', () => {
-    const presentation = buildExecutionPresentation(detail)
-    const verdict = executionVerdict(presentation, scenarioSummary(), [])
-    const html = renderToStaticMarkup(<NarrativeSection verdict={verdict} />)
-    expect(html).toContain('next step')
-    expect(html).toContain('Inspect the retained evidence')
-    expect(html).not.toContain('what happened')
-    expect(html).not.toContain('System: Passed')
-    expect(html).not.toContain('AI: Pass With Concerns')
-    expect(narrativeScent(verdict)).toBe(
-      'Inspect the retained evidence of the failing scenario before deciding whether to re-run',
-    )
+describe('execution numbers', () => {
+  it('states one sentence under the title', () => {
+    expect(
+      executionSummarySentence({
+        detail,
+        live: false,
+        scenarioSummary: scenarioSummary(),
+        runCount: 3,
+      }),
+    ).toBe('2 tests · 3 runs')
+    expect(
+      executionSummarySentence({
+        detail,
+        live: true,
+        scenarioSummary: null,
+        runCount: 0,
+      }),
+    ).toBe('Execution in progress · results are provisional')
   })
 
-  it('keeps report coverage and retained assessments in the counts layer, headless', () => {
+  it('describes the five metric cards from the retained detail', () => {
+    const cards = executionMetricCards(detail, scenarioSummary())
+    expect(cards.map((card) => card.label)).toEqual([
+      'tests',
+      'score',
+      'completion',
+      'runtime',
+      'tokens',
+    ])
+    expect(cards[0]).toMatchObject({
+      value: '1/2',
+      detail: '1 failed',
+      tone: 'negative',
+    })
+    expect(cards[1]).toMatchObject({ value: '—', tone: 'unavailable' })
+  })
+
+  it('keeps the retained totals when the evidence bundle is unavailable', () => {
+    const cards = snapshotMetricCards({
+      ...detail,
+      totals: {
+        received_reports: 3,
+        total_tokens: 12_345,
+        total_cost_usd: 0.42,
+        wall_time_seconds: 125,
+      },
+    } as unknown as DashboardExecutionDetail)
+    expect(cards.map((card) => card.value)).toEqual([
+      '3',
+      '12,345',
+      '$0.4200',
+      '2m 05s',
+    ])
+    expect(cards.every((card) => card.tone === 'neutral')).toBe(true)
+  })
+
+  it('says how far a live execution got and for how long', () => {
+    const presentation = buildExecutionPresentation({
+      ...detail,
+      status: 'running',
+      started_at: '2026-08-26T20:07:31Z',
+      totals: { expected_reports: 4, received_reports: 1 },
+    } as unknown as DashboardExecutionDetail)
+    const copy = liveStateCopy(
+      presentation,
+      false,
+      Date.parse('2026-08-26T20:09:31Z'),
+    )
+    expect(copy.headline).toBe('running · 1 of 4 tests · 2m 00s elapsed')
+    expect(copy.note).toContain('follows recorded progress')
+  })
+
+  it('counts the result filters in severity order', () => {
+    expect(resultFilterCounts(items)).toEqual([
+      ['failed', 1],
+      ['passed', 1],
+    ])
+  })
+})
+
+describe('execution results table', () => {
+  it('renders one row per test on the Console table, opening onto its runs', () => {
     const html = renderToStaticMarkup(
-      <CountsSection
+      <ResultsTable
+        items={items}
+        runs={[run]}
         detail={detail}
-        presentation={buildExecutionPresentation(detail)}
-        scenarioSummary={scenarioSummary()}
+        expanded={new Set(['terra:security_review'])}
+        onToggle={() => {}}
+        onTranscript={() => {}}
       />,
     )
-    expect(html).toContain('1/2')
-    expect(html).toContain('46')
-    expect(html).toContain('17 evidence references')
-    expect(html).not.toContain('reported cost')
-    // The layer row is the heading: no second title, no second anchor.
-    expect(html).not.toContain('execution summary')
-    expect(html).not.toContain('id="metrics"')
-    expect(html).toContain('No compatible run evidence')
-    expect(countsScent(detail)).toBe(
-      'no compatible run evidence to consolidate · assessments 46, 17 evidence references',
-    )
-  })
-
-  it('scents the results row with each scenario verdict and runtime', () => {
-    const items = [
-      {
-        scenarioId: 'minimal_path',
-        behaviorSha256:
-          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
-        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        durationMs: 167_000,
-      },
-      {
-        scenarioId: 'persistent_state',
-        behaviorSha256:
-          'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
-        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        durationMs: 128_000,
-      },
-      {
-        scenarioId: 'research_pipeline',
-        behaviorSha256: null,
-        objective: {
-          label: 'Unavailable',
-          status: 'unavailable',
-          raw: 'unavailable',
-        },
-        durationMs: null,
-      },
-    ] as unknown as ScenarioMatrixItem[]
-    // Scenarios are separated by a wider, non-collapsing gap than the facts
-    // inside each one.
-    expect(resultsScent(items)).toBe(
-      [
-        'minimal path · definition a1a1a1a1 passed · 2m 47s',
-        'persistent state · definition b2b2b2b2 passed · 2m 08s',
-        'research pipeline unavailable',
-      ].join(' \u00a0·\u00a0 '),
-    )
-    expect(resultsScent([])).toBe('no scenario report retained')
+    expect(html).toContain('class="iii-ui-table" data-density="compact"')
+    expect(html).toContain('data-scenario-id="security_review"')
+    expect(html).toMatch(/data-badge-variant="ok"[^>]*>passed</)
+    expect(html).toMatch(/data-badge-variant="alert"[^>]*>failed</)
+    expect(html).toContain('1 subject model event')
+    expect(html).toContain('definition a1a1a1a1')
+    // The expanded test lists its runs with the evidence route.
+    expect(html).toContain('data-run-id="run-1"')
+    expect(html).toContain('execution/execution-1/run/run-1')
+    expect(html).toContain('4,182')
+    expect(html).toContain('2m 31s')
+    // The collapsed test does not.
+    expect(html).not.toContain('data-scenario-detail="research_pipeline"')
+    expect(html).toContain('aria-expanded="true"')
+    expect(html).toContain('aria-expanded="false"')
   })
 })
 

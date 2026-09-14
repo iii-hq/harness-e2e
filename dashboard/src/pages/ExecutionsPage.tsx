@@ -61,6 +61,7 @@ import {
   tokensOf,
   triggerLabel,
 } from '@/lib/executions-ledger'
+import { badgeVariantForStatus } from '@/lib/status-badge'
 import '@/design-system/styles.css'
 
 /* The pilot screen of the redesign: it renders with the Console's own
@@ -71,23 +72,10 @@ import '@/design-system/styles.css'
 export function resultBadgeVariant(
   status: LedgerRow['status']['status'],
 ): BadgeVariant {
-  switch (status) {
-    case 'passed':
-      return 'ok'
-    case 'failed':
-      return 'alert'
-    case 'inconclusive':
-    case 'incomplete':
-    case 'cancelling':
-      return 'warn'
-    case 'running':
-      return 'accent'
-    default:
-      return 'default'
-  }
+  return badgeVariantForStatus(status)
 }
 
-const NUMERIC = 'text-right font-mono tabular-nums'
+const NUMERIC = 'whitespace-nowrap text-right font-mono tabular-nums'
 const META = 'block truncate font-mono text-xs text-ink-faint'
 const SORT_OPTIONS: Array<{ value: LedgerSort; label: string }> = [
   { value: 'newest', label: 'newest first' },

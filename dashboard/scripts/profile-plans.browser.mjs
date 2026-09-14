@@ -271,7 +271,8 @@ try {
     })
     .waitFor()
   await page.getByRole('button', { name: /^cancel execution$/i }).click()
-  await page.locator('.primary-metrics').waitFor()
+  // once the cancel lands the page settles onto its metric strip
+  await page.locator('[data-execution-metrics]').waitFor()
   await page.getByRole('link', { name: 'back to plan', exact: true }).click()
   await page
     .getByText('Incomplete attempt · cancelled', { exact: true })
