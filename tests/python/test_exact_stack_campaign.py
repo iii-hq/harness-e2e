@@ -564,7 +564,11 @@ fail() {
         self.assertEqual(runner["config_name"], "project-one-harness-e2e")
         self.assertEqual(
             runner["config_override"],
-            {"data_dir": str(data_dir), "control_namespace": "project-one"},
+            {
+                "data_dir": str(data_dir),
+                "control_database": "primary",
+                "control_namespace": "project-one",
+            },
         )
         self.assertNotIn("config_override", scaffold["containers"]["harness"])
         self.assertNotIn("config_name", scaffold["containers"]["harness"])
