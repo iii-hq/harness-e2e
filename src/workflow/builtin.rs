@@ -393,6 +393,8 @@ impl StepExecutor for HarnessStepExecutor {
                         })),
                     }),
                     options: Some(SendOptions {
+                        provider_options: None,
+                        thinking_level: None,
                         agent: None,
                         max_turns: Some(config.max_turns),
                         max_cost_usd: None,
@@ -551,6 +553,8 @@ impl StepExecutor for HarnessStepExecutorV2 {
                         })),
                     }),
                     options: Some(SendOptions {
+                        provider_options: None,
+                        thinking_level: None,
                         agent: None,
                         max_turns: Some(config.max_turns),
                         max_cost_usd: None,

@@ -48,7 +48,9 @@ enum Command {
     /// List models registered in the running stack.
     Models(ModelsArgs),
     /// Execute one or more quality scenarios against a running stack.
-    Run(RunArgs),
+    // Boxed: `RunArgs` is by far the widest variant, and clippy's
+    // `large_enum_variant` makes every other subcommand pay its size.
+    Run(Box<RunArgs>),
     /// Replay one exact immutable materialized Markdown plan.
     ReplayMaterialized(ReplayMaterializedArgs),
     /// Print a human-readable summary from a saved results.json.
@@ -118,6 +120,12 @@ struct RunArgs {
     /// (`directory::agents::*`) instead of the Harness built-in identity.
     #[arg(long, env = "HARNESS_E2E_AGENT")]
     agent: Option<String>,
+
+    /// Provider reasoning effort for the subject's turns
+    /// (minimal|low|medium|high|xhigh), or `off` for the provider's native
+    /// no-thinking switch. Omitted leaves the provider default.
+    #[arg(long, env = "HARNESS_E2E_THINKING")]
+    thinking: Option<String>,
 
     /// Auxiliary model for Markdown scenarios and Registry planning.
     /// Supply together with --judge-provider.
@@ -300,7 +308,7 @@ async fn main() -> Result<()> {
         Some(Command::ValidateScenarios(args)) => validate_scenarios(args),
         Some(Command::TestPlan { command }) => test_plan(command),
         Some(Command::Models(args)) => models(args).await,
-        Some(Command::Run(args)) => run(args).await,
+        Some(Command::Run(args)) => run(*args).await,
         Some(Command::ReplayMaterialized(args)) => replay_materialized(args).await,
         Some(Command::Report(args)) => report(args),
         Some(Command::Dashboard(args)) => dashboard::serve(args).await,
@@ -394,7 +402,16 @@ async fn run(args: RunArgs) -> Result<()> {
             1
         }
     });
+    // `off` is the provider's native switch, not a level: DeepSeek refuses a
+    // request that carries both, so the two never travel together.
+    let thinking_off = args
+        .thinking
+        .as_deref()
+        .is_some_and(|value| matches!(value, "off" | "disabled" | "none"));
     let subject = SubjectConfig {
+        provider_options: thinking_off
+            .then(|| serde_json::json!({ &args.provider: { "thinking": "disabled" } })),
+        thinking_level: args.thinking.filter(|_| !thinking_off),
         model: args.model,
         provider: args.provider,
         agent: args.agent,
@@ -489,6 +506,8 @@ async fn replay_materialized(args: ReplayMaterializedArgs) -> Result<()> {
         model: frozen.subject.model,
         provider: frozen.subject.provider,
         agent: None,
+        thinking_level: None,
+        provider_options: None,
     };
     let judge = JudgeConfig {
         model: frozen.auxiliary.model,

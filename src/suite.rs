@@ -88,6 +88,11 @@ pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> Function
 pub struct SubjectConfig {
     pub model: String,
     pub provider: String,
+    /// Reasoning effort for the subject's turns. `None` leaves the
+    /// provider default.
+    pub thinking_level: Option<String>,
+    /// Provider-native per-call options for the subject's turns.
+    pub provider_options: Option<serde_json::Value>,
     /// Directory agent profile the subject session runs as. `None` keeps the
     /// Harness built-in identity.
     pub agent: Option<String>,
@@ -3088,6 +3093,8 @@ async fn run_markdown_session(
                     })),
                 }),
                 options: Some(SendOptions {
+                    thinking_level: None,
+                    provider_options: None,
                     // Markdown scenarios always run as the built-in identity.
                     agent: None,
                     max_turns: Some(request.max_turns),
@@ -4448,6 +4455,8 @@ async fn execute(
                         })),
                     }),
                     options: Some(SendOptions {
+                        thinking_level: subject.thinking_level.clone(),
+                        provider_options: subject.provider_options.clone(),
                         agent: (exchange == 0)
                             .then(|| subject.agent.clone())
                             .flatten(),
@@ -6778,6 +6787,8 @@ mod tests {
             model: "subject-model".into(),
             provider: "subject-provider".into(),
             agent: None,
+            thinking_level: None,
+            provider_options: None,
         };
         let auxiliary = JudgeConfig {
             model: "auxiliary-model".into(),

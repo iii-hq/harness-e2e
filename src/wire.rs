@@ -116,6 +116,16 @@ pub enum MessageInput {
 
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SendOptions {
+    /// Provider reasoning effort for the turn, forwarded by the router
+    /// (`minimal`|`low`|`medium`|`high`|`xhigh`). Omitted leaves the
+    /// provider's own default, which for DeepSeek is thinking on at high.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking_level: Option<String>,
+    /// Provider-native per-call options, namespaced by provider id, e.g.
+    /// `{"deepseek": {"thinking": "disabled"}}`. DeepSeek refuses a native
+    /// off switch combined with a `thinking_level`, so the two are exclusive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_options: Option<Value>,
     /// Directory agent profile (`directory::agents::*`) that replaces the
     /// built-in identity. New sessions only: the Harness refuses it on an
     /// existing session.

@@ -1098,6 +1098,8 @@ impl ControlPlane {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
                 agent: None,
+                thinking_level: None,
+                provider_options: None,
             },
             judge,
             audit_analyzer,
