@@ -38,14 +38,17 @@ def curriculum(tickets):
         "You lead the engineering team of a company operating this profile service. "
         "Customer support reports configuration leaking between deployments, stale profiles, "
         "and dropped replay events. Inspect the repository and commit docs/request.json with "
-        "goal (string), stakeholders (nonempty array of strings), and acceptance (array of "
-        "{id, behavior}; use the three requirement ids config, cache, replay). State observable "
+        "goal (nonempty string), stakeholders (nonempty array of nonempty strings), and acceptance "
+        "(exactly one {id, behavior} for each requirement id config, cache, replay; behavior is a "
+        "nonempty string). State observable "
         "acceptance behavior and business impact. This checkpoint records the demand before implementation. "
         "The company's complete initial technical acceptance follows:\n\n" +
         "\n\n".join(ticket["prompt"] for ticket in tickets[:3]),
-        "Plan the work before implementation. Commit docs/plan.json with work_items: an array "
-        "of {id, owner, requirements, source_paths, test_paths, depends_on}. requirements refers "
-        "to config/cache/replay; source_paths names existing source files; test_paths names planned "
+        "Plan the work before implementation. Commit docs/plan.json with work_items: a nonempty array "
+        "of {id, owner, requirements, source_paths, test_paths, depends_on}. Use unique nonempty ids "
+        "and nonempty owner strings. requirements, source_paths and test_paths are nonempty arrays. "
+        "requirements refers to config/cache/replay; source_paths names existing repository-relative "
+        "files under src/; test_paths names planned "
         "tests/agent/test_*.py files; depends_on refers to other work item ids, without cycles. "
         "Cover all acceptance ids. Include interfaces and risks arrays of nonempty strings. "
         "Choose the architecture, sequence and team organization yourself; delegation is optional. "
@@ -54,9 +57,11 @@ def curriculum(tickets):
         "Deliver one integrated commit retaining the demand and plan.\n\n" +
         "\n\n".join(ticket["prompt"] for ticket in tickets[:3]),
         "Review the accepted implementation and prepare it for CI. Commit docs/review.json with "
-        "reviewed_head set to the preceding accepted implementation SHA, decision (approve or "
-        "request_changes), and findings (array of {file, line, risk, resolution, test}). Each finding "
-        "must refer to a real source location and an authored regression test. An empty findings "
+        "reviewed_head set to the preceding accepted implementation SHA, decision set to approve "
+        "after resolving all findings, and findings (array of {file, line, risk, resolution, test}). "
+        "Each finding names an existing source file, a positive integer line within that file, "
+        "nonempty risk and resolution strings, and test set to an existing tests/agent/test_*.py "
+        "file path (without class or method identifiers). An empty findings "
         "array is allowed. Resolve findings and include meaningful unittest regression tests: "
         "the controller runs them on the submitted code and on the original defective code, "
         "where at least one assertion must fail without test/import errors. CI executes the "
@@ -64,7 +69,8 @@ def curriculum(tickets):
         "Address the reliability review as part of this change:\n\n" + tickets[3]["prompt"],
         "Prepare a versioned release of the service. Commit docs/release.json with version "
         "(nonempty string), entrypoint (an existing source path), and rollback_head equal to the "
-        "preceding accepted CI SHA. The controller exports the submitted SHA, starts its actual "
+        "Preceding accepted HEAD shown below (the accepted stage-4 candidate, not the workflow or "
+        "merge SHA). The controller exports the submitted SHA, starts its actual "
         "HTTP service and tests compatibility and restart behavior; successful publication is "
         "recorded with that immutable SHA. Production behavior runs in the isolated environment; "
         "the PR, CI, merge and release are real GitHub resources. Submit the first release checkpoint "
@@ -73,14 +79,18 @@ def curriculum(tickets):
         "Product has approved a new customer isolation requirement after release. Update the "
         "implementation and regression tests while retaining the published API contracts.\n\n" + tickets[5]["prompt"],
         "Operations has reported replay degradation and requires an incident repair and recovery "
-        "exercise. Commit docs/incident.json with release_head equal to the published release SHA, "
-        "symptom, cause, mitigation (nonempty strings), and regression_test naming an authored test. "
+        "exercise. Commit docs/incident.json with release_head equal to the Published release HEAD "
+        "shown below (the accepted stage-5 candidate, not the GitHub tag or merge SHA), "
+        "symptom, cause, mitigation (nonempty strings), and regression_test naming an existing "
+        "tests/agent/test_*.py file path without class or method identifiers. "
         "The controller measures the published and repaired versions and exercises upgrade, "
         "SIGKILL, restart, rollback and re-upgrade against the same durable database. "
         "Do not discard data or replay acknowledgements.\n\n" + tickets[6]["prompt"],
         "Complete the operational handoff. Commit docs/handoff.json with release_head equal to "
-        "the published release SHA, owner (string), regression_tests (nonempty array of authored "
-        "test paths), and runbook naming docs/delivery.md. The controller rechecks startup, API "
+        "the Published release HEAD shown below (the accepted stage-5 candidate, not the GitHub tag "
+        "or merge SHA), owner (nonempty string), regression_tests (nonempty array of existing "
+        "tests/agent/test_*.py file paths without class or method identifiers), and runbook naming "
+        "docs/delivery.md. The controller rechecks startup, API "
         "compatibility, restart, rollback, persisted data and configuration restoration, in "
         "addition to the accumulated acceptance checks.\n\n" + tickets[7]["prompt"],
     ]
@@ -94,11 +104,14 @@ def curriculum(tickets):
         "and a substantive body. This records self-review, not independent approval.",
         "Push this HEAD, refresh the PR, obtain successful CI and review at this exact SHA. "
         "After the compatibility revision is revealed, use operation=merge then operation=release with "
-        "a unique version. The release tag will be scoped to this attempt; published versions are immutable.",
+        "a unique version of 1-41 ASCII characters: start with a letter or digit, then use only letters, "
+        "digits, dots, underscores or hyphens. The release tag will be scoped to this attempt; "
+        "published versions are immutable.",
         "Deliver through a new PR: push, pr, successful ci, review and merge at this exact HEAD.",
         "Deliver the incident repair through a new PR: push, pr, successful ci, review and merge at this exact HEAD.",
         "Deliver the handoff through a new PR: push, pr, successful ci, review, merge and a new versioned release. "
-        "Then close the customer issue with operation=close_issue.",
+        "Use a unique version of 1-41 ASCII characters: start with a letter or digit, then use only "
+        "letters, digits, dots, underscores or hyphens. Then close the customer issue with operation=close_issue.",
     )
     return [{"number": number, "id": stage[0], "title": stage[1],
              "prompt": prompt + "\n\nGitHub evidence required: " + remote +
