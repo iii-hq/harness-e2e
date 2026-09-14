@@ -900,6 +900,9 @@ impl ControlPlane {
             subject: SubjectConfig {
                 model: request.model.clone(),
                 provider: request.provider.clone(),
+                agent: None,
+                thinking_level: None,
+                provider_options: None,
             },
             output: output.clone(),
             scenarios,
