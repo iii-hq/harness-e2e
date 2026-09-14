@@ -1,25 +1,28 @@
-import { ArrowRight, Search, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  DashboardPageActions,
-  dashboardHeaderActionClassName,
-} from '@/components/DashboardPageActions'
+  Badge,
+  type BadgeVariant,
+  Button,
+  EmptyState,
+  Input,
+  Select,
+  Skeleton,
+  StatusPanel,
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFrame,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableViewport,
+} from '@iii-dev/console-ui'
+import { ArrowRight, X } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
-import {
-  buttonClassName,
-  Callout,
-  DataTable,
-  DataTableRow,
-  EmptyState,
-  FilterChip,
-  FilterChipGroup,
-  Input,
-  numericCellClassName,
-  PageHeader,
-  Select,
-  StatusBadge,
-} from '@/design-system'
+import { PageHeader } from '@/design-system'
 import {
   hashForExecution,
   hashForNewPlan,
@@ -31,390 +34,150 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
-  type ReleaseControlIdentity,
 } from '@/lib/dashboard-data-source'
 import {
-  buildExecutionPresentation,
   categoryMessage,
-  type ExecutionPresentation,
   executionTitle,
   formatDate,
   formatDuration,
   formatPercent,
   modelNames,
   percentPoints,
-  statusCopy,
 } from '@/lib/execution-view'
+import {
+  buildLedgerRows,
+  filterLedgerRows,
+  groupHeading,
+  groupLedgerRows,
+  LEDGER_DEFAULT_FILTERS,
+  type LedgerFilters,
+  type LedgerGroup,
+  type LedgerRow,
+  type LedgerSort,
+  ledgerFiltersFromParams,
+  ledgerFiltersToParams,
+  PAGE_SIZE,
+  RESULT_ORDER,
+  tokensOf,
+  triggerLabel,
+} from '@/lib/executions-ledger'
+import { badgeVariantForStatus } from '@/lib/status-badge'
 import '@/design-system/styles.css'
 
-const PAGE_SIZE = 50
+/* The pilot screen of the redesign: it renders with the Console's own
+   components and tokens, keeps the ledger logic in `lib/executions-ledger`,
+   and carries no page-specific CSS. */
 
-const triggerLabels: Record<string, string> = {
-  schedule: 'scheduled',
-  workflow_dispatch: 'manual',
-  local: 'local',
+/** The Console's status vocabulary for the ledger's result column. */
+export function resultBadgeVariant(
+  status: LedgerRow['status']['status'],
+): BadgeVariant {
+  return badgeVariantForStatus(status)
 }
 
-export function triggerLabel(event: string) {
-  return triggerLabels[event] ?? event.replace(/[_-]+/g, ' ')
-}
-
-export type LedgerSort = 'newest' | 'oldest' | 'runtime' | 'tokens' | 'result'
-
-export type LedgerFilters = {
-  query: string
-  status: string
-  event: string
-  sort: LedgerSort
-}
-
-export const LEDGER_DEFAULT_FILTERS: LedgerFilters = {
-  query: '',
-  status: 'all',
-  event: 'all',
-  sort: 'newest',
-}
-
-const SORTS: LedgerSort[] = ['newest', 'oldest', 'runtime', 'tokens', 'result']
-
-/** Audit E-04: the ledger's filters live in the hash, not only in state. */
-export function ledgerFiltersFromParams(
-  params: URLSearchParams,
-): LedgerFilters {
-  const sort = params.get('sort')
-  return {
-    query: params.get('q') ?? '',
-    status: params.get('status') ?? 'all',
-    event: params.get('event') ?? 'all',
-    sort:
-      sort && (SORTS as string[]).includes(sort)
-        ? (sort as LedgerSort)
-        : 'newest',
-  }
-}
-
-export function ledgerFiltersToParams(filters: LedgerFilters): URLSearchParams {
-  const params = new URLSearchParams()
-  if (filters.query.trim()) params.set('q', filters.query.trim())
-  if (filters.status !== 'all') params.set('status', filters.status)
-  if (filters.event !== 'all') params.set('event', filters.event)
-  if (filters.sort !== 'newest') params.set('sort', filters.sort)
-  return params
-}
-
-export type LedgerRow = {
-  execution: DashboardExecutionSummary
-  presentation: ExecutionPresentation
-  status: ReturnType<typeof statusCopy>
-  searchText: string
-}
-
-export function buildLedgerRows(
-  executions: DashboardExecutionSummary[],
-): LedgerRow[] {
-  return executions.map((execution) => {
-    const presentation = buildExecutionPresentation(execution)
-    const { title, detail } = executionTitle(presentation)
-    return {
-      execution,
-      presentation,
-      status: execution.id.startsWith('rc:')
-        ? {
-            label: execution.status.replaceAll('_', ' '),
-            status:
-              execution.status === 'running'
-                ? ('running' as const)
-                : execution.status === 'cancelled'
-                  ? ('cancelled' as const)
-                  : ('inconclusive' as const),
-          }
-        : statusCopy(presentation),
-      searchText: [
-        title,
-        detail,
-        execution.label,
-        execution.workflow_name,
-        execution.id,
-        execution.run_id,
-        formatDate(presentation.completedAt),
-        execution.source?.sha,
-        execution.release_control?.execution_id,
-        execution.release_control?.profile,
-        execution.release_control?.campaign_id,
-        ...presentation.subjects.flatMap((model) => [
-          model.model,
-          `${model.provider}/${model.model}`,
-        ]),
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase(),
-    }
-  })
-}
-
-function tokensOf(row: LedgerRow) {
-  const value = row.execution.totals?.total_tokens
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-const RESULT_ORDER = [
-  'failed',
-  'inconclusive',
-  'incomplete',
-  'running',
-  'cancelling',
-  'cancelled',
-  'unavailable',
-  'passed',
+const NUMERIC = 'whitespace-nowrap text-right font-mono tabular-nums'
+const META = 'block truncate font-mono text-xs text-ink-faint'
+const SORT_OPTIONS: Array<{ value: LedgerSort; label: string }> = [
+  { value: 'newest', label: 'newest first' },
+  { value: 'oldest', label: 'oldest first' },
+  { value: 'result', label: 'by result' },
+  { value: 'runtime', label: 'longest runtime' },
+  { value: 'tokens', label: 'most tokens' },
 ]
 
-export function filterLedgerRows(rows: LedgerRow[], filters: LedgerFilters) {
-  const query = filters.query.trim().toLowerCase()
-  const matched = rows.filter((row) => {
-    if (filters.status !== 'all' && row.status.status !== filters.status)
-      return false
-    if (filters.event !== 'all' && row.execution.event !== filters.event)
-      return false
-    return !query || row.searchText.includes(query)
-  })
-  const byDateDesc = (left: LedgerRow, right: LedgerRow) =>
-    Date.parse(right.presentation.completedAt || '') -
-    Date.parse(left.presentation.completedAt || '')
-  const sorted = [...matched]
-  if (filters.sort === 'oldest') sorted.sort((a, b) => byDateDesc(b, a))
-  else if (filters.sort === 'runtime')
-    sorted.sort(
-      (a, b) =>
-        (b.presentation.modelRuntimeSeconds ?? -1) -
-          (a.presentation.modelRuntimeSeconds ?? -1) || byDateDesc(a, b),
-    )
-  else if (filters.sort === 'tokens')
-    sorted.sort(
-      (a, b) => (tokensOf(b) ?? -1) - (tokensOf(a) ?? -1) || byDateDesc(a, b),
-    )
-  else if (filters.sort === 'result')
-    sorted.sort(
-      (a, b) =>
-        RESULT_ORDER.indexOf(a.status.status) -
-          RESULT_ORDER.indexOf(b.status.status) || byDateDesc(a, b),
-    )
-  else sorted.sort(byDateDesc)
-  return sorted
+function placeholder(value: string | null) {
+  return value ?? '—'
 }
 
-function dayKey(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'unknown'
-  const date = new Date(timestamp)
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
-}
-
-export function dayLabel(value: string, now = Date.now()) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'date not reported'
-  const day = new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(timestamp))
-  if (dayKey(value) === dayKey(new Date(now).toISOString()))
-    return `today · ${day}`
-  if (dayKey(value) === dayKey(new Date(now - 86_400_000).toISOString()))
-    return `yesterday · ${day}`
-  return day
-}
-
-export type LedgerGroup = {
-  key: string
-  label: string
-  rows: LedgerRow[]
-  /** Present when the group is one Release Control execution (its plan). */
-  plan?: ReleaseControlIdentity
-}
-
-/** One Release Control execution reads as its plan: profile · campaign · id. */
-export function planGroupLabel(plan: ReleaseControlIdentity): string {
-  const head = [plan.profile, plan.campaign_id].filter(Boolean).join(' · ')
-  return `${head || 'release control'} · release control ${plan.execution_id.slice(0, 8)}`
-}
-
-/** Additive figures over a group's rows; absence stays absent, never zero. */
-export function groupStats(rows: LedgerRow[]) {
-  const passed = rows.filter((row) => row.status.status === 'passed').length
-  const tokens = rows.map(tokensOf).filter((value) => value !== null)
-  const seconds = rows
-    .map((row) => row.presentation.modelRuntimeSeconds)
-    .filter((value): value is number => value !== null)
-  return {
-    runs: rows.length,
-    passed,
-    passRate: rows.length > 0 ? passed / rows.length : null,
-    tokens: tokens.length > 0 ? tokens.reduce((sum, v) => sum + v, 0) : null,
-    seconds: seconds.length > 0 ? seconds.reduce((sum, v) => sum + v, 0) : null,
-  }
-}
-
-export function groupHeading(group: LedgerGroup): string {
-  if (
-    !group.plan ||
-    group.rows.some((row) => row.execution.id.startsWith('rc:'))
-  )
-    return `${group.label} · ${group.rows.length}`
-  const stats = groupStats(group.rows)
-  const parts = [
-    group.label,
-    `${stats.runs} run${stats.runs === 1 ? '' : 's'}`,
-    stats.passRate === null
-      ? null
-      : `${formatPercent(percentPoints(stats.passRate), false)} pass`,
-    stats.tokens === null ? null : `${stats.tokens.toLocaleString()} tokens`,
-    stats.seconds === null ? null : formatDuration(stats.seconds),
-  ]
-  return parts.filter(Boolean).join(' · ')
-}
-
-/**
- * Audit E-12: a running execution is pinned above the groups. Runs that
- * Release Control dispatched are grouped by their execution (the plan they
- * belong to); everything else keeps its day group.
- */
-export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
-  const running = rows.filter(
-    (row) =>
-      row.status.status === 'running' || row.status.status === 'cancelling',
-  )
-  const settled = rows.filter((row) => !running.includes(row))
-  const groups: LedgerGroup[] = []
-  const byKey = new Map<string, LedgerGroup>()
-  const push = (group: LedgerGroup, row: LedgerRow) => {
-    const existing = byKey.get(group.key)
-    if (existing) existing.rows.push(row)
-    else {
-      group.rows.push(row)
-      byKey.set(group.key, group)
-      groups.push(group)
-    }
-  }
-  for (const row of settled) {
-    const plan = row.execution.release_control
-    if (plan?.execution_id) {
-      push(
-        {
-          key: `plan:${plan.execution_id}`,
-          label: planGroupLabel(plan),
-          rows: [],
-          plan,
-        },
-        row,
-      )
-      continue
-    }
-    push(
-      {
-        key: dayKey(row.presentation.completedAt),
-        label: dayLabel(row.presentation.completedAt, now),
-        rows: [],
-      },
-      row,
-    )
-  }
-  return { running, groups }
-}
-
-function LedgerRowCells({ row }: { row: LedgerRow }) {
+function LedgerCells({ row }: { row: LedgerRow }) {
   const { presentation, execution, status } = row
   const { title, detail } = executionTitle(presentation)
   const tokens = tokensOf(row)
-  const evidenceNote =
-    execution.availability === 'aggregate'
+  // Where it ran and how it started, without repeating the default case:
+  // a local, locally triggered run states only its date and system.
+  const origin = execution.id.startsWith('rc:') ? 'team · RC' : null
+  const trigger =
+    execution.event && String(execution.event) !== 'local'
+      ? triggerLabel(String(execution.event))
+      : null
+  const note = presentation.primaryIssue
+    ? categoryMessage(
+        presentation.primaryIssue.category,
+        presentation.primaryIssue.count,
+      )
+    : execution.availability === 'aggregate'
       ? 'aggregate report'
       : execution.availability === 'unavailable'
         ? 'no report retained'
         : null
   return (
     <>
-      <td data-label="Execution" className="ds-table-sticky-col">
+      <TableCell>
         <a
-          className="block truncate font-mono text-xs font-medium text-ink no-underline hover:underline"
+          className="block truncate font-mono text-sm font-medium text-ink no-underline hover:underline"
           href={hashForExecution(execution.id)}
           title={title}
         >
           {title}
         </a>
-        <span className="font-mono text-label text-ink-muted">
-          {execution.id.startsWith('rc:') ? 'team · RC' : 'my Harness · local'}
+        <span className={META}>
+          {[origin, trigger, formatDate(presentation.completedAt), detail]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
-        <span className="block truncate font-mono text-label text-ink-muted">
-          {formatDate(presentation.completedAt)}
-          {detail ? ` · ${detail}` : ''}
-          {execution.event ? ` · ${triggerLabel(String(execution.event))}` : ''}
-        </span>
-      </td>
-      <td data-label="Result">
-        <StatusBadge status={status.status} label={status.label} />
-        {presentation.primaryIssue ? (
-          <span className="block font-mono text-label text-ink-soft">
-            {categoryMessage(
-              presentation.primaryIssue.category,
-              presentation.primaryIssue.count,
-            )}
-          </span>
-        ) : evidenceNote ? (
-          <span className="block font-mono text-label text-ink-muted">
-            {evidenceNote}
-          </span>
-        ) : null}
-      </td>
-      <td data-label="Subject" title={modelNames(presentation.subjects)}>
-        <span className="block font-mono text-xs text-ink">
+      </TableCell>
+      <TableCell>
+        <Badge variant={resultBadgeVariant(status.status)}>
+          {status.label}
+        </Badge>
+        {note ? <span className={META}>{note}</span> : null}
+      </TableCell>
+      <TableCell title={modelNames(presentation.subjects)}>
+        <span className="block truncate font-mono text-sm text-ink">
           {presentation.subjects[0]?.model ?? '—'}
         </span>
-        <span className="block font-mono text-label text-ink-muted">
-          {presentation.subjects[0]?.provider ?? ''}
-        </span>
-      </td>
-      <td data-label="Scope" className={numericCellClassName}>
+        {presentation.subjects[0]?.provider ? (
+          <span className={META}>{presentation.subjects[0].provider}</span>
+        ) : null}
+      </TableCell>
+      <TableCell
+        className={NUMERIC}
+        title={
+          presentation.expectedReports === null
+            ? undefined
+            : `${presentation.receivedReports ?? 0} of ${presentation.expectedReports} test reports received`
+        }
+      >
         {presentation.receivedReports === null &&
         presentation.expectedReports === null
           ? '—'
           : `${presentation.receivedReports ?? '—'}/${presentation.expectedReports ?? '—'}`}
-      </td>
-      <td data-label="Pass rate" className={numericCellClassName}>
-        {presentation.passRate === null
-          ? '—'
-          : formatPercent(percentPoints(presentation.passRate), false)}
-      </td>
-      <td data-label="Runtime" className={numericCellClassName}>
-        {presentation.modelRuntimeSeconds === null
-          ? '—'
-          : formatDuration(presentation.modelRuntimeSeconds)}
-      </td>
-      <td data-label="Tokens" className={numericCellClassName}>
-        {tokens === null ? '—' : tokens.toLocaleString()}
-      </td>
-      <td data-label="Open" className="text-right">
-        <a
-          className={buttonClassName({
-            variant: 'quiet',
-            size: 'compact',
-            className: 'no-underline',
-          })}
-          href={hashForExecution(execution.id)}
-          aria-label={`Open ${title}`}
-        >
-          open
-          <ArrowRight size={13} aria-hidden="true" />
-        </a>
-      </td>
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        {placeholder(
+          presentation.passRate === null
+            ? null
+            : formatPercent(percentPoints(presentation.passRate), false),
+        )}
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        {placeholder(
+          presentation.modelRuntimeSeconds === null
+            ? null
+            : formatDuration(presentation.modelRuntimeSeconds),
+        )}
+      </TableCell>
+      <TableCell className={NUMERIC}>
+        {placeholder(tokens === null ? null : tokens.toLocaleString())}
+      </TableCell>
     </>
   )
 }
 
-/**
- * One table for the whole page: the day groups are separator rows so the
- * header is read once and the rhythm stays (audit E-07 / E-12).
- */
-function LedgerTable({
+const COLUMNS = 7
+
+/** One table for the whole ledger; running runs first, then plan and day groups. */
+export function LedgerTable({
   caption,
   groups,
 }: {
@@ -422,56 +185,95 @@ function LedgerTable({
   groups: LedgerGroup[]
 }) {
   return (
-    <DataTable
-      caption={caption}
-      collapse
-      collapseInline
-      minWidth="58rem"
-      sticky
-      data-ledger-table
-    >
-      <thead>
-        <tr>
-          <th scope="col">execution</th>
-          <th scope="col">result</th>
-          <th scope="col">subject</th>
-          <th scope="col" className={numericCellClassName}>
-            scope
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            pass rate
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            runtime
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            tokens
-          </th>
-          <th scope="col">
-            <span className="ds-visually-hidden">Open</span>
-          </th>
-        </tr>
-      </thead>
-      {groups.map((group) => (
-        <tbody key={group.key} data-ledger-group={group.key}>
-          <tr data-ledger-day data-ledger-plan={group.plan?.execution_id}>
-            <th className="ds-label" colSpan={8} scope="colgroup">
-              {groupHeading(group)}
-            </th>
-          </tr>
-          {group.rows.map((row) => (
-            <DataTableRow
-              key={row.execution.id}
-              href={hashForExecution(row.execution.id)}
-              data-execution-id={row.execution.id}
-              data-result={row.status.status}
-            >
-              <LedgerRowCells row={row} />
-            </DataTableRow>
+    <TableViewport>
+      <TableFrame>
+        <Table density="compact" data-ledger-table>
+          <TableCaption className="sr-only">{caption}</TableCaption>
+          <TableHeader>
+            <TableRow>
+              <TableHead scope="col">execution</TableHead>
+              <TableHead scope="col">result</TableHead>
+              <TableHead scope="col">subject</TableHead>
+              <TableHead
+                scope="col"
+                className="text-right"
+                title="test reports received / expected"
+              >
+                tests
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                pass rate
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                runtime
+              </TableHead>
+              <TableHead scope="col" className="text-right">
+                tokens
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          {groups.map((group) => (
+            <TableBody key={group.key} data-ledger-group={group.key}>
+              <TableRow
+                data-ledger-day
+                data-ledger-plan={group.plan?.execution_id}
+              >
+                <TableHead
+                  scope="colgroup"
+                  colSpan={COLUMNS}
+                  className="pt-4 text-xs font-semibold text-ink-faint"
+                >
+                  {group.plan ? (
+                    <a
+                      className="text-ink-faint no-underline hover:text-ink hover:underline"
+                      href={`#/ext/harness-e2e/execution/${group.plan.execution_id}`}
+                    >
+                      {groupHeading(group)}
+                    </a>
+                  ) : (
+                    groupHeading(group)
+                  )}
+                </TableHead>
+              </TableRow>
+              {group.rows.map((row) => (
+                <TableRow
+                  key={row.execution.id}
+                  interactive
+                  data-execution-id={row.execution.id}
+                  data-result={row.status.status}
+                  onClick={(event) => {
+                    if (
+                      event.defaultPrevented ||
+                      (event.target instanceof Element &&
+                        event.target.closest('a, button'))
+                    )
+                      return
+                    window.location.hash = hashForExecution(row.execution.id)
+                  }}
+                >
+                  <LedgerCells row={row} />
+                </TableRow>
+              ))}
+            </TableBody>
           ))}
-        </tbody>
+        </Table>
+      </TableFrame>
+    </TableViewport>
+  )
+}
+
+function LedgerSkeleton() {
+  return (
+    <div className="mt-4 grid gap-2" aria-busy="true" role="status">
+      <span className="sr-only">Loading executions</span>
+      {Array.from({ length: 6 }, (_, index) => (
+        <Skeleton
+          // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+          key={index}
+          className="block h-11 w-full"
+        />
       ))}
-    </DataTable>
+    </div>
   )
 }
 
@@ -524,7 +326,7 @@ export function ExecutionsPage() {
     void load()
   }, [load])
 
-  // Audit E-12: the ledger follows run changes instead of waiting for F5.
+  // The ledger follows run changes instead of waiting for a reload.
   useEffect(() => {
     if (!bridge) return
     let cancelled = false
@@ -551,7 +353,6 @@ export function ExecutionsPage() {
     replaceRouteParams(ledgerFiltersToParams(filters))
   }, [filters])
 
-  // Audit E-05: more executions arrive by cursor, never silently truncated.
   const loadMore = async () => {
     if (!bridge || !cursor) return
     setLoadingMore(true)
@@ -603,42 +404,48 @@ export function ExecutionsPage() {
     return [...counts.entries()]
   }, [rows])
 
-  // Audit E-07: the page says what the ledger holds, in the column vocabulary.
+  const runningCount = rows.filter(
+    (row) =>
+      row.status.status === 'running' || row.status.status === 'cancelling',
+  ).length
+  // One sentence with one denominator: what is retained, and what is live.
   const summary = [
-    `${total} executions`,
-    `${rows.length} loaded`,
-    ...statusCounts.map(([, entry]) => `${entry.count} ${entry.label}`),
-  ].join(' · ')
+    `${total} execution${total === 1 ? '' : 's'} retained`,
+    runningCount > 0 ? `${runningCount} running` : null,
+    total > rows.length ? `${rows.length} loaded` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+
+  const openRunner = () => {
+    setRunnerScope([])
+    setRunnerOpen(true)
+  }
 
   return (
-    <div className="ds-root min-h-dvh bg-canvas text-ink">
+    <div className="min-h-dvh bg-panel text-ink">
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
         actions={
           bridge ? (
             <>
-              <a
-                className={dashboardHeaderActionClassName()}
-                href={hashForNewPlan()}
-              >
-                New plan
-              </a>
-              <button
-                className={dashboardHeaderActionClassName({ primary: true })}
+              <Button variant="pill" size="sm" asChild>
+                <a href={hashForNewPlan()}>New plan</a>
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
                 type="button"
-                onClick={() => {
-                  setRunnerScope([])
-                  setRunnerOpen(true)
-                }}
+                onClick={openRunner}
               >
                 Run tests
-              </button>
+              </Button>
             </>
           ) : null
         }
       />
-      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+      <div className="mx-auto w-full max-w-[var(--spacing-content-max)] px-4 pt-5 pb-16 md:px-6">
         <PageHeader
           title="executions"
           summary={
@@ -649,152 +456,127 @@ export function ExecutionsPage() {
         />
 
         {error ? (
-          <Callout
-            tone="danger"
-            title="Executions could not be loaded"
-            className="mt-6"
-          >
-            <span className="flex flex-wrap items-center justify-between gap-3">
-              {error}
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => void load()}
-              >
-                retry
-              </button>
-            </span>
-          </Callout>
+          <div className="mt-6">
+            <StatusPanel
+              variant="alert"
+              headline="Executions could not be loaded"
+              detail={
+                <span className="flex flex-wrap items-center gap-3">
+                  <span>{error}</span>
+                  <Button
+                    variant="pill"
+                    size="sm"
+                    type="button"
+                    onClick={() => void load()}
+                  >
+                    retry
+                  </Button>
+                </span>
+              }
+            />
+          </div>
         ) : null}
 
-        {/* Audit E-13 / RD-05: one control vocabulary, an explicit grid. */}
-        <section className="mt-5 grid gap-3" aria-label="Execution filters">
-          <div className="grid gap-3 @[720px]:grid-cols-[minmax(0,1fr)_auto_auto] @[720px]:items-center">
-            <div className="relative max-w-[28rem]">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-muted"
-                size={14}
-                aria-hidden="true"
-              />
-              <Input
-                className="font-mono"
-                style={{ paddingInline: '2.25rem' }}
-                type="text"
-                value={filters.query}
-                placeholder="Search label, model, plan, id or date…"
-                aria-label="Search executions"
-                onChange={(event) => setFilter('query', event.target.value)}
-              />
-              {filters.query ? (
-                <button
-                  className="absolute top-1/2 right-1 inline-grid size-7 -translate-y-1/2 place-items-center rounded-[6px] border-0 bg-transparent text-ink-muted hover:bg-[var(--surface-soft)] hover:text-ink"
-                  type="button"
-                  onClick={() => setFilter('query', '')}
-                  aria-label="Clear search"
-                >
-                  <X size={13} aria-hidden="true" />
-                </button>
-              ) : null}
-            </div>
-            {eventCounts.length > 1 ? (
-              <Select
-                aria-label="Filter by trigger"
-                className="max-w-[14rem]"
-                value={filters.event}
-                onChange={(event) => setFilter('event', event.target.value)}
+        <section
+          className="mt-5 flex flex-wrap items-center gap-2"
+          aria-label="Execution filters"
+        >
+          <div className="relative min-w-56 flex-1 basis-64">
+            <Input
+              type="search"
+              value={filters.query}
+              placeholder="Search label, model, plan, id or date…"
+              aria-label="Search executions"
+              onChange={(next) => setFilter('query', next)}
+            />
+            {filters.query ? (
+              <Button
+                variant="icon"
+                size="icon"
+                type="button"
+                className="absolute top-1/2 right-1 -translate-y-1/2"
+                onClick={() => setFilter('query', '')}
+                aria-label="Clear search"
               >
-                <option value="all">all triggers · {rows.length}</option>
-                {eventCounts.map(([value, count]) => (
-                  <option key={value} value={value}>
-                    {triggerLabel(value)} · {count}
-                  </option>
-                ))}
-              </Select>
+                <X aria-hidden="true" />
+              </Button>
             ) : null}
+          </div>
+          {eventCounts.length > 1 ? (
             <Select
-              aria-label="Sort executions"
-              className="max-w-[14rem]"
-              value={filters.sort}
-              onChange={(event) =>
-                setFilter('sort', event.target.value as LedgerSort)
-              }
+              aria-label="Filter by trigger"
+              value={filters.event}
+              onChange={(next) => setFilter('event', next)}
+              options={[
+                { value: 'all', label: `all triggers · ${rows.length}` },
+                ...eventCounts.map(([value, count]) => ({
+                  value,
+                  label: `${triggerLabel(value)} · ${count}`,
+                })),
+              ]}
+            />
+          ) : null}
+          <Select
+            aria-label="Sort executions"
+            value={filters.sort}
+            onChange={(next) => setFilter('sort', next as LedgerSort)}
+            options={SORT_OPTIONS}
+          />
+          <fieldset className="m-0 flex min-w-0 basis-full flex-wrap items-center gap-2 border-0 p-0">
+            <legend className="sr-only">Result</legend>
+            <ResultFilter
+              active={filters.status === 'all'}
+              count={rows.length}
+              onClick={() => setFilter('status', 'all')}
             >
-              <option value="newest">newest first</option>
-              <option value="oldest">oldest first</option>
-              <option value="result">result</option>
-              <option value="runtime">longest runtime</option>
-              <option value="tokens">most tokens</option>
-            </Select>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <FilterChipGroup label="Result">
-              <FilterChip
-                active={filters.status === 'all'}
-                count={rows.length}
-                onClick={() => setFilter('status', 'all')}
+              all
+            </ResultFilter>
+            {statusCounts.map(([status, entry]) => (
+              <ResultFilter
+                key={status}
+                active={filters.status === status}
+                count={entry.count}
+                onClick={() => setFilter('status', status)}
               >
-                all
-              </FilterChip>
-              {statusCounts.map(([status, entry]) => (
-                <FilterChip
-                  key={status}
-                  active={filters.status === status}
-                  count={entry.count}
-                  onClick={() => setFilter('status', status)}
-                >
-                  {entry.label}
-                </FilterChip>
-              ))}
-            </FilterChipGroup>
-            <output
-              className="ms-auto font-mono text-label text-ink-muted"
-              aria-live="polite"
-            >
-              showing {visible.length} of {rows.length} loaded
-              {total > rows.length ? ` · ${total} retained` : ''}
-            </output>
-          </div>
+                {entry.label}
+              </ResultFilter>
+            ))}
+            {filtered ? (
+              <output
+                className="ms-auto font-mono text-xs text-ink-faint"
+                aria-live="polite"
+              >
+                showing {visible.length} of {rows.length} loaded
+              </output>
+            ) : null}
+          </fieldset>
         </section>
 
         {loading && rows.length === 0 ? (
-          <div className="mt-4 grid gap-px" aria-busy="true" role="status">
-            <span className="ds-visually-hidden">Loading executions</span>
-            {Array.from({ length: 6 }, (_, index) => (
-              <div
-                // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-                key={index}
-                className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-              />
-            ))}
-          </div>
+          <LedgerSkeleton />
         ) : visible.length === 0 ? (
-          <EmptyState
-            className="mt-6"
-            title={
-              rows.length === 0
-                ? 'No executions retained yet'
-                : 'No executions match these filters'
-            }
-            description={
-              rows.length === 0
-                ? 'Run tests or create a plan to start retaining execution evidence.'
-                : 'Widen the result or trigger filter, or clear the search.'
-            }
-            actions={
-              filtered ? (
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
-                >
-                  clear filters
-                </button>
-              ) : null
-            }
-          />
+          <div className="mt-6">
+            <EmptyState
+              title={
+                rows.length === 0
+                  ? 'No executions retained yet'
+                  : 'No executions match these filters'
+              }
+              description={
+                rows.length === 0
+                  ? 'Run tests or create a plan to start retaining execution evidence.'
+                  : 'Widen the result or trigger filter, or clear the search.'
+              }
+              action={
+                rows.length === 0
+                  ? { label: 'run tests', onClick: openRunner }
+                  : {
+                      label: 'clear filters',
+                      onClick: () => setFilters(LEDGER_DEFAULT_FILTERS),
+                    }
+              }
+            />
+          </div>
         ) : (
           <div className="mt-4 grid min-w-0 gap-6" data-ledger>
             <LedgerTable
@@ -810,16 +592,18 @@ export function ExecutionsPage() {
             />
             {cursor ? (
               <div className="flex flex-wrap items-center gap-3">
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
+                <Button
+                  variant="pill"
+                  size="sm"
                   type="button"
                   onClick={() => void loadMore()}
                   disabled={loadingMore}
                   aria-busy={loadingMore}
                 >
                   {loadingMore ? 'loading…' : `load ${PAGE_SIZE} more`}
-                </button>
-                <span className="font-mono text-label text-ink-muted">
+                  <ArrowRight aria-hidden="true" />
+                </Button>
+                <span className="font-mono text-xs text-ink-faint">
                   {rows.length} of {total} loaded
                 </span>
               </div>
@@ -835,5 +619,32 @@ export function ExecutionsPage() {
         onCompleted={() => void load()}
       />
     </div>
+  )
+}
+
+/** A result filter is the Console's pill button with a pressed state. */
+function ResultFilter({
+  active,
+  count,
+  onClick,
+  children,
+}: {
+  active: boolean
+  count: number
+  onClick: () => void
+  children: string
+}) {
+  return (
+    <Button
+      variant="pill"
+      size="sm"
+      type="button"
+      aria-pressed={active}
+      className={active ? 'bg-surface-selected text-ink' : undefined}
+      onClick={onClick}
+    >
+      {children}
+      <span className={active ? 'text-ink' : 'text-ink-faint'}>{count}</span>
+    </Button>
   )
 }

@@ -118,8 +118,66 @@ declare module '@iii-dev/console-ui' {
   export const Skeleton: React.ComponentType<
     React.HTMLAttributes<HTMLSpanElement>
   >
+
+  export type TableDensity = 'comfortable' | 'compact'
+  export interface TableProps
+    extends React.TableHTMLAttributes<HTMLTableElement> {
+    density?: TableDensity
+  }
+  export const TableViewport: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const TableFrame: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const Table: React.ComponentType<TableProps>
+  export const TableHeader: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export const TableBody: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export const TableFooter: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export interface TableRowProps
+    extends React.HTMLAttributes<HTMLTableRowElement> {
+    interactive?: boolean
+    selected?: boolean
+  }
+  export const TableRow: React.ComponentType<TableRowProps>
+  export const TableHead: React.ComponentType<
+    React.ThHTMLAttributes<HTMLTableCellElement>
+  >
+  export const TableCell: React.ComponentType<
+    React.TdHTMLAttributes<HTMLTableCellElement>
+  >
+  export const TableCaption: React.ComponentType<
+    React.HTMLAttributes<HTMLTableCaptionElement>
+  >
+
+  export type ChipTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+  export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
+    tone?: ChipTone
+    selected?: boolean
+  }
+  export const Chip: React.ComponentType<ChipProps>
+
+  export type BadgeVariant = 'default' | 'ok' | 'warn' | 'alert' | 'accent'
+  export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+    variant?: BadgeVariant
+  }
+  export const Badge: React.ComponentType<BadgeProps>
+
+  export interface StatusDotProps
+    extends React.HTMLAttributes<HTMLSpanElement> {
+    tone?: 'accent' | 'alert' | 'warn' | 'ink' | 'ok'
+    pulse?: boolean
+  }
+  export const StatusDot: React.ComponentType<StatusDotProps>
+  export type StatusVariant = 'info' | 'success' | 'warn' | 'alert'
   export interface StatusPanelProps {
-    variant?: 'info' | 'success' | 'warn' | 'alert'
+    variant?: StatusVariant
     icon?: React.ReactNode
     headline: React.ReactNode
     detail?: React.ReactNode
@@ -127,6 +185,7 @@ declare module '@iii-dev/console-ui' {
   }
   export const StatusPanel: React.ComponentType<StatusPanelProps>
   export interface EmptyStateProps {
+    icon?: React.ComponentType<{ className?: string }>
     title: string
     description: string
     action?: { label: string; onClick: () => void }
@@ -137,6 +196,32 @@ declare module '@iii-dev/console-ui' {
     onOpenChange?(open: boolean): void
     children?: React.ReactNode
   }>
+  export interface ConfirmDialogProps {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    title: string
+    description?: React.ReactNode
+    details?: readonly string[]
+    confirmLabel?: string
+    cancelLabel?: string
+    onConfirm: () => void
+    onCancel?: () => void
+  }
+  export const ConfirmDialog: React.ComponentType<ConfirmDialogProps>
+  export interface CollapsibleCardProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    open?: boolean
+    defaultOpen?: boolean
+    onOpenChange?(open: boolean): void
+    disabled?: boolean
+  }
+  export const CollapsibleCard: React.ComponentType<CollapsibleCardProps>
+  export const CollapsibleCardTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement>
+  >
+  export const CollapsibleCardContent: React.ComponentType<
+    React.HTMLAttributes<HTMLElement>
+  >
   export const DropdownMenu: React.ComponentType<{ children?: React.ReactNode }>
   export const PageSidebar: React.ComponentType<
     React.HTMLAttributes<HTMLElement> & { width?: number }

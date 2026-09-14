@@ -32,11 +32,17 @@ export type ExecutionMetrics = {
   scoreMean: number | null
   scoreSamples: number
   subjectTokens: UsageCoverage
+  /** The subject tokens split as the attempt totals report them. */
+  inputTokens: UsageCoverage
+  outputTokens: UsageCoverage
+  cacheReadTokens: UsageCoverage
+  cacheWriteTokens: UsageCoverage
   failedAttemptTokens: UsageCoverage
   cost: UsageCoverage
   durationMs: UsageCoverage
   functionCalls: UsageCoverage
   functionErrors: UsageCoverage
+  turns: UsageCoverage
   completedTokenSamples: number
   tokensCompletedP50: number | null
   tokensPerCompletion: number | null
@@ -134,6 +140,22 @@ export function buildExecutionMetrics(
     scoreMean: mean(scores),
     scoreSamples: scores.filter((value) => value !== null).length,
     subjectTokens,
+    inputTokens: coverage(
+      runs.map((run) => attemptTotals(run, 'input_tokens')),
+      scopeComplete,
+    ),
+    outputTokens: coverage(
+      runs.map((run) => attemptTotals(run, 'output_tokens')),
+      scopeComplete,
+    ),
+    cacheReadTokens: coverage(
+      runs.map((run) => attemptTotals(run, 'cache_read_tokens')),
+      scopeComplete,
+    ),
+    cacheWriteTokens: coverage(
+      runs.map((run) => attemptTotals(run, 'cache_write_tokens')),
+      scopeComplete,
+    ),
     failedAttemptTokens: coverage(
       runs.map((run) => {
         // Terminal run efficiency already includes retries. For an incomplete
@@ -158,6 +180,14 @@ export function buildExecutionMetrics(
     ),
     functionErrors: coverage(
       runs.map((run) => cumulativeCounter(run, 'function_call_errors')),
+      scopeComplete,
+    ),
+    turns: coverage(
+      // Efficiency carries turns for newer reports; older ones only in the
+      // terminal attempt's totals, as the assessment view reads them.
+      runs.map(
+        (run) => cumulativeCounter(run, 'turns') ?? attemptTotals(run, 'turns'),
+      ),
       scopeComplete,
     ),
     completedTokenSamples: completedTokens.samples,
@@ -228,6 +258,22 @@ function cumulativeCounter(run: unknown, name: string): number | null {
   // A terminal efficiency can carry a partial sum when retry efficiency was
   // unavailable. Do not present that smaller value as complete consumption.
   return retryTotal !== null && total >= retryTotal ? total : null
+}
+
+/** A counter from the attempt totals, summed over the terminal attempt and its
+ *  physical retries; null when any attempt lacks it. */
+function attemptTotals(run: unknown, name: string): number | null {
+  const terminal = counter(field(field(field(run, 'metrics'), 'totals'), name))
+  const retries = field(run, 'retry_attempts')
+  if (terminal === null || !Array.isArray(retries) || retries.length === 0)
+    return terminal
+  const retryTotal = coverage(
+    retries.map((retry) =>
+      counter(field(field(field(retry, 'metrics'), 'totals'), name)),
+    ),
+    true,
+  ).total
+  return retryTotal === null ? null : terminal + retryTotal
 }
 
 function nonnegative(value: unknown): number | null {

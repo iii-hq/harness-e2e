@@ -97,6 +97,42 @@ describe('whole-execution metrics', () => {
     expect(incomplete.tokensPerCompletion).toBeNull()
   })
 
+  it('splits the subject tokens into input, output and cache over every attempt', () => {
+    const run = metricRun('a', 150, {
+      metrics: {
+        totals: {
+          input_tokens: 80,
+          output_tokens: 20,
+          cache_read_tokens: 30,
+          cache_write_tokens: 0,
+        },
+      },
+      retry_attempts: [
+        {
+          ...metricRun('a', 50),
+          session_id: 'retry-session',
+          attempt_number: 1,
+          attempt_id: 'retry',
+          metrics: {
+            totals: {
+              input_tokens: 40,
+              output_tokens: 10,
+              cache_read_tokens: 5,
+              cache_write_tokens: 0,
+            },
+          },
+        },
+      ],
+    })
+    const metrics = buildExecutionMetrics(
+      executionMetricsFixture([{ runs: [run] }]),
+    )
+    expect(metrics.inputTokens.total).toBe(120)
+    expect(metrics.outputTokens.total).toBe(30)
+    expect(metrics.cacheReadTokens.total).toBe(35)
+    expect(metrics.cacheWriteTokens.total).toBe(0)
+  })
+
   it('preserves known usage when another run lacks telemetry without inventing efficiency', () => {
     const unknown = metricRun('unknown', null, {
       cost: null,
