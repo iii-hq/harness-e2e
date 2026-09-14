@@ -594,7 +594,7 @@ def project_scaffold(
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == runner_worker(contract):
             container["config_name"] = f"{namespace}-harness-e2e"
-            container["config_override"] = {"data_dir": str(data_dir)}
+            container["config_override"] = {"data_dir": str(data_dir), "control_namespace": namespace}
         elif worker == APPLICATION and harness_override:
             container["config_name"] = f"{namespace}-harness"
             container.setdefault("config_override", {}).update(harness_override)
