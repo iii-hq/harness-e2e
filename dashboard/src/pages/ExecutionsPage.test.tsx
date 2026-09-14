@@ -11,7 +11,8 @@ import {
   ledgerFiltersFromParams,
   ledgerFiltersToParams,
   triggerLabel,
-} from '@/pages/ExecutionsPage'
+} from '@/lib/executions-ledger'
+import { LedgerTable, resultBadgeVariant } from '@/pages/ExecutionsPage'
 
 const NOW = Date.parse('2026-08-26T21:00:00Z')
 
@@ -229,21 +230,43 @@ describe('executions ledger', () => {
     ).toEqual(['rc-a', 'rc-b'])
   })
 
-  // Audit O-03 / E-11: the row carries every column with a label, and a
-  // cancelled row never invents numbers.
-  it('renders the collapsing table with honest placeholders', () => {
-    const html = renderToStaticMarkup(
-      <table>
-        <tbody>
-          <tr>{null}</tr>
-        </tbody>
-      </table>,
-    )
-    expect(html).toContain('<table>')
+  // The ledger renders on the Console's table: running first, day groups as
+  // colgroup headings, one badge per result, and honest placeholders.
+  it('renders the ledger on the Console table with honest placeholders', () => {
     const grouped = groupLedgerRows(rows, NOW)
-    expect(grouped.groups[1].rows.map((row) => row.status.label)).toEqual([
-      'failed',
-      'cancelled',
-    ])
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        caption="Executions"
+        groups={[
+          { key: 'running', label: 'running', rows: grouped.running },
+          ...grouped.groups,
+        ]}
+      />,
+    )
+    expect(html).toContain('class="iii-ui-table" data-density="compact"')
+    expect(html).not.toContain('>open<')
+    expect(html.match(/scope="colgroup" colSpan="7"/g)?.length).toBe(
+      1 + grouped.groups.length,
+    )
+    expect(html).toContain('data-badge-variant="ok">passed<')
+    expect(html).toContain('data-badge-variant="alert">failed<')
+    expect(html).toContain('data-badge-variant="default">cancelled<')
+    expect(html).toContain('data-result="cancelled"')
+    const cancelled = html.slice(
+      html.indexOf('data-execution-id="cancelled-1"'),
+    )
+    const cancelledRow = cancelled.slice(0, cancelled.indexOf('</tr>'))
+    expect(cancelledRow.match(/>—</g)?.length).toBeGreaterThanOrEqual(4)
+    expect(cancelledRow).not.toMatch(/>0<|>0%<|>0s</)
+    expect(html).toContain('data-interactive="true"')
+  })
+
+  it('maps every result onto one of the Console badge variants', () => {
+    expect(resultBadgeVariant('passed')).toBe('ok')
+    expect(resultBadgeVariant('failed')).toBe('alert')
+    expect(resultBadgeVariant('inconclusive')).toBe('warn')
+    expect(resultBadgeVariant('running')).toBe('accent')
+    expect(resultBadgeVariant('cancelled')).toBe('default')
+    expect(resultBadgeVariant('unavailable')).toBe('default')
   })
 })

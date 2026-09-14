@@ -38,9 +38,26 @@
 
 /* Utilities reference the Console variables without redeclaring their values. */
 @theme reference {
+  --color-bg: var(--color-bg);
   --color-panel: var(--color-panel);
   --color-panel-raised: var(--color-panel-raised);
+  --color-card-highlight: var(--color-card-highlight);
+  --color-surface: var(--color-surface);
+  --color-surface-hover: var(--color-surface-hover);
+  --color-surface-selected: var(--color-surface-selected);
+  --color-edge: var(--color-edge);
   --color-ink: var(--color-ink);
+  --color-ink-faint: var(--color-ink-faint);
+  --color-ink-ghost: var(--color-ink-ghost);
+  --color-ink-disabled: var(--color-ink-disabled);
+  --color-accent: var(--color-accent);
+  --color-accent-muted: var(--color-accent-muted);
+  --color-ok: var(--color-ok);
+  --color-ok-muted: var(--color-ok-muted);
+  --color-warn: var(--color-warn);
+  --color-warn-muted: var(--color-warn-muted);
+  --color-alert: var(--color-alert);
+  --color-alert-muted: var(--color-alert-muted);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }

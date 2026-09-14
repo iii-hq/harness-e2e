@@ -1,3 +1,4 @@
+import type React from 'react'
 import {
   type ButtonHTMLAttributes,
   createContext,
@@ -104,4 +105,207 @@ export function TabsTrigger({
       {children}
     </button>
   )
+}
+
+/* ---- primitives the pilot screens render; markup mirrors the host recipes ---- */
+
+type Div = HTMLAttributes<HTMLDivElement>
+
+export function Button({
+  variant: _variant,
+  size: _size,
+  asChild,
+  children,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: string
+  size?: string
+  asChild?: boolean
+}) {
+  if (asChild) return <>{children}</>
+  return (
+    <button type="button" {...props}>
+      {children}
+    </button>
+  )
+}
+
+export function Input({
+  value,
+  onChange,
+  preserveCase: _preserveCase,
+  ...props
+}: Omit<React.InputHTMLAttributes<HTMLInputElement>, 'onChange' | 'value'> & {
+  value: string
+  onChange: (next: string) => void
+  preserveCase?: boolean
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      {...props}
+    />
+  )
+}
+
+export function Select<T extends string>({
+  value,
+  options = [],
+  onChange,
+  placeholder,
+  ...props
+}: {
+  value: T | undefined
+  options?: Array<{ value: T; label: string }>
+  onChange: (next: T) => void
+  placeholder?: string
+  disabled?: boolean
+  className?: string
+  'aria-label'?: string
+}) {
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(event) => onChange(event.target.value as T)}
+      {...props}
+    >
+      {placeholder ? <option value="">{placeholder}</option> : null}
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+export function Skeleton(props: HTMLAttributes<HTMLSpanElement>) {
+  return <span data-ui="skeleton" {...props} />
+}
+
+export function StatusPanel({
+  variant = 'info',
+  headline,
+  detail,
+  className,
+}: {
+  variant?: string
+  icon?: ReactNode
+  headline: ReactNode
+  detail?: ReactNode
+  className?: string
+}) {
+  return (
+    <div data-ui="status-panel" data-variant={variant} className={className}>
+      <strong>{headline}</strong>
+      {detail}
+    </div>
+  )
+}
+
+export function EmptyState({
+  title,
+  description,
+  action,
+}: {
+  icon?: unknown
+  title: string
+  description: string
+  action?: { label: string; onClick: () => void }
+}) {
+  return (
+    <section data-ui="empty-state">
+      <h2>{title}</h2>
+      <p>{description}</p>
+      {action ? (
+        <button type="button" onClick={action.onClick}>
+          {action.label}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+export function Badge({
+  variant = 'default',
+  children,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & { variant?: string }) {
+  return (
+    <span data-badge-variant={variant} {...props}>
+      {children}
+    </span>
+  )
+}
+
+export function Chip({
+  tone = 'neutral',
+  selected,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & { tone?: string; selected?: boolean }) {
+  return (
+    <span
+      className="iii-ui-chip"
+      data-tone={tone === 'neutral' ? undefined : tone}
+      data-selected={selected || undefined}
+      {...props}
+    />
+  )
+}
+
+export function StatusDot({
+  tone: _tone,
+  pulse: _pulse,
+  ...props
+}: HTMLAttributes<HTMLSpanElement> & { tone?: string; pulse?: boolean }) {
+  return <span data-ui="status-dot" {...props} />
+}
+
+export function TableViewport(props: Div) {
+  return <div className="iii-ui-table-viewport" {...props} />
+}
+export function TableFrame(props: Div) {
+  return <div className="iii-ui-table-frame" {...props} />
+}
+export function Table({
+  density = 'comfortable',
+  ...props
+}: React.TableHTMLAttributes<HTMLTableElement> & { density?: string }) {
+  return <table className="iii-ui-table" data-density={density} {...props} />
+}
+export function TableHeader(props: HTMLAttributes<HTMLTableSectionElement>) {
+  return <thead className="iii-ui-table__header" {...props} />
+}
+export function TableBody(props: HTMLAttributes<HTMLTableSectionElement>) {
+  return <tbody className="iii-ui-table__body" {...props} />
+}
+export function TableFooter(props: HTMLAttributes<HTMLTableSectionElement>) {
+  return <tfoot className="iii-ui-table__footer" {...props} />
+}
+export function TableRow({
+  interactive,
+  selected,
+  ...props
+}: HTMLAttributes<HTMLTableRowElement> & {
+  interactive?: boolean
+  selected?: boolean
+}) {
+  return (
+    <tr
+      className="iii-ui-table__row"
+      data-interactive={interactive || undefined}
+      data-selected={selected || undefined}
+      {...props}
+    />
+  )
+}
+export function TableHead(props: React.ThHTMLAttributes<HTMLTableCellElement>) {
+  return <th className="iii-ui-table__head" {...props} />
+}
+export function TableCell(props: React.TdHTMLAttributes<HTMLTableCellElement>) {
+  return <td className="iii-ui-table__cell" {...props} />
+}
+export function TableCaption(props: HTMLAttributes<HTMLTableCaptionElement>) {
+  return <caption className="iii-ui-table__caption" {...props} />
 }

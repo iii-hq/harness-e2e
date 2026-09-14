@@ -13,19 +13,11 @@
   scroll-margin-top: 82px;
 }
 
-button,
-select,
+/* Links keep the page colour; buttons and selects follow the preflight
+   (font and colour inherit), so the host's own controls keep their utilities. */
 a {
   font: inherit;
-}
-
-a {
   color: inherit;
-}
-
-button,
-select {
-  color: var(--text);
 }
 
 footer a {
