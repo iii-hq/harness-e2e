@@ -30,10 +30,8 @@
     --danger: color-mix(in srgb, var(--color-alert) 80%, var(--color-ink));
     --success: var(--color-ok);
     --control-edge: color-mix(in srgb, var(--color-ink) 50%, transparent);
-    --font-body: var(--font-sans);
     --code-bg: var(--surface-raised);
     --code-text: var(--text-soft);
-    --color-accent-fg: var(--color-panel);
     --glass: var(--color-panel-raised);
     --backdrop: color-mix(in srgb, var(--color-bg) 86%, transparent);
     min-width: 0;
@@ -51,9 +49,6 @@
   }
 
   .harness-e2e-dashboard.harness-e2e-dashboard {
-    --radius-sm: 6px;
-    --radius-md: 6px;
-    --radius-lg: 6px;
     min-width: 0;
     /* Audit DS-14 / RD-11: the dashboard is a query container. Injected pages
      live in tabs and split panes, so layout reacts to THIS width, not the
@@ -118,8 +113,8 @@
     text-transform: lowercase;
     white-space: nowrap;
     transition:
-      color 160ms ease,
-      background 160ms ease;
+      color var(--motion-duration-control) var(--motion-ease-standard),
+      background var(--motion-duration-control) var(--motion-ease-standard);
   }
 
   .harness-e2e-nav-link:hover {
@@ -169,7 +164,7 @@
     font-weight: 500;
     text-decoration: none;
     text-transform: lowercase;
-    transition: top 160ms ease;
+    transition: top var(--motion-duration-control) var(--motion-ease-standard);
   }
 
   .harness-e2e-shell .skip-link:focus-visible {
