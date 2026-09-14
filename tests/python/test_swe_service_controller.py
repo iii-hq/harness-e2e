@@ -158,6 +158,7 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
         self.assertEqual(self.checkpoint(1, self.commit(1, "too late"))["status"], "capability_failure")
 
     def test_lifecycle_rejections_are_evidence_and_never_close_the_run(self):
+        self.probes.write_text(self.probes.read_text().replace("'id':'contract'", "'id':'lifecycle.contract'"))
         self.prepare()
         for ticket in (1, 2):
             accepted = self.checkpoint(ticket, self.commit(0, f"stage {ticket}"))
@@ -167,7 +168,8 @@ raise SystemExit(subprocess.call([sys.executable,'-I',a.probes,*rest]))
             head = self.commit(2, f"build rejection {attempt}")
             result = self.checkpoint(3, head)
             self.assertEqual(result["status"], "rejected")
-            self.assertIn("Behavioral checks failed: contract", result["feedback"])
+            self.assertIn("Behavioral checks failed: lifecycle.contract", result["feedback"])
+            self.assertIn("lifecycle.contract: failed", result["feedback"])
             self.assertIn("authored_regressions: failed", result["feedback"])
             self.assertNotIn("contract failed", result["feedback"], "private probe details stay in evidence")
             self.assertEqual(result["accepted_tickets"], [1, 2])

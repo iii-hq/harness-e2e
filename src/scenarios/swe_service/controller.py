@@ -471,7 +471,8 @@ def checkpoint(args, state):
                 failed_checks = [check for check in lifecycle_checks if not check["passed"]]
                 if failed_checks:
                     passed = False
-                    feedback = "; ".join(check["id"] + ": " + check.get("reason", "failed")
+                    feedback = "; ".join(check["id"] + ": " + (
+                        "failed" if check["id"].startswith("lifecycle.") else check.get("reason", "failed"))
                                          for check in failed_checks)
             if passed and args.ticket == 5 and not state["canary_revealed"]:
                 canary_observation = {"passed": probe(state, temporary, 5, True)["passed"]}
