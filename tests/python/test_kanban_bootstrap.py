@@ -20,7 +20,7 @@ class KanbanBootstrapTest(unittest.TestCase):
             'mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6',
         )
         self.assertEqual(bootstrap.PLAYWRIGHT_MODULE, 'playwright/index.mjs')
-        self.assertEqual(bootstrap.FIXTURE_REVISION, 'df13c41f0ae476ddbb01debc605aff340c87b73c')
+        self.assertEqual(bootstrap.FIXTURE_REVISION, 'main')
         tools = ROOT / 'scripts/kanban_eval/tools'
         self.assertTrue((tools / 'package.json').is_file())
         self.assertTrue((tools / 'package-lock.json').is_file())
@@ -34,13 +34,13 @@ class KanbanBootstrapTest(unittest.TestCase):
         self.assertIn("startsWith(matrix.group_id, 'case-kanban-')", workflow)
         self.assertIn('repository: iii-hq/kanban-e2e-fixture', workflow)
         self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow)
-        self.assertIn('df13c41f0ae476ddbb01debc605aff340c87b73c', workflow)
         self.assertIn('fetch-depth: 0', workflow)
         self.assertIn('node-version: 24.18.0', workflow)
         kanban_checkout = next(
             step for step in workflow.split('\n      - ')
-            if 'name: Checkout pinned Kanban fixture' in step
+            if 'name: Checkout Kanban fixture' in step
         )
+        self.assertIn('ref: main', kanban_checkout)
         self.assertNotIn('token:', kanban_checkout)
         for step in workflow.split('\n      - '):
             if 'uses: actions/checkout@' in step:
@@ -77,7 +77,7 @@ class KanbanBootstrapTest(unittest.TestCase):
 
             with mock.patch.object(bootstrap, 'run', side_effect=fake_run), \
                  mock.patch.object(bootstrap.subprocess, 'check_output', side_effect=[
-                     bootstrap.FIXTURE_REVISION + '\n', json.dumps([bootstrap.IMAGE]),
+                     'a' * 40 + '\n', 'a' * 40 + '\n', json.dumps([bootstrap.IMAGE]),
                  ]) as check_output, \
                  mock.patch.object(bootstrap, 'required_file', side_effect=lambda path, _label: Path(path)), \
                  mock.patch.object(Path, 'is_file', is_file), \
@@ -92,10 +92,30 @@ class KanbanBootstrapTest(unittest.TestCase):
             self.assertIn('--store-dir', commands[2])
             self.assertIn('--ignore-scripts', commands[2])
             self.assertFalse(any('--with-deps' in command for command in commands))
-            self.assertEqual(check_output.call_args_list[1].args[0][0:4],
+            self.assertEqual(check_output.call_args_list[1].args[0],
+                             ['git', '-C', str(fixture.resolve()), 'rev-parse', '--verify', 'main^{commit}'])
+            self.assertEqual(check_output.call_args_list[2].args[0][0:4],
                              ['docker', 'image', 'inspect', '--format'])
             self.assertEqual(Path(json.loads(output.read_text())['fixture']), fixture.resolve())
             self.assertEqual(json.loads(output.read_text())['browsers'], '/ms-playwright')
+
+    def test_bootstrap_rejects_head_that_differs_from_the_resolved_fixture_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'scenarios').mkdir()
+            (root / 'kanban').mkdir()
+            (root / 'scenarios/catalog.json').write_bytes((ROOT / 'src/scenarios/kanban/catalog.json').read_bytes())
+            (root / 'kanban/pnpm-lock.yaml').write_text('lockfileVersion: 9\n')
+            with mock.patch.object(bootstrap.subprocess, 'check_output', side_effect=[
+                'a' * 40 + '\n', 'b' * 40 + '\n',
+            ]), mock.patch.object(bootstrap, 'run') as run, mock.patch.object(bootstrap.sys, 'argv', [
+                'bootstrap.py', '--fixture', str(root), '--iii', sys.executable,
+                '--runtime-root', str(root / 'runtime'), '--output', str(root / 'runtime.json'),
+                '--node', sys.executable, '--npm', sys.executable,
+            ]):
+                with self.assertRaisesRegex(ValueError, 'fixture revision mismatch'):
+                    bootstrap.main()
+                run.assert_not_called()
 
 
 if __name__ == '__main__':
