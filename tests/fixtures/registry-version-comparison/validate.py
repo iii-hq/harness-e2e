@@ -355,13 +355,6 @@ def environment_observations(task_root, assets, state):
         result = controller_command(state, command, timeout)
         return result, [save_command(task_root, name, result)]
 
-    # The private task container still runs whatever the attempt left up, and
-    # that stack holds the published ports this validation has to bind, so
-    # `docker compose up` fails with "port is already allocated". Reclaim the
-    # ports first: every check below is made against the stack this validator
-    # starts from the documented startup contract, never against a leftover.
-    reclaim = 'ids=$(docker ps -q); if [ -n "$ids" ]; then docker stop -t 15 $ids >/dev/null; fi; docker ps -q'
-    _, reclaim_evidence = checked("environment-reclaim", reclaim, 180)
     build, build_evidence = checked("environment-build", scoped(f"docker compose -f {compose_arg} build"), 600)
     start, start_evidence = checked("environment-start", scoped(startup), 600)
     migrate, migrate_evidence = checked("environment-migrate", scoped(migration), 300)
@@ -435,7 +428,7 @@ def environment_observations(task_root, assets, state):
     base, base_evidence = checked("environment-registry-base", "git -C /workspace/registry rev-parse HEAD", 30)
 
     values = {
-        "environment.build": (build, reclaim_evidence + build_evidence),
+        "environment.build": (build, build_evidence),
         "environment.migration": (migrate, migrate_evidence),
         "environment.seed": (seeded and seed.get("exit_code") == 0 and canonical.get("exit_code") == 0, seed_evidence + canonical_evidence),
         "environment.api_readiness": (api, api_evidence),
