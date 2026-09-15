@@ -941,7 +941,7 @@ export function PlanRunHistory({
                       <strong className="font-mono text-[0.8125rem] text-ink">
                         {displayLabel}
                       </strong>
-                      <span className="rounded bg-panel px-1.5 py-0.5 text-label text-ink-muted">
+                      <span className="rounded bg-panel px-1.5 py-0.5 text-[0.625rem] text-ink-muted">
                         {imported ? 'release-control' : 'local'}
                       </span>
                       {canRename && onRenameExecution ? (
