@@ -141,7 +141,7 @@ are not subject filesystem artifacts.
 To enable this in Release Control's exact-stack workflow:
 
 1. Publish the fixture history through commit
-   `0471257a95095da7c5e9d366e26636976472e90d` in the public
+   `df13c41f0ae476ddbb01debc605aff340c87b73c` in the public
    `iii-hq/kanban-e2e-fixture` repository. Checkout uses the workflow's default
    token and never persists credentials.
 2. Merge the native scenarios and publish a compatible immutable `harness-e2e`

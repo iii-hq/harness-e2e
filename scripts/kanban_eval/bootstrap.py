@@ -10,7 +10,7 @@ import sys
 
 IMAGE = 'mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6'
 PLAYWRIGHT_MODULE = 'playwright/index.mjs'
-FIXTURE_REVISION = '0471257a95095da7c5e9d366e26636976472e90d'
+FIXTURE_REVISION = 'df13c41f0ae476ddbb01debc605aff340c87b73c'
 
 
 def run(*command, **kwargs):

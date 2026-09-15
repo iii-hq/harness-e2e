@@ -20,7 +20,7 @@ class KanbanBootstrapTest(unittest.TestCase):
             'mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6',
         )
         self.assertEqual(bootstrap.PLAYWRIGHT_MODULE, 'playwright/index.mjs')
-        self.assertEqual(bootstrap.FIXTURE_REVISION, '0471257a95095da7c5e9d366e26636976472e90d')
+        self.assertEqual(bootstrap.FIXTURE_REVISION, 'df13c41f0ae476ddbb01debc605aff340c87b73c')
         tools = ROOT / 'scripts/kanban_eval/tools'
         self.assertTrue((tools / 'package.json').is_file())
         self.assertTrue((tools / 'package-lock.json').is_file())
@@ -34,7 +34,7 @@ class KanbanBootstrapTest(unittest.TestCase):
         self.assertIn("startsWith(matrix.group_id, 'case-kanban-')", workflow)
         self.assertIn('repository: iii-hq/kanban-e2e-fixture', workflow)
         self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow)
-        self.assertIn('0471257a95095da7c5e9d366e26636976472e90d', workflow)
+        self.assertIn('df13c41f0ae476ddbb01debc605aff340c87b73c', workflow)
         self.assertIn('fetch-depth: 0', workflow)
         self.assertIn('node-version: 24.18.0', workflow)
         kanban_checkout = next(
