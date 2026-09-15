@@ -10,7 +10,7 @@ import sys
 
 IMAGE = 'mcr.microsoft.com/playwright@sha256:cf0daee9b994042e011bc29f20cdff1a9f682a039b43fcd738f7d8a9d3bcd9d6'
 PLAYWRIGHT_MODULE = 'playwright/index.mjs'
-FIXTURE_REVISION = '0471257a95095da7c5e9d366e26636976472e90d'
+FIXTURE_REVISION = 'main'
 
 
 def run(*command, **kwargs):
@@ -44,8 +44,11 @@ def main():
     catalog = required_file(fixture / 'scenarios/catalog.json', 'fixture catalog')
     required_file(fixture / 'kanban/pnpm-lock.yaml', 'fixture lockfile')
     head = subprocess.check_output(['git', '-C', str(fixture), 'rev-parse', 'HEAD'], text=True).strip()
-    if head != FIXTURE_REVISION:
-        raise ValueError(f'fixture revision mismatch: expected {FIXTURE_REVISION}, observed {head}')
+    expected = subprocess.check_output(
+        ['git', '-C', str(fixture), 'rev-parse', '--verify', f'{FIXTURE_REVISION}^{{commit}}'], text=True,
+    ).strip()
+    if head != expected:
+        raise ValueError(f'fixture revision mismatch: expected {FIXTURE_REVISION} ({expected}), observed {head}')
     embedded_catalog = Path(__file__).resolve().parents[2] / 'src/scenarios/kanban/catalog.json'
     if catalog.read_bytes() != embedded_catalog.read_bytes():
         raise ValueError('fixture catalog differs from the runner-embedded catalog')
