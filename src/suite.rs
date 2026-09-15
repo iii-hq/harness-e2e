@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use chrono::{SecondsFormat, Utc};
-use serde::Serialize;
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 
@@ -18,9 +18,10 @@ use crate::asset::{self, AssetCaptureLimits};
 use crate::context::E2eContext;
 use crate::identity::{self, ExecutionIdentity, SystemUnderTestIdentity};
 use crate::report::{
-    CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport,
-    FailurePhase, ModelArtifact, ObservationMetricOrigin, ObservationRunContract,
-    RetryAttemptReport, RunStatus, ScenarioFlowEvidence, ScenarioMeasurement,
+    AgentProfileArtifact, CostReport, CriterionReport, E2eManifest, E2eReport, E2eRunReport,
+    E2eScenarioReport, FailurePhase, ModelArtifact, ObservationMetricOrigin,
+    ObservationRunContract, RetryAttemptReport, RunStatus, ScenarioFlowEvidence,
+    ScenarioMeasurement,
 };
 use crate::scenarios::common;
 use crate::scenarios::{
@@ -252,6 +253,23 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
     )
     .context("resolve system-under-test identity")?;
     let system_identity_sha256 = artifact::sha256_value(&system_under_test)?;
+    let agent = match config.subject.agent.as_deref() {
+        Some(id) => Some(
+            resolve_agent_profile(&context, id)
+                .await
+                .context("resolve subject agent profile")?,
+        ),
+        None => None,
+    };
+    if let Some((model, provider)) = agent.as_ref().and_then(ResolvedAgentProfile::route) {
+        config.subject.model = model;
+        if let Some(provider) = provider {
+            config.subject.provider = provider;
+        }
+    }
+    if let Some(agent) = &agent {
+        agent.apply_reasoning(&mut config.subject);
+    }
     let subject_model = resolve_model(&context, &config.subject.model, &config.subject.provider)
         .await
         .context("resolve subject model")?;
@@ -494,7 +512,7 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         started_at,
         completed_at,
     };
-    let subject = ModelArtifact::from(subject_model);
+    let subject = subject_artifact(subject_model, agent);
     let manifest = E2eManifest {
         execution: execution.clone(),
         system_under_test: system_under_test.clone(),
@@ -1067,6 +1085,142 @@ async fn resolve_model(context: &E2eContext, model: &str, provider: &str) -> Res
     Ok(resolved)
 }
 
+fn subject_artifact(model: Model, agent: Option<ResolvedAgentProfile>) -> ModelArtifact {
+    let mut subject = ModelArtifact::from(model);
+    subject.agent = agent.map(|agent| agent.artifact);
+    subject
+}
+
+#[derive(Debug, Deserialize)]
+struct AgentProfileResponse {
+    id: String,
+    system_prompt: String,
+    #[serde(default)]
+    skills: Vec<String>,
+    #[serde(default)]
+    functions: Vec<String>,
+    #[serde(default)]
+    unknown_skills: Vec<String>,
+    #[serde(default)]
+    unknown_functions: Vec<String>,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+    inheritance_error: Option<String>,
+}
+
+struct ResolvedAgentProfile {
+    artifact: AgentProfileArtifact,
+    model: Option<String>,
+    reasoning_effort: Option<String>,
+}
+
+impl ResolvedAgentProfile {
+    fn route(&self) -> Option<(String, Option<String>)> {
+        let model = self.model.as_deref()?.trim();
+        let split = model
+            .split_once("::")
+            .filter(|(provider, model)| !provider.is_empty() && !model.is_empty());
+        Some(match split {
+            Some((provider, model)) => (model.to_string(), Some(provider.to_string())),
+            None => (model.to_string(), None),
+        })
+    }
+
+    fn apply_reasoning(&self, subject: &mut SubjectConfig) {
+        let Some(effort) = self
+            .reasoning_effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty() && *effort != "default")
+        else {
+            return;
+        };
+        let normalized = effort.to_lowercase();
+        subject.thinking_level = matches!(
+            normalized.as_str(),
+            "minimal" | "low" | "medium" | "high" | "xhigh"
+        )
+        .then_some(normalized);
+        let options = subject.provider_options.get_or_insert_with(|| json!({}));
+        if !options.is_object() {
+            *options = json!({});
+        }
+        let provider = options
+            .as_object_mut()
+            .expect("provider options normalized to an object")
+            .entry(subject.provider.clone())
+            .or_insert_with(|| json!({}));
+        if !provider.is_object() {
+            *provider = json!({});
+        }
+        provider
+            .as_object_mut()
+            .expect("provider option normalized to an object")
+            .insert("reasoning_effort".into(), Value::String(effort.into()));
+    }
+}
+
+async fn resolve_agent_profile(context: &E2eContext, id: &str) -> Result<ResolvedAgentProfile> {
+    let response: AgentProfileResponse = serde_json::from_value(
+        context
+            .trigger_value("directory::agents::get", json!({ "id": id }))
+            .await
+            .with_context(|| format!("query Directory for agent profile '{id}'"))?,
+    )
+    .with_context(|| format!("decode Directory agent profile '{id}'"))?;
+    if response.id != id {
+        bail!(
+            "Directory resolved agent profile '{id}' as '{}'",
+            response.id
+        );
+    }
+    if let Some(error) = response
+        .inheritance_error
+        .as_deref()
+        .filter(|error| !error.trim().is_empty())
+    {
+        bail!("agent profile '{id}' has an unresolved inheritance chain: {error}");
+    }
+    if !response.unknown_skills.is_empty() || !response.unknown_functions.is_empty() {
+        bail!(
+            "agent profile '{id}' has unavailable skills {:?} or functions {:?}",
+            response.unknown_skills,
+            response.unknown_functions
+        );
+    }
+    let mut resolved_skills = Vec::with_capacity(response.skills.len());
+    for skill in &response.skills {
+        let value = context
+            .trigger_value("directory::skills::get", json!({ "id": skill }))
+            .await
+            .with_context(|| format!("resolve skill '{skill}' for agent profile '{id}'"))?;
+        let resolved_id = value
+            .get("id")
+            .and_then(Value::as_str)
+            .context("Directory skill response is missing id")?;
+        let body = value
+            .get("body")
+            .and_then(Value::as_str)
+            .context("Directory skill response is missing body")?;
+        resolved_skills.push(json!({ "id": resolved_id, "body": body }));
+    }
+    let configuration_sha256 = artifact::sha256_value(&json!({
+        "system_prompt": response.system_prompt,
+        "skills": resolved_skills,
+        "functions": response.functions,
+        "model": response.model.clone(),
+        "reasoning_effort": response.reasoning_effort.clone(),
+    }))?;
+    Ok(ResolvedAgentProfile {
+        artifact: AgentProfileArtifact {
+            id: response.id,
+            configuration_sha256,
+        },
+        model: response.model,
+        reasoning_effort: response.reasoning_effort,
+    })
+}
+
 struct AttemptRequest<'a> {
     scenario_id: ScenarioId,
     run_id: &'a str,
@@ -1457,6 +1611,7 @@ async fn run_adaptive_once(
             context.clone(),
             &subject.model,
             &subject.provider,
+            subject.agent.as_deref(),
             output,
             &attempt_id,
         ) {
@@ -1471,6 +1626,7 @@ async fn run_adaptive_once(
                             context,
                             model: &subject.model,
                             provider: &subject.provider,
+                            agent: subject.agent.as_deref(),
                             scenario_prompt: &spec.prompt,
                             policy: &runtime.policy,
                             catalog: &runtime.catalog,
@@ -1888,6 +2044,7 @@ async fn run_composite_once(
             context.clone(),
             &subject.model,
             &subject.provider,
+            subject.agent.as_deref(),
         ) {
             Ok(runtime) => {
                 let uses_harness = runtime
@@ -3315,6 +3472,66 @@ mod tests {
     }
 
     #[test]
+    fn agent_profile_resolves_route_reasoning_and_report_identity() {
+        let profile = ResolvedAgentProfile {
+            artifact: AgentProfileArtifact {
+                id: "software-engineer".into(),
+                configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+            },
+            model: Some("openai-codex::gpt-5.3-codex".into()),
+            reasoning_effort: Some("ultra".into()),
+        };
+        assert_eq!(
+            profile.route(),
+            Some(("gpt-5.3-codex".into(), Some("openai-codex".into())))
+        );
+        let mut configured = SubjectConfig {
+            model: "requested/model".into(),
+            provider: "requested".into(),
+            agent: Some("software-engineer".into()),
+            thinking_level: Some("low".into()),
+            provider_options: None,
+            priced: None,
+        };
+        configured.model = profile.route().unwrap().0;
+        configured.provider = profile.route().unwrap().1.unwrap();
+        profile.apply_reasoning(&mut configured);
+        assert_eq!(configured.thinking_level, None);
+        assert_eq!(
+            configured.provider_options.unwrap()["openai-codex"]["reasoning_effort"],
+            "ultra"
+        );
+
+        let model: Model = serde_json::from_value(json!({
+            "id": "gpt-5.3-codex",
+            "provider": "openai-codex",
+            "context_window": 200_000,
+            "max_output_tokens": 64_000
+        }))
+        .unwrap();
+        let artifact = subject_artifact(model, Some(profile));
+        assert_eq!(artifact.model, "gpt-5.3-codex");
+        assert_eq!(artifact.agent.unwrap().id, "software-engineer");
+    }
+
+    #[test]
+    fn plain_profile_model_keeps_the_requested_provider_and_slashes() {
+        let profile = ResolvedAgentProfile {
+            artifact: AgentProfileArtifact {
+                id: "profile".into(),
+                configuration_sha256: crate::artifact::sha256_bytes(b"profile"),
+            },
+            model: Some("claude-code/claude-sonnet-5".into()),
+            reasoning_effort: None,
+        };
+
+        assert_eq!(
+            profile.route(),
+            Some(("claude-code/claude-sonnet-5".into(), None))
+        );
+    }
+
+    #[test]
     fn terminal_failed_subject_is_captured_as_incomplete_without_mutating_report_metrics() {
         let case = ScenarioId::RegistryImplementation
             .materialize("failed-capture", 1)
@@ -3438,6 +3655,7 @@ mod tests {
         let subject = ModelArtifact {
             model: "model".into(),
             provider: "provider".into(),
+            agent: None,
             context_window: 1000,
             max_output_tokens: 100,
             supports_tools: Some(true),

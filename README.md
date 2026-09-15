@@ -165,6 +165,31 @@ Everything else is resolved here, from the commit pinned by `runner_sha`:
    protected runner; one root bundle is produced without rebuilding the native
    Harness artifacts.
 
+### Agent profiles from Release Control
+
+Release Control can select a test template for an execution and include an
+optional `agent_profile` in its frozen plan:
+
+```json
+{
+  "agent_profile": {
+    "id": "reviewer",
+    "content": "---\nname: Reviewer\nextends: iii\nmodel: zai::glm-5\nreasoning_effort: high\n---\nReview the implementation and verify the result."
+  }
+}
+```
+
+`content` is the complete Directory profile Markdown, including frontmatter.
+The runner installs it into the isolated group's Directory before sending its
+ID as `agent` to `e2e::run`. Referenced parent profiles, skills, functions and
+the selected model/provider must be available in that stack. An existing file
+with the same profile ID causes setup to fail, protecting shared profiles.
+A profile's model
+overrides the plan's model; `provider::model` also selects its provider.
+Results record the resolved subject model and the profile configuration hash.
+Each execution keeps its selected template and profile; comparisons remain
+manual in Release Control. Omitting `agent_profile` keeps the built-in agent.
+
 `scripts/report_execution.py` posts what was observed to Release Control's run
 ledger over OIDC: `materialized` before anything runs, one `shard` per campaign
 group whatever that group did, and a `summary` whatever the finalizer did. Runs

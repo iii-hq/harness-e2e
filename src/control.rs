@@ -188,6 +188,8 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(default)]
     pub scenarios: Vec<ScenarioId>,
     #[serde(default = "default_runs")]
@@ -205,6 +207,19 @@ pub struct RunRequest {
     pub slot_start_deadline_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_contract: Option<ObservationRunContract>,
+}
+
+impl RunRequest {
+    fn subject(&self) -> SubjectConfig {
+        SubjectConfig {
+            model: self.model.clone(),
+            provider: self.provider.clone(),
+            agent: self.agent.clone(),
+            thinking_level: None,
+            provider_options: None,
+            priced: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -898,14 +913,7 @@ impl ControlPlane {
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             execution_id: None,
-            subject: SubjectConfig {
-                model: request.model.clone(),
-                provider: request.provider.clone(),
-                agent: None,
-                thinking_level: None,
-                provider_options: None,
-                priced: None,
-            },
+            subject: request.subject(),
             output: output.clone(),
             scenarios,
             runs: request.runs,
@@ -1932,6 +1940,13 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             bail!("{name} cannot be empty");
         }
     }
+    if request
+        .agent
+        .as_deref()
+        .is_some_and(|agent| agent.trim().is_empty())
+    {
+        bail!("agent cannot be empty");
+    }
     let budget = lane_budget(&request.lane);
     let scenarios = if request.scenarios.is_empty() {
         ScenarioId::ALL.to_vec()
@@ -2026,7 +2041,7 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         .run_contract
         .as_ref()
         .context("Release Control observation intent requires run_contract")?;
-    artifact::sha256_value(&json!({
+    let mut intent = json!({
         "run_contract": contract,
         "lane": request.lane,
         "model": request.model,
@@ -2036,7 +2051,11 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         "seed": request.seed,
         "rotating_seeds": request.rotating_seeds,
         "technical_retries": request.technical_retries,
-    }))
+    });
+    if let Some(agent) = &request.agent {
+        intent["agent"] = Value::String(agent.clone());
+    }
+    artifact::sha256_value(&intent)
 }
 
 fn observation_idempotency_key(request: &RunRequest) -> Result<String> {
@@ -2674,6 +2693,7 @@ mod tests {
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
+            agent: None,
             scenarios: vec![ScenarioId::ContextPressure],
             runs: 1,
             seed: Some(42),
@@ -2700,6 +2720,17 @@ mod tests {
         assert_eq!(
             crate::artifact::sha256_value(&with_caller).unwrap(),
             crate::artifact::sha256_value(&request()).unwrap()
+        );
+    }
+
+    #[test]
+    fn run_request_carries_agent_into_the_native_subject() {
+        let mut request = request();
+        request.agent = Some("software-engineer".into());
+
+        assert_eq!(
+            request.subject().agent.as_deref(),
+            Some("software-engineer")
         );
     }
 
@@ -2859,6 +2890,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Release Control idempotency_key"));
+    }
+
+    #[test]
+    fn release_control_intent_is_bound_to_the_agent_profile() {
+        let plain = d0_request();
+        let mut profiled = plain.clone();
+        profiled.agent = Some("software-engineer".into());
+
+        assert_ne!(
+            observation_intent_sha256(&plain).unwrap(),
+            observation_intent_sha256(&profiled).unwrap()
+        );
+        assert_eq!(
+            observation_intent_sha256(&plain).unwrap(),
+            "sha256:107ab7bfe6f88140daf4e431ef5bf0b58f8f519cb3c74adb27ead477c0404e94"
+        );
     }
 
     #[test]
@@ -3026,6 +3073,7 @@ mod tests {
             crate::report::ModelArtifact {
                 model: record.request.model.clone(),
                 provider: record.request.provider.clone(),
+                agent: None,
                 context_window: 100,
                 max_output_tokens: 10,
                 supports_tools: Some(true),

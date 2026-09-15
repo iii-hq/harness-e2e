@@ -151,7 +151,7 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "stack_lock_sha256": args.contract_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,
-            "subject": obj(plan.get("subject")) or None,
+            "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
             "result_contract_sha256": results.get("result_contract_sha256"),
         }
     )

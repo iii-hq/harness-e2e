@@ -161,6 +161,21 @@
         }
       ]
     },
+    "AgentProfileArtifact": {
+      "type": "object",
+      "required": [
+        "configuration_sha256",
+        "id"
+      ],
+      "properties": {
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
     "ArtifactExpectation": {
       "type": "object",
       "required": [
@@ -1422,6 +1437,16 @@
         "provider"
       ],
       "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentProfileArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "context_window": {
           "type": "integer",
           "format": "uint64",

@@ -57,6 +57,7 @@ struct Shared {
     stopping: tokio::sync::Mutex<()>,
     model: String,
     provider: String,
+    agent: Option<String>,
     case: Case,
     state: Mutex<SharedState>,
 }
@@ -101,12 +102,14 @@ pub fn register(
     context: Arc<E2eContext>,
     model: &str,
     provider: &str,
+    agent: Option<&str>,
 ) -> Result<Arc<dyn WorkflowCleanupHook>> {
     let shared = Arc::new(Shared {
         harness: context,
         stopping: tokio::sync::Mutex::new(()),
         model: model.into(),
         provider: provider.into(),
+        agent: agent.map(str::to_owned),
         case,
         state: Mutex::new(SharedState::default()),
     });
@@ -506,7 +509,7 @@ impl Shared {
                 options: Some(SendOptions {
                     provider_options: None,
                     thinking_level: None,
-                    agent: None,
+                    agent: self.agent.clone(),
                     max_turns: Some(self.case.generations()),
                     max_cost_usd: None,
                     max_output_tokens: Some(32_768),
@@ -1209,6 +1212,7 @@ mod tests {
             stopping: tokio::sync::Mutex::new(()),
             model: "test".into(),
             provider: "test".into(),
+            agent: Some("test-profile".into()),
             case: Case {
                 ticket: 1,
                 id: "swe_config_isolation",
@@ -1261,6 +1265,7 @@ mod tests {
         let (_temp, shared, context) = fixture(api.clone()).await;
         shared.subject(&context).await.unwrap();
         let sent = api.sent.lock().unwrap();
+        assert_eq!(sent[0]["options"]["agent"], "test-profile");
         let policy = &sent[0]["options"]["functions"];
         assert!(policy["allow"]
             .as_array()

@@ -395,6 +395,14 @@ compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/statu
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
+if jq -e '.suite.agent_profile != null' "$contract_path" >/dev/null; then
+  failure_phase=agent_profile_setup
+  project_trigger directory::agents::create "$(jq -c '.suite.agent_profile' "$contract_path")" \
+    >"$artifact_dir/stack/agent-profile-write.json"
+  project_trigger directory::agents::get "$(jq -c '.suite.agent_profile | {id}' "$contract_path")" \
+    >"$artifact_dir/stack/agent-profile.json"
+fi
+
 failure_phase=materialization
 project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
   >"$artifact_dir/catalog.json"
