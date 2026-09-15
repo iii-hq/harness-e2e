@@ -270,7 +270,7 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: iii-hq/kanban-e2e-fixture
-          ref: df13c41f0ae476ddbb01debc605aff340c87b73c
+          ref: main
           path: target/kanban-fixture
           fetch-depth: 0
           persist-credentials: false
