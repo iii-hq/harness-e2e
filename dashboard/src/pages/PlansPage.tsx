@@ -10,7 +10,6 @@ import {
   Callout,
   DataTable,
   DataTableRow,
-  DeltaValue,
   Dialog,
   EmptyState,
   FilterChip,
@@ -19,6 +18,7 @@ import {
   numericCellClassName,
   type OperationalStatus,
   PageHeader,
+  Select,
   StatusBadge,
 } from '@/design-system'
 import { hashForNewPlan, hashForPlan } from '@/hooks/use-hash-route'
@@ -39,7 +39,6 @@ import {
   formatPlanMetricValue,
   loadExecutionSummaries,
   metricById,
-  type PlanMetricComparison,
   type PlanMetricId,
 } from '@/lib/plan-comparison'
 import {
@@ -65,14 +64,16 @@ export function releaseControlPlans(executions: DashboardExecutionSummary[]) {
   return [...plans]
     .map(([key, history]) => ({
       key,
-      executions: history.sort((left, right) =>
-        (right.started_at ?? '').localeCompare(left.started_at ?? ''),
+      executions: history.sort(
+        (left, right) =>
+          Date.parse(right.started_at ?? '') -
+          Date.parse(left.started_at ?? ''),
       ),
     }))
-    .sort((left, right) =>
-      (right.executions[0]?.started_at ?? '').localeCompare(
-        left.executions[0]?.started_at ?? '',
-      ),
+    .sort(
+      (left, right) =>
+        Date.parse(right.executions[0]?.started_at ?? '') -
+        Date.parse(left.executions[0]?.started_at ?? ''),
     )
 }
 
@@ -194,7 +195,6 @@ export function ReleaseControlPlans({
 export type PlanStatePresentation = {
   status: OperationalStatus
   label: string
-  detail: string
   /** The one action this state offers; it opens the plan at that action. */
   action: string
 }
@@ -209,7 +209,6 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
     return {
       status: 'incomplete',
       label: 'retry available',
-      detail: 'The last baseline attempt was incomplete.',
       action: 'retry baseline',
     }
   }
@@ -218,36 +217,30 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
       return {
         status: 'running',
         label: 'baseline running',
-        detail: 'Capturing the official baseline.',
         action: 'open',
       }
     case 'baseline_ready':
       return {
         status: 'unavailable',
         label: 'ready for candidate',
-        detail:
-          'No candidate yet. Make the Harness change, then rerun this exact scope.',
         action: 'run candidate',
       }
     case 'candidate_running':
       return {
         status: 'running',
         label: 'candidate running',
-        detail: 'Comparing the saved scope against the baseline.',
         action: 'open',
       }
     case 'comparison_ready':
       return {
         status: 'unavailable',
         label: 'comparison available',
-        detail: 'Candidate results are available for review.',
         action: 'compare',
       }
     default:
       return {
         status: 'incomplete',
         label: 'draft',
-        detail: 'Baseline not captured yet.',
         action: 'run baseline',
       }
   }
@@ -277,169 +270,55 @@ function shortDate(value: string) {
   )
 }
 
-function compact(value: number) {
-  return new Intl.NumberFormat('en-US', {
-    notation: Math.abs(value) >= 1000 ? 'compact' : 'standard',
-    maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
-  }).format(value)
-}
-
-const CORE_DELTAS: Array<{ id: PlanMetricId; label: string }> = [
-  { id: 'coverage', label: 'coverage' },
-  { id: 'technical_failures', label: 'technical failures' },
-  { id: 'tokens', label: 'tokens' },
-  { id: 'duration', label: 'time' },
-]
-
-function MetricDelta({
-  label,
-  metric,
+export function PlanMetricsCell({
+  execution,
+  source,
 }: {
-  label: string
-  metric: PlanMetricComparison
+  execution: DashboardExecutionSummary | null
+  source: string
 }) {
-  if (metric.delta === null) return null
-  const absolute =
-    metric.format === 'percent_points' || metric.format === 'score'
-  const value = absolute ? metric.delta : (metric.delta_percent ?? metric.delta)
-  const unit =
-    metric.format === 'percent_points'
-      ? 'pp'
-      : metric.format === 'score'
-        ? 'pts'
-        : metric.delta_percent !== null
-          ? '%'
-          : ''
-  return (
-    <span className="inline-flex items-baseline gap-1 whitespace-nowrap">
-      <span className="text-ink-muted">{label}</span>
-      <DeltaValue
-        value={value}
-        format={(magnitude) => `${compact(magnitude)}${unit}`}
-        betterWhen="neither"
-      />
-    </span>
-  )
-}
-
-/** The baseline column: the four core figures, only when captured. */
-export function PlanBaselineCell({
-  plan,
-  baseline,
-}: {
-  plan: LocalPlan
-  baseline: DashboardExecutionSummary | null
-}) {
-  if (!baseline) {
-    const presentation = planStatePresentation(plan)
+  if (!execution)
     return (
-      <span className="text-ink-muted">
-        {presentation.label === 'retry available'
-          ? 'incomplete'
-          : 'not captured'}
+      <span className="text-xs text-ink-muted" title={source}>
+        {source === 'Baseline' ? null : `${source} · `}
+        No execution metrics
       </span>
     )
-  }
-  const snapshot = buildPlanComparison(baseline, baseline)
+  const snapshot = buildPlanComparison(execution, execution)
   const value = (id: PlanMetricId) => {
     const metric = metricById(snapshot, id)
-    return metric && metric.baseline !== null
-      ? formatPlanMetricValue(metric, 'baseline')
-      : null
+    if (
+      id === 'cost' &&
+      metric &&
+      metric.baseline !== null &&
+      metric.baseline > 0 &&
+      metric.baseline < 0.0001
+    )
+      return '<$0.0001'
+    return metric ? formatPlanMetricValue(metric, 'baseline') : 'Not reported'
   }
-  const coverage = value('coverage')
   const tokens = value('tokens')
-  const duration = value('duration')
-  const turns = value('turns')
+  const spend = value('cost')
+  const time = value('duration')
   return (
-    <span className="grid gap-0.5 font-mono text-xs tabular-nums">
-      <span className="text-ink">
-        {[
-          coverage ? `${coverage} coverage` : null,
-          tokens ? `${tokens} tokens` : null,
-        ]
-          .filter(Boolean)
-          .join(' · ') || 'no figures reported'}
+    <span
+      className="font-mono text-xs tabular-nums text-ink"
+      title={`${source} metrics`}
+    >
+      <span className="ds-visually-hidden">
+        {source} metrics: Tokens {tokens}, spend {spend}, time {time}
       </span>
-      {duration || turns ? (
-        <span className="text-ink-muted">
-          {[duration, turns ? `${turns} turns` : null]
-            .filter(Boolean)
-            .join(' · ')}
-        </span>
-      ) : null}
-    </span>
-  )
-}
-
-/**
- * The "latest candidate vs baseline" column: the signed
- * core deltas, or the sentence that says why there is nothing to compare.
- */
-export function PlanComparisonSummary({
-  plan,
-  baseline,
-  candidate,
-  running,
-}: {
-  plan: LocalPlan
-  baseline: DashboardExecutionSummary | null
-  candidate: DashboardExecutionSummary | null
-  running?: DashboardExecutionSummary | null
-}) {
-  const presentation = planStatePresentation(plan)
-  const candidateCount = plan.candidate_execution_ids.length
-  if (presentation.status === 'running') {
-    const expected = running?.totals?.expected_reports ?? null
-    const received = running?.totals?.received_reports ?? null
-    return (
-      <span className="grid gap-0.5 text-xs">
-        <StatusBadge status="running" label={presentation.label} />
-        <span className="text-ink-muted">
-          {running?.started_at
-            ? `started ${formatDate(running.started_at)}`
-            : 'in progress'}
-          {expected !== null && received !== null
-            ? ` · ${received}/${expected} tests`
-            : ''}
+      <span aria-hidden="true">
+        {source === 'Baseline' ? null : (
+          <span className="whitespace-nowrap">{source} · </span>
+        )}
+        <span className="whitespace-nowrap">
+          {tokens === 'Not reported'
+            ? 'Tokens not reported'
+            : `${tokens} tokens`}{' '}
+          · {spend} · {time}
         </span>
       </span>
-    )
-  }
-  if (candidateCount === 0) {
-    return (
-      <span className="block max-w-[26rem] text-xs leading-5 text-ink-muted">
-        {baseline ? presentation.detail : '—'}
-      </span>
-    )
-  }
-  const comparison = buildPlanComparison(baseline, candidate)
-  const deltas = CORE_DELTAS.map(({ id, label }) => {
-    const metric = metricById(comparison, id)
-    return metric && metric.delta !== null ? (
-      <MetricDelta key={id} label={label} metric={metric} />
-    ) : null
-  }).filter(Boolean)
-  return (
-    <span className="grid gap-1 text-xs">
-      <span className="flex flex-wrap items-center gap-2">
-        <span className="text-ink">{comparison.headline}</span>
-        <span className="text-ink-muted">
-          candidate #{candidateCount}
-          {candidate?.completed_at
-            ? ` · ${formatDate(candidate.completed_at)}`
-            : ''}
-        </span>
-      </span>
-      {deltas.length > 0 ? (
-        <span className="flex flex-wrap gap-x-3 gap-y-1 font-mono tabular-nums">
-          {deltas}
-        </span>
-      ) : (
-        <span className="max-w-[26rem] leading-5 text-ink-muted">
-          {comparison.detail}
-        </span>
-      )}
     </span>
   )
 }
@@ -463,7 +342,7 @@ function HowPlansWork() {
   )
 }
 
-function PlanRow({
+export function PlanRow({
   plan,
   executionSummaries,
 }: {
@@ -483,31 +362,42 @@ function PlanRow({
     presentation.status === 'running' && plan.last_attempt_id
       ? (executionSummaries[plan.last_attempt_id] ?? null)
       : null
+  const metricsExecution =
+    presentation.status === 'running'
+      ? running
+      : latestCandidateId
+        ? candidate
+        : baseline
+  const metricsSource =
+    presentation.status === 'running'
+      ? 'Current run'
+      : latestCandidateId
+        ? `Candidate #${plan.candidate_execution_ids.length}`
+        : 'Baseline'
   const title = plan.label || 'Untitled local plan'
   return (
     <DataTableRow href={href} data-plan-state={plan.state}>
       <td data-label="Plan">
         <span className="grid gap-1">
-          <StatusBadge
-            status={presentation.status}
-            label={presentation.label}
-          />
           <a
-            className="font-mono text-[0.8125rem] font-semibold text-ink no-underline hover:underline"
+            className="text-ink no-underline hover:underline"
             href={href}
             aria-label={`Open plan ${title}`}
           >
-            {title}
+            <strong className="font-sans text-sm font-semibold">{title}</strong>
           </a>
-          <span className="text-xs text-ink-muted">Local plan</span>
           {plan.purpose ? (
             <span
-              className="line-clamp-2 max-w-[28rem] text-xs leading-5 text-ink-soft"
+              className="line-clamp-2 max-w-[24rem] font-sans text-xs leading-5 text-ink-soft"
               title={plan.purpose}
             >
               {plan.purpose}
             </span>
           ) : null}
+          <StatusBadge
+            status={presentation.status}
+            label={presentation.label}
+          />
         </span>
       </td>
       <td data-label="Details">
@@ -521,18 +411,16 @@ function PlanRow({
       </td>
       <td data-label="Reference">
         <span className="mb-1 block text-xs text-ink-muted">Baseline</span>
-        <PlanBaselineCell plan={plan} baseline={baseline} />
-      </td>
-      <td data-label="Results">
-        <span className="mb-1 block text-xs text-ink-muted">
-          Latest candidate vs baseline
+        <span className="block text-xs text-ink">
+          {baseline
+            ? shortDate(baseline.completed_at ?? baseline.started_at ?? '')
+            : plan.baseline_execution_id
+              ? 'Unavailable'
+              : 'Not captured'}
         </span>
-        <PlanComparisonSummary
-          plan={plan}
-          baseline={baseline}
-          candidate={candidate}
-          running={running}
-        />
+      </td>
+      <td data-label="Metrics">
+        <PlanMetricsCell execution={metricsExecution} source={metricsSource} />
       </td>
       <td data-label="Last activity" className={numericCellClassName}>
         <span className="whitespace-nowrap text-xs text-ink-muted">
@@ -579,6 +467,7 @@ export function PlansPage() {
   const [importError, setImportError] = useState<string | null>(null)
   const [importWarnings, setImportWarnings] = useState<string[]>([])
   const [importOpen, setImportOpen] = useState(false)
+  const [discovering, setDiscovering] = useState(false)
   const [remotePlans, setRemotePlans] = useState<RcHistoryPlan[]>([])
   const [remotePlanKey, setRemotePlanKey] = useState('')
 
@@ -588,14 +477,10 @@ export function PlansPage() {
     setImportWarnings([])
     try {
       const json = await file.text()
-      const bytes = new Uint8Array(
-        await crypto.subtle.digest('SHA-256', new TextEncoder().encode(json)),
-      )
-      const sha256 = `sha256:${[...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
       const bridge = await getDashboardDataBridge()
       const imported = await bridge.planControl({
         action: 'import_history',
-        history: { json, sha256 },
+        history: json,
       })
       setImportWarnings(
         Array.isArray(imported.warnings)
@@ -615,10 +500,14 @@ export function PlansPage() {
     setImportOpen(true)
     setImportError(null)
     setRemotePlans([])
+    setRemotePlanKey('')
+    setDiscovering(true)
     try {
       setRemotePlans(await discoverReleaseControlHistory())
     } catch (cause) {
       setImportError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setDiscovering(false)
     }
   }
   const importRemote = async () => {
@@ -650,13 +539,15 @@ export function PlansPage() {
         right.updated_at.localeCompare(left.updated_at),
       )
       setPlans(orderedPlans)
-      const executionIds = orderedPlans
-        .filter(isLocalPlan)
-        .flatMap((plan) => [
-          plan.baseline_execution_id ?? '',
-          plan.candidate_execution_ids.at(-1) ?? '',
-          plan.last_attempt_id ?? '',
-        ])
+      const executionIds = orderedPlans.flatMap((plan) =>
+        isLocalPlan(plan)
+          ? [
+              plan.baseline_execution_id ?? '',
+              plan.candidate_execution_ids.at(-1) ?? '',
+              plan.last_attempt_id ?? '',
+            ]
+          : [plan.execution_ids[0] ?? ''],
+      )
       try {
         setExecutionSummaries(
           await loadExecutionSummaries(next.listExecutions, executionIds),
@@ -792,7 +683,11 @@ export function PlansPage() {
           value={tab}
           onValueChange={(value) => setTab(value as typeof tab)}
         >
-          <TabsList className="mt-5 flex-wrap" aria-label="Plan views">
+          <TabsList
+            className="mt-5 flex-wrap"
+            style={{ overflow: 'visible' }}
+            aria-label="Plan views"
+          >
             {(
               [
                 ['mine', 'My plans'],
@@ -887,12 +782,9 @@ export function PlansPage() {
 
               {comparisonError && !error ? (
                 <div className="mt-4">
-                  <Callout
-                    tone="warning"
-                    title="Comparison metrics unavailable"
-                  >
+                  <Callout tone="warning" title="Execution metrics unavailable">
                     Execution summaries could not be loaded. Plans remain
-                    available, but comparisons are marked unavailable.{' '}
+                    available, but their metrics are marked unavailable.{' '}
                     <span className="font-mono">{comparisonError}</span>
                   </Callout>
                 </div>
@@ -978,7 +870,7 @@ export function PlansPage() {
                         <th scope="col">Plan</th>
                         <th scope="col">Details</th>
                         <th scope="col">Reference</th>
-                        <th scope="col">Results</th>
+                        <th scope="col">Metrics</th>
                         <th scope="col" className={numericCellClassName}>
                           Last activity
                         </th>
@@ -1022,9 +914,14 @@ export function PlansPage() {
                                 Imported local copy
                               </span>
                             </td>
-                            <td data-label="Results">
-                              {plan.execution_ids.length} execution
-                              {plan.execution_ids.length === 1 ? '' : 's'}
+                            <td data-label="Metrics">
+                              <PlanMetricsCell
+                                execution={
+                                  executionSummaries[plan.execution_ids[0]] ??
+                                  null
+                                }
+                                source="Latest execution"
+                              />
                             </td>
                             <td
                               data-label="Last activity"
@@ -1056,27 +953,35 @@ export function PlansPage() {
       </div>
       <Dialog
         open={importOpen}
+        bodyPadding
         onClose={() => !importing && setImportOpen(false)}
         title="Import Release Control history"
         description="History is copied into this Harness. Later reading, comparison and reproduction use the local copy."
       >
         <div className="grid gap-4">
-          <label className="grid gap-1 text-sm">
+          <label
+            className="grid gap-1 text-sm"
+            htmlFor={`${viewsId}-import-plan`}
+          >
             Release Control plan
-            <select
+            <Select
+              id={`${viewsId}-import-plan`}
               value={remotePlanKey}
+              disabled={discovering || importing}
               onChange={(event) => setRemotePlanKey(event.target.value)}
             >
-              <option value="">Select a plan…</option>
+              <option value="">
+                {discovering ? 'Loading plans…' : 'Select a plan…'}
+              </option>
               {remotePlans.map((plan) => (
                 <option key={plan.key} value={plan.key}>
                   {plan.key}
                   {plan.active ? '' : ' (inactive)'}
                 </option>
               ))}
-            </select>
+            </Select>
           </label>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               className={buttonClassName({ variant: 'primary' })}
               type="button"
@@ -1089,6 +994,7 @@ export function PlansPage() {
               <input
                 className="ds-visually-hidden"
                 type="file"
+                disabled={importing}
                 accept="application/json,.json"
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0]

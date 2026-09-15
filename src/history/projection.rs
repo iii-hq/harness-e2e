@@ -31,6 +31,7 @@ impl Persistence {
                 execution.runs = runs.remove(id).unwrap_or_default();
                 metadata["id"] = row["id"].clone();
                 metadata["plan_id"] = row["plan_id"].clone();
+                metadata["execution_label"] = row["execution_label"].clone();
                 Ok(project_execution(&metadata, &execution))
             })
             .collect()
@@ -126,7 +127,8 @@ fn project_execution(metadata: &Value, execution: &Execution) -> Value {
     let aggregate = json!({"planned_runs": planned, "observed_runs": execution.runs.len(), "completion_rate": ratio(completed, determined), "execution_reliability": ratio(valid, technical_known)});
     json!({
         "origin": "remote", "id": metadata["id"], "plan_id": metadata["plan_id"], "kind": "history",
-        "label": record["label"].as_str().or(config["name"].as_str()).or(record["planKey"].as_str()),
+        "label": metadata["execution_label"].as_str().or(record["label"].as_str()).or(config["name"].as_str()).or(record["planKey"].as_str()),
+        "execution_label": metadata["execution_label"],
         "run_id": record["id"], "attempt": record["attempt"], "event": "remote", "actor": record["requestedBy"],
         "status": record["phase"], "started_at": record["requestedAt"], "completed_at": record["completedAt"],
         "generated_at": metadata["captured_at"], "workflow_url": workflow_url,
@@ -145,4 +147,36 @@ fn project_execution(metadata: &Value, execution: &Execution) -> Value {
             "materialized": materialized.map(|r| &r["payload"]),
             "shards": execution.reports.iter().filter(|r| r["kind"] == "shard" && execution.runs.iter().any(|run| run["reportId"] == r["id"])).map(|r| &r["payload"]).collect::<Vec<_>>()},
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_label_changes_only_the_imported_view() {
+        let transport: super::super::HistoryImport = serde_json::from_str(include_str!(
+            "../../tests/fixtures/history/retained-history.json"
+        ))
+        .unwrap();
+        let history = transport.decode().unwrap();
+        let execution = &history.executions[0];
+        let mut metadata = json!({
+            "id": "remote-execution-test", "plan_id": history.local_plan_id(),
+            "source": history.source, "captured_at": history.captured_at,
+            "execution_label": "Local name",
+        });
+        let renamed = project_execution(&metadata, execution);
+        assert_eq!(renamed["label"], "Local name");
+        assert_eq!(renamed["execution_label"], "Local name");
+        assert_eq!(
+            renamed["remote_reference"]["execution"]["label"],
+            execution.record["label"]
+        );
+
+        metadata["execution_label"] = Value::Null;
+        let original = project_execution(&metadata, execution);
+        assert!(original["execution_label"].is_null());
+        assert_ne!(original["label"], "Local name");
+    }
 }

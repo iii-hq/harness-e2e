@@ -3,6 +3,7 @@ import type {
   DashboardRunProjection,
   DashboardScenarioAggregate,
 } from '@/lib/dashboard-data-source'
+import { primaryRunValues } from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 
 export type UsageCoverage = {
@@ -32,6 +33,11 @@ export type ExecutionMetrics = {
   scoreMean: number | null
   scoreSamples: number
   subjectTokens: UsageCoverage
+  inputTokens: UsageCoverage
+  outputTokens: UsageCoverage
+  cacheReadTokens: UsageCoverage
+  cacheWriteTokens: UsageCoverage
+  turns: UsageCoverage
   failedAttemptTokens: UsageCoverage
   cost: UsageCoverage
   durationMs: UsageCoverage
@@ -93,6 +99,7 @@ export function buildExecutionMetrics(
   const scopeComplete =
     included.length > 0 && included.length === matrix.items.length
   const runs = included.flatMap((item) => item.runs)
+  const attemptMetrics = runs.map(primaryRunValues)
   const planned = included.reduce(
     (sum, item) => sum + (item.aggregate?.planned_runs ?? 0),
     0,
@@ -134,6 +141,26 @@ export function buildExecutionMetrics(
     scoreMean: mean(scores),
     scoreSamples: scores.filter((value) => value !== null).length,
     subjectTokens,
+    inputTokens: coverage(
+      attemptMetrics.map((run) => run.inputTokens),
+      scopeComplete,
+    ),
+    outputTokens: coverage(
+      attemptMetrics.map((run) => run.outputTokens),
+      scopeComplete,
+    ),
+    cacheReadTokens: coverage(
+      attemptMetrics.map((run) => run.cacheRead),
+      scopeComplete,
+    ),
+    cacheWriteTokens: coverage(
+      attemptMetrics.map((run) => run.cacheWrite),
+      scopeComplete,
+    ),
+    turns: coverage(
+      attemptMetrics.map((run) => run.turns),
+      scopeComplete,
+    ),
     failedAttemptTokens: coverage(
       runs.map((run) => {
         // Terminal run efficiency already includes retries. For an incomplete

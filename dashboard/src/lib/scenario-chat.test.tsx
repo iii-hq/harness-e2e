@@ -62,6 +62,58 @@ function detail(): DashboardExecutionDetail {
 }
 
 describe('scenario chat targets', () => {
+  it('loads imported transcripts and retries with the same identity filters', async () => {
+    const local = detail()
+    const scenario = local.reports[0].report?.scenarios[0]
+    if (!scenario) throw new Error('missing scenario fixture')
+    const imported = {
+      ...local,
+      id: 'remote-execution-1',
+      origin: 'remote',
+      reports: [],
+      remote_reference: {
+        runs: [
+          {
+            scenarioId: scenario.scenario_id,
+            behaviorSha256: scenario.behavior_sha256,
+            identity: { subjectModel: 'openai/codex' },
+            record: scenario.runs[0],
+          },
+        ],
+      },
+    } as DashboardExecutionDetail
+    const getExecution = vi.fn().mockResolvedValue(imported)
+    vi.mocked(getDashboardDataBridge).mockResolvedValue({
+      getExecution,
+    } as never)
+    const targets = await loadScenarioChatTargets({
+      executionId: imported.id,
+      scenarioId: 'direct_answer',
+      subjectId: 'openai/codex',
+      runId: 'run-1',
+      behaviorSha256: scenario.behavior_sha256,
+    })
+    expect(targets).toEqual(
+      scenarioChatTargets(local, 'direct_answer').map((target) => ({
+        ...target,
+        executionId: imported.id,
+      })),
+    )
+    expect(getExecution).toHaveBeenCalledWith(imported.id)
+    expect(scenarioChatTargets(imported, 'other_test')).toEqual([])
+    expect(
+      scenarioChatTargets(imported, 'direct_answer', 'other-model'),
+    ).toEqual([])
+    expect(
+      scenarioChatTargets(imported, 'direct_answer', null, 'other-run'),
+    ).toEqual([])
+    expect(
+      scenarioChatTargets(imported, 'direct_answer', null, null, null),
+    ).toEqual([])
+    imported.remote_reference = { runs: [{ scenarioId: 'direct_answer' }] }
+    expect(scenarioChatTargets(imported, 'direct_answer')).toEqual([])
+  })
+
   it('keeps the current attempt first and preserves retry sessions', () => {
     const targets = scenarioChatTargets(detail(), 'direct_answer')
     expect(
@@ -90,7 +142,8 @@ describe('scenario chat targets', () => {
   it('keeps transcript inspection within the selected definition', () => {
     const value = detail()
     const other = structuredClone(value.reports[0])
-    const scenario = other.report!.scenarios[0]
+    const scenario = other.report?.scenarios[0]
+    if (!scenario) throw new Error('fixture requires a scenario')
     scenario.behavior_sha256 =
       'sha256:c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3c3'
     scenario.runs[0].session_id = 'other-definition-session'

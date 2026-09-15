@@ -7,9 +7,10 @@ import type {
 } from '@/lib/dashboard-data-source'
 import {
   matchesFilter,
-  PlanBaselineCell,
-  PlanComparisonSummary,
+  PlanMetricsCell,
+  PlanRow,
   planStatePresentation,
+  releaseControlPlans,
 } from '@/pages/PlansPage'
 
 const plan: LocalPlan = {
@@ -58,57 +59,121 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
   }
 }
 
-describe('plan list comparison summary', () => {
-  it('shows coverage and neutral signed deltas despite objective failures', () => {
-    const html = renderToStaticMarkup(
-      <PlanComparisonSummary
-        plan={plan}
-        baseline={execution('baseline-1', 100)}
-        candidate={execution('candidate-2', 50)}
-      />,
-    )
-    expect(html).not.toContain('>regressed<')
-    expect(html).toContain('Retained observations')
-    expect(html).toContain('candidate #2')
-    expect(html).toContain('>coverage<')
-    expect(html).not.toContain('−50pp')
-    expect(html).not.toContain('ds-delta-negative')
-    expect(html).toContain('>tokens<')
-    expect(html).toContain('−10%')
-    expect(html).not.toContain('ds-delta-positive')
-    expect(html).not.toContain('Not reported')
-    expect(html).not.toContain('Not comparable')
+describe('plan list metrics', () => {
+  it('orders Release Control executions by the instant across timezones', () => {
+    const dated = (id: string, profile: string, started_at: string) => ({
+      ...execution(id, 100),
+      release_control: {
+        profile,
+        execution_id: id,
+        attempt: 1,
+        campaign_id: null,
+        group_id: null,
+      },
+      started_at,
+    })
+    const result = releaseControlPlans([
+      dated('earlier', 'smoke', '2026-09-14T12:00:00+03:00'),
+      dated('later', 'smoke', '2026-09-14T07:00:00-03:00'),
+      dated('middle', 'other', '2026-09-14T09:30:00Z'),
+    ])
+    expect(result.map((plan) => plan.key)).toEqual(['smoke', 'other'])
+    expect(result[0].executions.map((execution) => execution.id)).toEqual([
+      'later',
+      'earlier',
+    ])
   })
 
-  it('keeps the no-candidate state explicit and shows the baseline figures in their own cell', () => {
-    const ready = {
-      ...plan,
-      state: 'baseline_ready' as const,
-      candidate_execution_ids: [],
-    }
+  it('shows the latest candidate metrics and puts identity before status', () => {
     const html = renderToStaticMarkup(
-      <PlanComparisonSummary
-        plan={ready}
-        baseline={execution('baseline-1', 100)}
-        candidate={null}
+      <table>
+        <tbody>
+          <PlanRow
+            plan={plan}
+            executionSummaries={{
+              'baseline-1': execution('baseline-1', 100),
+              'candidate-2': execution('candidate-2', 50),
+            }}
+          />
+        </tbody>
+      </table>,
+    )
+    expect(html).toContain('Candidate #2')
+    expect(html.replace(/<[^>]*>/g, '')).toContain(
+      'Candidate #2 · 900 tokens · $0.0900 · 10s',
+    )
+    expect(html).not.toContain('Turns')
+    expect(html).not.toContain('Local plan')
+    expect(html).not.toContain('Latest candidate vs baseline')
+    expect(html.indexOf('Focused regression check')).toBeLessThan(
+      html.indexOf('comparison available'),
+    )
+  })
+
+  it('shows baseline metrics before a candidate exists without substituting a missing candidate', () => {
+    const summaries = { 'baseline-1': execution('baseline-1', 100) }
+    const render = (selected: LocalPlan) =>
+      renderToStaticMarkup(
+        <table>
+          <tbody>
+            <PlanRow plan={selected} executionSummaries={summaries} />
+          </tbody>
+        </table>,
+      )
+    const baseline = render({
+      ...plan,
+      state: 'baseline_ready',
+      candidate_execution_ids: [],
+    })
+    expect(baseline).toContain('1K tokens · $0.1000 · 12s')
+    expect(baseline).not.toContain('No candidate yet')
+    const missingCandidate = render(plan)
+    expect(missingCandidate).toContain('Candidate #2 · No execution metrics')
+    expect(missingCandidate).not.toContain('$0.1000')
+    const running = render({ ...plan, state: 'candidate_running' })
+    expect(running).toContain('Current run · No execution metrics')
+  })
+
+  it('preserves zero and absent metric values', () => {
+    const html = renderToStaticMarkup(
+      <PlanMetricsCell
+        source="Baseline"
+        execution={{
+          ...execution('zero', 100),
+          totals: {
+            total_tokens: 0,
+            total_cost_usd: 0,
+            wall_time_seconds: null,
+            turns: null,
+          },
+        }}
       />,
     )
-    expect(html).toContain('No candidate yet')
-    expect(html).not.toContain('regressed')
-    const cell = renderToStaticMarkup(
-      <PlanBaselineCell plan={ready} baseline={execution('baseline-1', 100)} />,
+    expect(html).toContain('0 tokens · $0.0000 · Not reported')
+    expect(html).toContain(
+      'Baseline metrics: Tokens 0, spend $0.0000, time Not reported',
     )
-    expect(cell).toContain('100%')
-    expect(cell).toContain('1K tokens')
-    expect(cell).toContain('4 turns')
-    expect(
-      renderToStaticMarkup(
-        <PlanBaselineCell
-          plan={{ ...ready, state: 'draft' }}
-          baseline={null}
-        />,
-      ),
-    ).toContain('not captured')
+    expect(html).not.toContain('Turns')
+  })
+
+  it('shows a positive sub-cent spend without rounding it to zero and identifies imported metrics', () => {
+    const html = renderToStaticMarkup(
+      <PlanMetricsCell
+        source="Latest execution"
+        execution={{
+          ...execution('small-spend', 100),
+          totals: {
+            total_tokens: 500,
+            total_cost_usd: 0.00003,
+            wall_time_seconds: 12,
+          },
+        }}
+      />,
+    )
+    expect(html.replace(/<[^>]*>/g, '')).toContain(
+      'Latest execution · 500 tokens · &lt;$0.0001 · 12s',
+    )
+    expect(html).not.toContain('$0.0000')
   })
 
   it('gives every state one status line and one action', () => {

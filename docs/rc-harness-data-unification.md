@@ -183,7 +183,7 @@ Arquivos principais: `src/plans.rs`, `src/plans/store.rs`, `src/persistence.rs`,
 - Implementar a importação no domínio do worker, validando o envelope e persistindo o conjunto conforme a seção 4. O frontend inicia a operação e recebe contagens de inseridos, atualizados e sem alteração.
 - Substituir `import_reference` pela importação histórica. Preservar a ação útil de reprodução como operação explícita separada, reutilizando criação/admissão local e suas verificações.
 - Alimentar lista, detalhe, histórico de teste e comparação com os registros do banco. Reutilizar as projeções existentes sem produzir um `E2eReport` fictício para dados RC.
-- Reutilizar `PrimaryMetricsView` e o contrato de métricas. Manter parcelas ausentes como indisponíveis, preservar totais válidos e não calcular deltas incompatíveis.
+- Reutilizar `PrimaryMetricsView` e o contrato de métricas. Calcular deltas quando A e B exibem a métrica, preservando indicações de parcialidade. Usar `Not comparable` apenas quando faltar o valor em algum lado.
 - Resolver evidência remota sob demanda no ambiente local. Transcritos retidos continuam no contexto E2E, sem criar ou selecionar conversas pessoais.
 
 Arquivos principais: `src/plans/store.rs`, `src/persistence.rs`, `src/dashboard/{controller,bus,read_model,presenter,plan_projection}.rs`, `src/manifest.rs`, `dashboard/src/lib/dashboard-data-source.ts`, `dashboard/src/lib/release-control-reference.ts` e `dashboard/src/lib/primary-metrics.ts`.
@@ -314,7 +314,7 @@ Os testes Rust de contrato real são opt-in: `HARNESS_E2E_TEST_DATABASE_URL` dev
 
 ### Corte e limites ainda separados
 
-Esta entrega possui commits locais. Não houve push, CI remoto, publicação, deployment ou migração da base em uso nesta preparação. Antes da ativação conjunta, ainda é necessário drenar trabalho ativo, aplicar as migrações com backup, configurar uma identidade RC estável em `RELEASE_CONTROL_INSTANCE_ID`, aplicar o catálogo e validar o acesso aos artefatos GitHub no ambiente de destino.
+Esta entrega possui commits locais. Não houve push, CI remoto, publicação, deployment ou migração da base em uso nesta preparação. Antes da ativação conjunta, ainda é necessário drenar trabalho ativo, aplicar as migrações com backup, aplicar o catálogo e validar o acesso aos artefatos GitHub no ambiente de destino. A identidade RC passa a ser criada automaticamente pela migração e persistida no banco, sem exigir `RELEASE_CONTROL_INSTANCE_ID`.
 
 O teste de navegador usa o host de RPC da extensão, com funções simuladas; comprova o fluxo funcional e a independência da bridge RC. As capturas desse host não comprovam os temas e o layout do Console real. Aceite visual no Console integrado, round-trip autenticado no ambiente de destino e restauração do backup desse ambiente continuam na etapa 6.
 

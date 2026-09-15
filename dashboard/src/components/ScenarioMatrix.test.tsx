@@ -2,14 +2,187 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { comparisonPrimaryMetrics } from '@/lib/release-control-reference'
 import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
-import { buildScenarioMatrix } from '@/lib/scenario-matrix'
+import { buildScenarioMatrix, detailForScenario } from '@/lib/scenario-matrix'
+import {
+  executionMetricsFixture,
+  metricRun,
+} from '@/test-fixtures/execution-metrics'
 
 const resultContract = {
   result_contract_sha256: RESULT_CONTRACT_SHA256,
   report_state: 'complete' as const,
   objective_outcome: 'passed' as const,
 }
+
+it('shows imported results in the shared table with retained metrics, failures and transcripts', () => {
+  const scenarios = [
+    'minimal_path',
+    'persistent_state',
+    'tool_contract_recovery',
+    'timer_wake',
+    'shell_coder_sandbox',
+  ]
+  const reference = {
+    runs: scenarios.map((scenarioId, index) => ({
+      scenarioId,
+      repetition: 0,
+      attemptsComplete: true,
+      identity: { subjectModel: 'test-model' },
+      status: index < 3 ? 'passed' : 'hard_gate_failed',
+      technical: 'valid',
+      completion: 'completed',
+      score: 90,
+      totalTokens: 1234,
+      wallTimeMs: 1000,
+      turns: 2,
+      functionCalls: 1,
+      record: {
+        run_id: `run-${index}`,
+        attempt_id: `attempt-${index}`,
+        session_id: `session-${index}`,
+        transcript: {
+          messages: [
+            {
+              message: {
+                role: 'assistant',
+                content: [{ type: 'text', text: 'retained transcript' }],
+              },
+            },
+          ],
+        },
+        hard_gates:
+          index < 3 ? [] : [{ passed: false, reason: 'Recorded gate failure' }],
+      },
+    })),
+    aggregate: { planned_runs: 5, observed_runs: 5 },
+    materialized: {
+      profile: { repetitions: 1 },
+      campaigns: [{ groups: [{ scenarios }] }],
+    },
+  }
+  const imported = {
+    id: 'remote-execution-1',
+    origin: 'remote',
+    reports: [],
+    subjects: [],
+    remote_reference: reference,
+  } as unknown as DashboardExecutionDetail
+  const model = buildScenarioMatrix(imported)
+  expect(model.summary).toMatchObject({
+    total: 5,
+    passed: 3,
+    failed: 2,
+    unavailable: 0,
+  })
+  expect(model.contracts).toEqual([])
+  expect(model.items.every((item) => item.aggregate === null)).toBe(true)
+  expect(
+    model.items.find((item) => item.scenarioId === 'timer_wake')?.reason,
+  ).toBe('Recorded gate failure')
+  const scoped = detailForScenario(imported, model.items[0])
+  expect(comparisonPrimaryMetrics(scoped, null).baseline?.tests).toHaveLength(1)
+  expect(reference.runs).toHaveLength(5)
+  const html = renderToStaticMarkup(
+    <ScenarioMatrix
+      detail={imported}
+      onTranscript={() => undefined}
+      showContract={false}
+    />,
+  )
+  expect(html.match(/data-scenario-row=/g)).toHaveLength(5)
+  expect(html).toContain('3 passed')
+  expect(html).toContain('2 failed')
+  expect(html).toContain('90/100')
+  expect(html).toContain('1,234')
+  expect(html).toContain('View transcript for Minimal Path')
+  expect(html).not.toContain('Evidence record for')
+  expect(html).not.toContain('$0.0000')
+
+  const missing = {
+    ...imported,
+    remote_reference: {
+      ...reference,
+      runs: [],
+      aggregate: { planned_runs: 5, observed_runs: 0 },
+    },
+  } as unknown as DashboardExecutionDetail
+  expect(buildScenarioMatrix(missing).summary).toMatchObject({
+    total: 5,
+    passed: 0,
+    failed: 0,
+    unavailable: 5,
+  })
+  const missingHtml = renderToStaticMarkup(
+    <ScenarioMatrix
+      detail={missing}
+      onTranscript={() => undefined}
+      showContract={false}
+    />,
+  )
+  expect(missingHtml).toContain('5 unavailable')
+  expect(missingHtml).not.toContain('90/100')
+  expect(missingHtml).not.toContain('View transcript')
+  const unknownScope = {
+    ...imported,
+    remote_reference: {
+      ...reference,
+      materialized: { ...reference.materialized, profile: {} },
+    },
+  } as unknown as DashboardExecutionDetail
+  const partialHtml = renderToStaticMarkup(
+    <ScenarioMatrix
+      detail={unknownScope}
+      onTranscript={() => undefined}
+      showContract={false}
+    />,
+  )
+  expect(partialHtml).toContain('Partial · planned scope not confirmed')
+  expect(partialHtml).not.toContain('1/1 planned runs scored')
+  expect(partialHtml).not.toContain('Partial · 1/1 runs reported')
+  const repeated = {
+    ...imported,
+    remote_reference: {
+      ...reference,
+      runs: reference.runs.flatMap((run) => [
+        run,
+        {
+          ...run,
+          repetition: 1,
+          record: {
+            ...run.record,
+            run_id: `${run.record.run_id}-repeat`,
+            attempt_id: `${run.record.attempt_id}-repeat`,
+            session_id: `${run.record.session_id}-repeat`,
+          },
+        },
+      ]),
+      aggregate: { planned_runs: 10, observed_runs: 10 },
+      materialized: { ...reference.materialized, profile: { repetitions: 2 } },
+    },
+  } as unknown as DashboardExecutionDetail
+  const repeatedHtml = renderToStaticMarkup(
+    <ScenarioMatrix detail={repeated} onTranscript={() => undefined} />,
+  )
+  expect(repeatedHtml).toContain('Retained runs')
+  expect(repeatedHtml).toContain('Transcripts · 2 for Minimal Path')
+  expect(repeatedHtml).not.toContain('evidence record')
+  expect(repeatedHtml).not.toContain('Evidence record for')
+  const incompleteRepetitions = {
+    ...imported,
+    remote_reference: {
+      ...reference,
+      aggregate: { planned_runs: 10, observed_runs: 5 },
+      materialized: { ...reference.materialized, profile: { repetitions: 2 } },
+    },
+  } as unknown as DashboardExecutionDetail
+  expect(buildScenarioMatrix(incompleteRepetitions).summary).toMatchObject({
+    passed: 0,
+    incomplete: 3,
+    failed: 2,
+  })
+})
 
 function aggregate(overrides: Record<string, unknown> = {}) {
   return {
@@ -200,7 +373,126 @@ const detail = {
 } as unknown as DashboardExecutionDetail
 
 describe('ScenarioMatrix', () => {
-  it('renders a comparable matrix with an inline workflow expansion', () => {
+  it('sums scenario usage across runs and labels incomplete observations', () => {
+    const complete = executionMetricsFixture([
+      { runs: [metricRun('first', 100), metricRun('last', 200)] },
+    ])
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={complete} onTranscript={() => {}} />,
+    )
+    expect(html).toMatch(
+      /data-primary-metric="Total tokens"[\s\S]*?<strong[^>]*>300<\/strong>/,
+    )
+    expect(html).toMatch(
+      /data-primary-metric="Reported cost"[\s\S]*?<strong[^>]*>\$0.2000<\/strong>/,
+    )
+    expect(html).toMatch(
+      /data-primary-metric="Runtime"[\s\S]*?<strong[^>]*>2\.0 s<\/strong>/,
+    )
+    expect(html).toMatch(
+      /data-primary-metric="Function calls"[\s\S]*?<strong[^>]*>20<\/strong>/,
+    )
+    expect(html).toContain('@[1000px]/harness:table')
+    expect(html).not.toContain(' lg:')
+    const partial = executionMetricsFixture([
+      { runs: [metricRun('first', 100), metricRun('last', null)] },
+    ])
+    const partialHtml = renderToStaticMarkup(
+      <ScenarioMatrix detail={partial} onTranscript={() => {}} />,
+    )
+    expect(partialHtml).toMatch(
+      /data-primary-metric="Total tokens"[\s\S]*?<strong[^>]*>100<\/strong>/,
+    )
+    expect(partialHtml).toContain('Partial · 1/2 runs reported')
+  })
+
+  it('retains evidence and transcript access for every run across subjects', () => {
+    const report = detail.reports[0].report
+    if (!report) throw new Error('Expected retained report fixture')
+    const scenario = report.scenarios[0]
+    const originalRun = scenario.runs[0]
+    const multiple = {
+      ...detail,
+      reports: ['terra', 'sol'].map((subjectId) => ({
+        ...detail.reports[0],
+        subject_id: subjectId,
+        report: {
+          ...report,
+          scenarios: [
+            {
+              ...scenario,
+              runs: ['first', 'last'].map((suffix) => ({
+                ...originalRun,
+                run_id: `${subjectId}-${suffix}`,
+                attempt_id: `${subjectId}-${suffix}-attempt`,
+                assessment: {
+                  ...originalRun.assessment,
+                  run_id: `${subjectId}-${suffix}`,
+                  attempt_id: `${subjectId}-${suffix}-attempt`,
+                },
+                transcript: { messages: [] },
+              })),
+            },
+          ],
+        },
+      })),
+    } as DashboardExecutionDetail
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={multiple} onTranscript={() => {}} />,
+    )
+    expect(html).toContain('aria-label="Scenario results"')
+    for (const runId of [
+      'terra-first',
+      'terra-last',
+      'sol-first',
+      'sol-last',
+    ]) {
+      expect(html).toContain(`/run/${runId}`)
+    }
+    expect(html.match(/>transcript<\/button>/g)).toHaveLength(4)
+    expect(
+      html.match(/aria-label="Evidence record for Security Review"/g),
+    ).toHaveLength(2)
+    expect(html.match(/aria-label="Retained runs"/g)).toHaveLength(2)
+  })
+
+  it('shows the sample size when only part of a scenario has a score', () => {
+    const assessment = detail.reports[0].report?.scenarios[0].runs[0].assessment
+    const partial = executionMetricsFixture([
+      {
+        runs: [
+          metricRun('scored', 100, { score: 80, assessment }),
+          metricRun('unscored', 100, { score: null, assessment }),
+        ],
+      },
+    ])
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={partial} onTranscript={() => {}} />,
+    )
+    expect(html).toContain('80/100')
+    expect(html).toContain('Mean · 1/2 planned runs scored')
+  })
+
+  it('keeps a small positive cost distinct from zero', () => {
+    const assessment = detail.reports[0].report?.scenarios[0].runs[0].assessment
+    const evidence = executionMetricsFixture([
+      {
+        runs: [
+          metricRun('small-cost', 10, {
+            assessment,
+            cost: { total_usd: 0.00001 },
+          }),
+        ],
+      },
+    ])
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={evidence} onTranscript={() => {}} />,
+    )
+    expect(html).toContain('&lt;$0.0001')
+    expect(html).not.toContain('$0.0000')
+  })
+
+  it('shows scenario results in a compact table with scores and evidence', () => {
     const html = renderToStaticMarkup(
       <ScenarioMatrix detail={detail} onTranscript={() => {}} />,
     )
@@ -215,11 +507,14 @@ describe('ScenarioMatrix', () => {
       RESULT_CONTRACT_SHA256.replace('sha256:', '').slice(0, 12),
     )
     expect(html).not.toContain('Sha256:')
-    expect(html).toContain('Completion and evidence yield')
-    expect(html).toContain('execution reliability')
-    expect(html).toContain('mean score')
+    expect(html).not.toContain('Completion and evidence yield')
+    expect(html).not.toContain('execution reliability')
+    expect(html).toContain('Mean · 1/1 planned runs scored')
+    expect(html).toContain('65/100')
+    expect(html).not.toContain('completion rate')
+    expect(html).not.toContain('data-scenario-aggregate')
     expect(html).not.toContain('quality')
-    expect(html).toContain('Physical attempt outcomes')
+    expect(html).not.toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
     expect(html).toContain('1 passed')
     expect(html).toContain('1 incomplete')
@@ -227,9 +522,15 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('1 inconclusive')
     expect(html).toContain('1 unavailable')
     expect(html).toContain('Security Review · definition a1a1a1a1')
-    expect(html).toContain('Objective result')
+    expect(html).toContain('aria-label="Persistent State scenario result"')
+    expect(html).toContain('aria-label="Missing Report scenario result"')
+    expect(html).toContain(
+      'The expected report for this scenario is unavailable',
+    )
+    expect(html).toMatch(
+      /href="[^"]*execution\/execution-1\/run\/run-security"/,
+    )
     expect(html).not.toContain('Advisory')
-    expect(html).toContain('Workflow · 2 steps')
     expect(html).toContain('Workflow duration profile')
     expect(html).toContain('Tokens')
     expect(html).toContain('1,000')
@@ -246,18 +547,16 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('data-step-metric="Requests"')
     expect(html).not.toContain('data-step-metric="Polls"')
     expect(html).toContain('Not captured')
-    expect(html).toContain('Inspect scenario evidence')
-    expect(html).toContain('>Structure<')
+    expect(html).not.toContain('Inspect scenario evidence')
+    expect(html).not.toContain('>Structure<')
     expect(html).not.toContain('logical run')
     expect(html).not.toContain('>avg<')
     expect(html).not.toContain('Recorded runs')
     expect(html).not.toContain('This scenario has no persisted workflow')
-    expect(html).toContain('aria-expanded="true"')
+    expect(html).not.toMatch(/<button[^>]*data-scenario-row/)
   })
 
-  // Audit SM-07 / SM-12: without any persisted workflow the Structure column
-  // only repeats "Standard", and an incomplete scenario opens its evidence.
-  it('hides the structure column and opens evidence for an incomplete standard scenario', () => {
+  it('keeps incomplete outcomes and evidence access visible with secondary details collapsed', () => {
     const failedOnly = {
       ...detail,
       reports: detail.reports.filter(
@@ -270,11 +569,14 @@ describe('ScenarioMatrix', () => {
 
     expect(html).not.toContain('>Structure<')
     expect(html).not.toContain('>Standard<')
-    expect(html).toContain('Inspect scenario evidence')
-    expect(html).toMatch(/<details[^>]*open/)
+    expect(html).not.toContain('Inspect scenario evidence')
+    expect(html).toContain('aria-expanded="false"')
+    const panelId = html.match(/aria-controls="([^"]+)"/)?.[1]
+    expect(panelId).toBeTruthy()
+    expect(html).toContain(`id="${panelId}" hidden=""`)
     expect(html).toContain('title="Persistent State · definition b2b2b2b2"')
-    expect(html).toContain('Task Incomplete')
-    expect(html).toContain('completion evaluator')
+    expect(html).toContain('data-status="incomplete"')
+    expect(html).not.toContain('completion evaluator')
   })
 })
 

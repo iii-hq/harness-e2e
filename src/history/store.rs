@@ -11,6 +11,7 @@ pub(crate) const SQL: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS history_reports_execution_idx ON history_reports(execution_id)",
     "CREATE TABLE IF NOT EXISTS history_runs (source_instance TEXT NOT NULL, source_id TEXT NOT NULL, execution_id TEXT NOT NULL, source_updated_at TEXT NOT NULL, storage_sha256 TEXT NOT NULL, payload_json TEXT NOT NULL, PRIMARY KEY(source_instance, source_id))",
     "CREATE INDEX IF NOT EXISTS history_runs_execution_idx ON history_runs(execution_id)",
+    "CREATE TABLE IF NOT EXISTS history_execution_labels (execution_id TEXT PRIMARY KEY, label TEXT NOT NULL)",
 ];
 
 impl Persistence {
@@ -114,7 +115,7 @@ impl Persistence {
     }
 
     pub(crate) async fn imported_plans(&self) -> Result<Vec<Value>> {
-        let rows = self.query("SELECT id, payload_json, payload_sha256 FROM saved_plans WHERE origin = 'remote' ORDER BY updated_at DESC, id DESC", json!([])).await?;
+        let rows = self.query("SELECT id, payload_json, payload_sha256 FROM saved_plans WHERE origin = 'remote' ORDER BY julianday(updated_at) DESC, id DESC", json!([])).await?;
         let mut plans = Vec::new();
         for row in rows {
             plans.push(self.imported_plan_view(&row).await?);
@@ -134,7 +135,7 @@ impl Persistence {
         let value = retained_payload(row)?;
         let plan = &value["plan"];
         let config = &plan["configuration"];
-        let executions = self.query("SELECT id, started_at, updated_at FROM saved_plan_executions WHERE plan_id = ? AND origin = 'remote' ORDER BY started_at DESC, id DESC", json!([row["id"]])).await?;
+        let executions = self.query("SELECT id, started_at, updated_at FROM saved_plan_executions WHERE plan_id = ? AND origin = 'remote' ORDER BY julianday(started_at) DESC, id DESC", json!([row["id"]])).await?;
         Ok(json!({
             "origin": "remote", "id": row["id"],
             "label": config["name"].as_str().unwrap_or(plan["key"].as_str().unwrap_or("")),
@@ -148,11 +149,11 @@ impl Persistence {
     }
 
     pub(crate) async fn imported_execution_records(&self) -> Result<Vec<Value>> {
-        self.query("SELECT id, plan_id, payload_json, payload_sha256 FROM saved_plan_executions WHERE origin = 'remote' ORDER BY started_at DESC, id DESC", json!([])).await
+        self.query("SELECT e.id, e.plan_id, e.payload_json, e.payload_sha256, l.label AS execution_label FROM saved_plan_executions e LEFT JOIN history_execution_labels l ON l.execution_id = e.id WHERE e.origin = 'remote' ORDER BY julianday(e.started_at) DESC, e.id DESC", json!([])).await
     }
 
     pub(crate) async fn imported_execution(&self, id: &str) -> Result<Option<(Value, Execution)>> {
-        let rows = self.query("SELECT id, plan_id, payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ? AND origin = 'remote'", json!([id])).await?;
+        let rows = self.query("SELECT e.id, e.plan_id, e.payload_json, e.payload_sha256, l.label AS execution_label FROM saved_plan_executions e LEFT JOIN history_execution_labels l ON l.execution_id = e.id WHERE e.id = ? AND e.origin = 'remote'", json!([id])).await?;
         let Some(row) = rows.first() else {
             return Ok(None);
         };
@@ -167,7 +168,36 @@ impl Persistence {
         }
         value["id"] = row["id"].clone();
         value["plan_id"] = row["plan_id"].clone();
+        value["execution_label"] = row["execution_label"].clone();
         Ok(Some((value, execution)))
+    }
+
+    pub(crate) async fn rename_imported_execution(&self, id: &str, label: &str) -> Result<Value> {
+        let label = label.trim();
+        ensure!(
+            label.chars().count() <= 80,
+            "execution label must be at most 80 characters"
+        );
+        ensure!(
+            !label.chars().any(char::is_control),
+            "execution label must not contain control characters"
+        );
+        ensure!(
+            !self
+                .query(
+                    "SELECT id FROM saved_plan_executions WHERE id = ? AND origin = 'remote'",
+                    json!([id])
+                )
+                .await?
+                .is_empty(),
+            "imported execution '{id}' was not found"
+        );
+        self.transaction(vec![if label.is_empty() {
+            json!({"sql": "DELETE FROM history_execution_labels WHERE execution_id = ?", "params": [id]})
+        } else {
+            json!({"sql": "INSERT INTO history_execution_labels(execution_id, label) VALUES (?, ?) ON CONFLICT(execution_id) DO UPDATE SET label = excluded.label", "params": [id, label]})
+        }]).await?;
+        Ok(json!({"execution_id": id, "label": label}))
     }
 }
 
@@ -215,7 +245,7 @@ mod tests {
 
     fn transport(history: &super::super::History) -> HistoryImport {
         let json = serde_json::to_string(history).unwrap();
-        HistoryImport {
+        HistoryImport::Checked {
             sha256: artifact::sha256_bytes(json.as_bytes()),
             json,
         }
@@ -367,6 +397,79 @@ mod tests {
         assert_eq!(retained.reports.len(), 3);
         assert_eq!(retained.runs[0]["record"]["objective_score"], 0.125);
         assert!(retained.runs[0]["record"]["efficiency"].is_null());
+        let before = db
+            .query(
+                "SELECT payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ?",
+                json!([execution_id]),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            db.rename_imported_execution(&execution_id, "  Local name  ")
+                .await
+                .unwrap(),
+            json!({"execution_id": execution_id, "label": "Local name"})
+        );
+        let detail = db
+            .imported_execution_detail(&execution_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail["label"], "Local name");
+        assert_eq!(detail["execution_label"], "Local name");
+        assert_eq!(
+            db.imported_execution_summaries()
+                .await
+                .unwrap()
+                .iter()
+                .find(|e| e["id"] == execution_id)
+                .unwrap()["label"],
+            "Local name"
+        );
+        db.import_history(transport(&updated)).await.unwrap();
+        let reloaded = Persistence::new(client.clone(), "harness_e2e".into(), "default".into());
+        assert_eq!(
+            reloaded
+                .imported_execution_detail(&execution_id)
+                .await
+                .unwrap()
+                .unwrap()["execution_label"],
+            "Local name"
+        );
+        assert_eq!(
+            db.query(
+                "SELECT payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ?",
+                json!([execution_id])
+            )
+            .await
+            .unwrap(),
+            before
+        );
+        assert!(db
+            .rename_imported_execution("unknown-execution", "Other")
+            .await
+            .is_err());
+        assert!(db
+            .rename_imported_execution(&execution_id, &"x".repeat(81))
+            .await
+            .is_err());
+        assert!(db
+            .rename_imported_execution(&execution_id, "bad\nname")
+            .await
+            .is_err());
+        assert_eq!(
+            db.rename_imported_execution(&execution_id, "  ")
+                .await
+                .unwrap()["label"],
+            ""
+        );
+        let reset = db
+            .imported_execution_detail(&execution_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(reset["execution_label"].is_null());
+        assert_ne!(reset["label"], "Local name");
         client.shutdown_async().await;
     }
 }

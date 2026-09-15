@@ -4,7 +4,10 @@ import type {
   DashboardRunProjection,
   DashboardScenarioMetricSummary,
 } from '@/lib/dashboard-data-source'
-import { getDashboardDataBridge } from '@/lib/dashboard-data-source'
+import {
+  getDashboardDataBridge,
+  normalizeBridgeError,
+} from '@/lib/dashboard-data-source'
 import { getDashboardIiiClient } from '@/lib/iii-client'
 import {
   buildPrimaryMetrics,
@@ -60,16 +63,18 @@ export type RcRun = {
   turns: number | null
   functionCalls: number | null
   functionCallErrors?: number | null
-  record?: {
-    efficiency?: {
-      input_tokens?: number | null
-      output_tokens?: number | null
-      cache_read_tokens?: number | null
-      cache_write_tokens?: number | null
-      function_call_errors?: number | null
-    } | null
-    cost?: { total_usd?: number | null; subject_usd?: number | null } | null
-  } | null
+  record?:
+    | (Partial<DashboardRunProjection> & {
+        efficiency?: {
+          input_tokens?: number | null
+          output_tokens?: number | null
+          cache_read_tokens?: number | null
+          cache_write_tokens?: number | null
+          function_call_errors?: number | null
+        } | null
+        cost?: { total_usd?: number | null; subject_usd?: number | null } | null
+      })
+    | null
   cohortSha256?: string
   capturedAt?: string
   /** Release Control payloads may carry extra identity fields (a legacy judge
@@ -105,33 +110,41 @@ export type RcHistoryPlan = { key: string; active: boolean; updated_at: string }
 export async function discoverReleaseControlHistory(): Promise<
   RcHistoryPlan[]
 > {
-  const client = await getDashboardIiiClient()
-  const plans: RcHistoryPlan[] = []
-  let after: string | undefined
-  do {
-    const page = await client.trigger<{
-      plans: RcHistoryPlan[]
-      next_after: string | null
-    }>(
-      'release-control::test-plans::history-list',
-      { after, limit: 100 },
-      { namespace: 'default' },
-    )
-    plans.push(...page.plans)
-    after = page.next_after ?? undefined
-  } while (after)
-  return plans
+  try {
+    const client = await getDashboardIiiClient()
+    const plans: RcHistoryPlan[] = []
+    let after: string | undefined
+    do {
+      const page = await client.trigger<{
+        plans: RcHistoryPlan[]
+        next_after: string | null
+      }>(
+        'release-control::test-plans::history-list',
+        { after, limit: 100 },
+        { namespace: 'default' },
+      )
+      plans.push(...page.plans)
+      after = page.next_after ?? undefined
+    } while (after)
+    return plans
+  } catch (cause) {
+    throw normalizeBridgeError(cause)
+  }
 }
 
 export async function exportReleaseControlHistory(planKey: string) {
-  return (await getDashboardIiiClient()).trigger<{
-    json: string
-    sha256: string
-  }>(
-    'release-control::test-plans::export',
-    { planKey },
-    { namespace: 'default' },
-  )
+  try {
+    return await (await getDashboardIiiClient()).trigger<{
+      json: string
+      sha256: string
+    }>(
+      'release-control::test-plans::export',
+      { planKey },
+      { namespace: 'default' },
+    )
+  } catch (cause) {
+    throw normalizeBridgeError(cause)
+  }
 }
 
 function completeSum(values: Array<number | null | undefined>) {
@@ -198,42 +211,6 @@ function metrics(runs: RcRun[]): DashboardScenarioMetricSummary[] {
   }))
 }
 
-function normalizedSeed(value: unknown) {
-  if (typeof value === 'number')
-    return Number.isSafeInteger(value) && value >= 0 ? String(value) : null
-  if (typeof value !== 'string' || !/^\d+$/.test(value)) return null
-  try {
-    return BigInt(value).toString()
-  } catch {
-    return null
-  }
-}
-
-function primaryIdentity(values: {
-  caseId: unknown
-  seed: unknown
-  repetition: unknown
-  definitionSha256: unknown
-  resultContractSha256: unknown
-  subjectProvider: unknown
-  subjectModel: unknown
-}) {
-  const parts = [
-    text(values.caseId),
-    normalizedSeed(values.seed),
-    typeof values.repetition === 'number' &&
-    Number.isSafeInteger(values.repetition) &&
-    values.repetition >= 0
-      ? values.repetition
-      : null,
-    text(values.definitionSha256),
-    text(values.resultContractSha256),
-    text(values.subjectProvider),
-    text(values.subjectModel),
-  ]
-  return parts.every((part) => part !== null) ? JSON.stringify(parts) : null
-}
-
 function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
   const values = Object.fromEntries(
     (
@@ -242,7 +219,6 @@ function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
         'totalTokens',
         'inputTokens',
         'outputTokens',
-        'inputNormal',
         'cacheRead',
         'cacheWrite',
         'turns',
@@ -270,7 +246,6 @@ function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
     values.outputTokens.push(
       complete ? (run.record?.efficiency?.output_tokens ?? null) : null,
     )
-    values.inputNormal.push(null)
     values.cacheRead.push(
       complete ? (run.record?.efficiency?.cache_read_tokens ?? null) : null,
     )
@@ -288,9 +263,7 @@ function primaryValues(runs: RcRun[]): PrimaryTestValues['values'] {
     )
     values.durationMs.push(run.wallTimeMs)
     // RC only retains subject cost; costUsd is total recorded spend.
-    values.costUsd.push(
-      complete ? (run.record?.cost?.total_usd ?? run.costSubjectUsd) : null,
-    )
+    values.costUsd.push(complete ? (run.record?.cost?.total_usd ?? null) : null)
   }
   return values
 }
@@ -306,33 +279,73 @@ function plannedRepetitions(reference: RcReference) {
     : null
 }
 
+export function filterReferenceScenarios(
+  reference: RcReference,
+  selected: Set<string>,
+): RcReference {
+  const campaigns = record(reference.materialized)?.campaigns
+  const runs = reference.runs.filter((run) => selected.has(run.scenarioId))
+  const repetitions = plannedRepetitions(reference)
+  return {
+    ...reference,
+    runs,
+    aggregate: {
+      ...reference.aggregate,
+      planned_runs:
+        repetitions === null
+          ? reference.aggregate.planned_runs
+          : selected.size * repetitions,
+      observed_runs: runs.length,
+    },
+    materialized: reference.materialized && {
+      ...reference.materialized,
+      campaigns: (Array.isArray(campaigns) ? campaigns : []).map((campaign) => {
+        const value = record(campaign)
+        return {
+          ...value,
+          groups: (Array.isArray(value?.groups) ? value.groups : []).map(
+            (group) => {
+              const value = record(group)
+              return {
+                ...value,
+                scenarios: (Array.isArray(value?.scenarios)
+                  ? value.scenarios
+                  : []
+                ).filter((id) => typeof id === 'string' && selected.has(id)),
+              }
+            },
+          ),
+        }
+      }),
+    },
+  }
+}
+
 /** Project the RC ledger directly into the shared presentation contract. */
 export function referencePrimaryMetrics(
   reference: RcReference,
 ): PrimaryMetrics {
   const groups = new Map<string, RcRun[]>()
+  const campaigns = record(reference.materialized)?.campaigns
+  for (const campaign of Array.isArray(campaigns) ? campaigns : []) {
+    const materializedGroups = record(campaign)?.groups
+    for (const group of Array.isArray(materializedGroups)
+      ? materializedGroups
+      : []) {
+      const scenarios = record(group)?.scenarios
+      for (const scenario of Array.isArray(scenarios) ? scenarios : []) {
+        if (typeof scenario === 'string') groups.set(scenario, [])
+      }
+    }
+  }
   for (const run of reference.runs) {
-    const key = JSON.stringify([run.scenarioId])
-    groups.set(key, [...(groups.get(key) ?? []), run])
+    groups.set(run.scenarioId, [...(groups.get(run.scenarioId) ?? []), run])
   }
   const planned = plannedRepetitions(reference)
   const executionComplete =
     reference.aggregate.planned_runs === reference.aggregate.observed_runs
-  const planSubject = record(record(reference.execution.plan)?.subject)
   return buildPrimaryMetricsFromValues(
-    [...groups.entries()].map(([key, runs]) => {
-      const identities = runs.map((run) =>
-        primaryIdentity({
-          caseId: run.caseId,
-          seed: run.seed,
-          repetition: run.repetition,
-          definitionSha256: run.identity?.definitionSha256,
-          resultContractSha256: run.identity?.resultContractSha256,
-          subjectProvider:
-            run.identity?.subjectProvider ?? planSubject?.provider,
-          subjectModel: run.identity?.subjectModel ?? planSubject?.model,
-        }),
-      )
+    [...groups.entries()].map(([scenario, runs]) => {
       const repetitions = runs.map((run) => run.repetition)
       const expected = planned
       const scopeKnown =
@@ -346,68 +359,34 @@ export function referencePrimaryMetrics(
             value >= 0 &&
             value < expected,
         ) &&
-        new Set(repetitions).size === repetitions.length &&
-        identities.every((identity) => identity !== null) &&
-        new Set(identities).size === identities.length
+        new Set(repetitions).size === repetitions.length
       return {
-        key,
-        label: runs[0]?.scenarioId ?? key,
+        key: JSON.stringify([scenario]),
+        label: scenario,
         definition: runs[0]?.behaviorSha256 ?? null,
         expected: expected ?? runs.length,
         scopeKnown,
-        identity: scopeKnown ? JSON.stringify([...identities].sort()) : null,
         values: primaryValues(runs),
       }
     }),
   )
 }
 
-/** Keep local Results native while aligning only their comparison identity to RC. */
-export function localReferencePrimaryMetrics(
-  detail: DashboardExecutionDetail,
-  compatible: boolean,
-): PrimaryMetrics {
-  const projected = buildPrimaryMetrics(detail)
-  return {
-    ...projected,
-    tests: projected.tests.map((test) => {
-      const identities = detail.reports.flatMap((entry) => {
-        const subject = detail.subjects.find(
-          (candidate) => candidate.id === entry.subject_id,
-        )
-        const reportSubject = record(entry.report?.subject)
-        return (
-          entry.report?.scenarios.flatMap((scenario) => {
-            if (scenario.scenario_id !== test.label) return []
-            const scenarioCase = record(scenario.case)
-            return scenario.runs.map((run, index) =>
-              primaryIdentity({
-                caseId: scenario.case_id,
-                seed: scenarioCase?.seed,
-                repetition: localRepetition(entry, run, index),
-                definitionSha256: scenarioCase?.inputs_sha256,
-                resultContractSha256: entry.report?.result_contract_sha256,
-                subjectProvider: reportSubject?.provider ?? subject?.provider,
-                subjectModel: reportSubject?.model ?? subject?.model,
-              }),
-            )
-          }) ?? []
-        )
-      })
-      const slotsKnown =
-        identities.length === test.repetitions &&
-        identities.every((identity) => identity !== null) &&
-        new Set(identities).size === identities.length
-      return {
-        ...test,
-        scopeKnown: test.scopeKnown && slotsKnown,
-        identity:
-          compatible && slotsKnown
-            ? JSON.stringify([...identities].sort())
-            : null,
-      }
-    }),
+export function comparisonPrimaryMetrics(
+  baseline: DashboardExecutionDetail | null,
+  candidate: DashboardExecutionDetail | null,
+) {
+  const metrics = (detail: DashboardExecutionDetail | null) => {
+    if (!detail) return null
+    return detail.origin === 'remote'
+      ? detail.remote_reference
+        ? referencePrimaryMetrics(
+            detail.remote_reference as unknown as RcReference,
+          )
+        : null
+      : buildPrimaryMetrics(detail)
   }
+  return { baseline: metrics(baseline), candidate: metrics(candidate) }
 }
 
 export function referenceSummary(view: {
@@ -560,7 +539,7 @@ function localRepetition(
     : index
 }
 
-function aggregateStatus(runs: RcRun[]) {
+export function aggregateStatus(runs: RcRun[]) {
   if (runs.length === 0) return 'unavailable'
   if (runs.every((run) => run.status === 'passed')) return 'passed'
   if (runs.some((run) => run.technical === 'technical_invalid'))
@@ -812,17 +791,15 @@ function inclusiveTokens(run: DashboardRunProjection): number | null {
     : null
 }
 
-export async function listImportedExecutions(): Promise<
+export async function listComparisonExecutions(): Promise<
   DashboardExecutionSummary[]
 > {
   const bridge = await getDashboardDataBridge()
   const executions: DashboardExecutionSummary[] = []
   let cursor: string | undefined
   do {
-    const page = await bridge.listExecutions({ limit: 200, cursor })
-    executions.push(
-      ...page.executions.filter((execution) => execution.origin === 'remote'),
-    )
+    const page = await bridge.listExecutions({ limit: 100, cursor })
+    executions.push(...page.executions)
     cursor = page.next_cursor ?? undefined
   } while (cursor)
   return executions

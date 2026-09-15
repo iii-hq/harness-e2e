@@ -1,8 +1,6 @@
-import { ChevronDown } from 'lucide-react'
-import { type ReactNode, useEffect, useMemo, useState } from 'react'
-import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
+import { ChevronDown, Eye } from 'lucide-react'
+import { useId, useMemo, useState } from 'react'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
-import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import {
   buttonClassName,
   type OperationalStatus,
@@ -10,18 +8,17 @@ import {
   StatusBadge,
 } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
-import type { AssessmentRunView } from '@/lib/assessment-view'
+import {
+  type AssessmentRunView,
+  buildAssessmentWorkspace,
+} from '@/lib/assessment-view'
 import type {
-  CompletionState,
   DashboardExecutionDetail,
-  DashboardRunProjection,
-  DashboardScenarioAggregate,
-  EvaluatorAvailability,
   SemanticTestReport,
-  TechnicalState,
 } from '@/lib/dashboard-data-source'
 import { shortDefinition } from '@/lib/definition-digest'
-import { formatPercent, titleCase } from '@/lib/execution-view'
+import { buildExecutionMetrics } from '@/lib/execution-metrics'
+import { titleCase } from '@/lib/execution-view'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -42,25 +39,6 @@ export function ScenarioMatrix({
   showContract?: boolean
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
-  // Audit SM-07: the Structure column only carries information when at
-  // least one scenario persisted a workflow; otherwise it repeats "Standard".
-  const showStructure = model.items.some(
-    (item) => item.workflowSteps.length > 0,
-  )
-  const preferredItem =
-    model.items.find((item) => item.workflowSteps.length > 0) ??
-    model.items.find((item) => item.objective.status !== 'passed') ??
-    model.items[0]
-  const [expandedKey, setExpandedKey] = useState<string | null>(
-    preferredItem?.key ?? null,
-  )
-
-  useEffect(() => {
-    if (expandedKey && !model.items.some((item) => item.key === expandedKey)) {
-      setExpandedKey(preferredItem?.key ?? null)
-    }
-  }, [expandedKey, model.items, preferredItem?.key])
-
   if (model.items.length === 0) {
     return (
       <div className="rounded-[var(--ds-radius-sm)] border border-dashed border-[var(--color-edge)] bg-panel-raised p-5 text-sm text-ink-muted">
@@ -75,34 +53,43 @@ export function ScenarioMatrix({
         <ResultContractStrip contracts={model.contracts} />
       ) : null}
       <ScenarioSummary summary={model.summary} />
-      <div className="overflow-hidden rounded-[var(--ds-radius-md)] border border-[var(--color-edge)] bg-panel">
-        <div
-          className={`hidden gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-3 font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid ${matrixColumns(showStructure)}`}
-          aria-hidden="true"
-        >
-          <span>Scenario</span>
-          <span>Objective result</span>
-          <span>Runtime</span>
-          {showStructure ? <span>Structure</span> : null}
-        </div>
-        <ol className="m-0 grid list-none p-0">
-          {model.items.map((item) => {
-            const expanded = expandedKey === item.key
-            return (
-              <ScenarioRow
-                key={item.key}
-                item={item}
-                detail={detail}
-                executionId={detail.id}
-                expanded={expanded}
-                showStructure={showStructure}
-                onToggle={() => setExpandedKey(expanded ? null : item.key)}
-                onTranscript={onTranscript}
-              />
-            )
-          })}
-        </ol>
-      </div>
+      <table
+        className="scenario-results-table block w-full table-fixed border-collapse text-left text-xs @[1000px]/harness:table"
+        aria-label="Scenario results"
+      >
+        <thead className="hidden border-b border-[var(--color-rule)] text-ink-muted @[1000px]/harness:table-header-group">
+          <tr>
+            {[
+              'Scenario',
+              'Result',
+              'Score',
+              'Runtime',
+              'Tokens',
+              'Cost',
+              'Evidence',
+            ].map((label) => (
+              <th
+                key={label}
+                scope="col"
+                className={`px-3 py-3 font-medium ${label === 'Scenario' ? 'w-[28%]' : label === 'Evidence' ? 'w-[20%]' : ''}`}
+              >
+                {label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="block @[1000px]/harness:table-row-group">
+          {model.items.map((item) => (
+            <ScenarioResult
+              key={item.key}
+              detail={detailForScenario(detail, item)}
+              item={item}
+              executionId={detail.id}
+              onTranscript={onTranscript}
+            />
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }
@@ -161,7 +148,7 @@ export function ResultContractStrip({
       {contracts.map((contract) => (
         <div
           key={contract.key}
-          className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3"
+          className="grid gap-3 @[640px]/harness:grid-cols-2 @[1000px]/harness:grid-cols-3"
           data-results-contract={contract.valid ? 'valid' : 'invalid'}
         >
           {/* Audit ED-30: title case belongs to words. Applied to every value it
@@ -182,7 +169,7 @@ export function ResultContractStrip({
           />
           {contractDrift(contract) ? (
             <p
-              className="m-0 text-xs text-warning sm:col-span-2 lg:col-span-3"
+              className="m-0 text-xs text-warning @[640px]/harness:col-span-2 @[1000px]/harness:col-span-3"
               data-results-contract-drift="true"
             >
               {contractDrift(contract)}
@@ -210,15 +197,6 @@ function ContractFact({ label, value }: { label: string; value: string }) {
 function shortDigest(value: string | null) {
   if (!value) return 'unavailable'
   return value.replace(/^sha256:/, '').slice(0, 12)
-}
-
-const MATRIX_COLUMNS =
-  'lg:grid-cols-[minmax(13rem,1.4fr)_minmax(9rem,0.75fr)_minmax(7rem,0.55fr)]'
-const MATRIX_COLUMNS_WITH_STRUCTURE =
-  'lg:grid-cols-[minmax(13rem,1.4fr)_minmax(9rem,0.75fr)_minmax(7rem,0.55fr)_minmax(8rem,0.7fr)]'
-
-function matrixColumns(showStructure: boolean) {
-  return showStructure ? MATRIX_COLUMNS_WITH_STRUCTURE : MATRIX_COLUMNS
 }
 
 function ScenarioSummary({
@@ -272,417 +250,314 @@ function ScenarioSummary({
   )
 }
 
-function ScenarioRow({
-  item,
+function ScenarioResult({
   detail,
+  item,
   executionId,
-  expanded,
-  showStructure,
-  onToggle,
   onTranscript,
 }: {
+  detail: DashboardExecutionDetail
   item: ScenarioMatrixItem
   executionId: string
-  detail: DashboardExecutionDetail
-  expanded: boolean
-  showStructure: boolean
-  onToggle: () => void
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
-  const panelId = `${safeId(item.key)}-scenario-panel`
+  const [expanded, setExpanded] = useState(false)
+  const panelId = useId()
+  const assessmentRuns = useMemo(
+    () => buildAssessmentWorkspace(detail).runs,
+    [detail],
+  )
+  const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
+  const importedTest = item.primaryTest
+  const scoreMean = importedTest
+    ? (importedTest.metrics.score.value ?? importedTest.metrics.score.observed)
+    : metrics.scoreMean
+  const scoreSamples = importedTest
+    ? importedTest.metrics.score.samples
+    : metrics.scoreSamples
+  const planned = importedTest
+    ? importedTest.metrics.score.expected
+    : metrics.planned
+  const usage = [
+    { label: 'Runtime', id: 'durationMs' as const, metric: metrics.durationMs },
+    {
+      label: 'Total tokens',
+      id: 'totalTokens' as const,
+      metric: metrics.subjectTokens,
+    },
+    { label: 'Reported cost', id: 'costUsd' as const, metric: metrics.cost },
+    {
+      label: 'Input tokens',
+      id: 'inputTokens' as const,
+      metric: metrics.inputTokens,
+    },
+    {
+      label: 'Output tokens',
+      id: 'outputTokens' as const,
+      metric: metrics.outputTokens,
+    },
+    {
+      label: 'Cache read',
+      id: 'cacheRead' as const,
+      metric: metrics.cacheReadTokens,
+    },
+    {
+      label: 'Cache written',
+      id: 'cacheWrite' as const,
+      metric: metrics.cacheWriteTokens,
+    },
+    { label: 'Turns', id: 'turns' as const, metric: metrics.turns },
+    {
+      label: 'Function calls',
+      id: 'functionCalls' as const,
+      metric: metrics.functionCalls,
+    },
+    {
+      label: 'Function errors',
+      id: 'functionErrors' as const,
+      metric: metrics.functionErrors,
+    },
+  ].map(({ label, id, metric: localMetric }) => {
+    const importedMetric = importedTest?.metrics[id]
+    const metric = importedMetric
+      ? { ...importedMetric, total: importedMetric.value }
+      : localMetric
+    const value = metric.total ?? metric.observed
+    return {
+      label,
+      value:
+        value === null
+          ? '—'
+          : label === 'Runtime'
+            ? formatScenarioDuration(value)
+            : label === 'Reported cost'
+              ? value > 0 && value < 0.0001
+                ? '<$0.0001'
+                : `$${value.toFixed(4)}`
+              : formatDecimal(value),
+      detail:
+        metric.total !== null
+          ? 'Accumulated across runs, including retries'
+          : metric.observed !== null
+            ? importedTest &&
+              !importedTest.scopeKnown &&
+              metric.samples === metric.expected
+              ? 'Partial · planned scope not confirmed'
+              : `Partial · ${metric.samples}/${metric.expected} runs reported`
+            : 'Not reported',
+    }
+  })
+  const runId = item.primaryRun?.run_id
   const definition = shortDefinition(item.behaviorSha256)
-  const scenarioTitle = `${titleCase(item.scenarioId)}${
-    definition ? ` · definition ${definition}` : ''
-  }`
-  const structure = item.workflowSteps.length
-    ? `Workflow · ${item.workflowSteps.length} ${item.workflowSteps.length === 1 ? 'step' : 'steps'}`
-    : item.available
-      ? 'Standard'
-      : 'No report'
-
+  const scenarioTitle = `${titleCase(item.scenarioId)}${definition ? ` · definition ${definition}` : ''}`
   return (
-    <li className="border-t border-[var(--color-rule)] first:border-t-0">
-      <button
+    <>
+      <tr
         data-scenario-row={item.key}
-        className={`group grid min-h-16 w-full min-w-0 gap-x-4 gap-y-3 border-0 px-4 py-4 text-left transition-colors motion-reduce:transition-none lg:items-center lg:px-5 ${matrixColumns(showStructure)} ${
-          expanded ? 'bg-panel-raised' : 'bg-panel hover:bg-panel-raised'
-        }`}
-        type="button"
-        aria-expanded={expanded}
-        aria-controls={panelId}
-        onClick={onToggle}
+        className="grid grid-cols-2 gap-y-2 border-b border-[var(--color-rule)] py-3 align-top @[1000px]/harness:table-row"
+        aria-label={`${titleCase(item.scenarioId)} scenario result`}
       >
-        <span className="flex min-w-0 items-start gap-3">
-          <ChevronDown
-            className={`mt-0.5 size-4 shrink-0 text-ink-muted transition-transform duration-[var(--ds-motion-duration-fast)] motion-reduce:transition-none ${expanded ? 'rotate-0' : '-rotate-90'}`}
-            aria-hidden="true"
-          />
-          <span className="min-w-0">
-            <h3
-              className="m-0 block truncate text-sm font-semibold text-ink"
-              title={scenarioTitle}
-            >
-              {scenarioTitle}
-            </h3>
-            <span
-              className="mt-1 block truncate font-mono text-label text-ink-muted"
-              title={item.reason ?? item.subjectId}
-            >
-              {item.reason ??
-                `${item.subjectId} · ${item.runCount} ${item.runCount === 1 ? 'run' : 'runs'}`}
+        <th
+          scope="row"
+          className="col-span-2 min-w-0 px-3 py-2 text-left font-normal"
+        >
+          <button
+            type="button"
+            aria-expanded={expanded}
+            aria-controls={panelId}
+            onClick={() => setExpanded(!expanded)}
+            className="flex min-h-8 w-full items-start gap-2 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2"
+          >
+            <ChevronDown
+              className={`mt-0.5 size-4 shrink-0 text-ink-muted ${expanded ? '' : '-rotate-90'}`}
+              aria-hidden="true"
+            />
+            <span className="min-w-0">
+              <strong
+                className="block break-words text-sm"
+                title={scenarioTitle}
+              >
+                {titleCase(item.scenarioId)}
+              </strong>
+              <span className="mt-1 block break-all text-label text-ink-muted">
+                {item.subjectId} · {item.runCount}{' '}
+                {item.runCount === 1 ? 'run' : 'runs'}
+              </span>
+              {definition ? (
+                <span className="mt-1 block font-mono text-label text-ink-muted">
+                  definition {definition}
+                </span>
+              ) : null}
             </span>
+          </button>
+        </th>
+        <td className="min-w-0 px-3 py-2">
+          <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
+            Result
           </span>
-        </span>
-        <MatrixCell label="Objective result">
           <StatusBadge
             status={item.objective.status}
             label={item.objective.label}
           />
-        </MatrixCell>
-        <MatrixCell label="Runtime">
-          <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
-            {formatScenarioDuration(item.durationMs)}
-          </strong>
-          {item.durationKind === 'average' && item.runCount > 1 ? (
-            <span className="ml-1 font-mono text-label text-ink-muted">
-              avg
-            </span>
-          ) : null}
-        </MatrixCell>
-        {showStructure ? (
-          <MatrixCell label="Structure">
-            <span className="text-xs font-medium text-[var(--color-ink-faint)]">
-              {structure}
-            </span>
-          </MatrixCell>
-        ) : null}
-      </button>
-      {expanded ? (
-        <ScenarioExpansion
-          id={panelId}
-          detail={detailForScenario(detail, item)}
-          item={item}
-          executionId={executionId}
-          onTranscript={onTranscript}
-        />
-      ) : null}
-    </li>
-  )
-}
-
-function MatrixCell({
-  label,
-  children,
-}: {
-  label: string
-  children: ReactNode
-}) {
-  return (
-    <span className="grid min-w-0 grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-      <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
-        {label}
-      </span>
-      <span className="min-w-0">{children}</span>
-    </span>
-  )
-}
-
-function ScenarioExpansion({
-  id,
-  detail,
-  item,
-  executionId,
-  onTranscript,
-}: {
-  id: string
-  detail: DashboardExecutionDetail
-  item: ScenarioMatrixItem
-  executionId: string
-  onTranscript: (run: AssessmentRunView, title: string) => void
-}) {
-  const runId =
-    (item.primaryRun as unknown as { run_id?: string } | null)?.run_id ?? null
-  const evidenceHref = runId ? hashForExecution(executionId, null, runId) : null
-  return (
-    <section
-      id={id}
-      className="border-t border-[var(--color-edge)] bg-panel-raised p-3 sm:p-4 md:p-5"
-      aria-label={`${titleCase(item.scenarioId)} scenario result`}
-    >
-      <div className="overflow-hidden rounded-[var(--ds-radius-sm)] border border-[var(--color-rule)] bg-panel">
-        <div className="flex min-h-14 flex-col gap-3 border-b border-[var(--color-rule)] bg-panel px-4 py-3 sm:flex-row sm:items-center sm:justify-between md:px-5">
-          <div className="min-w-0">
-            <strong className="block truncate text-sm text-ink">
-              {titleCase(item.scenarioId)} run evidence
-            </strong>
-            <span className="mt-1 block font-mono text-label text-ink-muted">
-              {item.runCount} {item.runCount === 1 ? 'run' : 'runs'} retained ·{' '}
-              {item.subjectId}
-            </span>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 max-[560px]:*:w-full">
-            {evidenceHref ? (
+        </td>
+        <td className="min-w-0 px-3 py-2">
+          <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
+            Score
+          </span>
+          <strong className="font-mono">{scoreLabel(scoreMean)}</strong>
+          <span className="mt-1 block text-label text-ink-muted">
+            {scoreSamples > 0
+              ? importedTest && !importedTest.scopeKnown
+                ? `Mean · ${scoreSamples} runs scored · partial scope`
+                : `Mean · ${scoreSamples}/${planned} planned runs scored`
+              : 'Not reported'}
+          </span>
+        </td>
+        {usage
+          .filter((metric) =>
+            ['Runtime', 'Total tokens', 'Reported cost'].includes(metric.label),
+          )
+          .map((metric) => (
+            <td
+              key={metric.label}
+              className="min-w-0 px-3 py-2"
+              title={metric.detail}
+              data-primary-metric={metric.label}
+            >
+              <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
+                {metric.label}
+              </span>
+              <strong className="break-words font-mono">{metric.value}</strong>
+              {item.runCount > 1 ||
+              metric.detail !== 'Accumulated across runs, including retries' ? (
+                <span className="mt-1 block text-label text-ink-muted">
+                  {metric.detail}
+                </span>
+              ) : null}
+            </td>
+          ))}
+        <td className="col-span-2 min-w-0 px-3 py-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {runId &&
+            (detail.origin !== 'remote' || assessmentRuns.length > 0) ? (
               <a
                 className={buttonClassName({
                   variant: 'secondary',
                   size: 'compact',
                   className: 'no-underline',
                 })}
-                href={evidenceHref}
+                href={hashForExecution(executionId, null, runId)}
+                aria-label={`Evidence record for ${titleCase(item.scenarioId)}`}
+                title="Evidence record"
               >
-                evidence record
+                <Eye size={15} aria-hidden="true" />
               </a>
+            ) : !runId ? (
+              <span className="text-ink-muted">No retained run</span>
             ) : null}
             <ScenarioChatAction
+              compact
               detail={detail}
               scenarioId={item.scenarioId}
               subjectId={item.subjectId}
             />
           </div>
-        </div>
-        {item.reason ? (
-          <p className="m-0 bg-[var(--surface-fill)] px-4 py-3 text-sm leading-6 text-ink md:px-5">
-            <span className="ds-label mr-2">why it failed</span>
-            {item.reason}
-          </p>
-        ) : null}
-        <ScenarioResultBand item={item} />
-        <ScenarioReliabilityBand aggregate={item.aggregate} />
-        <RunOutcomeLedger runs={item.runs} />
-        {!item.available ? (
-          <div className="border-t border-[var(--color-rule)] px-4 py-6 text-sm leading-6 text-ink-muted md:px-5">
-            The expected report for this scenario is unavailable. Runtime and
-            workflow data are intentionally not inferred.
-          </div>
-        ) : item.workflowSteps.length > 0 ? (
-          <WorkflowDurationProfile tests={item.workflowSteps} />
-        ) : null}
-        {item.available ? (
-          <details
-            className="group border-t border-[var(--color-rule)]"
-            open={item.objective.status !== 'passed'}
-          >
-            <summary className="flex min-h-12 cursor-pointer list-none items-center gap-3 px-4 py-3 text-sm font-semibold text-ink marker:hidden md:px-5">
-              <ChevronDown
-                className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-motion-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
-                aria-hidden="true"
-              />
-              <span>Inspect scenario evidence</span>
-              <span className="ml-auto font-mono text-label font-normal text-ink-muted">
-                assessments, gates, artifacts, and provenance
-              </span>
-            </summary>
-            <div className="grid gap-6 border-t border-[var(--color-rule)] p-4 md:p-5">
-              <AssessmentWorkspace
-                detail={detail}
-                onTranscript={onTranscript}
-              />
-              {item.workflowSteps.length > 0 ? (
-                <SemanticTestFlow detail={detail} />
-              ) : null}
-            </div>
-          </details>
-        ) : null}
-      </div>
-    </section>
-  )
-}
-
-function ScenarioReliabilityBand({
-  aggregate,
-}: {
-  aggregate: DashboardScenarioAggregate | null
-}) {
-  if (!aggregate) {
-    return (
-      <p
-        className="m-0 bg-panel-raised px-4 py-3 text-xs text-ink-muted md:px-5"
-        data-scenario-aggregate="unavailable"
+        </td>
+      </tr>
+      <tr
+        id={panelId}
+        hidden={!expanded}
+        className={expanded ? 'block @[1000px]/harness:table-row' : 'hidden'}
       >
-        The required results aggregate is unavailable; no completion or
-        reliability metric was inferred.
-      </p>
-    )
-  }
-  const counts = [
-    ['planned', aggregate.planned_runs],
-    ['observed', aggregate.observed_runs],
-    ['deferred', aggregate.deferred_runs],
-    ['completed', aggregate.completed_runs],
-    ['task incomplete', aggregate.task_incomplete_runs],
-    ['undetermined', aggregate.undetermined_runs],
-    ['technical valid', aggregate.technical_valid_runs],
-    ['technical invalid', aggregate.technical_invalid_runs],
-  ] as const
-  const rates = [
-    ['execution reliability', aggregate.execution_reliability],
-    ['completion evidence coverage', aggregate.completion_evidence_coverage],
-    ['completion rate', aggregate.completion_rate],
-  ] as const
-  const tokenMetrics = [
-    ['subject tokens', aggregate.total_tokens_consumed],
-    ['completed p50 tokens', aggregate.tokens_completed_p50],
-    ['failed attempt tokens', aggregate.failed_attempt_tokens],
-    ['tokens per completion', aggregate.tokens_per_completion],
-  ] as const
-  return (
-    <section
-      className="bg-panel-raised px-4 py-4 md:px-5"
-      aria-label="Scenario reliability and completion"
-      data-scenario-aggregate="available"
-    >
-      <h4 className="m-0 text-xs font-semibold text-ink">
-        Completion and evidence yield
-      </h4>
-      <dl className="m-0 mt-3 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-4 xl:grid-cols-8">
-        {counts.map(([label, value]) => (
-          <AggregateFact key={label} label={label} value={formatCount(value)} />
-        ))}
-      </dl>
-      <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-6">
-        {rates.map(([label, value]) => (
-          <AggregateFact
-            key={label}
-            label={label}
-            value={formatPercentOrDash(value)}
-          />
-        ))}
-        <AggregateFact
-          label="mean score"
-          value={
-            aggregate.mean_score == null
-              ? '—'
-              : `${formatDecimal(aggregate.mean_score)}/100`
-          }
-          detail={`${aggregate.scored_runs}/${aggregate.technical_valid_runs} technically valid runs scored`}
-        />
-      </dl>
-      <dl className="m-0 mt-4 grid grid-cols-2 gap-x-5 gap-y-3 sm:grid-cols-3 xl:grid-cols-5">
-        {tokenMetrics.map(([label, value]) => (
-          <AggregateFact
-            key={label}
-            label={label}
-            value={value == null ? '—' : formatDecimal(value)}
-          />
-        ))}
-      </dl>
-    </section>
+        <td
+          colSpan={7}
+          className="block min-w-0 bg-panel-raised p-4 @[1000px]/harness:table-cell"
+        >
+          {item.reason ? (
+            <p className="m-0 mb-3 break-words text-sm text-ink">
+              {item.reason}
+            </p>
+          ) : null}
+          <dl className="m-0 grid gap-3 @[640px]/harness:grid-cols-2 @[1000px]/harness:grid-cols-3">
+            {usage
+              .filter(
+                (metric) =>
+                  !['Runtime', 'Total tokens', 'Reported cost'].includes(
+                    metric.label,
+                  ),
+              )
+              .map((metric) => (
+                <ResultFact
+                  key={metric.label}
+                  label={metric.label}
+                  value={metric.value}
+                  detail={metric.detail}
+                />
+              ))}
+          </dl>
+          {item.runs.length > 1 ? (
+            <ul
+              className="m-0 mt-4 grid list-none gap-3 p-0"
+              aria-label="Retained runs"
+            >
+              {item.runs.map((run) => {
+                const assessment = assessmentRuns.find(
+                  (entry) => entry.runId === run.run_id,
+                )
+                return (
+                  <li
+                    key={run.attempt_id}
+                    className="flex flex-wrap items-center gap-3"
+                  >
+                    <span className="break-all font-mono text-label">
+                      {run.run_id}
+                    </span>
+                    {detail.origin !== 'remote' || assessment ? (
+                      <a
+                        className={buttonClassName({
+                          variant: 'secondary',
+                          size: 'compact',
+                        })}
+                        href={hashForExecution(executionId, null, run.run_id)}
+                      >
+                        evidence record
+                      </a>
+                    ) : null}
+                    {assessment?.transcript ? (
+                      <button
+                        type="button"
+                        className={buttonClassName({
+                          variant: 'quiet',
+                          size: 'compact',
+                        })}
+                        onClick={() =>
+                          onTranscript(
+                            assessment,
+                            `${titleCase(item.scenarioId)} · ${run.run_id}`,
+                          )
+                        }
+                      >
+                        transcript
+                      </button>
+                    ) : null}
+                  </li>
+                )
+              })}
+            </ul>
+          ) : null}
+          {!item.available ? (
+            <p className="m-0 mt-3 text-sm text-ink-muted">
+              The expected report for this scenario is unavailable. Runtime and
+              workflow data are intentionally not inferred.
+            </p>
+          ) : null}
+          {item.workflowSteps.length > 0 ? (
+            <WorkflowDurationProfile tests={item.workflowSteps} />
+          ) : null}
+        </td>
+      </tr>
+    </>
   )
-}
-
-function AggregateFact({
-  label,
-  value,
-  detail,
-}: {
-  label: string
-  value: string
-  detail?: string
-}) {
-  return (
-    <div className="min-w-0">
-      <dt className="ds-label">{label}</dt>
-      <dd className="m-0 mt-1 font-mono text-xs font-semibold tabular-nums text-ink">
-        {value}
-      </dd>
-      {detail ? (
-        <dd className="m-0 mt-1 text-label text-ink-muted">{detail}</dd>
-      ) : null}
-    </div>
-  )
-}
-
-type PhysicalAttempt = {
-  key: string
-  runId: string
-  attemptNumber: number | null
-  completion?: CompletionState
-  technical?: TechnicalState
-  evaluators?: DashboardRunProjection['evaluators']
-  score?: number | null
-}
-
-function physicalAttempts(runs: DashboardRunProjection[]): PhysicalAttempt[] {
-  return runs.flatMap((run) => [
-    ...(run.retry_attempts ?? []).map((attempt) => ({
-      key: `${attempt.attempt_id}:retry`,
-      runId: attempt.run_id,
-      attemptNumber: attempt.attempt_number,
-      completion: attempt.completion,
-      technical: attempt.technical,
-      evaluators: attempt.evaluators,
-      score: attempt.score,
-    })),
-    {
-      key: `${run.attempt_id}:terminal`,
-      runId: run.run_id,
-      attemptNumber: run.attempt_number ?? null,
-      completion: run.completion,
-      technical: run.technical,
-      evaluators: run.evaluators,
-      score: run.score,
-    },
-  ])
-}
-
-function RunOutcomeLedger({ runs }: { runs: DashboardRunProjection[] }) {
-  const attempts = physicalAttempts(runs)
-  if (attempts.length === 0) return null
-  return (
-    <details className="group bg-panel-raised">
-      <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 px-4 py-3 text-xs font-semibold text-ink marker:hidden md:px-5">
-        <ChevronDown
-          className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform group-open:rotate-0"
-          aria-hidden="true"
-        />
-        Physical attempt outcomes
-        <span className="ml-auto font-mono text-label font-normal text-ink-muted">
-          {attempts.length} {attempts.length === 1 ? 'attempt' : 'attempts'}
-        </span>
-      </summary>
-      <div className="overflow-x-auto bg-panel">
-        <table className="w-full min-w-[620px] border-collapse text-left text-xs">
-          <thead className="bg-panel-raised font-mono text-label uppercase tracking-[0.06em] text-ink-muted">
-            <tr>
-              <th className="px-4 py-2 font-semibold">run / attempt</th>
-              <th className="px-4 py-2 font-semibold">completion</th>
-              <th className="px-4 py-2 font-semibold">technical</th>
-              <th className="px-4 py-2 font-semibold">completion evaluator</th>
-              <th className="px-4 py-2 font-semibold">score</th>
-            </tr>
-          </thead>
-          <tbody>
-            {attempts.map((attempt) => (
-              <tr key={attempt.key} className="even:bg-panel-raised">
-                <td className="px-4 py-3 font-mono text-ink">
-                  {attempt.runId}
-                  <span className="ml-2 text-ink-muted">
-                    #{attempt.attemptNumber ?? '—'}
-                  </span>
-                </td>
-                <td className="px-4 py-3">{stateLabel(attempt.completion)}</td>
-                <td className="px-4 py-3">{stateLabel(attempt.technical)}</td>
-                <td className="px-4 py-3">
-                  {evaluatorLabel(attempt.evaluators?.completion)}
-                </td>
-                <td className="px-4 py-3 font-mono tabular-nums">
-                  {scoreLabel(attempt.score)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </details>
-  )
-}
-
-function stateLabel(value: CompletionState | TechnicalState | undefined) {
-  return value ? titleCase(value) : 'Contract unavailable'
-}
-
-function evaluatorLabel(value: EvaluatorAvailability | undefined) {
-  return value ? titleCase(value) : 'Contract unavailable'
 }
 
 function scoreLabel(value: number | null | undefined) {
@@ -691,95 +566,33 @@ function scoreLabel(value: number | null | undefined) {
     : '—'
 }
 
-function formatPercentOrDash(value: number | null) {
-  return value == null || !Number.isFinite(value) ? '—' : formatPercent(value)
-}
-
 function formatDecimal(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
-}
-
-function formatCount(value: number) {
-  return value.toLocaleString('en-US', { maximumFractionDigits: 0 })
-}
-
-/** Audit ED-24: the facts in one seven-column grid wrapped into a ragged
- *  second row with a visible empty cell. Two bands, each sized to its own
- *  count, divide evenly and say what kind of number each one is. */
-function ScenarioResultBand({ item }: { item: ScenarioMatrixItem }) {
-  return (
-    <div className="grid gap-4" data-scenario-primary-metrics>
-      <MetricBandGroup label="outcome" columns="sm:grid-cols-1">
-        <ResultFact
-          label="Objective"
-          value={item.objective.label}
-          status={item.objective.status}
-          detail="Authoritative system result"
-        />
-      </MetricBandGroup>
-      <MetricBandGroup
-        label="execution"
-        columns="sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5"
-      >
-        {item.primaryMetrics.map((metric) => (
-          <ResultFact
-            key={metric.label}
-            label={metric.label}
-            value={metric.value}
-            detail={metric.detail}
-          />
-        ))}
-      </MetricBandGroup>
-    </div>
-  )
-}
-
-function MetricBandGroup({
-  label,
-  columns,
-  children,
-}: {
-  label: string
-  columns: string
-  children: ReactNode
-}) {
-  return (
-    <div className="grid gap-2">
-      <span className="ds-label">{label}</span>
-      <dl className={`m-0 grid gap-2 ${columns}`}>{children}</dl>
-    </div>
-  )
 }
 
 function ResultFact({
   label,
   value,
   detail,
-  status,
 }: {
   label: string
   value: string
   detail: string
-  status?: OperationalStatus
 }) {
   return (
     // Bands separate by fill and gap now, so the hairline seams and the
     // negative margins that closed them are gone (audit DS-14).
     <div
-      className="min-w-0 rounded-[6px] bg-panel p-3 md:p-4"
+      className="min-w-0 rounded-[6px] bg-panel p-3 @[768px]/harness:p-4"
       data-primary-metric={label}
     >
       <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </dt>
       <dd className="m-0 mt-2 min-w-0">
-        {status ? (
-          <StatusBadge status={status} label={value} />
-        ) : (
-          <strong className="block truncate font-mono text-sm font-semibold tabular-nums text-ink">
-            {value}
-          </strong>
-        )}
+        <strong className="block truncate font-mono text-sm font-semibold tabular-nums text-ink">
+          {value}
+        </strong>
         <span className="mt-1 block text-label leading-4 text-ink-muted">
           {detail}
         </span>
@@ -798,14 +611,11 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
   return (
     <section
       className="border-t border-[var(--color-rule)]"
-      aria-labelledby="workflow-duration-heading"
+      aria-label="Workflow duration profile"
     >
-      <header className="grid gap-2 border-b border-[var(--color-rule)] px-4 py-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end md:px-5">
+      <header className="grid gap-2 border-b border-[var(--color-rule)] px-4 py-4 @[768px]/harness:grid-cols-[minmax(0,1fr)_auto] @[768px]/harness:items-end @[768px]/harness:px-5">
         <div>
-          <h3
-            id="workflow-duration-heading"
-            className="m-0 text-sm font-semibold text-ink"
-          >
+          <h3 className="m-0 text-sm font-semibold text-ink">
             Workflow duration profile
           </h3>
           <p className="m-0 mt-1 text-xs leading-5 text-ink-muted">
@@ -817,7 +627,7 @@ function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {
           {formatScenarioDuration(totalDuration)} recorded step time
         </span>
       </header>
-      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:grid">
+      <div className="hidden grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] gap-4 border-b border-[var(--color-rule)] bg-panel-raised px-5 py-2.5 font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted @[1000px]/harness:grid">
         <span>Step</span>
         <span>Duration</span>
         <span>Duration profile</span>
@@ -871,7 +681,7 @@ function WorkflowStepRow({
 
   return (
     <li
-      className="grid gap-3 border-t border-[var(--color-rule)] px-4 py-4 first:border-t-0 lg:grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] lg:items-center lg:gap-4 lg:px-5"
+      className="grid gap-3 border-t border-[var(--color-rule)] px-4 py-4 first:border-t-0 @[1000px]/harness:grid-cols-[minmax(12rem,0.9fr)_7rem_minmax(14rem,1.4fr)_minmax(12rem,1fr)] @[1000px]/harness:items-center @[1000px]/harness:gap-4 @[1000px]/harness:px-5"
       data-workflow-step={test.node_id}
     >
       <div className="flex min-w-0 items-start gap-3">
@@ -894,16 +704,16 @@ function WorkflowStepRow({
           </span>
         </div>
       </div>
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 @[1000px]/harness:block">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted @[1000px]/harness:hidden">
           Duration
         </span>
         <strong className="font-mono text-xs font-semibold tabular-nums text-ink">
           {formatScenarioDuration(test.duration_ms)}
         </strong>
       </div>
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 lg:block">
-        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-center gap-3 @[1000px]/harness:block">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted @[1000px]/harness:hidden">
           Profile
         </span>
         <div>
@@ -918,8 +728,8 @@ function WorkflowStepRow({
           </span>
         </div>
       </div>
-      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 lg:block">
-        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted lg:hidden">
+      <div className="grid grid-cols-[7rem_minmax(0,1fr)] items-start gap-3 @[1000px]/harness:block">
+        <span className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted @[1000px]/harness:hidden">
           Metrics
         </span>
         <div
@@ -962,8 +772,4 @@ function workflowStepStatus(statusValue: string): {
     return { status: 'incomplete', label: titleCase(status) }
   }
   return { status: 'unavailable', label: titleCase(status) }
-}
-
-function safeId(value: string) {
-  return value.replace(/[^a-zA-Z0-9_-]/g, '-')
 }

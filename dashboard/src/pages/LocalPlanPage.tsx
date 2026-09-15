@@ -25,7 +25,6 @@ import {
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
-import { ImportedPlanDetailPage } from '@/pages/ImportedPlanDetailPage'
 import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
 
 type Model = { provider: string; model: string }
@@ -539,35 +538,18 @@ export function LocalPlanCreatePage({
 }
 
 export function LocalPlanDetailPage({ planId }: { planId: string }) {
-  const [remote, setRemote] = useState<boolean | null>(null)
-  useEffect(() => {
-    let current = true
-    void getDashboardDataBridge()
-      .then((bridge) => bridge.getPlan(planId))
-      .then((plan) => current && setRemote(plan.origin === 'remote'))
-      .catch(() => current && setRemote(false))
-    return () => {
-      current = false
-    }
-  }, [planId])
-  return remote ? (
-    <ImportedPlanDetailPage planId={planId} />
-  ) : (
-    <LocalPlanDetail planId={planId} />
-  )
+  return <LocalPlanDetail planId={planId} />
 }
 
 // The local plan detail lives in PlanDetailPage.tsx; these names stay
 // importable from here for the router and tests.
 export {
   executionHistoryRows,
-  executionsScent,
   PLAN_COMPARISON_TABLE_METRICS,
-  PLAN_TREND_BANDS,
   PlanComparisonLayers,
   PlanExecutionHistory,
-  PlanLifecycle,
   PlanNonComparableAttempts,
+  PlanRunDialog,
   PlanRunHistory,
   PlanScope,
   planMovementGroups,

@@ -6,8 +6,8 @@ import {
   metricRun,
 } from '@/test-fixtures/execution-metrics'
 
-describe('execution summary panel', () => {
-  it('shows all-scenario metrics without expanding individual scenarios', () => {
+describe('execution efficiency', () => {
+  it('shows pooled efficiency without repeating the primary score or removed counts and rates', () => {
     const detail = executionMetricsFixture([
       { runs: [metricRun('a', 100_000, { score: 60 })] },
       {
@@ -21,61 +21,57 @@ describe('execution summary panel', () => {
       { runs: [metricRun('c', 120_000, { score: 100 })] },
     ])
     const html = renderToStaticMarkup(<ExecutionMetricsPanel detail={detail} />)
-    expect(html).toContain('execution summary')
-    expect(html).toContain('id="metrics"')
-    expect(html).toContain('3/3 scenarios')
-    expect(html).toContain('66.7%')
-    expect(html).toContain('2/3 determined runs')
-    expect(html).toContain('240,000')
+    expect(html).toContain('Efficiency')
+    expect(html).toContain('Failed attempt tokens')
+    expect(html).toContain('Tokens per completion')
+    expect(html).toContain('Completed p50 tokens')
     expect(html).toContain('120,000')
     expect(html).toContain('110,000')
     expect(html).toContain('20,000')
-    expect(html).toContain('80/100')
-    expect(html).toContain('Mean · 2/3 planned runs scored')
-    expect(html).not.toContain('quality')
-    expect(html).toContain('3/3 runs with telemetry')
+    for (const removed of [
+      'planned',
+      'recorded',
+      'completion rate',
+      'execution reliability',
+      'completion evidence',
+      'coverage',
+      'assessments',
+      'score',
+    ]) {
+      expect(html).not.toContain(removed)
+    }
     expect(html).not.toContain('<details')
+    expect(html).not.toContain('<table')
   })
 
-  // Audit ED-26: inside the counts layer the layer row is the heading.
-  it('renders headless inside a layer: same numbers, no title, no anchor', () => {
-    const detail = executionMetricsFixture([
-      { runs: [metricRun('a', 100_000, { score: 60 })] },
-    ])
-    const html = renderToStaticMarkup(
-      <ExecutionMetricsPanel detail={detail} headless />,
-    )
-    expect(html).toContain('data-execution-metrics="headless"')
-    expect(html).not.toContain('execution summary')
-    expect(html).not.toContain('id="metrics"')
-    expect(html).toContain('100,000')
-    expect(html).toContain('1/1 runs with telemetry')
-  })
-
-  it('marks observed subtotals and distinguishes missing cost from zero', () => {
+  it('distinguishes observed failed-attempt subtotals from missing and zero values', () => {
     const detail = executionMetricsFixture([
       {
         runs: [
-          metricRun('a', 100, { cost: null }),
-          metricRun('b', null, { cost: null }),
+          metricRun('a', 100, { completion: 'task_incomplete' }),
+          metricRun('b', null, { completion: 'task_incomplete' }),
         ],
       },
     ])
     const html = renderToStaticMarkup(<ExecutionMetricsPanel detail={detail} />)
-    expect(html).toContain('observed subtotal')
-    expect(html).toContain('1/2 runs with telemetry')
-    expect(html).not.toContain('Execution cost')
-    expect(html).not.toContain('$0.0000')
-    expect(html).toMatch(/Tokens per completion<\/td><td[^>]*>—<\/td>/)
+    expect(html).toContain('Observed subtotal · 1/2')
+    expect(html).toMatch(/Tokens per completion<\/dt><dd[^>]*>—<\/dd>/)
+    expect(html).toMatch(/Completed p50 tokens<\/dt><dd[^>]*>—<\/dd>/)
+    const zero = renderToStaticMarkup(
+      <ExecutionMetricsPanel
+        detail={executionMetricsFixture([{ runs: [metricRun('c', 100)] }])}
+      />,
+    )
+    expect(zero).toMatch(/Failed attempt tokens<\/dt><dd[^>]*>0<\/dd>/)
+    expect(zero).not.toContain('Observed subtotal')
   })
 
-  it('labels missing scenario scope and never renders fabricated metrics', () => {
+  it('keeps unavailable scenario scope unknown', () => {
     const detail = executionMetricsFixture([{ runs: [metricRun('a', 100)] }])
     detail.reports[0].available = false
     const html = renderToStaticMarkup(<ExecutionMetricsPanel detail={detail} />)
-    expect(html).toContain('partial evidence')
     expect(html).toContain('No compatible run evidence')
     expect(html).not.toContain('100%')
-    expect(html).not.toContain('$0.0000')
+    expect(html).not.toContain('>0<')
   })
 })

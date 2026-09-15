@@ -16,15 +16,25 @@ const master = JSON.parse(
 )
 const plans = []
 const executions = new Map()
+const runStarts = []
 let active = null
+let requirementsBlocked = false
 const configuration = {
   url: 'ws://localhost:49134',
   model: '',
   provider: '',
 }
 const requirements = () => ({
-  ready: !active,
-  checks: [],
+  ready: !active && !requirementsBlocked,
+  checks: requirementsBlocked
+    ? [
+        {
+          id: 'fixture',
+          status: 'blocked',
+          message: 'Fixture requirement blocked.',
+        },
+      ]
+    : [],
   active_execution: active && {
     id: active.id,
     kind: 'plan',
@@ -110,7 +120,7 @@ function operation(request) {
       s.state = 'not_run'
     })
     const plan = plans.find((p) => p.id === execution.plan_id)
-    plan.state = 'draft'
+    plan.state = plan.baseline_execution_id ? 'baseline_ready' : 'draft'
     plan.incomplete_execution_ids.push(execution.id)
     active = null
     return execution
@@ -157,11 +167,13 @@ const trigger = (name, request = {}) => {
       plans.find((plan) => plan.id === request.plan_id),
       request,
     )
-  if (id === 'plan-run-start')
+  if (id === 'plan-run-start') {
+    runStarts.push({ planId: request.plan_id, role: request.role })
     return startPlan(
       plans.find((plan) => plan.id === request.plan_id),
       request.role,
     )
+  }
   if (id === 'executions-list')
     return { executions: [...executions.values()].map(executionDetail) }
   if (id === 'execution-get')
@@ -216,16 +228,67 @@ try {
   }
   await select('Execution model', 'deepseek-v4-flash')
   await page.getByRole('button', { name: 'Save plan', exact: true }).click()
-  await page.locator('[data-plan-lifecycle]').waitFor()
+  await page.locator('[data-plan-scope]').waitFor()
   assert.equal(plans.length, 2)
   assert.equal(plans[1].scenario_ids.length, 5)
   assert.equal(plans[1].baseline_execution_id, null)
+  const runButton = page.getByRole('button', { name: 'Run plan', exact: true })
+  await runButton.click()
+  const runDialog = page.getByRole('dialog', { name: 'Run baseline?' })
+  await runDialog.waitFor()
+  assert.equal(runStarts.length, 0)
+  await runDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await runDialog.waitFor({ state: 'hidden' })
+  assert.equal(runStarts.length, 0)
+  await runButton.click()
+  await runDialog.waitFor()
+  await page.keyboard.press('Escape')
+  await runDialog.waitFor({ state: 'hidden' })
+  assert.equal(runStarts.length, 0)
+  requirementsBlocked = true
+  await runButton.click()
+  await runDialog
+    .getByRole('button', { name: 'Run baseline', exact: true })
+    .click()
+  await runDialog
+    .getByText('Execution requirements need attention.', { exact: false })
+    .waitFor()
+  assert.equal(runStarts.length, 0)
+  assert.equal(active, null)
+  requirementsBlocked = false
+  await runDialog.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await runButton.click()
+  await runDialog.waitFor()
+  assert.equal(
+    await runDialog
+      .getByText('Fixture requirement blocked.', { exact: true })
+      .count(),
+    0,
+  )
+  assert.equal(
+    await runDialog
+      .getByText('Execution requirements need attention.', { exact: false })
+      .count(),
+    0,
+  )
+  await runDialog
+    .getByRole('button', { name: 'Run baseline', exact: true })
+    .click()
+  await page.getByRole('button', { name: /^cancel execution$/i }).waitFor()
+  assert.deepEqual(runStarts.at(-1), { planId: plans[1].id, role: 'baseline' })
+  await page.getByRole('button', { name: /^cancel execution$/i }).click()
+  await page
+    .locator('[data-plan-run-history]')
+    .getByText('cancelled', { exact: true })
+    .first()
+    .waitFor()
+  assert.equal(active, null)
   // Template and manual plans use the same table, detail and lifecycle.
   await page.goto(`${server.url}#/ext/harness-e2e/plans`)
   await page.getByText('Smoke', { exact: true }).first().waitFor()
   assert.equal(await page.getByRole('table').count(), 1)
   await page.getByText('Existing manual plan', { exact: true }).first().click()
-  await page.locator('[data-plan-lifecycle]').waitFor()
+  await page.locator('[data-plan-scope]').waitFor()
   await page.goto(`${server.url}#/ext/harness-e2e/plans/${plans[1].id}`)
   await page.getByRole('link', { name: 'Duplicate plan', exact: true }).click()
   await page
@@ -274,9 +337,47 @@ try {
   await page.locator('.primary-metrics').waitFor()
   await page.getByRole('link', { name: 'back to plan', exact: true }).click()
   await page
-    .getByText('Incomplete attempt · cancelled', { exact: true })
+    .locator('[data-plan-run-history]')
+    .getByText('cancelled', { exact: true })
+    .first()
     .waitFor()
   assert.equal(active, null)
+  const seededBaseline = startPlan(plans[0], 'baseline')
+  seededBaseline.state = 'completed'
+  plans[0].state = 'baseline_ready'
+  plans[0].baseline_execution_id = seededBaseline.id
+  active = null
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/${plans[0].id}`)
+  await page.getByRole('button', { name: 'Re-run plan', exact: true }).click()
+  const candidateDialog = page.getByRole('dialog', {
+    name: 'Run candidate #1?',
+  })
+  await candidateDialog.waitFor()
+  assert.equal(active, null)
+  const startsBeforeCandidate = runStarts.length
+  await candidateDialog
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click()
+  assert.equal(runStarts.length, startsBeforeCandidate)
+  await page.getByRole('button', { name: 'Re-run plan', exact: true }).click()
+  await candidateDialog
+    .getByRole('button', { name: 'Run candidate #1', exact: true })
+    .click()
+  await page.getByRole('button', { name: /^cancel execution$/i }).waitFor()
+  assert.deepEqual(runStarts.at(-1), { planId: plans[0].id, role: 'candidate' })
+  await page.getByRole('button', { name: /^cancel execution$/i }).click()
+  await page
+    .locator('[data-plan-run-history]')
+    .getByText('cancelled', { exact: true })
+    .first()
+    .waitFor()
+  assert.equal(active, null)
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/${plans[2].id}`)
+  await page
+    .locator('[data-plan-run-history]')
+    .getByText('cancelled', { exact: true })
+    .first()
+    .waitFor()
   await page.setViewportSize({ width: 390, height: 844 })
   assert.equal(
     await page.evaluate(
@@ -289,7 +390,7 @@ try {
   await page.getByText('Saved scope unavailable', { exact: true }).waitFor()
   assert.deepEqual(errors, [])
   console.log(
-    'Unified plan browser flow passed: create, evaluator, keyboard search, save, run, duplicate, busy draft, cancel, incompatible and narrow viewport in a functional Console host double.',
+    'Unified plan browser flow passed: create, evaluator, keyboard search, save, run confirmation and blocked requirements, baseline and candidate, duplicate, busy draft, cancel, incompatible and narrow viewport in a functional Console host double.',
   )
 } catch (error) {
   console.error(
