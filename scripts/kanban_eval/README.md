@@ -140,10 +140,12 @@ are not subject filesystem artifacts.
 
 To enable this in Release Control's exact-stack workflow:
 
-1. Publish the fixture history through commit
-   `0471257a95095da7c5e9d366e26636976472e90d` in the public
-   `iii-hq/kanban-e2e-fixture` repository. Checkout uses the workflow's default
-   token and never persists credentials.
+1. Checkout `main` with full history from the public
+   `iii-hq/kanban-e2e-fixture` repository. The bootstrap verifies HEAD against
+   the locally resolved `main` commit and requires the fixture catalog to match
+   the runner's embedded catalog. Each scenario still starts from its catalog's
+   exact `base_commit` or `reference_commit`, not the checkout's HEAD.
+   Checkout uses the workflow's default token and never persists credentials.
 2. Merge the native scenarios and publish a compatible immutable `harness-e2e`
    worker release. Select that release in the Release Control stack; changing
    `runner_sha` alone does not replace the Registry-resolved worker binary.
