@@ -2894,7 +2894,17 @@ mod tests {
 
     #[test]
     fn release_control_intent_is_bound_to_the_agent_profile() {
-        let plain = d0_request();
+        let mut plain = d0_request();
+        let contract = plain.run_contract.as_mut().unwrap();
+        contract.runner = RunnerIdentity {
+            name: "harness-e2e".into(),
+            version: "1.0.0".into(),
+            revision: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        contract.plan.catalog_sha256 = format!("sha256:{}", "b".repeat(64));
+        contract.selected_cases[0].behavior_sha256 = format!("sha256:{}", "c".repeat(64));
+        contract.selected_cases[0].inputs_sha256 = format!("sha256:{}", "d".repeat(64));
+        contract.selected_cases[0].contract_sha256 = format!("sha256:{}", "e".repeat(64));
         let mut profiled = plain.clone();
         profiled.agent = Some("software-engineer".into());
 
@@ -2904,7 +2914,7 @@ mod tests {
         );
         assert_eq!(
             observation_intent_sha256(&plain).unwrap(),
-            "sha256:107ab7bfe6f88140daf4e431ef5bf0b58f8f519cb3c74adb27ead477c0404e94"
+            "sha256:25b42328eb6e8d8a535ea4327a4490feecf3c063580c5b65285a3b9ec8c7cb4e"
         );
     }
 
