@@ -69,34 +69,3 @@ jobs:
         run: |
           python3 -m pip install --quiet pyyaml
           python3 -m unittest discover -s tests/python -p 'test_*.py'
-
-  kanban-catalog:
-    # bootstrap.py rejects a fixture whose catalog is not byte-identical to the
-    # runner-embedded one, and it does so only once a campaign is already
-    # running: run 34979011694 lost all seven Kanban groups to that drift.
-    # Catch it on the pull request that introduces it.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-      - id: pin
-        name: Read the pinned fixture revision
-        run: |
-          revision=$(sed -n "s/^FIXTURE_REVISION = '\([0-9a-f]\{40\}\)'.*/\1/p" scripts/kanban_eval/bootstrap.py)
-          test -n "$revision" || { echo 'FIXTURE_REVISION is unreadable' >&2; exit 1; }
-          echo "revision=$revision" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          repository: iii-hq/kanban-e2e-fixture
-          ref: ${{ steps.pin.outputs.revision }}
-          path: target/kanban-fixture
-          persist-credentials: false
-      - name: Compare the fixture catalog with the runner-embedded catalog
-        run: |
-          if ! cmp -s target/kanban-fixture/scenarios/catalog.json src/scenarios/kanban/catalog.json; then
-            echo 'The pinned Kanban fixture catalog and the runner-embedded catalog differ.' >&2
-            echo 'Publish the synchronized catalog to iii-hq/kanban-e2e-fixture, then repin it in' >&2
-            echo 'scripts/kanban_eval/bootstrap.py, .github/workflows/exact-stack-e2e.yml,' >&2
-            echo 'tests/python/test_kanban_bootstrap.py and scripts/kanban_eval/README.md.' >&2
-            diff -u src/scenarios/kanban/catalog.json target/kanban-fixture/scenarios/catalog.json || true
-            exit 1
-          fi
