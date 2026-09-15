@@ -1,6 +1,7 @@
 import { Tabs, TabsList, TabsTrigger } from '@iii-dev/console-ui'
 import { ArrowDown, ArrowUp } from 'lucide-react'
 import { type ReactNode, useId, useMemo, useState } from 'react'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   Button,
@@ -294,6 +295,20 @@ export function PrimaryMetricsView({
           </span>
         </div>
         {toolbarActions}
+        {baselineExecutionId && (!comparing || candidateExecutionId) ? (
+          <InvestigationAction
+            executionId={baselineExecutionId}
+            comparisonExecutionId={comparing ? candidateExecutionId : undefined}
+            visibleScenarioIds={tests.map((test) => test.label)}
+            unavailableDeltas={
+              comparison
+                ? Object.entries(comparison.deltas)
+                    .filter(([, delta]) => delta === null)
+                    .map(([metric]) => metric)
+                : undefined
+            }
+          />
+        ) : null}
         {!summaryOnly ? (
           <Tabs value={view} onValueChange={setView}>
             <TabsList aria-label="Metrics view" className="pm-view-tabs">

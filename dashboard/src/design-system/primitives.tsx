@@ -65,7 +65,7 @@ export function Button({
       {...props}
     >
       {busy ? <span className="ds-button-spinner" aria-hidden="true" /> : null}
-      <span>{children}</span>
+      {children}
     </button>
   )
 }
@@ -760,9 +760,11 @@ export function Dialog({
       aria-describedby={description ? descriptionId : undefined}
       onCancel={(event) => {
         event.preventDefault()
+        event.stopPropagation()
         onClose()
       }}
-      onClose={() => {
+      onClose={(event) => {
+        event.stopPropagation()
         if (open) onClose()
       }}
       onKeyDown={(event) => {

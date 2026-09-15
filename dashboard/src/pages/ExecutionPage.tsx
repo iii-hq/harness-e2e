@@ -5,6 +5,7 @@ import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { PlanProgress } from '@/components/PlanStatus'
 import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
@@ -709,6 +710,9 @@ export function ExecutionPage({
           ]}
           actions={
             <>
+              {detail.evidence_error ? (
+                <InvestigationAction executionId={executionId} />
+              ) : null}
               {ready ? (
                 <a
                   className={buttonClassName({

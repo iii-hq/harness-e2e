@@ -893,6 +893,17 @@ try {
     ],
   ]) {
     await selectPair(a, b, scoreA, scoreB)
+    const mutationsBefore = calls.filter((call) => call.id === 'plan_control')
+    await page.getByRole('button', { name: 'Investigate comparison' }).click()
+    const draft = await page.evaluate(() => window.drafts.at(-1))
+    assert.equal(draft.title, 'E2E comparison investigation')
+    assert.ok(draft.text.includes(`"reference_execution_id": "${a}"`))
+    assert.ok(draft.text.includes(`"compared_execution_id": "${b}"`))
+    assert.ok(draft.text.includes('Respond in English'))
+    assert.deepEqual(
+      calls.filter((call) => call.id === 'plan_control'),
+      mutationsBefore,
+    )
     for (const [index, source] of sources.entries()) {
       const side = index === 0 ? 'A' : 'B'
       await page
@@ -917,6 +928,16 @@ try {
     .getByRole('link', { name: /^Open report for / })
     .click()
   await page.locator('.execution-page [data-identity-band]').waitFor()
+  await page.getByRole('button', { name: 'Investigate execution' }).click()
+  const executionDraft = await page.evaluate(() => window.drafts.at(-1))
+  assert.equal(executionDraft.title, 'E2E execution investigation')
+  assert.ok(
+    executionDraft.text.includes(
+      `"reference_execution_id": "${reference.execution.local_id}"`,
+    ),
+  )
+  assert.ok(executionDraft.text.includes('do not rerun tests'))
+  assert.ok(!executionDraft.text.includes('"compared_execution_id"'))
   assert.equal(
     await page
       .getByText(

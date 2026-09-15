@@ -28,6 +28,9 @@ declare module '@iii-dev/console-ui' {
 
   export interface Host {
     iii: ExtensionIii
+    chat?: {
+      openDraft?(draft: { text: string; title?: string }): void
+    }
     useTheme(): 'light' | 'dark'
     pages: {
       register(page: {
