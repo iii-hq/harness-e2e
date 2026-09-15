@@ -40,6 +40,21 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "AgentProfileArtifact": {
+      "type": "object",
+      "required": [
+        "configuration_sha256",
+        "id"
+      ],
+      "properties": {
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
     "ControlPlaneEvidence": {
       "type": "object",
       "required": [
@@ -105,6 +120,16 @@
         "provider"
       ],
       "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentProfileArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "context_window": {
           "type": "integer",
           "format": "uint64",

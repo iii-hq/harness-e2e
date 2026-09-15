@@ -5,6 +5,7 @@ import {
   AssessmentPanel,
 } from '@/components/AssessmentWorkspace'
 import type { AssessmentWorkspaceModel } from '@/lib/assessment-view'
+import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 
 const model: AssessmentWorkspaceModel = {
   availability: 'available',
@@ -74,11 +75,7 @@ describe('assessment workspace component', () => {
       />,
     )
     const detailHtml = renderToStaticMarkup(
-      <AssessmentDetailDialog
-        run={model.runs[0]}
-        onClose={() => undefined}
-        onTranscript={() => undefined}
-      />,
+      <AssessmentDetailDialog run={model.runs[0]} onClose={() => undefined} />,
     )
     const rendered = `${html}${detailHtml}`
     // One status, in the same shape the execution page uses.
@@ -99,10 +96,11 @@ describe('assessment workspace component', () => {
     expect(rendered).toContain('22,668')
     expect(rendered).toContain('Function calls')
     expect(rendered).toContain('14')
-    expect(rendered).toContain('Duration')
     expect(rendered).toContain('1m 02s')
     expect(rendered).toContain('Function errors')
-    expect(rendered).toContain('Runtime telemetry')
+    expect(rendered).not.toContain('Runtime telemetry')
+    expect(detailHtml).toContain('aria-label="Run metrics"')
+    expect(detailHtml).toContain('Cache written')
     expect(rendered).toContain('grid-flow-dense')
     expect(rendered).toContain('sm:grid-cols-2 lg:grid-cols-4')
     expect(rendered).toContain('Input tokens')
@@ -120,13 +118,13 @@ describe('assessment workspace component', () => {
     expect(rendered).not.toContain('role="tablist"')
     expect(rendered).not.toContain('Analyzer provenance')
     expect(rendered).not.toContain('confidence')
-    expect(detailHtml).toContain('Suggested next step')
+    expect(detailHtml).not.toContain('Suggested next step')
     expect(detailHtml).not.toContain('hard gate')
     expect(detailHtml.indexOf('Score')).toBeLessThan(
       detailHtml.indexOf('System outcome'),
     )
-    expect(detailHtml.indexOf('System outcome')).toBeLessThan(
-      detailHtml.indexOf('Suggested next step'),
+    expect(detailHtml.indexOf('data-run-metrics-detail')).toBeLessThan(
+      detailHtml.indexOf('System outcome'),
     )
     expect(rendered).toContain('Transcript')
     expect(rendered).toContain('data-transcript-action=')
@@ -214,6 +212,8 @@ describe('assessment workspace component', () => {
     expect(html).toContain('Optional patch checks')
     expect(html).toContain('0/4')
     expect(html).toContain('0% applied cleanly')
+    expect(detailHtml).toContain('Runtime')
+    expect(detailHtml).toContain('1m 02s')
     // A passing run reads as passed, with no second, softer verdict beside it.
     const outcomeIndex = detailHtml.indexOf(
       'system · completion, execution and infrastructure',
@@ -221,6 +221,112 @@ describe('assessment workspace component', () => {
     const outcome = detailHtml.slice(outcomeIndex - 400, outcomeIndex + 100)
     expect(outcome).toContain('ds-status-passed')
     expect(outcome).not.toContain('ds-status-failed')
+  })
+
+  it('keeps workflow checks and artifacts in the selected run evidence modal', () => {
+    const selectedStep = {
+      node_id: 'selected_step',
+      step_type: 'asset.evaluate',
+      required: true,
+      dependencies: ['prepare_asset'],
+      status: 'hard_gate_failed',
+      duration_ms: 1200,
+      hard_gates: [
+        { id: 'selected_gate', passed: false, reason: 'Selected gate failed' },
+      ],
+      assets: [
+        { id: 'selected_asset', artifact: { path: 'selected/asset.json' } },
+      ],
+    }
+    const detail = {
+      id: 'execution-1',
+      reports: [
+        {
+          subject_id: 'codex/terra',
+          report: {
+            scenarios: [
+              {
+                scenario_id: 'direct_answer',
+                runs: [
+                  {
+                    run_id: 'run-1',
+                    attempt_id: 'attempt-1',
+                    semantic_tests: [selectedStep],
+                    scenario_flow: {
+                      cleanup: { status: 'failed', duration_ms: 9 },
+                    },
+                  },
+                  {
+                    run_id: 'run-1',
+                    attempt_id: 'attempt-2',
+                    semantic_tests: [
+                      { ...selectedStep, node_id: 'other_attempt_step' },
+                    ],
+                  },
+                  {
+                    run_id: 'run-2',
+                    attempt_id: 'attempt-1',
+                    semantic_tests: [
+                      { ...selectedStep, node_id: 'other_run_step' },
+                    ],
+                  },
+                ],
+              },
+              {
+                scenario_id: 'other_scenario',
+                runs: [
+                  {
+                    run_id: 'run-1',
+                    attempt_id: 'attempt-1',
+                    semantic_tests: [
+                      { ...selectedStep, node_id: 'other_scenario_step' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+        {
+          subject_id: 'other_subject',
+          report: {
+            scenarios: [
+              {
+                scenario_id: 'direct_answer',
+                runs: [
+                  {
+                    run_id: 'run-1',
+                    attempt_id: 'attempt-1',
+                    semantic_tests: [
+                      { ...selectedStep, node_id: 'other_subject_step' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+    const html = renderToStaticMarkup(
+      <AssessmentDetailDialog
+        run={model.runs[0]}
+        detail={detail}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(html).toContain('Execution flow')
+    expect(html).toContain('Selected Step')
+    expect(html).toContain('Runs after Prepare Asset')
+    expect(html).toContain('Selected gate failed')
+    expect(html).toContain('selected/asset.json')
+    expect(html).toContain('Cleanup failed')
+    expect(html).not.toContain('data-transcript-action=')
+    expect(html).not.toContain('Other Attempt Step')
+    expect(html).not.toContain('Other Run Step')
+    expect(html).not.toContain('Other Scenario Step')
+    expect(html).not.toContain('Other Subject Step')
   })
 
   // Audit AW-03 / AW-04: a run that retained no assessments gets neither a

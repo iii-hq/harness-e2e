@@ -1,10 +1,11 @@
-import { ArrowRight, Link2, Trash2 } from 'lucide-react'
+import { Link2, RotateCcw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { PlanProgress } from '@/components/PlanStatus'
 import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
@@ -18,8 +19,6 @@ import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
   Callout,
-  DataTable,
-  DataTableRow,
   Dialog,
   EmptyState,
   MetricCard,
@@ -45,48 +44,31 @@ import {
   type DashboardExecutionSummary,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
-import { shortDefinition } from '@/lib/definition-digest'
-import { buildExecutionMetrics } from '@/lib/execution-metrics'
-import {
-  type ExecutionVerdict,
-  executionVerdict,
-} from '@/lib/execution-verdict'
 import {
   buildExecutionPresentation,
   type ExecutionPresentation,
   executionTitle,
   formatDate,
   formatDuration,
-  formatPercent,
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
-import { buildPrimaryMetrics } from '@/lib/primary-metrics'
+import { excludeUnsuccessfulTests } from '@/lib/primary-metrics'
 import {
+  comparisonPrimaryMetrics,
+  filterReferenceScenarios,
   type RcReference,
-  referencePrimaryMetrics,
 } from '@/lib/release-control-reference'
-import {
-  buildScenarioMatrix,
-  formatScenarioDuration,
-  type ScenarioMatrixItem,
-  type ScenarioMatrixSummary,
-} from '@/lib/scenario-matrix'
+import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import { watchExecution } from '@/lib/watch-execution'
 import '@/design-system/styles.css'
 
-type DetailSection = 'summary' | 'metrics' | 'results' | 'technical'
+type DetailSection = 'metrics' | 'results' | 'technical'
 
 function sectionFromAnchor(anchor: string | null | undefined): DetailSection {
   if (anchor === 'metrics') return 'metrics'
-  if (
-    anchor === 'results' ||
-    anchor === 'assessments' ||
-    anchor === 'scenarios'
-  )
-    return 'results'
   if (anchor === 'evidence' || anchor === 'raw-data') return 'technical'
   if (anchor === 'technical' || anchor === 'configuration') return 'technical'
-  return 'summary'
+  return 'results'
 }
 
 function summaryFromDetail(
@@ -174,176 +156,6 @@ export function executionOutcome(
       )
       .join(' · '),
   }
-}
-
-function firstSentence(value: string | null | undefined): string | null {
-  if (!value) return null
-  const match = value.match(/^.*?[.!?](?=\s|$)/)
-  return (match ? match[0] : value).replace(/\.$/, '')
-}
-
-/** Audit ED-26: every closed layer carries a scent — enough of its content to
- *  decide whether to open it. The narrative's is what to do next. */
-export function narrativeScent(verdict: ExecutionVerdict): string {
-  return firstSentence(verdict.nextStep) ?? ''
-}
-
-/** One line per scenario: name, objective verdict, runtime. The table behind
- *  it has the same order. */
-export function resultsScent(items: ScenarioMatrixItem[]): string {
-  if (items.length === 0) return 'no scenario report retained'
-  return items
-    .map((item) => {
-      const definition = shortDefinition(item.behaviorSha256)
-      const name = `${item.scenarioId.replace(/_/g, ' ')}${
-        definition === null ? '' : ` · definition ${definition}`
-      }`
-      const runtime =
-        item.durationMs == null
-          ? ''
-          : ` · ${formatScenarioDuration(item.durationMs)}`
-      return `${name} ${item.objective.label.toLowerCase()}${runtime}`
-    })
-    .join(' \u00a0·\u00a0 ')
-}
-
-/** The counts the layer opens onto, with the four that are usually zero
- *  folded into one clause when they all are. */
-export function countsScent(detail: DashboardExecutionDetail): string {
-  const metrics = buildExecutionMetrics(detail)
-  const summary = detail.assessment_summary
-  const evidence =
-    typeof summary?.evidence_reference_count === 'number'
-      ? `${summary.evidence_reference_count} evidence reference${summary.evidence_reference_count === 1 ? '' : 's'}`
-      : 'no evidence references retained'
-  const assessments = `assessments ${
-    summary?.assessment_count
-      ? summary.assessment_count.toLocaleString('en-US')
-      : 'none retained'
-  }, ${evidence}`
-  if (metrics.includedScenarios === 0)
-    return `no compatible run evidence to consolidate · ${assessments}`
-  const quiet =
-    metrics.incomplete +
-      metrics.undetermined +
-      metrics.deferred +
-      metrics.technicalInvalid ===
-    0
-  return [
-    `planned ${metrics.planned}`,
-    `recorded ${metrics.observed}`,
-    `completed ${metrics.completed}`,
-    quiet
-      ? 'no incomplete, undetermined, deferred or technically invalid runs'
-      : `${metrics.incomplete} incomplete · ${metrics.undetermined} undetermined · ${metrics.deferred} deferred · ${metrics.technicalInvalid} technically invalid`,
-    assessments,
-  ].join(' · ')
-}
-
-/** Audit ED-03 / ED-05: one verdict for the execution, stated once. The
- *  system outcome leads the overview; this layer carries the words. */
-export function NarrativeSection({ verdict }: { verdict: ExecutionVerdict }) {
-  return (
-    <div className="grid gap-y-4" data-narrative>
-      <div className="grid content-start gap-1">
-        <span className="ds-label">next step</span>
-        <p className="m-0 text-sm leading-6 text-pretty text-ink-soft">
-          {verdict.nextStep}
-        </p>
-      </div>
-    </div>
-  )
-}
-
-/** The counts-and-coverage layer: report coverage and retained assessments
- *  first, then the pooled counts and consumption table, headless. */
-export function CountsSection({
-  presentation,
-  detail,
-  scenarioSummary,
-}: {
-  presentation: ExecutionPresentation
-  detail: DashboardExecutionDetail
-  scenarioSummary: ScenarioMatrixSummary | null
-}) {
-  const summary = detail.assessment_summary
-  const coverageComplete =
-    presentation.coverage != null &&
-    (presentation.coverage === 1 || presentation.coverage >= 100)
-  const scenarioCount = scenarioSummary?.total ?? 0
-  return (
-    <div className="grid gap-5" data-counts>
-      {/* Audit ED-18: one column below 640px, no delta wrapping into a
-          second line beside the label. */}
-      <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-3">
-        <MetricCard
-          label="scenarios"
-          value={
-            scenarioCount
-              ? `${scenarioSummary?.passed ?? 0}/${scenarioCount}`
-              : '—'
-          }
-          detail={
-            scenarioCount
-              ? `${scenarioSummary?.failed ?? 0} failed · ${scenarioSummary?.inconclusive ?? 0} inconclusive`
-              : 'no scenario report retained'
-          }
-          tone={
-            scenarioCount === 0
-              ? 'unavailable'
-              : (scenarioSummary?.passed ?? 0) === scenarioCount
-                ? 'positive'
-                : 'negative'
-          }
-        />
-        <MetricCard
-          label="coverage"
-          value={formatPercent(presentation.coverage)}
-          detail={`${presentation.receivedReports ?? 0} of ${presentation.expectedReports ?? 0} reports`}
-          tone={
-            presentation.coverage == null
-              ? 'unavailable'
-              : coverageComplete
-                ? 'positive'
-                : 'warning'
-          }
-        />
-        <MetricCard
-          label="assessments"
-          value={
-            typeof summary?.assessment_count === 'number'
-              ? summary.assessment_count.toLocaleString('en-US')
-              : '—'
-          }
-          // Audit ED-23: "0" beside "N evidence references" read as a
-          // contradiction; say the count means nothing was retained.
-          detail={[
-            summary?.assessment_count ? null : 'none retained',
-            typeof summary?.evidence_reference_count === 'number'
-              ? `${summary.evidence_reference_count} evidence reference${summary.evidence_reference_count === 1 ? '' : 's'}`
-              : 'no evidence references retained',
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-          tone={summary?.assessment_count ? 'neutral' : 'unavailable'}
-        />
-      </div>
-      <ExecutionMetricsPanel detail={detail} headless />
-    </div>
-  )
-}
-
-function runCountFromDetail(detail: DashboardExecutionDetail) {
-  return (detail.reports ?? []).reduce(
-    (total, record) =>
-      total +
-      (record.report?.scenarios ?? []).reduce(
-        (scenarioTotal, scenario) =>
-          scenarioTotal + (scenario.runs?.length ?? 0),
-        0,
-      ),
-    0,
-  )
 }
 
 function compactObject(value: unknown): string | null {
@@ -455,51 +267,6 @@ function ProvenanceSection({
   )
 }
 
-/** Audit ED-07 / ED-26: the anchors the router accepts stay a visible bar;
- *  each one now opens its layer, so deep links keep working. */
-const SECTIONS: Array<{ id: DetailSection; label: string }> = [
-  { id: 'summary', label: 'next step' },
-  { id: 'results', label: 'results' },
-  { id: 'metrics', label: 'counts' },
-  { id: 'technical', label: 'provenance' },
-]
-
-function SectionBar({
-  active,
-  executionId,
-  onSelect,
-}: {
-  active: DetailSection | null
-  executionId: string
-  /** Re-opens a layer the reader closed when its anchor is already current. */
-  onSelect: (section: DetailSection) => void
-}) {
-  return (
-    <nav
-      className="sticky top-12 z-10 -mx-1 flex flex-wrap gap-1 bg-canvas px-1 py-2"
-      aria-label="Execution sections"
-      data-section-bar
-    >
-      {SECTIONS.map((section) => (
-        <a
-          key={section.id}
-          className={buttonClassName({
-            variant: active === section.id ? 'secondary' : 'quiet',
-            size: 'compact',
-            className: 'no-underline',
-          })}
-          href={hashForExecution(executionId, section.id)}
-          aria-current={active === section.id ? 'true' : undefined}
-          onClick={() => onSelect(section.id)}
-        >
-          {section.label}
-        </a>
-      ))}
-    </nav>
-  )
-}
-
-/** Audit ED-11 / ED-12: running and cancelled are their own screen. */
 function LiveState({
   presentation,
   status,
@@ -643,29 +410,12 @@ export function ExecutionPage({
   const [cancelling, setCancelling] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [evidenceMessage, setEvidenceMessage] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
   } | null>(null)
-  // Audit ED-26: the URL opens its layer; toggles the reader makes afterwards
-  // hold until the anchor changes, then the URL wins again. No effect needed.
   const anchorSection = anchor ? sectionFromAnchor(anchor) : null
-  const [toggles, setToggles] = useState<{
-    anchor: string | null | undefined
-    layers: Partial<Record<DetailSection, boolean>>
-  }>({ anchor, layers: {} })
-  const layers = toggles.anchor === anchor ? toggles.layers : {}
-  const layerOpen = (id: DetailSection) =>
-    layers[id] ?? (Boolean(anchor) && anchorSection === id)
-  const setLayer = (id: DetailSection, open: boolean) =>
-    setToggles((current) => ({
-      anchor,
-      layers: {
-        ...(current.anchor === anchor ? current.layers : {}),
-        [id]: open,
-      },
-    }))
+  const [excludeFailedTests, setExcludeFailedTests] = useState(false)
   const beginRequest = useLatestRequest()
   const loadedExecutionId = detail?.id
 
@@ -707,6 +457,7 @@ export function ExecutionPage({
     setError(null)
     setDetail(null)
     setSummary(null)
+    setExcludeFailedTests(false)
     void load()
   }, [load])
 
@@ -715,8 +466,9 @@ export function ExecutionPage({
     [summary],
   )
   const live =
-    presentation?.attention === 'running' ||
-    presentation?.attention === 'cancelling'
+    detail?.origin !== 'remote' &&
+    (presentation?.attention === 'running' ||
+      presentation?.attention === 'cancelling')
 
   // Audit ED-12: a live execution follows the run instead of waiting for F5.
   useEffect(() => {
@@ -733,10 +485,57 @@ export function ExecutionPage({
     [detail],
   )
 
-  const primaryMetrics = useMemo(
-    () => (detail ? buildPrimaryMetrics(detail) : null),
+  const allPrimaryMetrics = useMemo(
+    () => comparisonPrimaryMetrics(detail, null).baseline,
     [detail],
   )
+  const excludedScenarioIds = useMemo(() => {
+    const excluded = new Set<string>()
+    if (!excludeFailedTests || detail?.origin !== 'remote') return excluded
+    for (const test of allPrimaryMetrics?.tests ?? []) {
+      if (test.metrics.score.value === 0) excluded.add(test.label)
+    }
+    for (const item of scenarioMatrix?.items ?? []) {
+      if (
+        item.objective.status === 'failed' ||
+        item.runs.some(
+          (run) =>
+            [
+              'hard_gate_failed',
+              'subject_error',
+              'resource_limit',
+              'infrastructure_error',
+            ].includes(run.status) || run.technical === 'technical_invalid',
+        )
+      )
+        excluded.add(item.scenarioId)
+    }
+    return excluded
+  }, [allPrimaryMetrics, detail, excludeFailedTests, scenarioMatrix])
+  const resultDetail = useMemo(() => {
+    if (!detail || !excludeFailedTests) return detail
+    if (detail.origin !== 'remote') return excludeUnsuccessfulTests(detail)
+    const reference = detail.remote_reference as RcReference | undefined
+    return reference
+      ? ({
+          ...detail,
+          remote_reference: filterReferenceScenarios(
+            reference,
+            new Set(
+              (allPrimaryMetrics?.tests ?? [])
+                .filter((test) => !excludedScenarioIds.has(test.label))
+                .map((test) => test.label),
+            ),
+          ),
+        } as DashboardExecutionDetail)
+      : detail
+  }, [detail, excludeFailedTests, excludedScenarioIds, allPrimaryMetrics])
+  const primaryMetrics = useMemo(
+    () => comparisonPrimaryMetrics(resultDetail, null).baseline,
+    [resultDetail],
+  )
+  const excludedTests =
+    (allPrimaryMetrics?.tests.length ?? 0) - (primaryMetrics?.tests.length ?? 0)
 
   if (error && !detail)
     return (
@@ -803,148 +602,25 @@ export function ExecutionPage({
       </div>
     )
 
-  if (detail.origin === 'remote' && detail.remote_reference) {
-    const reference = detail.remote_reference as unknown as RcReference
-    return (
-      <div className="ds-root min-h-dvh bg-canvas text-ink">
-        <DashboardPageActions active="executions" />
-        <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
-          <PageHeader
-            title={detail.label ?? 'imported execution'}
-            summary="Historical evidence imported locally; metrics use the retained run ledger."
-            breadcrumb={[
-              { label: 'plans', href: hashForPlans() },
-              ...(detail.plan_id
-                ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }]
-                : []),
-            ]}
-          />
-          <div className="mt-6">
-            <PrimaryMetricsView
-              baseline={referencePrimaryMetrics(reference)}
-              baselineExecutionId={detail.id}
-              baselineLabel="Imported history"
-            />
-          </div>
-          <Panel className="mt-6" title="Retained runs">
-            <DataTable
-              collapse
-              minWidth="44rem"
-              caption="Historical run ledger"
-            >
-              <thead>
-                <tr>
-                  <th>Scenario</th>
-                  <th>Attempt</th>
-                  <th>Status</th>
-                  <th>Evidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {reference.runs.map((run, index) => (
-                  <DataTableRow key={run.id ?? `${run.scenarioId}-${index}`}>
-                    <td>{run.scenarioId}</td>
-                    <td>{run.repetition ?? '—'}</td>
-                    <td>{run.status ?? '—'}</td>
-                    <td>{run.attemptsComplete ? 'retained' : 'partial'}</td>
-                  </DataTableRow>
-                ))}
-              </tbody>
-            </DataTable>
-          </Panel>
-          <Panel className="mt-6" title="Retained artifacts">
-            {(detail.retained_reports ?? [])
-              .flatMap((value) => {
-                if (!value || typeof value !== 'object' || Array.isArray(value))
-                  return []
-                const report = value as Record<string, unknown>
-                const reportId =
-                  typeof report.id === 'string'
-                    ? report.id
-                    : typeof report.report_id === 'string'
-                      ? report.report_id
-                      : null
-                const paths = Array.isArray(report.artifacts)
-                  ? report.artifacts
-                  : []
-                return reportId
-                  ? paths.flatMap((artifact) => {
-                      const path =
-                        typeof artifact === 'string'
-                          ? artifact
-                          : artifact &&
-                              typeof artifact === 'object' &&
-                              typeof (artifact as Record<string, unknown>)
-                                .path === 'string'
-                            ? String((artifact as Record<string, unknown>).path)
-                            : null
-                      return path ? [{ reportId, path }] : []
-                    })
-                  : []
-              })
-              .map(({ reportId, path }) => (
-                <button
-                  key={`${reportId}:${path}`}
-                  type="button"
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                  })}
-                  onClick={() =>
-                    void (async () => {
-                      if (!bridge) return
-                      const result = await bridge.openEvidence({
-                        execution_id: detail.id,
-                        report_id: reportId,
-                        path,
-                      })
-                      if (
-                        result.availability !== 'available' ||
-                        !result.content_base64
-                      ) {
-                        setEvidenceMessage(result.reason ?? result.availability)
-                        return
-                      }
-                      const binary = Uint8Array.from(
-                        atob(result.content_base64),
-                        (char) => char.charCodeAt(0),
-                      )
-                      const url = URL.createObjectURL(
-                        new Blob([binary], {
-                          type: result.mime_type ?? 'application/octet-stream',
-                        }),
-                      )
-                      const link = document.createElement('a')
-                      link.href = url
-                      link.download = path.split('/').at(-1) ?? 'evidence'
-                      link.click()
-                      URL.revokeObjectURL(url)
-                    })()
-                  }
-                >
-                  {path}
-                </button>
-              ))}
-            {evidenceMessage ? (
-              <p className="mt-3 text-sm text-warning">{evidenceMessage}</p>
-            ) : null}
-          </Panel>
-        </div>
-      </div>
-    )
-  }
-
   const evidenceRun = runId
     ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
     : null
-  const status = executionStatus(presentation)
   const scenarioSummary = scenarioMatrix?.summary ?? null
-  const verdict = executionVerdict(
-    presentation,
-    scenarioSummary,
-    scenarioMatrix?.items ?? [],
-  )
-  const runCount = runCountFromDetail(detail)
+  const status =
+    detail.origin === 'remote' &&
+    scenarioSummary &&
+    !['running', 'cancelling', 'cancelled', 'incomplete'].includes(
+      presentation.attention,
+    )
+      ? scenarioSummary.failed > 0
+        ? { status: 'failed' as const, label: 'Failed' }
+        : scenarioSummary.passed > 0 &&
+            scenarioSummary.passed === scenarioSummary.total
+          ? { status: 'passed' as const, label: 'Passed' }
+          : { status: 'inconclusive' as const, label: 'Inconclusive' }
+      : executionStatus(presentation)
+  const runCount =
+    scenarioMatrix?.items.reduce((total, item) => total + item.runCount, 0) ?? 0
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const { title } = executionTitle(presentation)
   const identity: Array<[string, string]> = [
@@ -1000,19 +676,27 @@ export function ExecutionPage({
   }
 
   return (
-    <div className="ds-root min-h-dvh bg-canvas text-ink">
+    <div className="ds-root execution-page bg-canvas text-ink">
       <DashboardPageActions active="executions" context={title} />
-      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+      <div className="page-shell max-w-[1420px]">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
-          className="pm-page-header"
+          className="pm-page-header execution-header"
           title={title}
           summary={
-            detail.live_progress
-              ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
-              : live
-                ? 'Execution in progress · results are provisional'
-                : `${scenarioSummary?.total ?? 0} tests · ${runCount} runs`
+            <>
+              <StatusBadge
+                status={status.status}
+                label={status.label.toLowerCase()}
+              />
+              <span>
+                {detail.live_progress
+                  ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
+                  : live
+                    ? 'Execution in progress · results are provisional'
+                    : `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'} · ${runCount} ${runCount === 1 ? 'run' : 'runs'}`}
+              </span>
+            </>
           }
           headingId="execution-title"
           breadcrumb={[
@@ -1026,34 +710,13 @@ export function ExecutionPage({
           ]}
           actions={
             <>
-              <StatusBadge
-                status={status.status}
-                label={status.label.toLowerCase()}
-              />
-              {/* Audit ED-14: the detail keeps its own actions. */}
-              <button
-                className={buttonClassName({
-                  variant: 'quiet',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => {
-                  void navigator.clipboard
-                    ?.writeText(window.location.href)
-                    .then(() => {
-                      setCopied(true)
-                      window.setTimeout(() => setCopied(false), 1500)
-                    })
-                }}
-              >
-                <Link2 size={13} aria-hidden="true" />
-                {copied ? 'link copied' : 'copy link'}
-              </button>
+              {detail.evidence_error ? (
+                <InvestigationAction executionId={executionId} />
+              ) : null}
               {ready ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
-                    size: 'compact',
                     className: 'no-underline',
                   })}
                   href={
@@ -1069,20 +732,43 @@ export function ExecutionPage({
                     )
                   }
                 >
+                  {!detail.plan_id ? (
+                    <RotateCcw size={15} aria-hidden="true" />
+                  ) : null}
                   {detail.plan_id ? 'back to plan' : 're-run same scope'}
                 </a>
               ) : null}
-              {ready && !live && !detail.plan_execution ? (
+              <button
+                className={buttonClassName({
+                  variant: 'quiet',
+                })}
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(window.location.href)
+                    .then(() => {
+                      setCopied(true)
+                      window.setTimeout(() => setCopied(false), 1500)
+                    })
+                }}
+              >
+                <Link2 size={13} aria-hidden="true" />
+                {copied ? 'link copied' : 'copy link'}
+              </button>
+              {ready &&
+              !live &&
+              !detail.plan_execution &&
+              detail.origin !== 'remote' ? (
                 <button
                   className={buttonClassName({
                     variant: 'quiet',
-                    size: 'compact',
                   })}
                   type="button"
+                  aria-label="Delete execution"
+                  title="Delete execution"
                   onClick={() => setDeleteOpen(true)}
                 >
-                  <Trash2 size={13} aria-hidden="true" />
-                  delete execution
+                  <Trash2 size={15} aria-hidden="true" />
                 </button>
               ) : null}
             </>
@@ -1090,12 +776,9 @@ export function ExecutionPage({
         />
 
         {/* Audit ED-05: identity is one band of facts, not four cards. */}
-        <dl
-          className="mt-4 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs"
-          data-identity-band
-        >
+        <dl className="execution-identity" data-identity-band>
           {identity.map(([label, value]) => (
-            <div className="flex min-w-0 items-baseline gap-2" key={label}>
+            <div className="grid min-w-0 content-start gap-1" key={label}>
               <dt className="ds-label">{label}</dt>
               <dd className="m-0 min-w-0 break-words text-ink">{value}</dd>
             </div>
@@ -1130,7 +813,11 @@ export function ExecutionPage({
             status={status}
             cancelling={cancelling}
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
-            onCancel={ready ? () => void cancelRun() : undefined}
+            onCancel={
+              ready && detail.origin !== 'remote'
+                ? () => void cancelRun()
+                : undefined
+            }
           />
         ) : null}
         {detail.plan_execution && live ? (
@@ -1157,95 +844,87 @@ export function ExecutionPage({
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
         {primaryMetrics && !detail.evidence_error ? (
-          <div className="mt-6">
+          <section
+            id="metrics"
+            className="mt-6 scroll-mt-24"
+            aria-label="Execution summary"
+          >
             <PrimaryMetricsView
               key={executionId}
               baseline={primaryMetrics}
               baselineExecutionId={executionId}
               baselineLabel={title}
+              summaryOnly
+              toolbarActions={
+                <div className="pm-execution-filter">
+                  <label className="pm-filter">
+                    <input
+                      type="checkbox"
+                      checked={excludeFailedTests}
+                      onChange={(event) =>
+                        setExcludeFailedTests(event.target.checked)
+                      }
+                    />
+                    Exclude tests with zero score or failures
+                  </label>
+                  {excludeFailedTests ? (
+                    <span className="pm-muted" role="status">
+                      {excludedTests} {excludedTests === 1 ? 'test' : 'tests'}{' '}
+                      excluded · metrics recalculated
+                    </span>
+                  ) : null}
+                </div>
+              }
             />
-          </div>
+            {detail.origin !== 'remote' &&
+            !noRun &&
+            !live &&
+            resultDetail &&
+            primaryMetrics.tests.length > 0 ? (
+              <ExecutionMetricsPanel detail={resultDetail} />
+            ) : null}
+          </section>
         ) : null}
         {!noRun && !live ? (
-          <>
-            <SectionBar
-              active={anchorSection}
-              executionId={detail.id}
-              onSelect={(id) => setLayer(id, true)}
-            />
-            {/* Audit ED-26: layer 0 is the grouped metrics; everything else
-                is a closed row with a scent until the reader needs it. */}
-            <div className="grid min-w-0 gap-3">
-              <DisclosureLayer
-                id="summary"
-                label="next step"
-                scent={narrativeScent(verdict)}
-                open={layerOpen('summary')}
-                onToggle={(open) => setLayer('summary', open)}
-                actions={
-                  <a
-                    className={buttonClassName({
-                      variant: 'secondary',
-                      size: 'compact',
-                      className: 'no-underline',
-                    })}
-                    href={hashForExecution(detail.id, 'results')}
-                  >
-                    inspect retained evidence
-                    <ArrowRight size={13} aria-hidden="true" />
-                  </a>
-                }
+          <div className="execution-layers mt-6 grid min-w-0 gap-3">
+            <section
+              id="results"
+              className="min-w-0 scroll-mt-24"
+              aria-labelledby="execution-results-heading"
+            >
+              <h2
+                id="execution-results-heading"
+                className="m-0 mb-4 text-base font-semibold text-ink"
               >
-                <NarrativeSection verdict={verdict} />
-              </DisclosureLayer>
-              <DisclosureLayer
-                id="results"
-                label="scenario results"
-                scent={resultsScent(scenarioMatrix?.items ?? [])}
-                open={layerOpen('results')}
-                onToggle={(open) => setLayer('results', open)}
-                actions={
-                  <span className="font-mono text-label font-normal text-ink-muted">
-                    {scenarioSummary?.total ?? 0}{' '}
-                    {scenarioSummary?.total === 1 ? 'scenario' : 'scenarios'} ·{' '}
-                    {runCount} {runCount === 1 ? 'run' : 'runs'}
-                  </span>
-                }
-              >
+                Scenario results
+              </h2>
+              {excludeFailedTests && primaryMetrics?.tests.length === 0 ? (
+                <EmptyState
+                  title="All scenarios excluded"
+                  description="Clear the filter to show the retained test results."
+                />
+              ) : (
                 <ScenarioMatrix
-                  detail={detail}
+                  detail={resultDetail ?? detail}
                   onTranscript={(run, title) => setTranscript({ run, title })}
                   showContract={false}
                 />
-              </DisclosureLayer>
-              <DisclosureLayer
-                id="metrics"
-                label="counts and coverage"
-                scent={countsScent(detail)}
-                open={layerOpen('metrics')}
-                onToggle={(open) => setLayer('metrics', open)}
-              >
-                <CountsSection
-                  presentation={presentation}
-                  detail={detail}
-                  scenarioSummary={scenarioSummary}
-                />
-              </DisclosureLayer>
-              <DisclosureLayer
-                id="technical"
-                label="provenance"
-                scent={contractScent(scenarioMatrix?.contracts ?? [])}
-                open={layerOpen('technical')}
-                onToggle={(open) => setLayer('technical', open)}
-              >
-                <ProvenanceSection
-                  detail={detail}
-                  presentation={presentation}
-                  contracts={scenarioMatrix?.contracts ?? []}
-                />
-              </DisclosureLayer>
-            </div>
-          </>
+              )}
+            </section>
+            <DisclosureLayer
+              key={anchor}
+              id="technical"
+              label="provenance"
+              scent={contractScent(scenarioMatrix?.contracts ?? [])}
+              open={anchorSection === 'technical'}
+            >
+              <ProvenanceSection
+                detail={detail}
+                presentation={presentation}
+                contracts={scenarioMatrix?.contracts ?? []}
+              />
+            </DisclosureLayer>
+          </div>
         ) : null}
       </div>
       <Dialog

@@ -11,9 +11,9 @@ use crate::report::CompletionState;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, DeliverableContract,
-    EvaluationFuture, ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "persistent_state";
@@ -83,51 +83,83 @@ fn expected() -> Value {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct PersistentState;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "key": KEY,
-            "baseline": baseline(),
-            "expected": expected(),
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
+#[async_trait]
+impl Scenario for PersistentState {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-fn deliverable_contract() -> DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "state_record",
-        json!({
-            "type": "object",
-            "required": ["state", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "key": KEY,
+                "baseline": baseline(),
+                "expected": expected(),
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+            ],
+            deliverable_contract(),
+        )
+    }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let scope = scope(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "Use `state::get` to read key `{KEY}` from scope `{scope}`. Migrate the stored \
+                 object with exactly one successful `state::set`: preserve `owner`, preserve the \
+                 existing `alpha` item, mark `beta` as completed, append \
+                 `{{\"id\":\"gamma\",\"completed\":true}}`, change `revision` to `2`, change \
+                 `status` to `migrated`, and preserve `metadata` unchanged. Do not write any other \
+                 scope or key. Then respond with a concise confirmation that includes the new \
+                 revision and total item count."
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 8,
+                max_output_tokens: Some(4_096),
+                max_total_tokens: Some(80_000),
+                stuck_timeout_seconds: 180,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let scope = scope(run_id);
+        let _: Value = context
+            .trigger_value(
+                "state::set",
+                json!({ "scope": scope, "key": KEY, "value": baseline() }),
+            )
+            .await?;
+        let stored = common::state_value(
+            context
+                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
+                .await?,
+        );
+        if stored != baseline() {
+            bail!("persistent_state baseline was not established in {scope}/{KEY}: {stored}");
+        }
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let scope = scope(run_id);
         let state = common::state_value(
             context
@@ -152,76 +184,14 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let scope = scope(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "Use `state::get` to read key `{KEY}` from scope `{scope}`. Migrate the stored \
-             object with exactly one successful `state::set`: preserve `owner`, preserve the \
-             existing `alpha` item, mark `beta` as completed, append \
-             `{{\"id\":\"gamma\",\"completed\":true}}`, change `revision` to `2`, change \
-             `status` to `migrated`, and preserve `metadata` unchanged. Do not write any other \
-             scope or key. Then respond with a concise confirmation that includes the new \
-             revision and total item count."
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 8,
-            max_output_tokens: Some(4_096),
-            max_total_tokens: Some(80_000),
-            stuck_timeout_seconds: 180,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
-}
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let scope = scope(run_id);
-        let _: Value = context
-            .trigger_value(
-                "state::set",
-                json!({ "scope": scope, "key": KEY, "value": baseline() }),
-            )
-            .await?;
-        let stored = common::state_value(
-            context
-                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
-                .await?,
-        );
-        if stored != baseline() {
-            bail!("persistent_state baseline was not established in {scope}/{KEY}: {stored}");
-        }
-        Ok(())
-    })
-}
-
-fn mentions_number(text: &str, expected: u64) -> bool {
-    text.split(|character: char| !character.is_ascii_digit())
-        .filter(|token| !token.is_empty())
-        .any(|token| token.parse::<u64>().ok() == Some(expected))
-}
-
-fn targets_owned(arguments: &Value, scope: &str) -> bool {
-    arguments.get("scope").and_then(Value::as_str) == Some(scope)
-        && arguments.get("key").and_then(Value::as_str) == Some(KEY)
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !observation.metrics.complete {
             return Ok(assessment::prerequisite_failure(
                 ASSESSMENTS,
@@ -230,11 +200,16 @@ fn evaluate<'a>(
             ));
         }
         let scope = scope(run_id);
-        let state = common::state_value(
-            context
-                .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
-                .await?,
-        );
+        // The capture stored this same migrated record before cleanup; reuse
+        // it instead of reading the scope a second time.
+        let state = match captured_state(observation) {
+            Some(state) => state,
+            None => common::state_value(
+                context
+                    .trigger_value("state::get", json!({ "scope": scope, "key": KEY }))
+                    .await?,
+            ),
+        };
         let calls: Vec<_> = common::function_outcomes(&observation.transcript)
             .into_iter()
             .filter(|call| !common::is_contract_discovery(&call.function_id))
@@ -335,11 +310,9 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let _: Value = context
             .trigger_value(
                 "state::delete",
@@ -347,7 +320,42 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             )
             .await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "state_record",
+        json!({
+            "type": "object",
+            "required": ["state", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+fn mentions_number(text: &str, expected: u64) -> bool {
+    text.split(|character: char| !character.is_ascii_digit())
+        .filter(|token| !token.is_empty())
+        .any(|token| token.parse::<u64>().ok() == Some(expected))
+}
+
+fn targets_owned(arguments: &Value, scope: &str) -> bool {
+    arguments.get("scope").and_then(Value::as_str) == Some(scope)
+        && arguments.get("key").and_then(Value::as_str) == Some(KEY)
+}
+
+/// The migrated record the capture stored for this run.
+fn captured_state(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("state")
+        .cloned()
 }
 
 #[cfg(test)]
@@ -363,8 +371,10 @@ mod tests {
         assert_eq!(baseline["items"][0], expected["items"][0]);
         assert_eq!(expected["revision"], 2);
         assert_eq!(expected["items"].as_array().unwrap().len(), 3);
-        scenario("run").validate().unwrap();
-        materialize("case", 3).unwrap();
+        PersistentState.spec("run").validate().unwrap();
+        crate::scenarios::ScenarioId::PersistentState
+            .materialize("case", 3)
+            .unwrap();
     }
 
     #[test]

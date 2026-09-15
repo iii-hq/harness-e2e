@@ -165,6 +165,29 @@ Everything else is resolved here, from the commit pinned by `runner_sha`:
    protected runner; one root bundle is produced without rebuilding the native
    Harness artifacts.
 
+### Agent profiles from Release Control
+
+Release Control can select an existing Directory agent profile for an execution
+by including its ID in the frozen plan:
+
+```json
+{
+  "agent_profile": "console-ui"
+}
+```
+
+For example, `console-ui` identifies **Console UI Engineer**. The runner reads
+the profile from the group's Directory and sends its ID as `agent` to `e2e::run`.
+The profile, its parent profiles, skills, functions, and model/provider must
+be available in that stack. The runner waits up to 120 seconds for Directory's
+background profile downloads; profiles that remain unavailable fail resolution.
+A profile's model overrides the plan's model; `provider::model` also selects its
+provider. Results record the resolved subject model and profile configuration
+hash, so changes to an existing profile remain visible between executions.
+Each execution keeps the selected profile ID; Run again resolves that ID in its
+test stack. Comparisons remain manual in Release Control. Omitting
+`agent_profile` keeps the built-in agent.
+
 `scripts/report_execution.py` posts what was observed to Release Control's run
 ledger over OIDC: `materialized` before anything runs, one `shard` per campaign
 group whatever that group did, and a `summary` whatever the finalizer did. Runs
@@ -273,6 +296,28 @@ The worker exposes `e2e::run`, `e2e::status`, `e2e::cancel`,
 Fault supervisors use `e2e::fault-plan` and `e2e::fault-evaluate` so plan
 materialization and recovery classification stay on the same iii control plane.
 Subject policies deny `e2e::*`.
+
+### Validating a running worker
+
+`tests/live_worker.rs` talks to a worker that is registered in a real engine,
+so its tests are ignored by default. They check that the worker publishes the
+catalog this revision materializes (ids, seeds, cases, definition digests),
+that it refuses malformed requests without admitting anything, and, when a
+subject is named, that one `minimal_path` execution goes through admission,
+setup, the subject turn, capture, evaluation and persistence to a technically
+valid report readable back through `e2e::results-get`:
+
+```bash
+HARNESS_E2E_LIVE_URL=ws://127.0.0.1:49134 HARNESS_E2E_LIVE_NAMESPACE=my-project \
+HARNESS_E2E_LIVE_PROVIDER=deepseek HARNESS_E2E_LIVE_MODEL=deepseek-flash \
+cargo test --test live_worker -- --ignored
+```
+
+Seven scenarios state host paths in their prompts, so their definition digests
+only match when the test process carries the worker's `HARNESS_E2E_RUN_DIR`,
+`TMPDIR` and `HARNESS_E2E_*_FIXTURE_PATH` values; export the same environment
+the Compose file gives the worker. The scenario run leaves one execution
+labelled `live worker validation` in the worker's storage.
 
 Durable artifacts are chunked through `storage::*`. Admissions, executions,
 runs, attempts and artifact references are written through the control-plane

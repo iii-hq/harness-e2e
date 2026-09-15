@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { type ReactNode, useId } from 'react'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { type OperationalStatus, StatusBadge } from '@/design-system/primitives'
 import type {
@@ -27,17 +27,15 @@ export function SemanticTestFlow({
 }: {
   detail: DashboardExecutionDetail
 }) {
+  const headingId = useId()
   const flows = observedFlows(detail)
   if (flows.length === 0) return null
 
   return (
-    <section
-      className="mt-6 grid gap-5"
-      aria-labelledby="semantic-tests-heading"
-    >
+    <section className="mt-6 grid gap-5" aria-labelledby={headingId}>
       <div>
         <h3
-          id="semantic-tests-heading"
+          id={headingId}
           className="m-0 text-xl font-semibold tracking-[-0.025em]"
         >
           Execution flow

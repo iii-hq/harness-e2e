@@ -102,6 +102,12 @@ class ReportPayloadTests(unittest.TestCase):
     def tearDown(self):
         __import__("shutil").rmtree(self.tmp, ignore_errors=True)
 
+    def test_identity_uses_the_effective_model_and_agent_reported_by_the_runtime(self):
+        subject = {"provider": "zai", "model": "resolved-model", "agent": {"id": "reviewer", "configuration_sha256": "c" * 64}}
+        (self.tmp / "results.json").write_text(json.dumps({"subject": subject}))
+        identity = report_execution.identity_of(Args(plan=self.plan), self.tmp)
+        self.assertEqual(identity["subject"], subject)
+
     def test_materialized_states_the_shards_and_planned_runs(self):
         """Release Control reads only these fields; it must find all of them."""
         payload = report_execution.materialized_payload(
@@ -294,6 +300,15 @@ class StackResolutionTests(unittest.TestCase):
         self.assertEqual(contract["schema"], resolve_stack_lock.CONTRACT_SCHEMA)
         self.assertEqual(contract["suite"]["id"], "regression-r01")
         self.assertEqual(contract["suite"]["subject"], PLAN["subject"])
+        agent = "console-ui"
+        with_agent = resolve_stack_lock.build_contract(
+            PROFILE_SNAPSHOT["campaigns"][0], execution_id=contract["execution_id"],
+            snapshot=PROFILE_SNAPSHOT, plan={**PLAN, "agent_profile": agent},
+            orchestration=orchestration, cli=contract["runtime"]["cli"],
+            stack_revision=contract["stack_revision"], oidc_audience="release-control-harness-e2e",
+        )
+        self.assertEqual(with_agent["suite"]["agent_profile"], agent)
+        self.assertNotEqual(with_agent["idempotency_key"], contract["idempotency_key"])
         # Absent: each scenario keeps the canonical seed it was materialized
         # with, so the same slot stays the same slot across executions.
         self.assertIsNone(contract["suite"]["seed"])

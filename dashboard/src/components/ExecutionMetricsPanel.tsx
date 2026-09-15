@@ -1,10 +1,6 @@
-import { type ReactNode, useMemo } from 'react'
-import { DataTable, DataTableRow, MetricCard, Panel } from '@/design-system'
+import { useMemo } from 'react'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import {
-  buildExecutionMetrics,
-  type UsageCoverage,
-} from '@/lib/execution-metrics'
+import { buildExecutionMetrics } from '@/lib/execution-metrics'
 
 function number(value: number | null) {
   return value === null
@@ -12,212 +8,76 @@ function number(value: number | null) {
     : value.toLocaleString('en-US', { maximumFractionDigits: 1 })
 }
 
-function percent(value: number | null) {
-  return value === null ? '—' : `${number(value * 100)}%`
-}
-
-/** Audit ED-26: inside the "counts and coverage" layer the layer row is the
- *  heading, so the panel renders headless — same numbers, no second title. */
-function Shell({
-  headless,
-  children,
-}: {
-  headless: boolean
-  children: ReactNode
-}) {
-  if (headless)
-    return (
-      <div className="min-w-0" data-execution-metrics="headless">
-        {children}
-      </div>
-    )
-  return (
-    <Panel
-      as="section"
-      id="metrics"
-      className="scroll-mt-24"
-      aria-labelledby="execution-metrics-heading"
-      data-execution-metrics
-    >
-      {children}
-    </Panel>
-  )
-}
-
 export function ExecutionMetricsPanel({
   detail,
-  headless = false,
 }: {
   detail: DashboardExecutionDetail
-  headless?: boolean
 }) {
   const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
-  const counts = [
-    ['planned', metrics.planned],
-    ['recorded', metrics.observed],
-    ['completed', metrics.completed],
-    ['task incomplete', metrics.incomplete],
-    ['undetermined', metrics.undetermined],
-    ['deferred', metrics.deferred],
-    ['technically invalid', metrics.technicalInvalid],
-  ] as const
-  const usage: Array<{
-    label: string
-    metric: UsageCoverage
-    format: (value: number | null) => string
-    unit: string
-    note: string
-  }> = [
-    {
-      label: 'Subject tokens',
-      metric: metrics.subjectTokens,
-      format: number,
-      unit: 'runs',
-      note: 'Includes retries exactly once.',
-    },
+  const failed = metrics.failedAttemptTokens
+  const entries = [
     {
       label: 'Failed attempt tokens',
-      metric: metrics.failedAttemptTokens,
-      format: number,
-      unit: 'runs',
+      value: failed.total ?? failed.observed,
       note: 'Retries plus terminal attempts of non-completed tasks.',
+      partial: failed.total === null && failed.observed !== null,
+    },
+    {
+      label: 'Tokens per completion',
+      value: metrics.tokensPerCompletion,
+      note: 'Execution tokens divided by completed runs.',
+    },
+    {
+      label: 'Completed p50 tokens',
+      value: metrics.tokensCompletedP50,
+      note: 'Median tokens of completed runs, including retries.',
     },
   ]
+
   return (
-    <Shell headless={headless}>
-      {headless ? null : (
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <h2
-            id="execution-metrics-heading"
-            className="m-0 text-sm font-semibold text-ink"
-          >
-            execution summary
-          </h2>
-          <span className="font-mono text-xs text-ink-muted">
-            {metrics.includedScenarios}/{metrics.scenarios} scenarios ·{' '}
-            {metrics.observed} runs ·{' '}
-            {metrics.partial ? 'partial evidence' : 'retained results'}
-          </span>
+    <section
+      className="primary-metrics execution-efficiency"
+      aria-label="Execution efficiency"
+      data-execution-metrics
+    >
+      <div className="pm-band">
+        <div className="pm-band-heading">
+          <h3>Efficiency</h3>
+          <span className="pm-muted">Across all test runs</span>
         </div>
-      )}
-      <p className="mt-2 mb-0 text-xs leading-5 text-ink-soft">
-        Run outcomes, evidence coverage and retry efficiency. Report coverage
-        and scenario pass rate are not task completion.
-      </p>
-      {!metrics.scopeComplete ? (
-        <p className="mt-3 mb-0 text-sm text-warning" role="status">
-          {metrics.scenarios - metrics.includedScenarios} scenarios have
-          unavailable or inconsistent evidence. Counts and rates below cover
-          only the verified subset; execution-wide consumption is unknown.
-        </p>
-      ) : null}
-      {metrics.includedScenarios === 0 ? (
-        <p className="mt-4 mb-0 text-sm text-ink-muted">
-          No compatible run evidence is available to consolidate. Missing
-          metrics are not zero.
-        </p>
-      ) : (
-        <>
-          <dl className="m-0 mt-4 flex flex-wrap gap-x-6 gap-y-3">
-            {counts.map(([label, value]) => (
-              <div key={label}>
-                <dt className="ds-label">{label}</dt>
-                <dd className="m-0 mt-1 font-mono text-sm font-semibold text-ink">
-                  {number(value)}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <MetricCard
-              label="completion rate"
-              value={percent(metrics.completionRate)}
-              detail={`${metrics.completed}/${metrics.completed + metrics.incomplete} determined runs`}
-            />
-            <MetricCard
-              label="execution reliability"
-              value={percent(metrics.executionReliability)}
-              detail={`${metrics.technicalValid}/${metrics.planned} planned runs technically valid`}
-            />
-            <MetricCard
-              label="completion evidence"
-              value={percent(metrics.completionCoverage)}
-              detail={`${metrics.completed + metrics.incomplete}/${metrics.planned} planned runs determined`}
-            />
-            <MetricCard
-              label="score"
-              value={
-                metrics.scoreMean === null
-                  ? '—'
-                  : `${number(metrics.scoreMean)}/100`
-              }
-              detail={`Mean · ${metrics.scoreSamples}/${metrics.planned} planned runs scored`}
-            />
-          </div>
-          <DataTable
-            caption="Run evidence and efficiency"
-            minWidth="620px"
-            wrapClassName="mt-5"
-          >
-            <thead>
-              <tr>
-                <th scope="col">Metric</th>
-                <th scope="col">Value</th>
-                <th scope="col">Coverage / denominator</th>
-              </tr>
-            </thead>
-            <tbody>
-              {usage.map(({ label, metric, format, unit, note }) => (
-                <DataTableRow key={label}>
-                  <td>
-                    <span className="font-semibold">{label}</span>
-                    <span className="mt-1 block text-xs text-ink-muted">
-                      {note}
-                    </span>
-                  </td>
-                  <td className="font-mono tabular-nums">
-                    {format(metric.total ?? metric.observed)}
-                    {metric.total === null && metric.observed !== null ? (
-                      <span className="mt-1 block text-xs text-warning">
-                        observed subtotal
-                      </span>
-                    ) : null}
-                  </td>
-                  <td className="text-xs text-ink-muted">
-                    {metric.samples}/{metric.expected} {unit} with telemetry
-                  </td>
-                </DataTableRow>
-              ))}
-              <DataTableRow>
-                <td className="font-semibold">Tokens per completion</td>
-                <td className="font-mono tabular-nums">
-                  {number(metrics.tokensPerCompletion)}
-                </td>
-                <td className="text-xs text-ink-muted">
-                  Total subject tokens / {metrics.completed} completed runs;
-                  requires complete token coverage.
-                </td>
-              </DataTableRow>
-              <DataTableRow>
-                <td className="font-semibold">Completed p50 tokens</td>
-                <td className="font-mono tabular-nums">
-                  {number(metrics.tokensCompletedP50)}
-                </td>
-                <td className="text-xs text-ink-muted">
-                  {metrics.completedTokenSamples}/{metrics.completed} completed
-                  runs with telemetry; pooled median, including retries.
-                </td>
-              </DataTableRow>
-            </tbody>
-          </DataTable>
-          <p className="mt-3 mb-0 text-xs leading-5 text-ink-muted">
-            Missing telemetry stays unknown. Observed subtotals are not complete
-            totals and must not be interpreted as improved efficiency. The score
-            mean and the token medians are pooled from individual runs, not
-            averaged across scenarios.
+        {metrics.includedScenarios === 0 ? (
+          <p className="m-0 text-sm text-ink-muted">
+            No compatible run evidence is available to consolidate. Missing
+            metrics are not zero.
           </p>
-        </>
-      )}
-    </Shell>
+        ) : (
+          <>
+            {!metrics.scopeComplete ? (
+              <p className="mt-0 mb-4 text-sm text-warning" role="status">
+                Efficiency metrics cover only verified scenarios; execution-wide
+                consumption is unknown.
+              </p>
+            ) : null}
+            <dl className="execution-efficiency-values">
+              {entries.map(({ label, value, note, partial }) => (
+                <div className="min-w-0" key={label}>
+                  <dt>{label}</dt>
+                  <dd className="pm-number m-0 mt-2">
+                    {number(value)}
+                    {partial ? (
+                      <small className="pm-partial">
+                        Observed subtotal · {failed.samples}/{failed.expected}{' '}
+                        runs reported
+                      </small>
+                    ) : null}
+                  </dd>
+                  <dd className="pm-muted m-0 mt-2">{note}</dd>
+                </div>
+              ))}
+            </dl>
+          </>
+        )}
+      </div>
+    </section>
   )
 }

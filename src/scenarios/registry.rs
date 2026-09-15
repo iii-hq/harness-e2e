@@ -153,42 +153,32 @@ fn registrations() -> &'static Mutex<HashMap<String, FunctionRef>> {
     FUNCTIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-pub fn scenario(test: u8, run_id: &str) -> ScenarioSpec {
-    match test {
-        1 => spec::<1>(run_id),
-        2 => spec::<2>(run_id),
-        3 => spec::<3>(run_id),
-        4 => spec::<4>(run_id),
-        _ => unreachable!(),
+/// One of the four Registry tests, numbered 1..=4 in the order they run.
+pub struct Registry(pub u8);
+
+impl Registry {
+    fn index(&self) -> usize {
+        usize::from(self.0 - 1)
     }
 }
-fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
-    let id = IDS[usize::from(N - 1)];
-    ScenarioSpec {
-        id,
-        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
-        filesystem_root: None,
-        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
-        denied_functions: &[],
-        criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
-        setup: Some(setup::<N>), evaluate: evaluate::<N>, cleanup: Some(cleanup::<N>),
+
+#[async_trait]
+impl Scenario for Registry {
+    fn id(&self) -> &'static str {
+        IDS[self.index()]
     }
-}
-pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let capture: ScenarioDeliverableCapture = match test {
-        1 => capture::<1>,
-        2 => capture::<2>,
-        3 => capture::<3>,
-        4 => capture::<4>,
-        _ => unreachable!(),
-    };
-    Ok(MaterializedScenario {
-        spec: scenario(test, namespace),
-        case: ScenarioCase::new(
-            IDS[usize::from(test - 1)],
-            super::stable_seed(IDS[usize::from(test - 1)]),
-            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":test}),
-            vec!["iii::functions".into(), "docker".into()],
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let id = self.id();
+        ScenarioCase::new(
+            id,
+            stable_seed(id),
+            json!({"registry_sha":"662eb87c1bdbb395f36264d5d26bf823e2ace783","test":self.0}),
+            vec![Capability::IiiFunctions, Capability::Docker],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
                     id: "registry_evidence".into(),
@@ -201,9 +191,88 @@ pub fn materialize(test: u8, namespace: &str, _seed: u64) -> Result<Materialized
                 provenance_required: true,
                 capture_before_cleanup: true,
             },
-        )?,
-        capture: Some(capture),
-    })
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        match self.0 {
+            1 => spec::<1>(run_id),
+            2 => spec::<2>(run_id),
+            3 => spec::<3>(run_id),
+            4 => spec::<4>(run_id),
+            _ => unreachable!(),
+        }
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(self.id(), run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(self.id(), run_id))
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        match self.0 {
+            1 => setup::<1>(context, run_id).await,
+            2 => setup::<2>(context, run_id).await,
+            3 => setup::<3>(context, run_id).await,
+            4 => setup::<4>(context, run_id).await,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        match self.0 {
+            1 => capture::<1>(context, observation, run_id).await,
+            2 => capture::<2>(context, observation, run_id).await,
+            3 => capture::<3>(context, observation, run_id).await,
+            4 => capture::<4>(context, observation, run_id).await,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        match self.0 {
+            1 => evaluate::<1>(context, observation, run_id).await,
+            2 => evaluate::<2>(context, observation, run_id).await,
+            3 => evaluate::<3>(context, observation, run_id).await,
+            4 => evaluate::<4>(context, observation, run_id).await,
+            _ => unreachable!(),
+        }
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        match self.0 {
+            1 => cleanup::<1>(context, run_id).await,
+            2 => cleanup::<2>(context, run_id).await,
+            3 => cleanup::<3>(context, run_id).await,
+            4 => cleanup::<4>(context, run_id).await,
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn spec<const N: u8>(run_id: &str) -> ScenarioSpec {
+    let id = IDS[usize::from(N - 1)];
+    ScenarioSpec {
+        id,
+        prompt: format!("{}\n\nUse `{}` for every workspace read, edit and command. Commands start at /workspace inside your private container. The registry/, inputs/, and output/ directories are siblings under /workspace; write deliverables to /workspace/output/, not inside the repository. Supply command and timeout_ms (1..=120000). Use function discovery only to find this exact tool.", PROMPTS[usize::from(N - 1)], function_id(id, run_id)),
+        filesystem_root: None,
+        execution: ExecutionPolicy { max_turns: 128, max_output_tokens: Some(32_768), max_total_tokens: Some(if N == 2 { 1_200_000 } else { 600_000 }), stuck_timeout_seconds: 900, max_validation_retries: None },
+        denied_functions: &[],
+        criteria: metrics(N).iter().map(|m| CriterionSpec::scored(m["id"].as_str().unwrap(), m["weight"].as_u64().unwrap() as u8, m["question"].as_str().unwrap(), EvaluationDimension::Deliverable)).collect(),
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]
@@ -238,105 +307,99 @@ fn lifecycle(test: u8, run_id: &str, action: &str) -> Command {
         .arg(assets(test, run_id));
     command
 }
-fn setup<'a, const N: u8>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let directory = assets(N, run_id);
-        std::fs::create_dir_all(&directory)?;
-        for (name, data) in [
-            (
-                "lifecycle.py",
-                include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
-            ),
-            ("capture.cjs", CAPTURE_SCRIPT),
-            (
-                "validate.py",
-                include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
-            ),
-            (
-                "validate-feature.cjs",
-                include_str!(
-                    "../../tests/fixtures/registry-version-comparison/validate-feature.cjs"
-                ),
-            ),
-            ("requirements.md", REQUIREMENTS),
-            ("reference-plan.md", REFERENCE),
-        ] {
-            std::fs::write(directory.join(name), data)?;
-        }
-        for (index, name) in ["planning", "implementation", "environment", "verification"]
-            .iter()
-            .enumerate()
-        {
-            std::fs::write(
-                directory.join(format!("test-{}-{name}.md", index + 1)),
-                PROMPTS[index],
-            )?;
-        }
-        let web = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let api = std::net::TcpListener::bind("127.0.0.1:0")?;
-        let web_port = web.local_addr()?.port().to_string();
-        let api_port = api.local_addr()?.port().to_string();
-        let mut prepare = lifecycle(N, run_id, "prepare");
-        prepare.args([
-            "--test",
-            &N.to_string(),
-            "--web-port",
-            &web_port,
-            "--api-port",
-            &api_port,
-        ]);
-        if N == 4 {
-            let implementation = match context.execution_output(IMPLEMENTATION_ID)? {
-                Some(output) => {
-                    tracing::info!(producer_attempt = output.attempt_id, "using execution-scoped Registry implementation");
-                    output.directory
+async fn setup<const N: u8>(context: &E2eContext, run_id: &str) -> Result<()> {
+    let directory = assets(N, run_id);
+    std::fs::create_dir_all(&directory)?;
+    for (name, data) in [
+        (
+            "lifecycle.py",
+            include_str!("../../tests/fixtures/registry-version-comparison/lifecycle.py"),
+        ),
+        ("capture.cjs", CAPTURE_SCRIPT),
+        (
+            "validate.py",
+            include_str!("../../tests/fixtures/registry-version-comparison/validate.py"),
+        ),
+        (
+            "validate-feature.cjs",
+            include_str!("../../tests/fixtures/registry-version-comparison/validate-feature.cjs"),
+        ),
+        ("requirements.md", REQUIREMENTS),
+        ("reference-plan.md", REFERENCE),
+    ] {
+        std::fs::write(directory.join(name), data)?;
+    }
+    for (index, name) in ["planning", "implementation", "environment", "verification"]
+        .iter()
+        .enumerate()
+    {
+        std::fs::write(
+            directory.join(format!("test-{}-{name}.md", index + 1)),
+            PROMPTS[index],
+        )?;
+    }
+    let web = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let api = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let web_port = web.local_addr()?.port().to_string();
+    let api_port = api.local_addr()?.port().to_string();
+    let mut prepare = lifecycle(N, run_id, "prepare");
+    prepare.args([
+        "--test",
+        &N.to_string(),
+        "--web-port",
+        &web_port,
+        "--api-port",
+        &api_port,
+    ]);
+    if N == 4 {
+        let implementation = match context.execution_output(IMPLEMENTATION_ID)? {
+            Some(output) => {
+                tracing::info!(producer_attempt = output.attempt_id, "using execution-scoped Registry implementation");
+                output.directory
+            }
+            None => PathBuf::from(std::env::var_os("HARNESS_E2E_REGISTRY_IMPLEMENTATION").context("standalone registry_verification requires HARNESS_E2E_REGISTRY_IMPLEMENTATION pointing to a delivery directory")?),
+        };
+        prepare.arg("--implementation").arg(implementation);
+    }
+    drop((web, api));
+    checked(&mut prepare).await?;
+    let task_root = root(N, run_id);
+    let function = context.client().register_function(
+        function_id(IDS[usize::from(N - 1)], run_id),
+        RegisterFunction::new_async(move |input: ExecInput| {
+            let directory = directory.clone();
+            let task_root = task_root.clone();
+            async move {
+                if !(1..=120_000).contains(&input.timeout_ms) {
+                    return Err(iii_sdk::errors::Error::Handler(
+                        "timeout_ms must be 1..=120000".into(),
+                    ));
                 }
-                None => PathBuf::from(std::env::var_os("HARNESS_E2E_REGISTRY_IMPLEMENTATION").context("standalone registry_verification requires HARNESS_E2E_REGISTRY_IMPLEMENTATION pointing to a delivery directory")?),
-            };
-            prepare.arg("--implementation").arg(implementation);
-        }
-        drop((web, api));
-        checked(&mut prepare).await?;
-        let task_root = root(N, run_id);
-        let function = context.client().register_function(
-            function_id(IDS[usize::from(N - 1)], run_id),
-            RegisterFunction::new_async(move |input: ExecInput| {
-                let directory = directory.clone();
-                let task_root = task_root.clone();
-                async move {
-                    if !(1..=120_000).contains(&input.timeout_ms) {
-                        return Err(iii_sdk::errors::Error::Handler(
-                            "timeout_ms must be 1..=120000".into(),
-                        ));
-                    }
-                    let mut command = Command::new("python3");
-                    command
-                        .arg(directory.join("lifecycle.py"))
-                        .args(["exec", "--root"])
-                        .arg(task_root)
-                        .args([
-                            "--command",
-                            &input.command,
-                            "--timeout-ms",
-                            &input.timeout_ms.to_string(),
-                        ]);
-                    let value = checked(&mut command)
-                        .await
-                        .map_err(|e| iii_sdk::errors::Error::Handler(e.to_string()))?;
-                    serde_json::from_value::<ExecOutput>(value)
-                        .map_err(|e| iii_sdk::errors::Error::Handler(e.to_string()))
-                }
-            })
-            .description(
-                "Execute a bounded command in this Registry scenario's private workspace.",
-            ),
-        );
-        registrations()
-            .lock()
-            .unwrap()
-            .insert(function_id(IDS[usize::from(N - 1)], run_id), function);
-        Ok(())
-    })
+                let mut command = Command::new("python3");
+                command
+                    .arg(directory.join("lifecycle.py"))
+                    .args(["exec", "--root"])
+                    .arg(task_root)
+                    .args([
+                        "--command",
+                        &input.command,
+                        "--timeout-ms",
+                        &input.timeout_ms.to_string(),
+                    ]);
+                let value = checked(&mut command)
+                    .await
+                    .map_err(|e| iii_sdk::errors::Error::Handler(e.to_string()))?;
+                serde_json::from_value::<ExecOutput>(value)
+                    .map_err(|e| iii_sdk::errors::Error::Handler(e.to_string()))
+            }
+        })
+        .description("Execute a bounded command in this Registry scenario's private workspace."),
+    );
+    registrations()
+        .lock()
+        .unwrap()
+        .insert(function_id(IDS[usize::from(N - 1)], run_id), function);
+    Ok(())
 }
 
 fn check_plan(run_id: &str) -> Result<Value> {
@@ -598,101 +661,102 @@ async fn capture_browser_evidence(context: &E2eContext, directory: &std::path::P
     Ok(())
 }
 
-fn capture<'a, const N: u8>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let directory = root(N, run_id);
-        std::fs::create_dir_all(directory.join("validation"))?;
-        let mut finish = lifecycle(N, run_id, "finish");
-        finish.args([
-            "--subject-status",
-            if observation.metrics.complete {
-                "finished"
-            } else {
-                "incomplete"
-            },
-        ]);
-        let delivery = checked(&mut finish).await?;
-        if N == 2 {
-            publish_implementation(context, run_id, &directory.join("delivery"));
-        }
-        if matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
-            if let Err(error) = capture_browser_evidence(context, &directory).await {
-                std::fs::write(
-                    directory.join("browser-capture-error.txt"),
-                    format!("{error:#}"),
-                )?;
-            }
-        }
-        let result = if N == 1 {
-            check_plan(run_id)
-        } else if matches!(N, 2 | 4) && delivery["runtime_ready"] != true {
-            Err(anyhow::anyhow!(
-                "Delivered source could not be started for validation: {delivery}"
-            ))
+async fn capture<const N: u8>(
+    context: &E2eContext,
+    observation: &ScenarioObservation,
+    run_id: &str,
+) -> Result<Vec<CapturedDeliverable>> {
+    let directory = root(N, run_id);
+    std::fs::create_dir_all(directory.join("validation"))?;
+    let mut finish = lifecycle(N, run_id, "finish");
+    finish.args([
+        "--subject-status",
+        if observation.metrics.complete {
+            "finished"
         } else {
-            let mut command = Command::new("python3");
-            command
-                .arg(assets(N, run_id).join("validate.py"))
-                .arg("--root")
-                .arg(&directory)
-                .arg("--assets")
-                .arg(assets(N, run_id));
-            checked(&mut command).await
-        };
-        let validation =
-            result.unwrap_or_else(|error| json!({"observations":[],"error":format!("{error:#}")}));
-        std::fs::write(
-            directory.join("validation/observations.json"),
-            serde_json::to_vec_pretty(&validation)?,
-        )?;
-        let bundle = evidence_files(&directory)?;
-        Ok(vec![CapturedDeliverable { id:"registry_evidence".into(), kind:"application_audit".into(),
-            content: json!({"root":directory,"files":bundle["files"],"omitted_files":bundle["omitted_files"],"observations":validation["observations"],"validation_error":validation["error"],"delivery":delivery}).into(),
-            invariants:vec![], provenance:vec![ProvenanceEvidence {kind:"filesystem_path".into(),source_id:directory.display().to_string(),relation:"validated_before_cleanup".into()}],
-        }])
-    })
+            "incomplete"
+        },
+    ]);
+    let delivery = checked(&mut finish).await?;
+    if N == 2 {
+        publish_implementation(context, run_id, &directory.join("delivery"));
+    }
+    if matches!(N, 2 | 4) && delivery["runtime_ready"] == true {
+        if let Err(error) = capture_browser_evidence(context, &directory).await {
+            std::fs::write(
+                directory.join("browser-capture-error.txt"),
+                format!("{error:#}"),
+            )?;
+        }
+    }
+    let result = if N == 1 {
+        check_plan(run_id)
+    } else if matches!(N, 2 | 4) && delivery["runtime_ready"] != true {
+        Err(anyhow::anyhow!(
+            "Delivered source could not be started for validation: {delivery}"
+        ))
+    } else {
+        let mut command = Command::new("python3");
+        command
+            .arg(assets(N, run_id).join("validate.py"))
+            .arg("--root")
+            .arg(&directory)
+            .arg("--assets")
+            .arg(assets(N, run_id));
+        checked(&mut command).await
+    };
+    let validation =
+        result.unwrap_or_else(|error| json!({"observations":[],"error":format!("{error:#}")}));
+    std::fs::write(
+        directory.join("validation/observations.json"),
+        serde_json::to_vec_pretty(&validation)?,
+    )?;
+    let bundle = evidence_files(&directory)?;
+    Ok(vec![CapturedDeliverable { id:"registry_evidence".into(), kind:"application_audit".into(),
+        content: json!({"root":directory,"files":bundle["files"],"omitted_files":bundle["omitted_files"],"observations":validation["observations"],"validation_error":validation["error"],"delivery":delivery}).into(),
+        invariants:vec![], provenance:vec![ProvenanceEvidence {kind:"filesystem_path".into(),source_id:directory.display().to_string(),relation:"validated_before_cleanup".into()}],
+    }])
 }
 fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
     super::common::atomic_awards(metrics(test), validation)
 }
-fn evaluate<'a, const N: u8>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let validation: Value = serde_json::from_slice(&std::fs::read(
-            root(N, run_id).join("validation/observations.json"),
-        )?)?;
-        Ok(ObjectiveEvaluation {
-            completion: if observation.metrics.complete {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            awards: awards(N, &validation)?,
-            infrastructure_error: None,
-        })
+/// Scores the observations the capture already sealed into the evidence
+/// deliverable, so the verdict no longer depends on the workspace surviving.
+async fn evaluate<const N: u8>(
+    _context: &E2eContext,
+    observation: &ScenarioObservation,
+    _run_id: &str,
+) -> Result<ObjectiveEvaluation> {
+    let evidence = observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == "registry_evidence")
+        .and_then(|deliverable| deliverable.content.as_json())
+        .context("Registry evidence deliverable is missing")?;
+    let validation =
+        json!({"observations": evidence["observations"], "error": evidence["validation_error"]});
+    Ok(ObjectiveEvaluation {
+        completion: if observation.metrics.complete {
+            CompletionState::Completed
+        } else {
+            CompletionState::TaskIncomplete
+        },
+        awards: awards(N, &validation)?,
+        infrastructure_error: None,
     })
 }
-fn cleanup<'a, const N: u8>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        registrations()
-            .lock()
-            .unwrap()
-            .remove(&function_id(IDS[usize::from(N - 1)], run_id));
-        if root(N, run_id).join("state.json").is_file() {
-            let result = checked(&mut lifecycle(N, run_id, "cleanup")).await?;
-            if result["cleanup_exit_code"].as_i64().unwrap_or(0) != 0 {
-                bail!("Registry cleanup failed: {result}");
-            }
+async fn cleanup<const N: u8>(_context: &E2eContext, run_id: &str) -> Result<()> {
+    registrations()
+        .lock()
+        .unwrap()
+        .remove(&function_id(IDS[usize::from(N - 1)], run_id));
+    if root(N, run_id).join("state.json").is_file() {
+        let result = checked(&mut lifecycle(N, run_id, "cleanup")).await?;
+        if result["cleanup_exit_code"].as_i64().unwrap_or(0) != 0 {
+            bail!("Registry cleanup failed: {result}");
         }
-        Ok(())
-    })
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -758,7 +822,7 @@ mod tests {
     #[test]
     fn all_registry_criteria_are_atomic_and_use_catalog_weights() {
         for n in 1..=4 {
-            let scenario = scenario(n, "test");
+            let scenario = Registry(n).spec("test");
             scenario.validate().unwrap();
             assert_eq!(scenario.criteria.len(), metrics(n).len());
             assert!(scenario

@@ -31,10 +31,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_play_ladder";
@@ -271,108 +270,189 @@ fn step(game: &mut ChessGame, uci: &str, depth: u32) -> ChessMoveReply {
 /// run-scoped move channel. The opponent `depth` is baked in here — the only
 /// per-rung value the setup hook needs — and stored in the game so the handler
 /// can read it back.
-fn setup_game<'a>(context: &'a E2eContext, run_id: &'a str, depth: u32) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let game = Arc::new(Mutex::new(ChessGame {
-            fen: chess_engine::STARTPOS.to_string(),
-            moves: Vec::new(),
-            illegal_attempts: 0,
-            result: None,
-            finished: false,
-            depth,
-        }));
+async fn setup_game(context: &E2eContext, run_id: &str, depth: u32) -> anyhow::Result<()> {
+    let game = Arc::new(Mutex::new(ChessGame {
+        fen: chess_engine::STARTPOS.to_string(),
+        moves: Vec::new(),
+        illegal_attempts: 0,
+        result: None,
+        finished: false,
+        depth,
+    }));
+    game_registry()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(run_id.to_string(), game.clone());
+
+    context.client().register_function(
+        move_function_id(run_id),
+        RegisterFunction::new_async(move |input: ChessMoveInput| {
+            let game = game.clone();
+            async move {
+                let reply = {
+                    let mut game = game.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                    let depth = game.depth;
+                    step(&mut game, &input.uci, depth)
+                };
+                Ok::<ChessMoveReply, iii_sdk::errors::Error>(reply)
+            }
+        })
+        .description(
+            "E2E chess move channel: validates the subject's move from the current FEN, plays \
+             the deterministic negamax opponent reply, and returns the new position.",
+        ),
+    );
+    Ok(())
+}
+
+pub struct ChessPlayLadder;
+
+#[async_trait]
+impl Scenario for ChessPlayLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let rung = RUNG;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            // Nothing here is run-scoped: inputs are identical across namespaces
+            // for a given seed, so canonical identity stays stable across attempts.
+            json!({
+                "opponent_depth": rung.depth,
+                "move_cap_plies": MOVE_CAP,
+                "start_fen": chess_engine::STARTPOS,
+                "result_marker": RESULT_MARKER,
+            }),
+            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let move_function = move_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&move_function, RUNG.depth),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                // One live turn per subject move, plus slack for discovery, the
+                // occasional illegal-move retry, and the final report. This exceeds
+                // the other scenarios' turn counts on purpose; `ExecutionPolicy`
+                // only rejects zero and total < output, so a long game is allowed.
+                max_turns: 8 + MOVE_CAP,
+                max_output_tokens: Some(8_192),
+                // Unbounded on purpose: this is a measurement ladder — capping the
+                // shared token budget would distort the strength signal the ladder
+                // exists to observe. Spend surfaces in the Efficiency dimension.
+                max_total_tokens: None,
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["state::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        setup_game(context, run_id, RUNG.depth).await
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let function_errors = observation.metrics.totals.function_call_errors;
+        // Depth comes from the authoritative case inputs (always 1..=3), so the
+        // record stays schema-valid even on the defensive missing-game path.
+        let depth = case_depth(&observation.case);
+        let (moves, result, illegal_attempts, finished, plies) = match read_game(run_id) {
+            Some(snapshot) => {
+                let plies = snapshot.moves.len() as u32;
+                (
+                    snapshot.moves,
+                    snapshot.result,
+                    snapshot.illegal_attempts,
+                    snapshot.finished,
+                    plies,
+                )
+            }
+            None => (Vec::new(), None, 0u32, false, 0u32),
+        };
+        let within_cap = plies <= MOVE_CAP;
+        let completed = finished && result.is_some() && within_cap;
+        let zero_illegal = illegal_attempts == 0 && function_errors == 0;
+        // Provenance links the record to the move channel that actually played
+        // the game, but only when the game both completed and stayed clean.
+        let provenance = if completed && zero_illegal {
+            vec![ProvenanceEvidence {
+                kind: "function".to_string(),
+                source_id: move_function_id(run_id),
+                relation: "played_opponent".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: GAME_RECORD_ID.to_string(),
+            kind: "game_record".to_string(),
+            content: json!({
+                "moves": moves,
+                "result": result.clone().unwrap_or_default(),
+                "illegal_attempts": illegal_attempts,
+                "opponent_depth": depth,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "game_completed".to_string(),
+                    passed: completed,
+                    reason: format!(
+                        "finished={finished}, result={result:?}, plies={plies} (cap {MOVE_CAP})"
+                    ),
+                },
+                CapturedInvariant {
+                    id: "zero_illegal_moves".to_string(),
+                    passed: zero_illegal,
+                    reason: format!(
+                        "illegal_attempts={illegal_attempts}, function_call_errors={function_errors}"
+                    ),
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_game(observation, run_id)
+    }
+
+    /// Nothing scenario-owned outlives the process except the registered function
+    /// (registered on the suite's own engine connection, so it needs no
+    /// unregister). Drop the run's live game from the registry.
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         game_registry()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(run_id.to_string(), game.clone());
-
-        context.client().register_function(
-            move_function_id(run_id),
-            RegisterFunction::new_async(move |input: ChessMoveInput| {
-                let game = game.clone();
-                async move {
-                    let reply = {
-                        let mut game = game.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let depth = game.depth;
-                        step(&mut game, &input.uci, depth)
-                    };
-                    Ok::<ChessMoveReply, iii_sdk::errors::Error>(reply)
-                }
-            })
-            .description(
-                "E2E chess move channel: validates the subject's move from the current FEN, plays \
-                 the deterministic negamax opponent reply, and returns the new position.",
-            ),
-        );
+            .remove(run_id);
         Ok(())
-    })
-}
-
-macro_rules! rung_setup {
-    ($name:ident, $depth:expr) => {
-        fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-            setup_game(context, run_id, $depth)
-        }
-    };
-}
-
-rung_setup!(setup_depth_3, 3);
-
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, RUNG)
-}
-
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = RUNG;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        // Nothing here is run-scoped: inputs are identical across namespaces
-        // for a given seed, so canonical identity stays stable across attempts.
-        json!({
-            "opponent_depth": rung.depth,
-            "move_cap_plies": MOVE_CAP,
-            "start_fen": chess_engine::STARTPOS,
-            "result_marker": RESULT_MARKER,
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, rung),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
-    let move_function = move_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&move_function, rung.depth),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            // One live turn per subject move, plus slack for discovery, the
-            // occasional illegal-move retry, and the final report. This exceeds
-            // the other scenarios' turn counts on purpose; `ExecutionPolicy`
-            // only rejects zero and total < output, so a long game is allowed.
-            max_turns: 8 + MOVE_CAP,
-            max_output_tokens: Some(8_192),
-            // Unbounded on purpose: this is a measurement ladder — capping the
-            // shared token budget would distort the strength signal the ladder
-            // exists to observe. Spend surfaces in the Efficiency dimension.
-            max_total_tokens: None,
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["state::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup_depth_3),
-        evaluate,
-        cleanup: Some(cleanup),
     }
 }
 
@@ -393,14 +473,6 @@ When the game ends, finish with a single line matching the final status — exac
         start = chess_engine::STARTPOS,
         marker = RESULT_MARKER,
     )
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_game(observation, run_id) })
 }
 
 fn evaluate_game(
@@ -479,74 +551,6 @@ fn case_depth(case: &ScenarioCase) -> u32 {
         .unwrap_or(1)
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let function_errors = observation.metrics.totals.function_call_errors;
-        // Depth comes from the authoritative case inputs (always 1..=3), so the
-        // record stays schema-valid even on the defensive missing-game path.
-        let depth = case_depth(&observation.case);
-        let (moves, result, illegal_attempts, finished, plies) = match read_game(run_id) {
-            Some(snapshot) => {
-                let plies = snapshot.moves.len() as u32;
-                (
-                    snapshot.moves,
-                    snapshot.result,
-                    snapshot.illegal_attempts,
-                    snapshot.finished,
-                    plies,
-                )
-            }
-            None => (Vec::new(), None, 0u32, false, 0u32),
-        };
-        let within_cap = plies <= MOVE_CAP;
-        let completed = finished && result.is_some() && within_cap;
-        let zero_illegal = illegal_attempts == 0 && function_errors == 0;
-        // Provenance links the record to the move channel that actually played
-        // the game, but only when the game both completed and stayed clean.
-        let provenance = if completed && zero_illegal {
-            vec![ProvenanceEvidence {
-                kind: "function".to_string(),
-                source_id: move_function_id(run_id),
-                relation: "played_opponent".to_string(),
-            }]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: GAME_RECORD_ID.to_string(),
-            kind: "game_record".to_string(),
-            content: json!({
-                "moves": moves,
-                "result": result.clone().unwrap_or_default(),
-                "illegal_attempts": illegal_attempts,
-                "opponent_depth": depth,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "game_completed".to_string(),
-                    passed: completed,
-                    reason: format!(
-                        "finished={finished}, result={result:?}, plies={plies} (cap {MOVE_CAP})"
-                    ),
-                },
-                CapturedInvariant {
-                    id: "zero_illegal_moves".to_string(),
-                    passed: zero_illegal,
-                    reason: format!(
-                        "illegal_attempts={illegal_attempts}, function_call_errors={function_errors}"
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -588,19 +592,6 @@ fn deliverable_contract() -> DeliverableContract {
     }
 }
 
-/// Nothing scenario-owned outlives the process except the registered function
-/// (registered on the suite's own engine connection, so it needs no
-/// unregister). Drop the run's live game from the registry.
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        game_registry()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(run_id);
-        Ok(())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,7 +611,11 @@ mod tests {
     fn every_seed_request_normalizes_to_the_maximum_case() {
         assert_eq!(RUNG.depth, 3);
         assert_eq!(
-            materialize("attempt", 6002).unwrap().case.seed,
+            crate::scenarios::ScenarioId::ChessPlayLadder
+                .materialize("attempt", 6002)
+                .unwrap()
+                .case
+                .seed,
             CANONICAL_SEED
         );
     }
@@ -714,8 +709,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_and_uses_the_maximum_depth() {
-        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        let first = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("attempt-a", CANONICAL_SEED)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("attempt-b", CANONICAL_SEED)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
@@ -730,7 +729,6 @@ mod tests {
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert_eq!(first.spec.execution.max_turns, 8 + MOVE_CAP);
         assert!(first.spec.execution.max_total_tokens.is_none());
-        assert!(first.capture.is_some());
         first.validate().unwrap();
     }
 
@@ -738,7 +736,9 @@ mod tests {
     fn the_materialized_spec_and_case_pass_the_shared_contract() {
         // The same invariants the registry-wide test enforces for a wired
         // scenario, checked here so the file stands on its own.
-        let materialized = materialize("chess", CANONICAL_SEED).unwrap();
+        let materialized = crate::scenarios::ScenarioId::ChessPlayLadder
+            .materialize("chess", CANONICAL_SEED)
+            .unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.spec.id, ID);
         let weights: u16 = materialized

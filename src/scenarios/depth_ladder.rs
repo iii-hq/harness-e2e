@@ -20,10 +20,9 @@ use crate::wire::SessionUsage;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "depth_ladder";
@@ -99,55 +98,167 @@ fn expected_row(run_id: &str, level: u8) -> Value {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, RUNG)
-}
+pub struct DepthLadder;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = RUNG;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "depth": rung.depth,
-            "relay_keys": relay_keys(rung.depth),
-            "report_marker": report_marker(rung.depth),
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(rung.depth),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, rung),
-        case,
-        capture: Some(capture),
-    })
-}
+#[async_trait]
+impl Scenario for DepthLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names, run_id, rung.depth),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12 + 4 * u32::from(rung.depth),
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(300_000 + 150_000 * u64::from(rung.depth)),
-            stuck_timeout_seconds: 420,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let rung = RUNG;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "depth": rung.depth,
+                "relay_keys": relay_keys(rung.depth),
+                "report_marker": report_marker(rung.depth),
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(rung.depth),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names, run_id, RUNG.depth),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12 + 4 * u32::from(RUNG.depth),
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(300_000 + 150_000 * u64::from(RUNG.depth)),
+                stuck_timeout_seconds: 420,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let depth = case_depth(&observation.case)?;
+        let audit = relay_audit(
+            context,
+            &names,
+            run_id,
+            depth,
+            &observation.metrics.by_session,
+        )
+        .await?;
+        let mut rows = Vec::new();
+        for level in 1..=depth {
+            let key = relay_key(level);
+            let value = get_state(context, &names.scope, &key).await?;
+            rows.push(json!({ "key": key, "value": value }));
+        }
+        // Location evidence is only attached once the audit establishes that
+        // the rows are exact and were written at their own depths; failed
+        // runs carry no unearned provenance.
+        let provenance = if audit.rows_exact && audit.chain_provenance {
+            (1..=depth)
+                .map(|level| ProvenanceEvidence {
+                    kind: "state_location".to_string(),
+                    source_id: format!("{}/{}", names.scope, relay_key(level)),
+                    relation: "written_by_relay_level".to_string(),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        Ok(vec![CapturedDeliverable {
+            id: ROWS_DELIVERABLE_ID.to_string(),
+            kind: "state_bundle".to_string(),
+            content: json!({ "depth": depth, "rows": rows }).into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "relay_rows_exact".to_string(),
+                    passed: audit.rows_exact,
+                    reason: format!("observed {}/{depth} exact relay row(s)", audit.exact_rows),
+                },
+                CapturedInvariant {
+                    id: "depth_provenance".to_string(),
+                    passed: audit.chain_provenance,
+                    reason: format!(
+                        "lane_chained={}, single_writes={}, spawn_counts={}, lane_discipline={}",
+                        audit.lane_chained,
+                        audit.single_writes,
+                        audit.spawn_counts_ok,
+                        audit.lane_discipline
+                    ),
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_rung(context, observation, run_id).await
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        // Delete every key the retained workload can address so a misbehaving
+        // run cannot leak rows between attempts sharing a scope prefix.
+        for key in relay_keys(RUNG.depth) {
+            let _: Value = context
+                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
+                .await?;
+        }
+        Ok(())
     }
 }
 
@@ -204,14 +315,6 @@ token `{terminal_token}` verbatim."#,
         marker = report_marker(depth),
         terminal_token = relay_token(run_id, depth),
     )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_rung(context, observation, run_id).await })
 }
 
 async fn evaluate_rung(
@@ -432,70 +535,6 @@ fn case_depth(case: &ScenarioCase) -> anyhow::Result<u8> {
         .ok_or_else(|| anyhow::anyhow!("depth_ladder case is missing a positive depth input"))
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let depth = case_depth(&observation.case)?;
-        let audit = relay_audit(
-            context,
-            &names,
-            run_id,
-            depth,
-            &observation.metrics.by_session,
-        )
-        .await?;
-        let mut rows = Vec::new();
-        for level in 1..=depth {
-            let key = relay_key(level);
-            let value = get_state(context, &names.scope, &key).await?;
-            rows.push(json!({ "key": key, "value": value }));
-        }
-        // Location evidence is only attached once the audit establishes that
-        // the rows are exact and were written at their own depths; failed
-        // runs carry no unearned provenance.
-        let provenance = if audit.rows_exact && audit.chain_provenance {
-            (1..=depth)
-                .map(|level| ProvenanceEvidence {
-                    kind: "state_location".to_string(),
-                    source_id: format!("{}/{}", names.scope, relay_key(level)),
-                    relation: "written_by_relay_level".to_string(),
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-
-        Ok(vec![CapturedDeliverable {
-            id: ROWS_DELIVERABLE_ID.to_string(),
-            kind: "state_bundle".to_string(),
-            content: json!({ "depth": depth, "rows": rows }).into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "relay_rows_exact".to_string(),
-                    passed: audit.rows_exact,
-                    reason: format!("observed {}/{depth} exact relay row(s)", audit.exact_rows),
-                },
-                CapturedInvariant {
-                    id: "depth_provenance".to_string(),
-                    passed: audit.chain_provenance,
-                    reason: format!(
-                        "lane_chained={}, single_writes={}, spawn_counts={}, lane_discipline={}",
-                        audit.lane_chained,
-                        audit.single_writes,
-                        audit.spawn_counts_ok,
-                        audit.lane_discipline
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
-}
-
 fn deliverable_contract(depth: u8) -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -542,43 +581,6 @@ fn deliverable_contract(depth: u8) -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        // Delete every key the retained workload can address so a misbehaving
-        // run cannot leak rows between attempts sharing a scope prefix.
-        for key in relay_keys(RUNG.depth) {
-            let _: Value = context
-                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
-                .await?;
-        }
-        Ok(())
-    })
 }
 
 async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
@@ -633,7 +635,11 @@ mod tests {
     fn every_seed_request_normalizes_to_the_maximum_case() {
         assert_eq!(RUNG.depth, 6);
         assert_eq!(
-            materialize("attempt", 4002).unwrap().case.seed,
+            crate::scenarios::ScenarioId::DepthLadder
+                .materialize("attempt", 4002)
+                .unwrap()
+                .case
+                .seed,
             CANONICAL_SEED
         );
     }
@@ -648,8 +654,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_with_maximum_depth() {
-        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        let first = crate::scenarios::ScenarioId::DepthLadder
+            .materialize("attempt-a", CANONICAL_SEED)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::DepthLadder
+            .materialize("attempt-b", CANONICAL_SEED)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(

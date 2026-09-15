@@ -8,7 +8,6 @@ import {
   aggregateAssessmentMetrics,
   assessmentFilterCounts,
   buildAssessmentWorkspace,
-  buildHarnessRecommendation,
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -223,89 +222,11 @@ describe('assessment presentation model', () => {
     ])
   })
 
-  it('derives next-run guidance from authoritative harness status', () => {
-    const infrastructureInput = detail(
-      contract({ system_status: 'infrastructure_error' }),
-    )
-    const projectedRun =
-      infrastructureInput.reports[0].report?.scenarios[0].runs[0]
-    if (!projectedRun) throw new Error('test run is missing')
-    projectedRun.failures = [
-      {
-        status: 'subject_error',
-        domain: 'subject',
-        phase: 'execute',
-        message: 'earlier subject transport failure',
-      },
-      {
-        status: 'infrastructure_error',
-        domain: 'e2e_infrastructure',
-        phase: 'setup',
-        message: 'missing runtime HARNESS_E2E_KANBAN_BASE_DIR',
-      },
-    ]
-    const infrastructure = buildAssessmentWorkspace(infrastructureInput).runs[0]
-    expect(buildHarnessRecommendation(infrastructure)).toMatch(
-      /missing runtime HARNESS_E2E_KANBAN_BASE_DIR/i,
-    )
-    expect(buildHarnessRecommendation(infrastructure)).not.toMatch(
-      /collection or serialization path|subject transport/i,
-    )
-
-    const infrastructureWithoutCause = buildAssessmentWorkspace(
-      detail(contract({ system_status: 'infrastructure_error' })),
-    ).runs[0]
-    expect(buildHarnessRecommendation(infrastructureWithoutCause)).toMatch(
-      /infrastructure failure/i,
-    )
-
-    const resource = buildAssessmentWorkspace(
-      detail(contract({ system_status: 'resource_limit' })),
-    ).runs[0]
-    expect(buildHarnessRecommendation(resource)).toMatch(/resource footprint/i)
-
-    const passing = buildAssessmentWorkspace(detail(contract())).runs[0]
-    expect(buildHarnessRecommendation(passing)).toMatch(/comparable scenario/i)
-  })
-
-  it('keeps invalid asset guidance separate from infrastructure failures', () => {
-    const invalidAsset = contract({ system_status: 'infrastructure_error' })
-    if (!invalidAsset.assets?.[0]) throw new Error('test asset is missing')
-    invalidAsset.assets[0].outcome = 'invalid'
-
-    expect(
-      buildHarnessRecommendation(
-        buildAssessmentWorkspace(detail(invalidAsset)).runs[0],
-      ),
-    ).toMatch(/invalid or missing asset/i)
-
-    invalidAsset.assets[0].outcome = 'not_evaluated'
-    const infrastructureInput = detail(invalidAsset)
-    const projectedRun =
-      infrastructureInput.reports[0].report?.scenarios[0].runs[0]
-    if (!projectedRun) throw new Error('test run is missing')
-    projectedRun.failures = [
-      {
-        status: 'infrastructure_error',
-        domain: 'e2e_infrastructure',
-        message: 'required runtime is unavailable',
-      },
-    ]
-    expect(
-      buildHarnessRecommendation(
-        buildAssessmentWorkspace(infrastructureInput).runs[0],
-      ),
-    ).toMatch(/required runtime is unavailable/i)
-  })
-
   it('preserves technical failures without translating them into quality failures', () => {
     const model = buildAssessmentWorkspace(
       detail(contract({ system_status: 'subject_error' })),
     )
     expect(model.runs[0].systemStatus).toBe('subject_error')
-    expect(buildHarnessRecommendation(model.runs[0])).toMatch(
-      /subject execution or transport path/i,
-    )
   })
 
   it('filters failed, unavailable and asset assessments', () => {

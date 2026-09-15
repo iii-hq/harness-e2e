@@ -65,7 +65,7 @@ export function Button({
       {...props}
     >
       {busy ? <span className="ds-button-spinner" aria-hidden="true" /> : null}
-      <span>{children}</span>
+      {children}
     </button>
   )
 }
@@ -149,7 +149,7 @@ export type Breadcrumb = { label: string; href?: string }
 
 export type PageHeaderProps = HTMLAttributes<HTMLElement> & {
   title: string
-  summary: string
+  summary: ReactNode
   headingLevel?: 1 | 2
   /** Id for the heading element, so a section can point aria-labelledby at it. */
   headingId?: string
@@ -760,9 +760,11 @@ export function Dialog({
       aria-describedby={description ? descriptionId : undefined}
       onCancel={(event) => {
         event.preventDefault()
+        event.stopPropagation()
         onClose()
       }}
-      onClose={() => {
+      onClose={(event) => {
+        event.stopPropagation()
         if (open) onClose()
       }}
       onKeyDown={(event) => {

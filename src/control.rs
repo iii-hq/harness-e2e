@@ -39,7 +39,8 @@ use crate::report::{
 };
 use crate::scenarios::ScenarioId;
 use crate::scenarios::{
-    scenario_contract_sha256, DeliverableContract, ExecutionPolicy, ScenarioCharacterization,
+    scenario_contract_sha256, Capability, DeliverableContract, ExecutionPolicy,
+    ScenarioCharacterization,
 };
 use crate::suite::{
     run_suite, AdaptiveResumeAttempt, SubjectConfig, SuiteControl, SuiteEvent, SuiteEventEnvelope,
@@ -187,6 +188,8 @@ pub struct RunRequest {
     pub lane: String,
     pub model: String,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
     #[serde(default)]
     pub scenarios: Vec<ScenarioId>,
     #[serde(default = "default_runs")]
@@ -204,6 +207,19 @@ pub struct RunRequest {
     pub slot_start_deadline_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub run_contract: Option<ObservationRunContract>,
+}
+
+impl RunRequest {
+    fn subject(&self) -> SubjectConfig {
+        SubjectConfig {
+            model: self.model.clone(),
+            provider: self.provider.clone(),
+            agent: self.agent.clone(),
+            thinking_level: None,
+            provider_options: None,
+            priced: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -331,7 +347,7 @@ pub struct ScenarioDescriptor {
     pub contract_sha256: String,
     pub characterization: ScenarioCharacterization,
     pub resource_envelope: ScenarioResourceEnvelope,
-    pub required_capabilities: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
     pub deliverable_contract: DeliverableContract,
 }
 
@@ -897,10 +913,7 @@ impl ControlPlane {
         let outcome = run_suite(SuiteRunConfig {
             url: self.inner.url.clone(),
             execution_id: None,
-            subject: SubjectConfig {
-                model: request.model.clone(),
-                provider: request.provider.clone(),
-            },
+            subject: request.subject(),
             output: output.clone(),
             scenarios,
             runs: request.runs,
@@ -1443,16 +1456,19 @@ impl ControlPlane {
                 json!({ "root_session_id": active.session_id }),
             )
             .await;
-        if let Some(cleanup) = active.scenario_id.spec(&active.attempt_id).cleanup {
-            let context = E2eContext::from_client(self.inner.iii.clone());
-            if let Err(error) = cleanup(&context, &active.attempt_id).await {
-                tracing::warn!(
-                    scenario = active.scenario_id.as_str(),
-                    attempt_id = active.attempt_id,
-                    %error,
-                    "restart compensation could not complete scenario cleanup"
-                );
-            }
+        let context = E2eContext::from_client(self.inner.iii.clone());
+        if let Err(error) = active
+            .scenario_id
+            .module()
+            .cleanup(&context, &active.attempt_id)
+            .await
+        {
+            tracing::warn!(
+                scenario = active.scenario_id.as_str(),
+                attempt_id = active.attempt_id,
+                %error,
+                "restart compensation could not complete scenario cleanup"
+            );
         }
     }
 
@@ -1924,6 +1940,13 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
             bail!("{name} cannot be empty");
         }
     }
+    if request
+        .agent
+        .as_deref()
+        .is_some_and(|agent| agent.trim().is_empty())
+    {
+        bail!("agent cannot be empty");
+    }
     let budget = lane_budget(&request.lane);
     let scenarios = if request.scenarios.is_empty() {
         ScenarioId::ALL.to_vec()
@@ -2018,7 +2041,7 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         .run_contract
         .as_ref()
         .context("Release Control observation intent requires run_contract")?;
-    artifact::sha256_value(&json!({
+    let mut intent = json!({
         "run_contract": contract,
         "lane": request.lane,
         "model": request.model,
@@ -2028,7 +2051,11 @@ fn observation_intent_sha256(request: &RunRequest) -> Result<String> {
         "seed": request.seed,
         "rotating_seeds": request.rotating_seeds,
         "technical_retries": request.technical_retries,
-    }))
+    });
+    if let Some(agent) = &request.agent {
+        intent["agent"] = Value::String(agent.clone());
+    }
+    artifact::sha256_value(&intent)
 }
 
 fn observation_idempotency_key(request: &RunRequest) -> Result<String> {
@@ -2666,6 +2693,7 @@ mod tests {
             lane: "pr-gate".into(),
             model: "model".into(),
             provider: "provider".into(),
+            agent: None,
             scenarios: vec![ScenarioId::ContextPressure],
             runs: 1,
             seed: Some(42),
@@ -2692,6 +2720,17 @@ mod tests {
         assert_eq!(
             crate::artifact::sha256_value(&with_caller).unwrap(),
             crate::artifact::sha256_value(&request()).unwrap()
+        );
+    }
+
+    #[test]
+    fn run_request_carries_agent_into_the_native_subject() {
+        let mut request = request();
+        request.agent = Some("software-engineer".into());
+
+        assert_eq!(
+            request.subject().agent.as_deref(),
+            Some("software-engineer")
         );
     }
 
@@ -2851,6 +2890,32 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("Release Control idempotency_key"));
+    }
+
+    #[test]
+    fn release_control_intent_is_bound_to_the_agent_profile() {
+        let mut plain = d0_request();
+        let contract = plain.run_contract.as_mut().unwrap();
+        contract.runner = RunnerIdentity {
+            name: "harness-e2e".into(),
+            version: "1.0.0".into(),
+            revision: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        contract.plan.catalog_sha256 = format!("sha256:{}", "b".repeat(64));
+        contract.selected_cases[0].behavior_sha256 = format!("sha256:{}", "c".repeat(64));
+        contract.selected_cases[0].inputs_sha256 = format!("sha256:{}", "d".repeat(64));
+        contract.selected_cases[0].contract_sha256 = format!("sha256:{}", "e".repeat(64));
+        let mut profiled = plain.clone();
+        profiled.agent = Some("software-engineer".into());
+
+        assert_ne!(
+            observation_intent_sha256(&plain).unwrap(),
+            observation_intent_sha256(&profiled).unwrap()
+        );
+        assert_eq!(
+            observation_intent_sha256(&plain).unwrap(),
+            "sha256:25b42328eb6e8d8a535ea4327a4490feecf3c063580c5b65285a3b9ec8c7cb4e"
+        );
     }
 
     #[test]
@@ -3018,6 +3083,7 @@ mod tests {
             crate::report::ModelArtifact {
                 model: record.request.model.clone(),
                 provider: record.request.provider.clone(),
+                agent: None,
                 context_window: 100,
                 max_output_tokens: 10,
                 supports_tools: Some(true),
@@ -3264,7 +3330,12 @@ mod tests {
     #[test]
     fn subject_policy_hides_control_functions() {
         let spec = ScenarioId::ContextPressure.spec("policy");
-        let policy = crate::suite::e2e_function_policy(&spec, "test-run");
+        let policy = crate::suite::e2e_function_policy(
+            &spec,
+            ScenarioId::ContextPressure
+                .module()
+                .allowed_functions("test-run"),
+        );
         assert!(policy.deny.contains(&"e2e::*".to_string()));
     }
 

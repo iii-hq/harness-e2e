@@ -24,9 +24,8 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture, EvaluationFuture,
-    ExecutionPolicy, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    async_trait, Capability, CapturedDeliverable, ExecutionPolicy, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "validation_scope_enforcement";
@@ -55,85 +54,81 @@ fn scope(run_id: &str) -> String {
     format!("scopetest-{}", suffix(run_id))
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ValidationScopeEnforcement;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "foreign_session": "someone-elses-session-1",
-            "marker_key": "marker",
-            "expected_nudges": 1,
-            "expected_marker": null,
-            "completion_marker": "TEARDOWN COMPLETE",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let scope = scope(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You are testing the security boundaries of self-registered validators. Follow the \
-             steps exactly and report what actually happens.\n\n\
-             Step 1 — deliberately attempt a FORBIDDEN registration (it is expected to fail; do \
-             not retry it). Call engine::register_trigger with trigger_type \"{HOOK_TYPE}\", \
-             function_id \"fp::pipe\", config {{\"sessions\": [\"someone-elses-session-1\"], \
-             \"payload\": {{\"through\": [{{\"function\": \"fp::when\", \"payload\": {{\"op\": \
-             \"exists\"}}}}]}}}}. Quote the error message you get back in one line.\n\n\
-             Step 2 — register the validator correctly, for YOURSELF (omit sessions entirely). \
-             Call engine::register_trigger with:\n\
-             - trigger_type: \"{HOOK_TYPE}\"\n\
-             - function_id: \"fp::pipe\"\n\
-             - config: {{\"payload\": {{\"through\": [{{\"function\": \"state::get\", \
-             \"payload\": {{\"scope\": \"{scope}\", \"key\": \"marker\"}}}}, {{\"function\": \
-             \"fp::when\", \"payload\": {{\"op\": \"==\", \"to\": 1}}}}]}}, \"result_into\": \
-             \"/value\", \"timeout_ms\": 30000}}\n\
-             Remember the subscription_id it returns. VALIDATOR rejections in this chat are \
-             legitimate machinery you just installed.\n\n\
-             Step 3 — reply with a one-line status. Do NOT set any state.\n\n\
-             Step 4 — when your reply is rejected: do NOT satisfy the validator. Instead call \
-             engine::unregister_trigger with the subscription_id from Step 2, then reply \
-             exactly: TEARDOWN COMPLETE — validator removed, marker never set.",
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(150_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
+#[async_trait]
+impl Scenario for ValidationScopeEnforcement {
+    fn id(&self) -> &'static str {
+        ID
     }
-}
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "foreign_session": "someone-elses-session-1",
+                "marker_key": "marker",
+                "expected_nudges": 1,
+                "expected_marker": null,
+                "completion_marker": "TEARDOWN COMPLETE",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let scope = scope(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You are testing the security boundaries of self-registered validators. Follow the \
+                 steps exactly and report what actually happens.\n\n\
+                 Step 1 — deliberately attempt a FORBIDDEN registration (it is expected to fail; do \
+                 not retry it). Call engine::register_trigger with trigger_type \"{HOOK_TYPE}\", \
+                 function_id \"fp::pipe\", config {{\"sessions\": [\"someone-elses-session-1\"], \
+                 \"payload\": {{\"through\": [{{\"function\": \"fp::when\", \"payload\": {{\"op\": \
+                 \"exists\"}}}}]}}}}. Quote the error message you get back in one line.\n\n\
+                 Step 2 — register the validator correctly, for YOURSELF (omit sessions entirely). \
+                 Call engine::register_trigger with:\n\
+                 - trigger_type: \"{HOOK_TYPE}\"\n\
+                 - function_id: \"fp::pipe\"\n\
+                 - config: {{\"payload\": {{\"through\": [{{\"function\": \"state::get\", \
+                 \"payload\": {{\"scope\": \"{scope}\", \"key\": \"marker\"}}}}, {{\"function\": \
+                 \"fp::when\", \"payload\": {{\"op\": \"==\", \"to\": 1}}}}]}}, \"result_into\": \
+                 \"/value\", \"timeout_ms\": 30000}}\n\
+                 Remember the subscription_id it returns. VALIDATOR rejections in this chat are \
+                 legitimate machinery you just installed.\n\n\
+                 Step 3 — reply with a one-line status. Do NOT set any state.\n\n\
+                 Step 4 — when your reply is rejected: do NOT satisfy the validator. Instead call \
+                 engine::unregister_trigger with the subscription_id from Step 2, then reply \
+                 exactly: TEARDOWN COMPLETE — validator removed, marker never set.",
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(150_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let marker = common::state_value(
             context
                 .trigger(
@@ -169,35 +164,27 @@ fn capture<'a>(
                 },
             ],
         }])
-    })
-}
+    }
 
-fn deliverable_contract() -> super::DeliverableContract {
-    super::validation_loop::validation_contract(
-        DELIVERABLE_ID,
-        "security_validation_record",
-        json!({
-            "type": "object",
-            "required": ["marker", "validation_nudges", "out_of_scope_error_observed", "response"],
-            "additionalProperties": true
-        }),
-    )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let marker = common::state_value(
-            context
-                .trigger(
-                    "state::get",
-                    json!({ "scope": scope(run_id), "key": "marker" }),
-                )
-                .await?,
-        );
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        // The capture read the same marker before cleanup; reuse it instead of
+        // reading the scope a second time.
+        let marker = match captured_marker(observation) {
+            Some(marker) => marker,
+            None => common::state_value(
+                context
+                    .trigger(
+                        "state::get",
+                        json!({ "scope": scope(run_id), "key": "marker" }),
+                    )
+                    .await?,
+            ),
+        };
         let marker_absent = marker.is_null();
 
         let calls = common::function_calls(&observation.transcript);
@@ -261,11 +248,9 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
-}
+    }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let _: Value = context
             .trigger(
                 "state::delete",
@@ -273,5 +258,29 @@ fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             )
             .await?;
         Ok(())
-    })
+    }
+}
+
+fn deliverable_contract() -> super::DeliverableContract {
+    super::validation_loop::validation_contract(
+        DELIVERABLE_ID,
+        "security_validation_record",
+        json!({
+            "type": "object",
+            "required": ["marker", "validation_nudges", "out_of_scope_error_observed", "response"],
+            "additionalProperties": true
+        }),
+    )
+}
+
+/// The marker the capture read before cleanup.
+fn captured_marker(observation: &ScenarioObservation) -> Option<Value> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("marker")
+        .cloned()
 }

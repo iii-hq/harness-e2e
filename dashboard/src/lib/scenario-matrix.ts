@@ -6,6 +6,13 @@ import type {
   DashboardScenarioAggregate,
   SemanticTestReport,
 } from '@/lib/dashboard-data-source'
+import type { PrimaryTest } from '@/lib/primary-metrics'
+import {
+  aggregateStatus,
+  filterReferenceScenarios,
+  type RcReference,
+  referencePrimaryMetrics,
+} from '@/lib/release-control-reference'
 import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import {
   aggregateWorkflowMetrics,
@@ -39,6 +46,7 @@ export type ScenarioMatrixItem = {
   workflowRun: DashboardRunProjection | null
   workflowSteps: SemanticTestReport[]
   aggregate: DashboardScenarioAggregate | null
+  primaryTest?: PrimaryTest
   /** The execution facts of the scenario, one tile each (audit ED-24). */
   primaryMetrics: Array<{
     label: string
@@ -77,23 +85,87 @@ export function buildScenarioMatrix(
   detail: DashboardExecutionDetail,
 ): ScenarioMatrixModel {
   const contracts = resultContracts(detail)
-  const items = (detail.reports ?? []).flatMap((record, reportIndex) => {
-    const report = record.report
-    if (!record.available || !report) {
-      return [unavailableScenario(detail, reportIndex)]
-    }
+  const reference =
+    detail.origin === 'remote'
+      ? (detail.remote_reference as RcReference | undefined)
+      : undefined
+  const items: ScenarioMatrixItem[] = reference
+    ? referencePrimaryMetrics(reference).tests.map((test, index) => {
+        const retained = reference.runs.filter(
+          (run) => run.scenarioId === test.label,
+        )
+        const runs = retained.flatMap((run) =>
+          run.record ? [run.record as DashboardRunProjection] : [],
+        )
+        const primaryRun = runs.at(-1) ?? null
+        const status = aggregateStatus(retained)
+        const objective = objectiveStatus(
+          status === 'passed' && retained.length < test.repetitions
+            ? 'incomplete'
+            : status,
+        )
+        const failedGate = runs
+          .flatMap((run) =>
+            Array.isArray(run.hard_gates) ? run.hard_gates : [],
+          )
+          .find(
+            (gate) =>
+              gate &&
+              typeof gate === 'object' &&
+              !Array.isArray(gate) &&
+              gate.passed === false,
+          )
+        const duration = {
+          value:
+            test.metrics.durationMs.value ?? test.metrics.durationMs.observed,
+          kind: retained.length === 1 ? ('single' as const) : null,
+        }
+        return {
+          key: `${detail.id}:${test.label}`,
+          reportIndex: index,
+          scenarioIndex: null,
+          subjectId:
+            retained[0]?.identity?.subjectModel ?? detail.subjects[0]?.id ?? '',
+          scenarioId: test.label,
+          behaviorSha256: test.definition,
+          available: retained.length > 0,
+          objective,
+          reason:
+            failureReason(primaryRun) ??
+            (failedGate &&
+            typeof failedGate === 'object' &&
+            !Array.isArray(failedGate)
+              ? nonEmptyString(failedGate.reason)
+              : null),
+          durationMs: duration.value,
+          durationKind: duration.kind,
+          runCount: retained.length,
+          runs,
+          primaryRun,
+          workflowRun: null,
+          workflowSteps: [],
+          aggregate: null,
+          primaryTest: test,
+          primaryMetrics: primaryMetrics(primaryRun, [], duration),
+        }
+      })
+    : (detail.reports ?? []).flatMap((record, reportIndex) => {
+        const report = record.report
+        if (!record.available || !report) {
+          return [unavailableScenario(detail, reportIndex)]
+        }
 
-    return (report.scenarios ?? []).map((scenario, scenarioIndex) =>
-      scenarioItem(
-        detail,
-        record.subject_id,
-        report,
-        scenario,
-        reportIndex,
-        scenarioIndex,
-      ),
-    )
-  })
+        return (report.scenarios ?? []).map((scenario, scenarioIndex) =>
+          scenarioItem(
+            detail,
+            record.subject_id,
+            report,
+            scenario,
+            reportIndex,
+            scenarioIndex,
+          ),
+        )
+      })
 
   const summary: ScenarioMatrixSummary = {
     total: items.length,
@@ -159,6 +231,15 @@ export function detailForScenario(
   detail: DashboardExecutionDetail,
   item: ScenarioMatrixItem,
 ): DashboardExecutionDetail {
+  if (detail.origin === 'remote' && detail.remote_reference) {
+    return {
+      ...detail,
+      remote_reference: filterReferenceScenarios(
+        detail.remote_reference as RcReference,
+        new Set([item.scenarioId]),
+      ),
+    } as DashboardExecutionDetail
+  }
   const record = detail.reports[item.reportIndex]
   if (!record) return { ...detail, reports: [] }
   if (!record.report || item.scenarioIndex == null) {

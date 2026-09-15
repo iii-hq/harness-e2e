@@ -28,6 +28,9 @@ declare module '@iii-dev/console-ui' {
 
   export interface Host {
     iii: ExtensionIii
+    chat?: {
+      openDraft?(draft: { text: string; title?: string }): void
+    }
     useTheme(): 'light' | 'dark'
     pages: {
       register(page: {
@@ -138,6 +141,16 @@ declare module '@iii-dev/console-ui' {
     children?: React.ReactNode
   }>
   export const DropdownMenu: React.ComponentType<{ children?: React.ReactNode }>
+  export const Tooltip: React.ComponentType<{
+    children?: React.ReactNode
+    delayDuration?: number
+  }>
+  export const TooltipTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export const TooltipContent: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
   export const PageSidebar: React.ComponentType<
     React.HTMLAttributes<HTMLElement> & { width?: number }
   >

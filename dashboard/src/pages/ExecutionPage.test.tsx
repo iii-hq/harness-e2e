@@ -2,21 +2,11 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { executionVerdict } from '@/lib/execution-verdict'
 import { buildExecutionPresentation } from '@/lib/execution-view'
-import type {
-  ScenarioMatrixItem,
-  ScenarioMatrixSummary,
-} from '@/lib/scenario-matrix'
 import {
-  CountsSection,
-  countsScent,
   EvidenceBundleUnavailable,
   executionOutcome,
-  NarrativeSection,
-  narrativeScent,
   provenanceEntries,
-  resultsScent,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -67,20 +57,7 @@ const run: AssessmentRunView = {
   evidence: [],
 }
 
-function scenarioSummary(overrides: Partial<ScenarioMatrixSummary> = {}) {
-  return {
-    total: 2,
-    passed: 1,
-    failed: 1,
-    inconclusive: 0,
-    unavailable: 0,
-    running: 0,
-    incomplete: 0,
-    ...overrides,
-  }
-}
-
-describe('execution verdict', () => {
+describe('execution evidence', () => {
   it('reports an unavailable evidence bundle without losing the execution', () => {
     const retained = {
       ...detail,
@@ -110,44 +87,6 @@ describe('execution verdict', () => {
     expect(html).not.toContain('no test results yet')
     expect(html).not.toContain('Execution not found')
   })
-
-  // Audit ED-03: one aggregated verdict, never a per-scenario headline
-  // contradicting the objective one.
-  it('aggregates the scenario outcomes into one sentence', () => {
-    const verdict = executionVerdict(
-      buildExecutionPresentation(detail),
-      scenarioSummary({ failed: 2, passed: 3, total: 5 }),
-      [],
-    )
-    expect(verdict.headline).toBe('2 failures · 3 passed')
-    expect(verdict.nextStep).toBe(
-      'Inspect the retained evidence of the failing scenario before deciding whether to re-run.',
-    )
-  })
-
-  it('says plainly when no report was retained', () => {
-    const cancelled = buildExecutionPresentation({
-      ...detail,
-      status: 'cancelled',
-      availability: 'unavailable',
-      assessment_summary: undefined,
-      totals: undefined,
-    } as unknown as DashboardExecutionDetail)
-    const verdict = executionVerdict(cancelled, null, [])
-    expect(verdict.headline).toBe('cancelled · no scenario report retained')
-    expect(verdict.nextStep).toBe('Re-run the same scope to obtain a report.')
-    expect(verdict).not.toHaveProperty('diagnosis')
-  })
-
-  it('has nothing to act on when every scenario passed', () => {
-    const verdict = executionVerdict(
-      buildExecutionPresentation(detail),
-      scenarioSummary({ total: 2, passed: 2, failed: 0 }),
-      [],
-    )
-    expect(verdict.headline).toBe('2 passed')
-    expect(verdict.nextStep).toBe('Nothing to act on: every scenario passed.')
-  })
 })
 
 describe('execution layers', () => {
@@ -170,83 +109,6 @@ describe('execution layers', () => {
     })
   })
 
-  // Audit ED-26: the words live in a layer; its closed row says what they say.
-  it('tells what to do next, and scents the closed row with it', () => {
-    const presentation = buildExecutionPresentation(detail)
-    const verdict = executionVerdict(presentation, scenarioSummary(), [])
-    const html = renderToStaticMarkup(<NarrativeSection verdict={verdict} />)
-    expect(html).toContain('next step')
-    expect(html).toContain('Inspect the retained evidence')
-    expect(html).not.toContain('what happened')
-    expect(html).not.toContain('System: Passed')
-    expect(html).not.toContain('AI: Pass With Concerns')
-    expect(narrativeScent(verdict)).toBe(
-      'Inspect the retained evidence of the failing scenario before deciding whether to re-run',
-    )
-  })
-
-  it('keeps report coverage and retained assessments in the counts layer, headless', () => {
-    const html = renderToStaticMarkup(
-      <CountsSection
-        detail={detail}
-        presentation={buildExecutionPresentation(detail)}
-        scenarioSummary={scenarioSummary()}
-      />,
-    )
-    expect(html).toContain('1/2')
-    expect(html).toContain('46')
-    expect(html).toContain('17 evidence references')
-    expect(html).not.toContain('reported cost')
-    // The layer row is the heading: no second title, no second anchor.
-    expect(html).not.toContain('execution summary')
-    expect(html).not.toContain('id="metrics"')
-    expect(html).toContain('No compatible run evidence')
-    expect(countsScent(detail)).toBe(
-      'no compatible run evidence to consolidate · assessments 46, 17 evidence references',
-    )
-  })
-
-  it('scents the results row with each scenario verdict and runtime', () => {
-    const items = [
-      {
-        scenarioId: 'minimal_path',
-        behaviorSha256:
-          'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
-        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        durationMs: 167_000,
-      },
-      {
-        scenarioId: 'persistent_state',
-        behaviorSha256:
-          'sha256:b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2',
-        objective: { label: 'Passed', status: 'passed', raw: 'passed' },
-        durationMs: 128_000,
-      },
-      {
-        scenarioId: 'research_pipeline',
-        behaviorSha256: null,
-        objective: {
-          label: 'Unavailable',
-          status: 'unavailable',
-          raw: 'unavailable',
-        },
-        durationMs: null,
-      },
-    ] as unknown as ScenarioMatrixItem[]
-    // Scenarios are separated by a wider, non-collapsing gap than the facts
-    // inside each one.
-    expect(resultsScent(items)).toBe(
-      [
-        'minimal path · definition a1a1a1a1 passed · 2m 47s',
-        'persistent state · definition b2b2b2b2 passed · 2m 08s',
-        'research pipeline unavailable',
-      ].join(' \u00a0·\u00a0 '),
-    )
-    expect(resultsScent([])).toBe('no scenario report retained')
-  })
-})
-
-describe('execution provenance', () => {
   it('lists provenance without null fields and with local timestamps', () => {
     const entries = provenanceEntries(
       {

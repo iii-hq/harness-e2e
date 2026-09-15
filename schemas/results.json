@@ -161,6 +161,21 @@
         }
       ]
     },
+    "AgentProfileArtifact": {
+      "type": "object",
+      "required": [
+        "configuration_sha256",
+        "id"
+      ],
+      "properties": {
+        "configuration_sha256": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      }
+    },
     "ArtifactExpectation": {
       "type": "object",
       "required": [
@@ -535,6 +550,51 @@
         }
       },
       "additionalProperties": false
+    },
+    "Capability": {
+      "description": "What a scenario needs from the engine, the runner host or a fixture to run. The closed list keeps the catalog honest: a new need is a new variant, and every id is spelled once.",
+      "type": "string",
+      "enum": [
+        "browser::interactive",
+        "cross_repo_contract_simulator::v1",
+        "curl",
+        "docker",
+        "e2e::adaptive-flow-v1",
+        "e2e::control-plane-v1",
+        "e2e::filesystem",
+        "e2e::git",
+        "e2e::run-scoped-fixtures",
+        "e2e::shell",
+        "e2e::subagents",
+        "e2e::workflow-resume-v1",
+        "fixture::multi-origin-http",
+        "git",
+        "git::deterministic-fixture-v1",
+        "git::offline-bundle",
+        "github::security-read",
+        "github::trusted-handoff",
+        "harness::independent_session",
+        "harness::post-turn-validation",
+        "harness::scripted-dialogue-v1",
+        "iii::coder",
+        "iii::compose",
+        "iii::database",
+        "iii::functions",
+        "iii::registry",
+        "iii::shell",
+        "iii::state",
+        "iii::triggers",
+        "iii::workers",
+        "incident_fixture::v1",
+        "node",
+        "playwright",
+        "python3",
+        "release_shadow::read-only-v1",
+        "release_train_simulator::v1",
+        "security_scan::on-demand",
+        "security_scan::v1",
+        "swe::isolated-python-workspace"
+      ]
     },
     "CapturedInvariant": {
       "type": "object",
@@ -1377,6 +1437,16 @@
         "provider"
       ],
       "properties": {
+        "agent": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/AgentProfileArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "context_window": {
           "type": "integer",
           "format": "uint64",
@@ -2242,7 +2312,7 @@
         "required_capabilities": {
           "type": "array",
           "items": {
-            "type": "string"
+            "$ref": "#/definitions/Capability"
           }
         },
         "scenario_id": {

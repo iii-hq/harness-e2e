@@ -21,10 +21,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "fanout_ladder";
@@ -96,55 +95,197 @@ fn expected_row(run_id: &str, index: u8) -> Value {
     })
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id, RUNG)
-}
+pub struct FanoutLadder;
 
-pub fn materialize(namespace: &str, _seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let rung = RUNG;
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "fan_out": rung.fan_out,
-            "worker_keys": worker_keys(rung.fan_out),
-            "report_marker": report_marker(rung.fan_out),
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(rung.fan_out),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace, rung),
-        case,
-        capture: Some(capture),
-    })
-}
+#[async_trait]
+impl Scenario for FanoutLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-fn scenario_for_case(run_id: &str, rung: Rung) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names, run_id, rung.fan_out),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 16 + 2 * u32::from(rung.fan_out),
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(400_000 + 100_000 * u64::from(rung.fan_out)),
-            stuck_timeout_seconds: 360,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+        let rung = RUNG;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "fan_out": rung.fan_out,
+                "worker_keys": worker_keys(rung.fan_out),
+                "report_marker": report_marker(rung.fan_out),
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(rung.fan_out),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names, run_id, RUNG.fan_out),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 16 + 2 * u32::from(RUNG.fan_out),
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(400_000 + 100_000 * u64::from(RUNG.fan_out)),
+                stuck_timeout_seconds: 360,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let fan_out = case_fan_out(&observation.case)?;
+        let worker_sessions: BTreeSet<_> = observation
+            .metrics
+            .by_session
+            .iter()
+            .filter(|session| {
+                session.depth == 1
+                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
+            })
+            .map(|session| session.session_id.clone())
+            .collect();
+        let audit = worker_audit(context, &names, run_id, fan_out, &worker_sessions).await?;
+        let mut rows = Vec::new();
+        for index in 0..fan_out {
+            let key = worker_key(index);
+            let value = get_state(context, &names.scope, &key).await?;
+            rows.push(json!({ "key": key, "value": value }));
+        }
+        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
+        let aggregated = report_aggregates(&observation.response, run_id, fan_out);
+
+        Ok(vec![
+            CapturedDeliverable {
+                id: ROWS_DELIVERABLE_ID.to_string(),
+                kind: "state_bundle".to_string(),
+                content: json!({ "fan_out": fan_out, "workers": rows }).into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "worker_rows_exact".to_string(),
+                        passed: audit.rows_exact,
+                        reason: format!(
+                            "observed {}/{fan_out} exact worker row(s)",
+                            audit.exact_rows
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "direct_worker_provenance".to_string(),
+                        passed: audit.direct_provenance,
+                        reason: format!(
+                            "observed {} direct worker session(s) writing {} distinct key(s); \
+                             leaf_discipline={}",
+                            worker_sessions.len(),
+                            audit.distinct_writers,
+                            audit.leaf_discipline
+                        ),
+                    },
+                ],
+                provenance: worker_keys(fan_out)
+                    .into_iter()
+                    .map(|key| ProvenanceEvidence {
+                        kind: "state_location".to_string(),
+                        source_id: format!("{}/{}", names.scope, key),
+                        relation: "written_by_worker".to_string(),
+                    })
+                    .collect(),
+            },
+            CapturedDeliverable {
+                id: REPORT_DELIVERABLE_ID.to_string(),
+                kind: "fanout_report".to_string(),
+                content: json!({ "content": observation.response }).into(),
+                invariants: vec![
+                    CapturedInvariant {
+                        id: "report_aggregates".to_string(),
+                        passed: aggregated,
+                        reason: format!(
+                            "report must start with `{}` and carry all {fan_out} worker token(s)",
+                            report_marker(fan_out)
+                        ),
+                    },
+                    CapturedInvariant {
+                        id: "bindings_retired".to_string(),
+                        passed: active_bindings == 0,
+                        reason: format!("observed {active_bindings} active binding(s)"),
+                    },
+                ],
+                provenance: vec![ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: names.root_session,
+                    relation: "reported_after_barrier".to_string(),
+                }],
+            },
+        ])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_rung(context, observation, run_id).await
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        // Delete every key the retained workload can address so a misbehaving
+        // run cannot leak rows between attempts sharing a scope prefix.
+        for key in worker_keys(RUNG.fan_out) {
+            let _: Value = context
+                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
+                .await?;
+        }
+        // The barrier record is the state worker's private bookkeeping
+        // (`RESERVED_SCOPE`); it is per-run and not ours to delete.
+        Ok(())
     }
 }
 
@@ -199,14 +340,6 @@ armed."#,
         barrier_id = names.barrier_id,
         marker = report_marker(fan_out),
     )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_rung(context, observation, run_id).await })
 }
 
 async fn evaluate_rung(
@@ -419,98 +552,6 @@ fn case_fan_out(case: &ScenarioCase) -> anyhow::Result<u8> {
         .ok_or_else(|| anyhow::anyhow!("fanout_ladder case is missing a positive fan_out input"))
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let fan_out = case_fan_out(&observation.case)?;
-        let worker_sessions: BTreeSet<_> = observation
-            .metrics
-            .by_session
-            .iter()
-            .filter(|session| {
-                session.depth == 1
-                    && session.parent_session_id.as_deref() == Some(names.root_session.as_str())
-            })
-            .map(|session| session.session_id.clone())
-            .collect();
-        let audit = worker_audit(context, &names, run_id, fan_out, &worker_sessions).await?;
-        let mut rows = Vec::new();
-        for index in 0..fan_out {
-            let key = worker_key(index);
-            let value = get_state(context, &names.scope, &key).await?;
-            rows.push(json!({ "key": key, "value": value }));
-        }
-        let active_bindings = common::active_binding_count(context, &names.root_session).await?;
-        let aggregated = report_aggregates(&observation.response, run_id, fan_out);
-
-        Ok(vec![
-            CapturedDeliverable {
-                id: ROWS_DELIVERABLE_ID.to_string(),
-                kind: "state_bundle".to_string(),
-                content: json!({ "fan_out": fan_out, "workers": rows }).into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "worker_rows_exact".to_string(),
-                        passed: audit.rows_exact,
-                        reason: format!(
-                            "observed {}/{fan_out} exact worker row(s)",
-                            audit.exact_rows
-                        ),
-                    },
-                    CapturedInvariant {
-                        id: "direct_worker_provenance".to_string(),
-                        passed: audit.direct_provenance,
-                        reason: format!(
-                            "observed {} direct worker session(s) writing {} distinct key(s); \
-                             leaf_discipline={}",
-                            worker_sessions.len(),
-                            audit.distinct_writers,
-                            audit.leaf_discipline
-                        ),
-                    },
-                ],
-                provenance: worker_keys(fan_out)
-                    .into_iter()
-                    .map(|key| ProvenanceEvidence {
-                        kind: "state_location".to_string(),
-                        source_id: format!("{}/{}", names.scope, key),
-                        relation: "written_by_worker".to_string(),
-                    })
-                    .collect(),
-            },
-            CapturedDeliverable {
-                id: REPORT_DELIVERABLE_ID.to_string(),
-                kind: "fanout_report".to_string(),
-                content: json!({ "content": observation.response }).into(),
-                invariants: vec![
-                    CapturedInvariant {
-                        id: "report_aggregates".to_string(),
-                        passed: aggregated,
-                        reason: format!(
-                            "report must start with `{}` and carry all {fan_out} worker token(s)",
-                            report_marker(fan_out)
-                        ),
-                    },
-                    CapturedInvariant {
-                        id: "bindings_retired".to_string(),
-                        passed: active_bindings == 0,
-                        reason: format!("observed {active_bindings} active binding(s)"),
-                    },
-                ],
-                provenance: vec![ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: names.root_session,
-                    relation: "reported_after_barrier".to_string(),
-                }],
-            },
-        ])
-    })
-}
-
 fn deliverable_contract(fan_out: u8) -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![
@@ -580,45 +621,6 @@ fn deliverable_contract(fan_out: u8) -> DeliverableContract {
         provenance_required: true,
         capture_before_cleanup: true,
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        // Delete every key the retained workload can address so a misbehaving
-        // run cannot leak rows between attempts sharing a scope prefix.
-        for key in worker_keys(RUNG.fan_out) {
-            let _: Value = context
-                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
-                .await?;
-        }
-        // The barrier record is the state worker's private bookkeeping
-        // (`RESERVED_SCOPE`); it is per-run and not ours to delete.
-        Ok(())
-    })
 }
 
 async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
@@ -739,7 +741,11 @@ mod tests {
     fn every_seed_request_normalizes_to_the_maximum_case() {
         assert_eq!(RUNG.fan_out, 16);
         assert_eq!(
-            materialize("attempt", 2003).unwrap().case.seed,
+            crate::scenarios::ScenarioId::FanoutLadder
+                .materialize("attempt", 2003)
+                .unwrap()
+                .case
+                .seed,
             CANONICAL_SEED
         );
     }
@@ -754,8 +760,12 @@ mod tests {
 
     #[test]
     fn retained_case_is_reproducible_with_maximum_fan_out() {
-        let first = materialize("attempt-a", CANONICAL_SEED).unwrap();
-        let retry = materialize("attempt-b", CANONICAL_SEED).unwrap();
+        let first = crate::scenarios::ScenarioId::FanoutLadder
+            .materialize("attempt-a", CANONICAL_SEED)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::FanoutLadder
+            .materialize("attempt-b", CANONICAL_SEED)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(

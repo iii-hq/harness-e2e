@@ -20,10 +20,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    common, validation_loop, ArtifactExpectation, CapturedDeliverable, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence,
-    ScenarioCase, ScenarioObservation, ScenarioSpec,
+    async_trait, common, validation_loop, ArtifactExpectation, Capability, CapturedDeliverable,
+    CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "contention_ledger";
@@ -103,121 +102,130 @@ fn report_is_verified(response: &str) -> bool {
     response.contains(REPORT_MARKER) && response.chars().count() <= MAX_REPORT_CHARS
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ContentionLedger;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "writers": WRITERS,
-            "increments_per_writer": INCREMENTS_PER_WRITER,
-            "expected_total": EXPECTED_TOTAL,
-            "report_marker": REPORT_MARKER,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::database".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 24,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(1_000_000),
-            stuck_timeout_seconds: 420,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
+#[async_trait]
+impl Scenario for ContentionLedger {
+    fn id(&self) -> &'static str {
+        ID
     }
-}
 
-fn prompt(names: &Names) -> String {
-    format!(
-        r#"You are balancing one shared ledger under real write contention on this stack.
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "writers": WRITERS,
+                "increments_per_writer": INCREMENTS_PER_WRITER,
+                "expected_total": EXPECTED_TOTAL,
+                "report_marker": REPORT_MARKER,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiDatabase,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(),
+        )
+    }
 
-Three writer children each apply exactly {increments} increments to one shared accumulator
-in database `primary`. An increment is one atomic read-modify-write — a single
-`UPDATE {ledger} SET total = total + 1` statement, never a read followed by a separate
-write — plus exactly one audit row
-`INSERT INTO {audit} (writer, seq) VALUES (<writer>, <seq>)` written with literal values
-(no bound parameters).
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 24,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(1_000_000),
+                stuck_timeout_seconds: 420,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
 
-Use this run-isolated database contract so the result can be evaluated:
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let names = Names::new(run_id);
+        let database_available = context.function_exists("database::query").await?
+            && available_databases(context).await?.contains(DATABASE);
+        let snapshot = if database_available {
+            ledger_snapshot(context, &names).await?
+        } else {
+            LedgerSnapshot::empty()
+        };
+        let balanced = snapshot.balanced();
 
-- accumulator: `{ledger}` — single column `total` (INTEGER); exactly one row, seeded with
-  `total = 0`
-- audit: `{audit}` — columns `writer` (INTEGER, 0-2) and `seq` (INTEGER, 1-{increments});
-  one row per increment
+        let audit = writer_audit(context, observation, &names).await?;
+        let root_calls = common::function_calls(&observation.transcript);
+        let root_clean = root_avoids_increments(&root_calls, &names);
+        let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
 
-Do all of the following in ONE response, in this order:
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "database_snapshot".to_string(),
+            content: json!({
+                "accumulator": snapshot.accumulator,
+                "audit_rows": snapshot.audit_rows(),
+                "per_writer": per_writer_values(&snapshot.audit_pairs),
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "balanced_ledger".to_string(),
+                    passed: balanced,
+                    reason: format!(
+                        "accumulator_rows={}, accumulator={}, audit_rows={}",
+                        snapshot.accumulator_rows,
+                        snapshot.accumulator,
+                        snapshot.audit_rows(),
+                    ),
+                },
+                CapturedInvariant {
+                    id: "contended_writes".to_string(),
+                    passed: contended,
+                    reason: format!(
+                        "children_in_tree={}/{WRITERS}, contended_children={}, \
+                         no_extra_sessions={}, root_clean={root_clean}",
+                        audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
+                    ),
+                },
+            ],
+            // Provenance is certified only when the ledger balances AND the
+            // rows provably came from the three contending children; a failed
+            // or root-forged run must not carry provenance evidence.
+            provenance: if balanced && contended {
+                [names.ledger.as_str(), names.audit.as_str()]
+                    .into_iter()
+                    .map(|relation| ProvenanceEvidence {
+                        kind: "database_relation".to_string(),
+                        source_id: format!("{DATABASE}/{relation}"),
+                        relation: "captured_before_cleanup".to_string(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+        }])
+    }
 
-1. Create both tables and insert the single accumulator row with `total = 0`.
-2. Arm exactly one one-shot wake-only state wake over the whole scope `{scope}` with
-   top-level label `{complete_label}`. Gate it with the shipped named-set barrier using id
-   `{barrier_id}`, expecting exactly these keys: `done-00`, `done-01`, `done-02`, and carry
-   each event's new value. The registration is wake-only: omit any function target.
-   Register nothing else.
-3. Directly spawn all three writers in parallel — every spawn in this same response — as
-   sessions `{w0}` (writer 0), `{w1}` (writer 1), and `{w2}` (writer 2). Then end the turn.
-
-Each writer must, in its own session, perform its {increments} increments for `seq` 1
-through {increments} — each one atomic accumulator UPDATE plus one audit INSERT carrying
-its own writer index — and only AFTER all of them write its own done key: set the state
-value `"done"` at scope `{scope}`, key `done-0<its writer index>` (writer 0 writes
-`done-00`). Writers must not spawn, register reactions, read other writers' rows, or touch
-any done key except their own. You, the coordinator, must never run an increment or insert
-an audit row yourself.
-
-When the `{complete_label}` barrier wake arrives, run one verification query reading the
-accumulator total and counting the audit rows. Then answer with a single line: exactly
-`{marker}` only if your own query shows total {total} and {total} audit rows; otherwise one
-honest line naming the discrepancy. Keep the final answer at or under 300 characters and
-leave both tables in place for evaluation."#,
-        increments = INCREMENTS_PER_WRITER,
-        ledger = names.ledger,
-        audit = names.audit,
-        scope = names.scope,
-        complete_label = names.complete_label,
-        barrier_id = names.barrier_id,
-        w0 = names.writer_sessions[0],
-        w1 = names.writer_sessions[1],
-        w2 = names.writer_sessions[2],
-        marker = REPORT_MARKER,
-        total = EXPECTED_TOTAL,
-    )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
         if !context.function_exists("database::query").await? {
             return Ok(missing_database());
         }
@@ -340,77 +348,123 @@ fn evaluate<'a>(
                 ),
             ],
         ))
-    })
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        for key in done_keys() {
+            let _: Value = context
+                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
+                .await?;
+        }
+        if !context.function_exists("database::query").await? {
+            return Ok(());
+        }
+        if !available_databases(context).await?.contains(DATABASE) {
+            return Ok(());
+        }
+        let objects = database_objects(context, &names).await?;
+        for kind in ["trigger", "view", "table"] {
+            for object in objects.values().filter(|object| object.kind == kind) {
+                if !sql_safe_name(&object.name) {
+                    continue;
+                }
+                let _: Value = context
+                    .trigger(
+                        "database::execute",
+                        json!({
+                            "db": DATABASE,
+                            "sql": format!(
+                                "DROP {} IF EXISTS \"{}\"",
+                                kind.to_ascii_uppercase(),
+                                object.name
+                            ),
+                        }),
+                    )
+                    .await?;
+            }
+        }
+        Ok(())
+    }
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let database_available = context.function_exists("database::query").await?
-            && available_databases(context).await?.contains(DATABASE);
-        let snapshot = if database_available {
-            ledger_snapshot(context, &names).await?
-        } else {
-            LedgerSnapshot::empty()
-        };
-        let balanced = snapshot.balanced();
+fn prompt(names: &Names) -> String {
+    format!(
+        r#"You are balancing one shared ledger under real write contention on this stack.
 
-        let audit = writer_audit(context, observation, &names).await?;
-        let root_calls = common::function_calls(&observation.transcript);
-        let root_clean = root_avoids_increments(&root_calls, &names);
-        let contended = audit.all_children_contended && audit.no_extra_sessions && root_clean;
+Three writer children each apply exactly {increments} increments to one shared accumulator
+in database `primary`. An increment is one atomic read-modify-write — a single
+`UPDATE {ledger} SET total = total + 1` statement, never a read followed by a separate
+write — plus exactly one audit row
+`INSERT INTO {audit} (writer, seq) VALUES (<writer>, <seq>)` written with literal values
+(no bound parameters).
 
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "database_snapshot".to_string(),
-            content: json!({
-                "accumulator": snapshot.accumulator,
-                "audit_rows": snapshot.audit_rows(),
-                "per_writer": per_writer_values(&snapshot.audit_pairs),
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "balanced_ledger".to_string(),
-                    passed: balanced,
-                    reason: format!(
-                        "accumulator_rows={}, accumulator={}, audit_rows={}",
-                        snapshot.accumulator_rows,
-                        snapshot.accumulator,
-                        snapshot.audit_rows(),
-                    ),
-                },
-                CapturedInvariant {
-                    id: "contended_writes".to_string(),
-                    passed: contended,
-                    reason: format!(
-                        "children_in_tree={}/{WRITERS}, contended_children={}, \
-                         no_extra_sessions={}, root_clean={root_clean}",
-                        audit.children_in_tree, audit.contended_children, audit.no_extra_sessions,
-                    ),
-                },
-            ],
-            // Provenance is certified only when the ledger balances AND the
-            // rows provably came from the three contending children; a failed
-            // or root-forged run must not carry provenance evidence.
-            provenance: if balanced && contended {
-                [names.ledger.as_str(), names.audit.as_str()]
-                    .into_iter()
-                    .map(|relation| ProvenanceEvidence {
-                        kind: "database_relation".to_string(),
-                        source_id: format!("{DATABASE}/{relation}"),
-                        relation: "captured_before_cleanup".to_string(),
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            },
-        }])
-    })
+Use this run-isolated database contract so the result can be evaluated:
+
+- accumulator: `{ledger}` — single column `total` (INTEGER); exactly one row, seeded with
+  `total = 0`
+- audit: `{audit}` — columns `writer` (INTEGER, 0-2) and `seq` (INTEGER, 1-{increments});
+  one row per increment
+
+Do all of the following in ONE response, in this order:
+
+1. Create both tables and insert the single accumulator row with `total = 0`.
+2. Arm exactly one one-shot wake-only state wake over the whole scope `{scope}` with
+   top-level label `{complete_label}`. Gate it with the shipped named-set barrier using id
+   `{barrier_id}`, expecting exactly these keys: `done-00`, `done-01`, `done-02`, and carry
+   each event's new value. The registration is wake-only: omit any function target.
+   Register nothing else.
+3. Directly spawn all three writers in parallel — every spawn in this same response — as
+   sessions `{w0}` (writer 0), `{w1}` (writer 1), and `{w2}` (writer 2). Then end the turn.
+
+Each writer must, in its own session, perform its {increments} increments for `seq` 1
+through {increments} — each one atomic accumulator UPDATE plus one audit INSERT carrying
+its own writer index — and only AFTER all of them write its own done key: set the state
+value `"done"` at scope `{scope}`, key `done-0<its writer index>` (writer 0 writes
+`done-00`). Writers must not spawn, register reactions, read other writers' rows, or touch
+any done key except their own. You, the coordinator, must never run an increment or insert
+an audit row yourself.
+
+When the `{complete_label}` barrier wake arrives, run one verification query reading the
+accumulator total and counting the audit rows. Then answer with a single line: exactly
+`{marker}` only if your own query shows total {total} and {total} audit rows; otherwise one
+honest line naming the discrepancy. Keep the final answer at or under 300 characters and
+leave both tables in place for evaluation."#,
+        increments = INCREMENTS_PER_WRITER,
+        ledger = names.ledger,
+        audit = names.audit,
+        scope = names.scope,
+        complete_label = names.complete_label,
+        barrier_id = names.barrier_id,
+        w0 = names.writer_sessions[0],
+        w1 = names.writer_sessions[1],
+        w2 = names.writer_sessions[2],
+        marker = REPORT_MARKER,
+        total = EXPECTED_TOTAL,
+    )
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -477,68 +531,6 @@ fn missing_primary(databases: &BTreeSet<String>) -> ObjectiveEvaluation {
         databases.iter().cloned().collect::<Vec<_>>().join(", ")
     );
     assessment::prerequisite_failure(ASSESSMENTS, "primary_database_available", reason)
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        for key in done_keys() {
-            let _: Value = context
-                .trigger("state::delete", json!({ "scope": names.scope, "key": key }))
-                .await?;
-        }
-        if !context.function_exists("database::query").await? {
-            return Ok(());
-        }
-        if !available_databases(context).await?.contains(DATABASE) {
-            return Ok(());
-        }
-        let objects = database_objects(context, &names).await?;
-        for kind in ["trigger", "view", "table"] {
-            for object in objects.values().filter(|object| object.kind == kind) {
-                if !sql_safe_name(&object.name) {
-                    continue;
-                }
-                let _: Value = context
-                    .trigger(
-                        "database::execute",
-                        json!({
-                            "db": DATABASE,
-                            "sql": format!(
-                                "DROP {} IF EXISTS \"{}\"",
-                                kind.to_ascii_uppercase(),
-                                object.name
-                            ),
-                        }),
-                    )
-                    .await?;
-            }
-        }
-        Ok(())
-    })
 }
 
 #[derive(Debug)]
@@ -1210,18 +1202,23 @@ mod tests {
 
     #[test]
     fn cases_materialize_reproducibly() {
-        let first = materialize("attempt-a", 313).unwrap();
-        let retry = materialize("attempt-b", 313).unwrap();
+        let first = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-a", 313)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-b", 313)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
 
-        let other_seed = materialize("attempt-c", 314).unwrap();
+        let other_seed = crate::scenarios::ScenarioId::ContentionLedger
+            .materialize("attempt-c", 314)
+            .unwrap();
         assert_ne!(first.case.case_id, other_seed.case.case_id);
 
-        assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
     }

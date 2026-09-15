@@ -23,7 +23,9 @@ export async function createConsoleTestHost() {
         import {createRoot} from 'react-dom/client';
         import setup from '/src/console-entry.tsx';
         window.calls=[];
+        window.drafts=[];
         const host={
+          chat:{openDraft(draft){window.drafts.push(draft)}},
           iii:{browserId:'console-test',on:()=>()=>{},registerTrigger:()=>()=>{},trigger(id,payload){window.calls.push({id,payload});return window.__consoleTrigger(id,payload)}},
           useTheme:()=> window.__consoleTheme ?? 'light',
           pages:{register(page){createRoot(document.getElementById('root')).render(page.render({tabId:'test',panelSide:'left'}));return ()=>{}}}

@@ -243,6 +243,7 @@ export type ReleaseControlIdentity = {
 export type DashboardExecutionSummary = JsonObject & {
   id: string
   label?: string
+  execution_label?: string | null
   run_id?: string
   attempt?: number
   status: string
@@ -705,7 +706,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
   }
 }
 
-function normalizeBridgeError(cause: unknown) {
+export function normalizeBridgeError(cause: unknown) {
   if (cause instanceof Error) return cause
   if (typeof cause === 'object' && cause !== null && 'message' in cause) {
     return new Error(String(cause.message))

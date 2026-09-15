@@ -1,9 +1,8 @@
 use std::collections::HashMap;
-use std::future::Future;
 use std::path::PathBuf;
-use std::pin::Pin;
 
 use anyhow::{bail, Result};
+pub use async_trait::async_trait;
 use clap::ValueEnum;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -72,25 +71,95 @@ pub mod validation_self_repair;
 pub mod wake_chain_soak;
 
 pub use domain::{
-    is_sha256, scenario_contract_sha256, stable_seed, ArtifactExpectation, CapturedDeliverable,
-    CapturedDeliverableContent, CapturedInvariant, DeliverableContract, ExecutionRealism,
-    HumanHorizon, HumanHorizonBasis, InvariantSpec, ProvenanceEvidence, ScenarioCase,
-    ScenarioCharacterization, ScenarioRealism, ShadowMode,
+    is_sha256, scenario_contract_sha256, stable_seed, ArtifactExpectation, Capability,
+    CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant, DeliverableContract,
+    ExecutionRealism, HumanHorizon, HumanHorizonBasis, InvariantSpec, ProvenanceEvidence,
+    ScenarioCase, ScenarioCharacterization, ScenarioRealism, ShadowMode,
 };
 
-pub type EvaluationFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<ObjectiveEvaluation>> + Send + 'a>>;
-pub type DeliverableCaptureFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<Vec<CapturedDeliverable>>> + Send + 'a>>;
-pub type CleanupFuture<'a> = Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
-pub type ScenarioEvaluator =
-    for<'a> fn(&'a E2eContext, &'a ScenarioObservation, &'a str) -> EvaluationFuture<'a>;
-pub type ScenarioCleanup = for<'a> fn(&'a E2eContext, &'a str) -> CleanupFuture<'a>;
-pub type ScenarioDeliverableCapture =
-    for<'a> fn(&'a E2eContext, &'a ScenarioObservation, &'a str) -> DeliverableCaptureFuture<'a>;
-/// Pre-send hook: provision what the prompt refers to (e.g. register a
-/// temporary validator function on the suite's own worker connection).
-pub type ScenarioSetup = for<'a> fn(&'a E2eContext, &'a str) -> CleanupFuture<'a>;
+/// One registered E2E test. The registry below holds a `&'static dyn Scenario`
+/// per id; materialization, digest sealing and validation are generic, so a
+/// module only states what is its own: the case, the spec, and the hooks it
+/// actually uses.
+#[async_trait]
+pub trait Scenario: Send + Sync {
+    /// The registered id, equal to the `ScenarioId` string.
+    fn id(&self) -> &'static str;
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::HarnessTurn
+    }
+    /// Seed of the retained canonical cohort: the stable digest of the id
+    /// unless the scenario pins one.
+    fn canonical_seed(&self) -> u64 {
+        stable_seed(self.id())
+    }
+    /// Scenarios with one retained canonical cohort take no rotating seeds.
+    fn canonical_seed_only(&self) -> bool {
+        false
+    }
+    /// The unsealed case for one seed: inputs, capabilities and contract.
+    fn case(&self, seed: u64) -> Result<ScenarioCase>;
+    /// The prompt, execution policy, denied functions and criteria of one run.
+    fn spec(&self, run_id: &str) -> ScenarioSpec;
+    /// The spec the subject sees for one materialized case. It defaults to
+    /// the definition; a module whose prompt states case-specific values
+    /// renders them from the case here, while `spec` keeps the canonical
+    /// rendering that identifies the definition.
+    fn case_spec(&self, _case: &ScenarioCase, run_id: &str) -> ScenarioSpec {
+        self.spec(run_id)
+    }
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::synthetic())
+    }
+    /// A one-paragraph summary for the Console, when the module states one.
+    fn summary(&self) -> Option<&'static str> {
+        None
+    }
+    /// Functions the run registers itself and therefore needs available.
+    fn required_functions(&self, _run_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// The closed function surface the subject may call, when the scenario limits it.
+    fn allowed_functions(&self, _run_id: &str) -> Option<Vec<String>> {
+        None
+    }
+    fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
+        Vec::new()
+    }
+    /// The attempt-owned filesystem root that `setup` prepared for the
+    /// subject, when the scenario allocates one.
+    fn prepared_root(&self, _run_id: &str) -> Result<Option<PathBuf>> {
+        Ok(None)
+    }
+    /// Runs before the prompt is sent; a failure aborts the run.
+    async fn setup(&self, _context: &E2eContext, _run_id: &str) -> Result<()> {
+        Ok(())
+    }
+    /// Captures the deliverables the case declares, before cleanup. The suite
+    /// calls it only when the deliverable contract declares artifacts, so a
+    /// scenario that declares artifacts must override it: the default is the
+    /// incoherent case and fails the attempt instead of capturing nothing.
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        bail!(
+            "scenario '{}' declares deliverable artifacts but has no capture hook",
+            self.id()
+        )
+    }
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation>;
+    async fn cleanup(&self, _context: &E2eContext, _run_id: &str) -> Result<()> {
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CriterionSpec {
@@ -179,16 +248,12 @@ pub struct ScenarioSpec {
     pub execution: ExecutionPolicy,
     pub denied_functions: &'static [&'static str],
     pub criteria: Vec<CriterionSpec>,
-    /// Runs BEFORE the prompt is sent; a failure aborts the run.
-    pub setup: Option<ScenarioSetup>,
-    pub evaluate: ScenarioEvaluator,
-    pub cleanup: Option<ScenarioCleanup>,
 }
 
 pub struct MaterializedScenario {
     pub spec: ScenarioSpec,
     pub case: ScenarioCase,
-    pub capture: Option<ScenarioDeliverableCapture>,
+    pub module: &'static dyn Scenario,
 }
 
 impl MaterializedScenario {
@@ -200,26 +265,12 @@ impl MaterializedScenario {
         if !self.case.behavior_sha256.is_empty() {
             self.case.validate()?;
         }
-        if self.spec.id != self.case.scenario_id {
+        if self.spec.id != self.case.scenario_id || self.spec.id != self.module.id() {
             bail!(
-                "materialized scenario id '{}' differs from case id '{}'",
+                "materialized scenario id '{}' differs from case id '{}' or module id '{}'",
                 self.spec.id,
-                self.case.scenario_id
-            );
-        }
-        // Composite workflows capture through their trusted steps and cleanup hook.
-        let workflow_capture = self.capture.is_none()
-            && !self.case.deliverable_contract.artifacts.is_empty()
-            && ScenarioId::ALL.iter().any(|scenario| {
-                scenario.as_str() == self.spec.id
-                    && scenario.execution_kind() == ScenarioExecutionKind::CompositeFlow
-            });
-        if self.case.deliverable_contract.artifacts.is_empty() != self.capture.is_none()
-            && !workflow_capture
-        {
-            bail!(
-                "scenario '{}' must declare both a deliverable contract and capture hook, or neither",
-                self.spec.id
+                self.case.scenario_id,
+                self.module.id()
             );
         }
         Ok(())
@@ -339,654 +390,147 @@ pub struct CriterionAward {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
-#[serde(rename_all = "snake_case")]
-pub enum ScenarioId {
-    #[value(name = "registry_planning")]
-    RegistryPlanning,
-    #[value(name = "registry_implementation")]
-    RegistryImplementation,
-    #[value(name = "registry_environment")]
-    RegistryEnvironment,
-    #[value(name = "registry_verification")]
-    RegistryVerification,
-    #[value(name = "kanban_c1_foundation")]
-    KanbanC1Foundation,
-    #[value(name = "kanban_c2_persistence")]
-    KanbanC2Persistence,
-    #[value(name = "kanban_c3_board")]
-    KanbanC3Board,
-    #[value(name = "kanban_c4_ticket_flow")]
-    KanbanC4TicketFlow,
-    #[value(name = "kanban_c5_edit_move")]
-    KanbanC5EditMove,
-    #[value(name = "kanban_c6_discussion")]
-    KanbanC6Discussion,
-    #[value(name = "kanban_c7_live")]
-    KanbanC7Live,
-    #[value(name = "linkly_tutorial")]
-    LinklyTutorial,
-    #[value(name = "context_pressure")]
-    ContextPressure,
-    #[value(name = "minimal_path")]
-    MinimalPath,
-    #[value(name = "persistent_state")]
-    PersistentState,
-    #[value(name = "insert_record")]
-    InsertRecord,
-    #[value(name = "sequential_pipeline")]
-    SequentialPipeline,
-    #[value(name = "database_migration_recovery")]
-    DatabaseMigrationRecovery,
-    #[value(name = "shell_coder_sandbox")]
-    ShellCoderSandbox,
-    #[value(name = "research_pipeline")]
-    ResearchPipeline,
-    #[value(name = "fanout_ladder")]
-    FanoutLadder,
-    #[value(name = "security_review")]
-    SecurityReview,
-    #[value(name = "incident_response")]
-    IncidentResponse,
-    #[value(name = "todo_worker_simple")]
-    TodoWorkerSimple,
-    #[value(name = "todo_worker_planned")]
-    TodoWorkerPlanned,
-    #[value(name = "engineering_ticket")]
-    EngineeringTicket,
-    #[value(name = "engineering_ticket_git_handoff")]
-    EngineeringTicketGitHandoff,
-    #[value(name = "engineering_endurance_ladder")]
-    EngineeringEnduranceLadder,
-    #[value(name = "git_regression_forensics")]
-    GitRegressionForensics,
-    #[value(name = "mechanical_reaction")]
-    MechanicalReaction,
-    #[value(name = "timer_wake")]
-    TimerWake,
-    #[value(name = "receiving_operation")]
-    ReceivingOperation,
-    #[value(name = "validation_loop")]
-    ValidationLoop,
-    #[value(name = "subagent_validation")]
-    SubagentValidation,
-    #[value(name = "subagent_validation_failure")]
-    SubagentValidationFailure,
-    #[value(name = "validation_self_repair")]
-    ValidationSelfRepair,
-    #[value(name = "validation_scope_enforcement")]
-    ValidationScopeEnforcement,
-    #[value(name = "validation_chain")]
-    ValidationChain,
-    #[value(name = "secret_hygiene")]
-    SecretHygiene,
-    #[value(name = "prompt_injection_resilience")]
-    PromptInjectionResilience,
-    #[value(name = "moving_target")]
-    MovingTarget,
-    #[value(name = "poison_message")]
-    PoisonMessage,
-    #[value(name = "cleanup_under_failure")]
-    CleanupUnderFailure,
-    #[value(name = "depth_ladder")]
-    DepthLadder,
-    #[value(name = "quorum_fan_in")]
-    QuorumFanIn,
-    #[value(name = "contention_ledger")]
-    ContentionLedger,
-    #[value(name = "wake_chain_soak")]
-    WakeChainSoak,
-    #[value(name = "chess_engine_build")]
-    ChessEngineBuild,
-    #[value(name = "chess_play_ladder")]
-    ChessPlayLadder,
-    #[value(name = "trend_blog")]
-    TrendBlog,
-    #[value(name = "trending_topics_build")]
-    TrendingTopicsBuild,
-    #[value(name = "typescript_chat_service")]
-    TypescriptChatService,
-    #[value(name = "tool_contract_recovery")]
-    ToolContractRecovery,
-    #[value(name = "policy_bound_action")]
-    PolicyBoundAction,
-    #[value(name = "cross_app_transaction")]
-    CrossAppTransaction,
-    #[value(name = "performance_regression")]
-    PerformanceRegression,
-    #[value(name = "browser_cross_site")]
-    BrowserCrossSite,
-    #[value(name = "release_train_recovery")]
-    ReleaseTrainRecovery,
-    #[value(name = "cross_repo_contract_migration")]
-    CrossRepoContractMigration,
-    #[value(name = "swe_config_isolation")]
-    SweConfigIsolation,
-    #[value(name = "swe_cache_invalidation")]
-    SweCacheInvalidation,
-    #[value(name = "swe_batch_replay")]
-    SweBatchReplay,
-    #[value(name = "swe_replay_recovery")]
-    SweReplayRecovery,
-    #[value(name = "swe_contract_migration")]
-    SweContractMigration,
-    #[value(name = "swe_tenant_isolation")]
-    SweTenantIsolation,
-    #[value(name = "swe_replay_performance")]
-    SweReplayPerformance,
-    #[value(name = "swe_release_handoff")]
-    SweReleaseHandoff,
-    #[value(name = "swe_service_journey")]
-    SweServiceJourney,
+/// The registry: one line per test. The id is what the enum prints and
+/// parses; the expression is the module value that implements [`Scenario`].
+macro_rules! scenarios {
+    ($($variant:ident = $id:literal => $module:expr,)+) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema, ValueEnum)]
+        #[serde(rename_all = "snake_case")]
+        pub enum ScenarioId {
+            $(
+                #[value(name = $id)]
+                $variant,
+            )+
+        }
+
+        impl ScenarioId {
+            pub const ALL: [Self; scenarios!(@count $($variant)+)] = [$(Self::$variant,)+];
+
+            pub const fn as_str(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $id,)+
+                }
+            }
+
+            /// The module that implements this test.
+            pub fn module(self) -> &'static dyn Scenario {
+                match self {
+                    $(Self::$variant => &$module,)+
+                }
+            }
+        }
+    };
+    (@count) => { 0usize };
+    (@count $head:ident $($tail:ident)*) => { 1usize + scenarios!(@count $($tail)*) };
+}
+
+scenarios! {
+    RegistryPlanning = "registry_planning" => registry::Registry(1),
+    RegistryImplementation = "registry_implementation" => registry::Registry(2),
+    RegistryEnvironment = "registry_environment" => registry::Registry(3),
+    RegistryVerification = "registry_verification" => registry::Registry(4),
+    KanbanC1Foundation = "kanban_c1_foundation" => kanban::Kanban(0),
+    KanbanC2Persistence = "kanban_c2_persistence" => kanban::Kanban(1),
+    KanbanC3Board = "kanban_c3_board" => kanban::Kanban(2),
+    KanbanC4TicketFlow = "kanban_c4_ticket_flow" => kanban::Kanban(3),
+    KanbanC5EditMove = "kanban_c5_edit_move" => kanban::Kanban(4),
+    KanbanC6Discussion = "kanban_c6_discussion" => kanban::Kanban(5),
+    KanbanC7Live = "kanban_c7_live" => kanban::Kanban(6),
+    LinklyTutorial = "linkly_tutorial" => linkly::LinklyTutorial,
+    ContextPressure = "context_pressure" => context_pressure::ContextPressure,
+    MinimalPath = "minimal_path" => minimal_path::MinimalPath,
+    PersistentState = "persistent_state" => persistent_state::PersistentState,
+    InsertRecord = "insert_record" => insert_record::InsertRecord,
+    SequentialPipeline = "sequential_pipeline" => sequential_pipeline::SequentialPipeline,
+    DatabaseMigrationRecovery = "database_migration_recovery" => database_migration_recovery::DatabaseMigrationRecovery,
+    ShellCoderSandbox = "shell_coder_sandbox" => shell_coder_sandbox::ShellCoderSandbox,
+    ResearchPipeline = "research_pipeline" => research_pipeline::ResearchPipeline,
+    FanoutLadder = "fanout_ladder" => fanout_ladder::FanoutLadder,
+    SecurityReview = "security_review" => security_review::SecurityReview,
+    IncidentResponse = "incident_response" => incident_response::IncidentResponse,
+    TodoWorkerSimple = "todo_worker_simple" => todo_worker::TodoWorkerSimple,
+    TodoWorkerPlanned = "todo_worker_planned" => todo_worker::TodoWorkerPlanned,
+    EngineeringTicket = "engineering_ticket" => engineering_ticket::EngineeringTicket,
+    EngineeringTicketGitHandoff = "engineering_ticket_git_handoff" => engineering_ticket::EngineeringTicketGitHandoff,
+    EngineeringEnduranceLadder = "engineering_endurance_ladder" => engineering_endurance_ladder::EngineeringEnduranceLadder,
+    GitRegressionForensics = "git_regression_forensics" => git_regression_forensics::GitRegressionForensics,
+    MechanicalReaction = "mechanical_reaction" => mechanical_reaction::MechanicalReaction,
+    TimerWake = "timer_wake" => timer_wake::TimerWake,
+    ReceivingOperation = "receiving_operation" => receiving_operation::ReceivingOperation,
+    ValidationLoop = "validation_loop" => validation_loop::ValidationLoop,
+    SubagentValidation = "subagent_validation" => subagent_validation::SubagentValidation,
+    SubagentValidationFailure = "subagent_validation_failure" => subagent_validation_failure::SubagentValidationFailure,
+    ValidationSelfRepair = "validation_self_repair" => validation_self_repair::ValidationSelfRepair,
+    ValidationScopeEnforcement = "validation_scope_enforcement" => validation_scope_enforcement::ValidationScopeEnforcement,
+    ValidationChain = "validation_chain" => validation_chain::ValidationChain,
+    SecretHygiene = "secret_hygiene" => secret_hygiene::SecretHygiene,
+    PromptInjectionResilience = "prompt_injection_resilience" => prompt_injection_resilience::PromptInjectionResilience,
+    MovingTarget = "moving_target" => moving_target::MovingTarget,
+    PoisonMessage = "poison_message" => poison_message::PoisonMessage,
+    CleanupUnderFailure = "cleanup_under_failure" => cleanup_under_failure::CleanupUnderFailure,
+    DepthLadder = "depth_ladder" => depth_ladder::DepthLadder,
+    QuorumFanIn = "quorum_fan_in" => quorum_fan_in::QuorumFanIn,
+    ContentionLedger = "contention_ledger" => contention_ledger::ContentionLedger,
+    WakeChainSoak = "wake_chain_soak" => wake_chain_soak::WakeChainSoak,
+    ChessEngineBuild = "chess_engine_build" => chess_engine_build::ChessEngineBuild,
+    ChessPlayLadder = "chess_play_ladder" => chess_play_ladder::ChessPlayLadder,
+    TrendBlog = "trend_blog" => trend_blog::TrendBlog,
+    TrendingTopicsBuild = "trending_topics_build" => trending_topics_build::TrendingTopicsBuild,
+    TypescriptChatService = "typescript_chat_service" => typescript_chat_service::TypescriptChatService,
+    ToolContractRecovery = "tool_contract_recovery" => tool_contract_recovery::ToolContractRecovery,
+    PolicyBoundAction = "policy_bound_action" => policy_bound_action::PolicyBoundAction,
+    CrossAppTransaction = "cross_app_transaction" => cross_app_transaction::CrossAppTransaction,
+    PerformanceRegression = "performance_regression" => performance_regression::PerformanceRegression,
+    BrowserCrossSite = "browser_cross_site" => browser_cross_site::BrowserCrossSite,
+    ReleaseTrainRecovery = "release_train_recovery" => release_train_recovery::ReleaseTrainRecovery,
+    CrossRepoContractMigration = "cross_repo_contract_migration" => cross_repo_contract_migration::CrossRepoContractMigration,
+    SweConfigIsolation = "swe_config_isolation" => swe_service::SweService(ScenarioId::SweConfigIsolation),
+    SweCacheInvalidation = "swe_cache_invalidation" => swe_service::SweService(ScenarioId::SweCacheInvalidation),
+    SweBatchReplay = "swe_batch_replay" => swe_service::SweService(ScenarioId::SweBatchReplay),
+    SweReplayRecovery = "swe_replay_recovery" => swe_service::SweService(ScenarioId::SweReplayRecovery),
+    SweContractMigration = "swe_contract_migration" => swe_service::SweService(ScenarioId::SweContractMigration),
+    SweTenantIsolation = "swe_tenant_isolation" => swe_service::SweService(ScenarioId::SweTenantIsolation),
+    SweReplayPerformance = "swe_replay_performance" => swe_service::SweService(ScenarioId::SweReplayPerformance),
+    SweReleaseHandoff = "swe_release_handoff" => swe_service::SweService(ScenarioId::SweReleaseHandoff),
+    SweServiceJourney = "swe_service_journey" => swe_service::SweService(ScenarioId::SweServiceJourney),
 }
 
 impl ScenarioId {
-    pub const ALL: [Self; 68] = [
-        Self::RegistryPlanning,
-        Self::RegistryImplementation,
-        Self::RegistryEnvironment,
-        Self::RegistryVerification,
-        Self::KanbanC1Foundation,
-        Self::KanbanC2Persistence,
-        Self::KanbanC3Board,
-        Self::KanbanC4TicketFlow,
-        Self::KanbanC5EditMove,
-        Self::KanbanC6Discussion,
-        Self::KanbanC7Live,
-        Self::LinklyTutorial,
-        Self::ContextPressure,
-        Self::MinimalPath,
-        Self::PersistentState,
-        Self::InsertRecord,
-        Self::SequentialPipeline,
-        Self::DatabaseMigrationRecovery,
-        Self::ShellCoderSandbox,
-        Self::ResearchPipeline,
-        Self::FanoutLadder,
-        Self::SecurityReview,
-        Self::IncidentResponse,
-        Self::TodoWorkerSimple,
-        Self::TodoWorkerPlanned,
-        Self::EngineeringTicket,
-        Self::EngineeringTicketGitHandoff,
-        Self::EngineeringEnduranceLadder,
-        Self::GitRegressionForensics,
-        Self::MechanicalReaction,
-        Self::TimerWake,
-        Self::ReceivingOperation,
-        Self::ValidationLoop,
-        Self::SubagentValidation,
-        Self::SubagentValidationFailure,
-        Self::ValidationSelfRepair,
-        Self::ValidationScopeEnforcement,
-        Self::ValidationChain,
-        Self::SecretHygiene,
-        Self::PromptInjectionResilience,
-        Self::MovingTarget,
-        Self::PoisonMessage,
-        Self::CleanupUnderFailure,
-        Self::DepthLadder,
-        Self::QuorumFanIn,
-        Self::ContentionLedger,
-        Self::WakeChainSoak,
-        Self::ChessEngineBuild,
-        Self::ChessPlayLadder,
-        Self::TrendBlog,
-        Self::TrendingTopicsBuild,
-        Self::TypescriptChatService,
-        Self::ToolContractRecovery,
-        Self::PolicyBoundAction,
-        Self::CrossAppTransaction,
-        Self::PerformanceRegression,
-        Self::BrowserCrossSite,
-        Self::ReleaseTrainRecovery,
-        Self::CrossRepoContractMigration,
-        Self::SweConfigIsolation,
-        Self::SweCacheInvalidation,
-        Self::SweBatchReplay,
-        Self::SweReplayRecovery,
-        Self::SweContractMigration,
-        Self::SweTenantIsolation,
-        Self::SweReplayPerformance,
-        Self::SweReleaseHandoff,
-        Self::SweServiceJourney,
-    ];
-
-    /// Editorial one-paragraph description of the test, for readers rather than
-    /// runners. `None` until a scenario defines a `SUMMARY`; the dashboard then
-    /// shows the prompt alone. Add a `pub const SUMMARY` to a scenario module
-    /// and list it here to give that test a description.
-    pub fn summary(self) -> Option<&'static str> {
-        match self {
-            Self::ChessEngineBuild => Some(chess_engine_build::SUMMARY),
-            Self::TypescriptChatService => Some(typescript_chat_service::SUMMARY),
-            _ => None,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::RegistryPlanning => registry::PLANNING_ID,
-            Self::RegistryImplementation => registry::IMPLEMENTATION_ID,
-            Self::RegistryEnvironment => registry::ENVIRONMENT_ID,
-            Self::RegistryVerification => registry::VERIFICATION_ID,
-            Self::KanbanC1Foundation => kanban::IDS[0],
-            Self::KanbanC2Persistence => kanban::IDS[1],
-            Self::KanbanC3Board => kanban::IDS[2],
-            Self::KanbanC4TicketFlow => kanban::IDS[3],
-            Self::KanbanC5EditMove => kanban::IDS[4],
-            Self::KanbanC6Discussion => kanban::IDS[5],
-            Self::KanbanC7Live => kanban::IDS[6],
-            Self::LinklyTutorial => linkly::ID,
-            Self::ContextPressure => context_pressure::ID,
-            Self::MinimalPath => minimal_path::ID,
-            Self::PersistentState => persistent_state::ID,
-            Self::InsertRecord => insert_record::ID,
-            Self::SequentialPipeline => sequential_pipeline::ID,
-            Self::DatabaseMigrationRecovery => database_migration_recovery::ID,
-            Self::ShellCoderSandbox => shell_coder_sandbox::ID,
-            Self::ResearchPipeline => research_pipeline::ID,
-            Self::FanoutLadder => fanout_ladder::ID,
-            Self::SecurityReview => security_review::ID,
-            Self::IncidentResponse => incident_response::ID,
-            Self::TodoWorkerSimple => todo_worker::SIMPLE_ID,
-            Self::TodoWorkerPlanned => todo_worker::PLANNED_ID,
-            Self::EngineeringTicket => engineering_ticket::ID,
-            Self::EngineeringTicketGitHandoff => engineering_ticket::GIT_HANDOFF_ID,
-            Self::EngineeringEnduranceLadder => engineering_endurance_ladder::ID,
-            Self::GitRegressionForensics => git_regression_forensics::ID,
-            Self::MechanicalReaction => mechanical_reaction::ID,
-            Self::TimerWake => timer_wake::ID,
-            Self::ReceivingOperation => receiving_operation::ID,
-            Self::ValidationLoop => validation_loop::ID,
-            Self::SubagentValidation => subagent_validation::ID,
-            Self::SubagentValidationFailure => subagent_validation_failure::ID,
-            Self::ValidationSelfRepair => validation_self_repair::ID,
-            Self::ValidationScopeEnforcement => validation_scope_enforcement::ID,
-            Self::ValidationChain => validation_chain::ID,
-            Self::SecretHygiene => secret_hygiene::ID,
-            Self::PromptInjectionResilience => prompt_injection_resilience::ID,
-            Self::MovingTarget => moving_target::ID,
-            Self::PoisonMessage => poison_message::ID,
-            Self::CleanupUnderFailure => cleanup_under_failure::ID,
-            Self::DepthLadder => depth_ladder::ID,
-            Self::QuorumFanIn => quorum_fan_in::ID,
-            Self::ContentionLedger => contention_ledger::ID,
-            Self::WakeChainSoak => wake_chain_soak::ID,
-            Self::ChessEngineBuild => chess_engine_build::ID,
-            Self::ChessPlayLadder => chess_play_ladder::ID,
-            Self::TrendBlog => trend_blog::ID,
-            Self::TrendingTopicsBuild => trending_topics_build::ID,
-            Self::TypescriptChatService => typescript_chat_service::ID,
-            Self::ToolContractRecovery => tool_contract_recovery::ID,
-            Self::PolicyBoundAction => policy_bound_action::ID,
-            Self::CrossAppTransaction => cross_app_transaction::ID,
-            Self::PerformanceRegression => performance_regression::ID,
-            Self::BrowserCrossSite => browser_cross_site::ID,
-            Self::ReleaseTrainRecovery => release_train_recovery::ID,
-            Self::CrossRepoContractMigration => cross_repo_contract_migration::ID,
-            Self::SweConfigIsolation => "swe_config_isolation",
-            Self::SweCacheInvalidation => "swe_cache_invalidation",
-            Self::SweBatchReplay => "swe_batch_replay",
-            Self::SweReplayRecovery => "swe_replay_recovery",
-            Self::SweContractMigration => "swe_contract_migration",
-            Self::SweTenantIsolation => "swe_tenant_isolation",
-            Self::SweReplayPerformance => "swe_replay_performance",
-            Self::SweReleaseHandoff => "swe_release_handoff",
-            Self::SweServiceJourney => "swe_service_journey",
-        }
-    }
-
     pub fn spec(self, run_id: &str) -> ScenarioSpec {
-        match self {
-            Self::RegistryPlanning => registry::scenario(1, run_id),
-            Self::RegistryImplementation => registry::scenario(2, run_id),
-            Self::RegistryEnvironment => registry::scenario(3, run_id),
-            Self::RegistryVerification => registry::scenario(4, run_id),
-            Self::KanbanC1Foundation => kanban::spec(0, run_id),
-            Self::KanbanC2Persistence => kanban::spec(1, run_id),
-            Self::KanbanC3Board => kanban::spec(2, run_id),
-            Self::KanbanC4TicketFlow => kanban::spec(3, run_id),
-            Self::KanbanC5EditMove => kanban::spec(4, run_id),
-            Self::KanbanC6Discussion => kanban::spec(5, run_id),
-            Self::KanbanC7Live => kanban::spec(6, run_id),
-            Self::LinklyTutorial => linkly::scenario(run_id),
-            Self::ContextPressure => context_pressure::scenario(run_id),
-            Self::MinimalPath => minimal_path::scenario(run_id),
-            Self::PersistentState => persistent_state::scenario(run_id),
-            Self::InsertRecord => insert_record::scenario(run_id),
-            Self::SequentialPipeline => sequential_pipeline::scenario(run_id),
-            Self::DatabaseMigrationRecovery => database_migration_recovery::scenario(run_id),
-            Self::ShellCoderSandbox => shell_coder_sandbox::scenario(run_id),
-            Self::ResearchPipeline => research_pipeline::scenario(run_id),
-            Self::FanoutLadder => fanout_ladder::scenario(run_id),
-            Self::SecurityReview => security_review::scenario(run_id),
-            Self::IncidentResponse => incident_response::scenario(run_id),
-            Self::TodoWorkerSimple => todo_worker::simple_scenario(run_id),
-            Self::TodoWorkerPlanned => todo_worker::planned_scenario(run_id),
-            Self::EngineeringTicket => engineering_ticket::scenario(run_id),
-            Self::EngineeringTicketGitHandoff => engineering_ticket::git_handoff_scenario(run_id),
-            Self::EngineeringEnduranceLadder => engineering_endurance_ladder::scenario(run_id),
-            Self::GitRegressionForensics => git_regression_forensics::scenario(run_id),
-            Self::MechanicalReaction => mechanical_reaction::scenario(run_id),
-            Self::TimerWake => timer_wake::scenario(run_id),
-            Self::ReceivingOperation => receiving_operation::scenario(run_id),
-            Self::ValidationLoop => validation_loop::scenario(run_id),
-            Self::SubagentValidation => subagent_validation::scenario(run_id),
-            Self::SubagentValidationFailure => subagent_validation_failure::scenario(run_id),
-            Self::ValidationSelfRepair => validation_self_repair::scenario(run_id),
-            Self::ValidationScopeEnforcement => validation_scope_enforcement::scenario(run_id),
-            Self::ValidationChain => validation_chain::scenario(run_id),
-            Self::SecretHygiene => secret_hygiene::scenario(run_id),
-            Self::PromptInjectionResilience => prompt_injection_resilience::scenario(run_id),
-            Self::MovingTarget => moving_target::scenario(run_id),
-            Self::PoisonMessage => poison_message::scenario(run_id),
-            Self::CleanupUnderFailure => cleanup_under_failure::scenario(run_id),
-            Self::DepthLadder => depth_ladder::scenario(run_id),
-            Self::QuorumFanIn => quorum_fan_in::scenario(run_id),
-            Self::ContentionLedger => contention_ledger::scenario(run_id),
-            Self::WakeChainSoak => wake_chain_soak::scenario(run_id),
-            Self::ChessEngineBuild => chess_engine_build::scenario(run_id),
-            Self::ChessPlayLadder => chess_play_ladder::scenario(run_id),
-            Self::TrendBlog => trend_blog::scenario(run_id),
-            Self::TrendingTopicsBuild => trending_topics_build::scenario(run_id),
-            Self::TypescriptChatService => typescript_chat_service::scenario(run_id),
-            Self::ToolContractRecovery => tool_contract_recovery::scenario(run_id),
-            Self::PolicyBoundAction => policy_bound_action::scenario(run_id),
-            Self::CrossAppTransaction => cross_app_transaction::scenario(run_id),
-            Self::PerformanceRegression => performance_regression::scenario(run_id),
-            Self::BrowserCrossSite => browser_cross_site::scenario(run_id),
-            Self::ReleaseTrainRecovery => release_train_recovery::scenario(run_id),
-            Self::CrossRepoContractMigration => cross_repo_contract_migration::scenario(run_id),
-            Self::SweConfigIsolation
-            | Self::SweCacheInvalidation
-            | Self::SweBatchReplay
-            | Self::SweReplayRecovery
-            | Self::SweContractMigration
-            | Self::SweTenantIsolation
-            | Self::SweReplayPerformance
-            | Self::SweReleaseHandoff
-            | Self::SweServiceJourney => swe_service::spec(self),
-        }
+        self.module().spec(run_id)
     }
 
+    /// Materialize one case: the module states the case and the spec, the
+    /// registry seals the definition digest and validates the whole.
     pub fn materialize(self, namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-        let mut materialized = match self {
-            Self::RegistryPlanning => registry::materialize(1, namespace, seed)?,
-            Self::RegistryImplementation => registry::materialize(2, namespace, seed)?,
-            Self::RegistryEnvironment => registry::materialize(3, namespace, seed)?,
-            Self::RegistryVerification => registry::materialize(4, namespace, seed)?,
-            Self::KanbanC1Foundation => kanban::materialize(0, namespace)?,
-            Self::KanbanC2Persistence => kanban::materialize(1, namespace)?,
-            Self::KanbanC3Board => kanban::materialize(2, namespace)?,
-            Self::KanbanC4TicketFlow => kanban::materialize(3, namespace)?,
-            Self::KanbanC5EditMove => kanban::materialize(4, namespace)?,
-            Self::KanbanC6Discussion => kanban::materialize(5, namespace)?,
-            Self::KanbanC7Live => kanban::materialize(6, namespace)?,
-            Self::LinklyTutorial => linkly::materialize(namespace, seed)?,
-            Self::ContextPressure => context_pressure::materialize(namespace, seed)?,
-            Self::MinimalPath => minimal_path::materialize(namespace, seed)?,
-            Self::PersistentState => persistent_state::materialize(namespace, seed)?,
-            Self::InsertRecord => insert_record::materialize(namespace, seed)?,
-            Self::SequentialPipeline => sequential_pipeline::materialize(namespace, seed)?,
-            Self::DatabaseMigrationRecovery => {
-                database_migration_recovery::materialize(namespace, seed)?
-            }
-            Self::ShellCoderSandbox => shell_coder_sandbox::materialize(namespace, seed)?,
-            Self::ResearchPipeline => research_pipeline::materialize(namespace, seed)?,
-            Self::FanoutLadder => fanout_ladder::materialize(namespace, seed)?,
-            Self::SecurityReview => security_review::materialize(namespace, seed)?,
-            Self::IncidentResponse => incident_response::materialize(namespace, seed)?,
-            Self::TodoWorkerSimple => todo_worker::simple_materialize(namespace, seed)?,
-            Self::TodoWorkerPlanned => todo_worker::planned_materialize(namespace, seed)?,
-            Self::EngineeringTicket => engineering_ticket::materialize(namespace, seed)?,
-            Self::EngineeringTicketGitHandoff => {
-                engineering_ticket::git_handoff_materialize(namespace, seed)?
-            }
-            Self::EngineeringEnduranceLadder => {
-                engineering_endurance_ladder::materialize(namespace, seed)?
-            }
-            Self::GitRegressionForensics => git_regression_forensics::materialize(namespace, seed)?,
-            Self::MechanicalReaction => mechanical_reaction::materialize(namespace, seed)?,
-            Self::TimerWake => timer_wake::materialize(namespace, seed)?,
-            Self::ReceivingOperation => receiving_operation::materialize(namespace, seed)?,
-            Self::SubagentValidation => subagent_validation::materialize(namespace, seed)?,
-            Self::SubagentValidationFailure => {
-                subagent_validation_failure::materialize(namespace, seed)?
-            }
-            Self::ValidationLoop => validation_loop::materialize(namespace, seed)?,
-            Self::ValidationSelfRepair => validation_self_repair::materialize(namespace, seed)?,
-            Self::ValidationScopeEnforcement => {
-                validation_scope_enforcement::materialize(namespace, seed)?
-            }
-            Self::ValidationChain => validation_chain::materialize(namespace, seed)?,
-            Self::SecretHygiene => secret_hygiene::materialize(namespace, seed)?,
-            Self::PromptInjectionResilience => {
-                prompt_injection_resilience::materialize(namespace, seed)?
-            }
-            Self::MovingTarget => moving_target::materialize(namespace, seed)?,
-            Self::PoisonMessage => poison_message::materialize(namespace, seed)?,
-            Self::CleanupUnderFailure => cleanup_under_failure::materialize(namespace, seed)?,
-            Self::DepthLadder => depth_ladder::materialize(namespace, seed)?,
-            Self::QuorumFanIn => quorum_fan_in::materialize(namespace, seed)?,
-            Self::ContentionLedger => contention_ledger::materialize(namespace, seed)?,
-            Self::WakeChainSoak => wake_chain_soak::materialize(namespace, seed)?,
-            Self::ChessEngineBuild => chess_engine_build::materialize(namespace, seed)?,
-            Self::ChessPlayLadder => chess_play_ladder::materialize(namespace, seed)?,
-            Self::TrendBlog => trend_blog::materialize(namespace, seed)?,
-            Self::TrendingTopicsBuild => trending_topics_build::materialize(namespace, seed)?,
-            Self::TypescriptChatService => typescript_chat_service::materialize(namespace, seed)?,
-            Self::ToolContractRecovery => tool_contract_recovery::materialize(namespace, seed)?,
-            Self::PolicyBoundAction => policy_bound_action::materialize(namespace, seed)?,
-            Self::CrossAppTransaction => cross_app_transaction::materialize(namespace, seed)?,
-            Self::PerformanceRegression => performance_regression::materialize(namespace, seed)?,
-            Self::BrowserCrossSite => browser_cross_site::materialize(namespace, seed)?,
-            Self::ReleaseTrainRecovery => release_train_recovery::materialize(namespace, seed)?,
-            Self::CrossRepoContractMigration => {
-                cross_repo_contract_migration::materialize(namespace, seed)?
-            }
-            Self::SweConfigIsolation
-            | Self::SweCacheInvalidation
-            | Self::SweBatchReplay
-            | Self::SweReplayRecovery
-            | Self::SweContractMigration
-            | Self::SweTenantIsolation
-            | Self::SweReplayPerformance
-            | Self::SweReleaseHandoff
-            | Self::SweServiceJourney => swe_service::materialize(self)?,
-        };
-        let behavior_sha256 =
-            behavior_sha256(self, &materialized.case, materialized.capture.is_some())?;
-        materialized.case = materialized.case.seal(behavior_sha256)?;
+        let module = self.module();
+        let case = module
+            .case(seed)?
+            .with_characterization(module.characterization()?)?;
+        let spec = module.case_spec(&case, namespace);
+        let behavior_sha256 = behavior_sha256(self, &case)?;
+        let case = case.seal(behavior_sha256)?;
+        let materialized = MaterializedScenario { spec, case, module };
         materialized.validate()?;
         Ok(materialized)
     }
 
     pub fn canonical_seed(self) -> u64 {
-        if self == Self::ShellCoderSandbox {
-            return shell_coder_sandbox::CANONICAL_SEED;
-        }
-        if self == Self::EngineeringTicket {
-            return engineering_ticket::CANONICAL_SEED;
-        }
-        if self == Self::EngineeringTicketGitHandoff {
-            return engineering_ticket::CANONICAL_SEED;
-        }
-        if self == Self::EngineeringEnduranceLadder {
-            return engineering_endurance_ladder::CANONICAL_SEED;
-        }
-        if self == Self::FanoutLadder {
-            return fanout_ladder::CANONICAL_SEED;
-        }
-        if self == Self::ContextPressure {
-            return context_pressure::CANONICAL_SEED;
-        }
-        if self == Self::DepthLadder {
-            return depth_ladder::CANONICAL_SEED;
-        }
-        if self == Self::WakeChainSoak {
-            return wake_chain_soak::CANONICAL_SEED;
-        }
-        if self == Self::ChessPlayLadder {
-            return chess_play_ladder::CANONICAL_SEED;
-        }
-        if self == Self::ToolContractRecovery {
-            return tool_contract_recovery::CANONICAL_SEED;
-        }
-        if self == Self::PolicyBoundAction {
-            return policy_bound_action::CANONICAL_SEED;
-        }
-        if self == Self::CrossAppTransaction {
-            return cross_app_transaction::CANONICAL_SEED;
-        }
-        if self == Self::ResearchPipeline {
-            return research_pipeline::CANONICAL_SEED;
-        }
-        if self == Self::PerformanceRegression {
-            return performance_regression::CANONICAL_SEED;
-        }
-        if self == Self::BrowserCrossSite {
-            return browser_cross_site::CANONICAL_SEED;
-        }
-        if self == Self::ReleaseTrainRecovery {
-            return release_train_recovery::CANONICAL_SEED;
-        }
-        if self == Self::CrossRepoContractMigration {
-            return cross_repo_contract_migration::CANONICAL_SEED;
-        }
-        if self == Self::TypescriptChatService {
-            return typescript_chat_service::CANONICAL_SEED;
-        }
-        // Stable FNV-1a keeps canonical cases reproducible without tying their
-        // identity to a particular execution or retry attempt.
-        stable_seed(self.as_str())
+        self.module().canonical_seed()
     }
 
     /// Scenarios with one retained canonical cohort do not participate in
     /// rotating-seed runs.
     pub fn canonical_seed_only(self) -> bool {
-        if kanban::IDS.contains(&self.as_str()) {
-            return true;
-        }
-        matches!(
-            self,
-            Self::RegistryPlanning
-                | Self::RegistryImplementation
-                | Self::RegistryEnvironment
-                | Self::RegistryVerification
-                | Self::ShellCoderSandbox
-                | Self::EngineeringTicket
-                | Self::EngineeringTicketGitHandoff
-                | Self::EngineeringEnduranceLadder
-                | Self::FanoutLadder
-                | Self::ContextPressure
-                | Self::DepthLadder
-                | Self::WakeChainSoak
-                | Self::ChessPlayLadder
-                | Self::ToolContractRecovery
-                | Self::PolicyBoundAction
-                | Self::CrossAppTransaction
-                | Self::ResearchPipeline
-                | Self::PerformanceRegression
-                | Self::BrowserCrossSite
-                | Self::ReleaseTrainRecovery
-                | Self::CrossRepoContractMigration
-                | Self::TypescriptChatService
-                | Self::TrendingTopicsBuild
-                | Self::LinklyTutorial
-                | Self::SweConfigIsolation
-                | Self::SweCacheInvalidation
-                | Self::SweBatchReplay
-                | Self::SweReplayRecovery
-                | Self::SweContractMigration
-                | Self::SweTenantIsolation
-                | Self::SweReplayPerformance
-                | Self::SweReleaseHandoff
-                | Self::SweServiceJourney
-        )
+        self.module().canonical_seed_only()
     }
 
     pub fn execution_kind(self) -> ScenarioExecutionKind {
-        match self {
-            Self::SecurityReview
-            | Self::TodoWorkerPlanned
-            | Self::SweConfigIsolation
-            | Self::SweCacheInvalidation
-            | Self::SweBatchReplay
-            | Self::SweReplayRecovery
-            | Self::SweContractMigration
-            | Self::SweTenantIsolation
-            | Self::SweReplayPerformance
-            | Self::SweReleaseHandoff
-            | Self::SweServiceJourney => ScenarioExecutionKind::CompositeFlow,
-            Self::IncidentResponse
-            | Self::ReleaseTrainRecovery
-            | Self::CrossRepoContractMigration => ScenarioExecutionKind::AdaptiveFlow,
-            Self::PolicyBoundAction | Self::LinklyTutorial => {
-                ScenarioExecutionKind::ScriptedDialogue
-            }
-            _ => ScenarioExecutionKind::HarnessTurn,
-        }
+        self.module().execution_kind()
     }
-}
 
-pub fn required_functions(scenario_id: &str, run_id: &str) -> Vec<String> {
-    if kanban::IDS.contains(&scenario_id) {
-        return vec![kanban::function_id(run_id)];
-    }
-    match scenario_id {
-        registry::PLANNING_ID
-        | registry::IMPLEMENTATION_ID
-        | registry::ENVIRONMENT_ID
-        | registry::VERIFICATION_ID => registry::required_functions(scenario_id, run_id),
-        engineering_ticket::GIT_HANDOFF_ID => {
-            engineering_ticket::git_handoff_required_functions(run_id)
-        }
-        engineering_endurance_ladder::ID => {
-            engineering_endurance_ladder::required_functions(run_id)
-        }
-        tool_contract_recovery::ID => tool_contract_recovery::required_functions(run_id),
-        policy_bound_action::ID => policy_bound_action::required_functions(run_id),
-        cross_app_transaction::ID => cross_app_transaction::required_functions(run_id),
-        research_pipeline::ID => research_pipeline::required_functions(run_id),
-        browser_cross_site::ID => browser_cross_site::required_functions(run_id),
-        trending_topics_build::ID => trending_topics_build::required_functions(run_id),
-        _ => Vec::new(),
-    }
-}
-
-pub fn allowed_functions(scenario_id: &str, run_id: &str) -> Option<Vec<String>> {
-    if kanban::IDS.contains(&scenario_id) {
-        return Some(vec![kanban::function_id(run_id)]);
-    }
-    match scenario_id {
-        registry::PLANNING_ID
-        | registry::IMPLEMENTATION_ID
-        | registry::ENVIRONMENT_ID
-        | registry::VERIFICATION_ID => Some(registry::allowed_functions(scenario_id, run_id)),
-        engineering_ticket::GIT_HANDOFF_ID => {
-            Some(engineering_ticket::git_handoff_allowed_functions(run_id))
-        }
-        engineering_endurance_ladder::ID => {
-            Some(engineering_endurance_ladder::allowed_functions(run_id))
-        }
-        tool_contract_recovery::ID => Some(tool_contract_recovery::allowed_functions(run_id)),
-        policy_bound_action::ID => Some(policy_bound_action::allowed_functions(run_id)),
-        cross_app_transaction::ID => Some(cross_app_transaction::allowed_functions(run_id)),
-        research_pipeline::ID => Some(research_pipeline::allowed_functions(run_id)),
-        performance_regression::ID => Some(performance_regression::allowed_functions(run_id)),
-        typescript_chat_service::ID => Some(typescript_chat_service::allowed_functions(run_id)),
-        browser_cross_site::ID => Some(browser_cross_site::allowed_functions(run_id)),
-        trending_topics_build::ID => Some(trending_topics_build::allowed_functions(run_id)),
-        _ => None,
-    }
-}
-
-pub fn dialogue_followups(scenario_id: &str, run_id: &str) -> Vec<String> {
-    match scenario_id {
-        policy_bound_action::ID => policy_bound_action::dialogue_followups(run_id),
-        linkly::ID => linkly::dialogue_followups(run_id),
-        _ => Vec::new(),
+    pub fn summary(self) -> Option<&'static str> {
+        self.module().summary()
     }
 }
 
@@ -1015,7 +559,7 @@ pub const CONTRACT_NAMESPACE: &str = "contract";
 /// Digest of a scenario definition: what the subject is asked, how the run is
 /// bounded, how it is scored, and the case-independent contract. Seed-specific
 /// inputs are excluded so every seed of one definition shares the digest.
-pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase, captures: bool) -> Result<String> {
+pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
     let spec = id.spec(CONTRACT_NAMESPACE);
     crate::artifact::sha256_value(&serde_json::json!({
         "scenario_id": id.as_str(),
@@ -1034,9 +578,6 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase, captures: bool) -> R
                 "dimension": criterion.dimension,
             }))
             .collect::<Vec<_>>(),
-        "setup": spec.setup.is_some(),
-        "cleanup": spec.cleanup.is_some(),
-        "captures": captures,
         "characterization": case.characterization,
         "required_capabilities": case.required_capabilities,
         "deliverable_contract": case.deliverable_contract,
@@ -1060,6 +601,60 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    /// A scenario that declares artifacts without overriding `capture`.
+    struct ArtifactsWithoutCapture;
+
+    #[async_trait]
+    impl Scenario for ArtifactsWithoutCapture {
+        fn id(&self) -> &'static str {
+            "artifacts_without_capture"
+        }
+
+        fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+            unreachable!("the default capture test never materializes")
+        }
+
+        fn spec(&self, _run_id: &str) -> ScenarioSpec {
+            unreachable!("the default capture test never builds the spec")
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> Result<ObjectiveEvaluation> {
+            unreachable!("the default capture test never evaluates")
+        }
+    }
+
+    #[tokio::test]
+    async fn the_default_capture_refuses_to_capture_nothing() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let materialized = ScenarioId::MinimalPath.materialize("probe", 7).unwrap();
+        let observation = ScenarioObservation {
+            case: materialized.case,
+            metrics: SessionMetricsResponse::from_normalized(crate::wire::SessionMetricsPayload {
+                root_session_id: "probe".into(),
+                complete: true,
+                totals: Default::default(),
+                by_session: Vec::new(),
+                traces: None,
+            }),
+            transcript: Value::Null,
+            response: String::new(),
+            deliverables: Vec::new(),
+        };
+        let error = ArtifactsWithoutCapture
+            .capture(&context, &observation, "probe")
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("declares deliverable artifacts but has no capture hook"));
+    }
+
     #[test]
     fn registry_contains_sixty_eight_unique_valid_scenarios() {
         let mut ids = HashSet::new();
@@ -1144,7 +739,10 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 91).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                !first.case.deliverable_contract.artifacts.is_empty(),
+                "{scenario:?}"
+            );
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,
                 "{scenario:?}"
@@ -1163,7 +761,10 @@ mod tests {
             let retry = scenario.materialize("attempt-b", 127).unwrap();
             assert_eq!(first.case.case_id, retry.case.case_id, "{scenario:?}");
             assert_eq!(first.case.inputs, retry.case.inputs, "{scenario:?}");
-            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                !first.case.deliverable_contract.artifacts.is_empty(),
+                "{scenario:?}"
+            );
             assert!(
                 first
                     .case
@@ -1183,12 +784,15 @@ mod tests {
             ScenarioId::SubagentValidationFailure,
         ] {
             let materialized = scenario.materialize("delegation", 211).unwrap();
-            assert!(materialized.capture.is_some(), "{scenario:?}");
+            assert!(
+                !materialized.case.deliverable_contract.artifacts.is_empty(),
+                "{scenario:?}"
+            );
             assert!(
                 materialized
                     .case
                     .required_capabilities
-                    .contains(&"e2e::subagents".to_string()),
+                    .contains(&Capability::E2eSubagents),
                 "{scenario:?}"
             );
         }
@@ -1217,11 +821,13 @@ mod tests {
                 } else {
                     assert!(first.case.deliverable_contract.artifacts.is_empty());
                 }
-                assert!(first.capture.is_none());
                 continue;
             }
 
-            assert!(first.capture.is_some(), "{scenario:?}");
+            assert!(
+                !first.case.deliverable_contract.artifacts.is_empty(),
+                "{scenario:?}"
+            );
             assert!(
                 first.case.deliverable_contract.capture_before_cleanup,
                 "{scenario:?}"

@@ -77,6 +77,7 @@ pub fn adaptive_runtime(
     context: Arc<E2eContext>,
     model: &str,
     provider: &str,
+    agent: Option<&str>,
     output: &std::path::Path,
     attempt_id: &str,
 ) -> Result<AdaptiveScenarioRuntime> {
@@ -94,6 +95,7 @@ pub fn adaptive_runtime(
                     context.clone(),
                     model,
                     provider,
+                    agent,
                     incident_response::harness_policy()?,
                 )?;
             }
@@ -228,6 +230,7 @@ pub fn composite_runtime(
     context: Arc<E2eContext>,
     model: &str,
     provider: &str,
+    agent: Option<&str>,
 ) -> Result<CompositeScenarioRuntime> {
     let definition = composite_definition(scenario)
         .with_context(|| format!("scenario '{}' is not composite", scenario.as_str()))?;
@@ -239,6 +242,7 @@ pub fn composite_runtime(
             context,
             model,
             provider,
+            agent,
         )?;
         definition.validate(&catalog)?;
         return Ok(CompositeScenarioRuntime {
@@ -252,7 +256,7 @@ pub fn composite_runtime(
         .iter()
         .any(|node| node.step_type == builtin::HARNESS_STEP_ID)
     {
-        register_harness_step(&mut catalog, context.clone(), model, provider)?;
+        register_harness_step(&mut catalog, context.clone(), model, provider, agent)?;
     }
     if definition
         .nodes
@@ -267,7 +271,14 @@ pub fn composite_runtime(
                 scenario.as_str()
             ),
         };
-        register_bounded_harness_step(&mut catalog, context.clone(), model, provider, policy)?;
+        register_bounded_harness_step(
+            &mut catalog,
+            context.clone(),
+            model,
+            provider,
+            agent,
+            policy,
+        )?;
     }
     let cleanup_hook = match scenario {
         ScenarioId::SecurityReview => {

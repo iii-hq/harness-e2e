@@ -1,5 +1,6 @@
 import type { Host, PageRenderProps } from '@iii-dev/console-ui'
 import { App } from '@/App'
+import { InvestigationContext } from '@/components/InvestigationAction'
 import {
   installDashboardRuntimeConfig,
   type RuntimeConfig,
@@ -40,12 +41,14 @@ function DashboardPage({
 }: PageRenderProps & { host: Host }) {
   const theme = host.useTheme()
   return (
-    <App
-      tabId={tabId}
-      panelSide={panelSide}
-      theme={theme}
-      onRequestClose={onRequestClose}
-    />
+    <InvestigationContext value={host.chat?.openDraft}>
+      <App
+        tabId={tabId}
+        panelSide={panelSide}
+        theme={theme}
+        onRequestClose={onRequestClose}
+      />
+    </InvestigationContext>
   )
 }
 
