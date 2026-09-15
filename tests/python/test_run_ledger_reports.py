@@ -290,7 +290,7 @@ class StackResolutionTests(unittest.TestCase):
         self.assertEqual(contract["schema"], resolve_stack_lock.CONTRACT_SCHEMA)
         self.assertEqual(contract["suite"]["id"], "regression-r01")
         self.assertEqual(contract["suite"]["subject"], PLAN["subject"])
-        agent = {"id": "reviewer", "content": "---\nname: Reviewer\n---\nReview carefully."}
+        agent = "console-ui"
         with_agent = resolve_stack_lock.build_contract(
             PROFILE_SNAPSHOT["campaigns"][0], execution_id=contract["execution_id"],
             snapshot=PROFILE_SNAPSHOT, plan={**PLAN, "agent_profile": agent},

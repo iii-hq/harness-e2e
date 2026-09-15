@@ -120,36 +120,49 @@ class ReleaseControlCampaignTest(unittest.TestCase):
     def test_agent_profile_is_validated_and_reaches_native_admission(self):
         contract = campaign_contract()
         original = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
-        contract["suite"]["agent_profile"] = {"id": "reviewer", "content": "---\nname: Reviewer\n---\nReview carefully."}
+        contract["suite"]["agent_profile"] = "console-ui"
         MODULE.validate_suite(contract["suite"])
         request = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
-        self.assertEqual(request["agent"], "reviewer")
+        self.assertEqual(request["agent"], "console-ui")
         self.assertNotEqual(request["idempotency_key"], original["idempotency_key"])
         self.assertNotIn("agent_profile", request)
-        for invalid in [{"id": "../reviewer", "content": "body"}, {"id": "reviewer", "content": " "}]:
+        for invalid in ["../reviewer", " ", {"id": "reviewer", "content": "body"}]:
             with self.subTest(invalid=invalid), self.assertRaises(ValueError):
                 MODULE.validate_suite({**contract["suite"], "agent_profile": invalid})
 
-    def test_runner_registers_the_frozen_profile_before_materialization(self):
+    def test_runner_waits_for_an_existing_profile_and_fails_if_it_stays_missing(self):
         source = RUNNER_SCRIPT.read_text()
         block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=materialization")]
-        profile = {"id": "reviewer", "content": "---\nname: Reviewer\n---\nLiteral `code` and $(no-shell-command)."}
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "stack").mkdir()
-            (root / "contract.json").write_text(json.dumps({"suite": {"agent_profile": profile}}))
-            shell = '''set -Eeuo pipefail
+        for available_after in [0, 1, 99]:
+            with self.subTest(available_after=available_after), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "stack").mkdir()
+                (root / "contract.json").write_text(json.dumps({"suite": {"agent_profile": "console-ui"}}))
+                shell = '''set -Eeuo pipefail
 artifact_dir=$1
 contract_path=$1/contract.json
+attempts=0
+sleep() { SECONDS=$((SECONDS + 60)); }
+fail() { printf '%s\\n' "$1" >&2; return 1; }
 project_trigger() {
   jq -cn --arg function "$1" --argjson payload "$2" '{function:$function,payload:$payload}' >>"$artifact_dir/calls.jsonl"
-  printf '{}\\n'
+  attempts=$((attempts + 1))
+  if ((attempts <= AVAILABLE_AFTER)); then return 1; fi
+  printf '{"id":"console-ui"}\\n'
 }
 '''
-            subprocess.run(["bash", "-c", shell + block, "runner", str(root)], check=True)
-            calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
-            self.assertEqual([call["function"] for call in calls], ["directory::agents::create", "directory::agents::get"])
-            self.assertEqual(calls[0]["payload"], profile)
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                                        env={**os.environ, "AVAILABLE_AFTER": str(available_after)},
+                                        capture_output=True, text=True)
+                calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
+                self.assertTrue(all(call == {"function": "directory::agents::get", "payload": {"id": "console-ui"}} for call in calls))
+                self.assertEqual(len(calls), min(available_after + 1, 3))
+                if available_after == 99:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Directory profile console-ui is unavailable after 120s", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(json.loads((root / "stack/agent-profile.json").read_text()), {"id": "console-ui"})
 
     def test_linkly_requires_a_fresh_group_for_its_whole_dialogue(self):
         contract = campaign_contract()

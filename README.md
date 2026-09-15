@@ -167,28 +167,26 @@ Everything else is resolved here, from the commit pinned by `runner_sha`:
 
 ### Agent profiles from Release Control
 
-Release Control can select a test template for an execution and include an
-optional `agent_profile` in its frozen plan:
+Release Control can select an existing Directory agent profile for an execution
+by including its ID in the frozen plan:
 
 ```json
 {
-  "agent_profile": {
-    "id": "reviewer",
-    "content": "---\nname: Reviewer\nextends: iii\nmodel: zai::glm-5\nreasoning_effort: high\n---\nReview the implementation and verify the result."
-  }
+  "agent_profile": "console-ui"
 }
 ```
 
-`content` is the complete Directory profile Markdown, including frontmatter.
-The runner installs it into the isolated group's Directory before sending its
-ID as `agent` to `e2e::run`. Referenced parent profiles, skills, functions and
-the selected model/provider must be available in that stack. An existing file
-with the same profile ID causes setup to fail, protecting shared profiles.
-A profile's model
-overrides the plan's model; `provider::model` also selects its provider.
-Results record the resolved subject model and the profile configuration hash.
-Each execution keeps its selected template and profile; comparisons remain
-manual in Release Control. Omitting `agent_profile` keeps the built-in agent.
+For example, `console-ui` identifies **Console UI Engineer**. The runner reads
+the profile from the group's Directory and sends its ID as `agent` to `e2e::run`.
+The profile, its parent profiles, skills, functions, and model/provider must
+be available in that stack. The runner waits up to 120 seconds for Directory's
+background profile downloads; profiles that remain unavailable fail resolution.
+A profile's model overrides the plan's model; `provider::model` also selects its
+provider. Results record the resolved subject model and profile configuration
+hash, so changes to an existing profile remain visible between executions.
+Each execution keeps the selected profile ID; Run again resolves that ID in its
+test stack. Comparisons remain manual in Release Control. Omitting
+`agent_profile` keeps the built-in agent.
 
 `scripts/report_execution.py` posts what was observed to Release Control's run
 ledger over OIDC: `materialized` before anything runs, one `shard` per campaign

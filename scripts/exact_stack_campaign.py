@@ -133,10 +133,9 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
     if suite.get("agent_profile") is not None:
-        agent = require_keys(suite["agent_profile"], {"id", "content"}, "suite.agent_profile")
-        if not re.fullmatch(r"[a-z0-9_-]{1,64}", require_text(agent["id"], "suite.agent_profile.id")):
-            raise ValueError("suite.agent_profile.id must be a Directory agent id")
-        require_text(agent["content"], "suite.agent_profile.content")
+        agent = require_text(suite["agent_profile"], "suite.agent_profile")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent):
+            raise ValueError("suite.agent_profile must be a Directory agent id")
 
     groups = suite.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -474,7 +473,7 @@ def materialize_request(
         },
     }
     if suite.get("agent_profile") is not None:
-        request["agent"] = suite["agent_profile"]["id"]
+        request["agent"] = suite["agent_profile"]
     # The runner keys admission on the fully materialized request, including the
     # cases and their fingerprints — those only exist after scenarios-list, so
     # the dispatch key cannot be reused. Deterministic for transport retries.
