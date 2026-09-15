@@ -291,6 +291,7 @@ pub(crate) mod tests {
         let summary = execution_summary(&metadata(), Some(&report)).unwrap();
         assert_eq!(summary["status"], "passed");
         assert!(summary["totals"].get("average_score").is_none());
+        assert!(summary["totals"]["turns"].is_null());
         assert_eq!(summary["run_id"], "execution");
         assert_eq!(summary["lane"], "local");
         assert_eq!(summary["stack"]["mode"], "source");
@@ -677,6 +678,14 @@ pub(crate) mod tests {
                 by_session: Vec::new(),
                 traces: None,
             }));
+        let mut zero = value.clone();
+        let mut metrics = (**zero.scenarios[0].runs[0].metrics.as_ref().unwrap()).clone();
+        metrics.totals.turns = 0;
+        zero.scenarios[0].runs[0].metrics = Some(Observed::from_normalized(metrics));
+        assert_eq!(
+            execution_summary(&metadata(), Some(&zero)).unwrap()["totals"]["turns"],
+            0.0
+        );
         let run_dir = root.path().join("metric-activity");
         let mut run_metadata = metadata();
         run_metadata.id = "metric-activity".into();
@@ -687,6 +696,7 @@ pub(crate) mod tests {
             .unwrap();
 
         let model = DashboardReadModel::load(root.path()).unwrap();
+        assert_eq!(model.summaries[0]["totals"]["turns"], 3.0);
         let history = model
             .test_history(super::read_model::TestHistoryRequest {
                 test_id: "direct_answer".into(),

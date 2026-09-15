@@ -6,6 +6,71 @@ import {
 } from '@/test-fixtures/execution-metrics'
 
 describe('whole-execution metrics', () => {
+  it('sums input, output, cache and turns across runs and retries while preserving missing cache writes', () => {
+    const first = metricRun('first', 13, {
+      metrics: {
+        totals: {
+          input_tokens: 10,
+          output_tokens: 2,
+          cache_read_tokens: 20,
+          cache_write_tokens: 0,
+          turns: 2,
+        },
+      },
+      retry_attempts: [
+        {
+          ...metricRun('retry', 3),
+          session_id: 'retry-session',
+          attempt_number: 1,
+          metrics: {
+            totals: {
+              input_tokens: 3,
+              output_tokens: 1,
+              cache_read_tokens: 4,
+              cache_write_tokens: 0,
+              turns: 1,
+            },
+          },
+        },
+      ],
+    })
+    const second = metricRun('second', 5, {
+      metrics: {
+        totals: {
+          input_tokens: 5,
+          output_tokens: 0,
+          cache_read_tokens: 8,
+          turns: 3,
+        },
+      },
+    })
+    const metrics = buildExecutionMetrics(
+      executionMetricsFixture([{ runs: [first, second] }]),
+    )
+    expect(metrics.inputTokens).toMatchObject({
+      total: 18,
+      samples: 2,
+      expected: 2,
+    })
+    expect(metrics.cacheReadTokens.total).toBe(32)
+    expect(metrics.outputTokens).toMatchObject({
+      total: 3,
+      samples: 2,
+      expected: 2,
+    })
+    expect(metrics.turns.total).toBe(6)
+    expect(metrics.cacheWriteTokens).toEqual({
+      total: null,
+      observed: 0,
+      samples: 1,
+      expected: 2,
+    })
+    expect(
+      buildExecutionMetrics(executionMetricsFixture([{ runs: [second] }]))
+        .cacheWriteTokens,
+    ).toEqual({ total: null, observed: null, samples: 0, expected: 1 })
+  })
+
   it('pools the approved A/B/C example into one execution summary', () => {
     const metrics = buildExecutionMetrics(
       executionMetricsFixture([

@@ -17,10 +17,10 @@ pub const SCHEMA: &str = "harness-e2e-history";
 const PROFILE_SNAPSHOT_SCHEMA: &str = "harness-e2e-profile-snapshot";
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct HistoryImport {
-    pub json: String,
-    pub sha256: String,
+#[serde(untagged, deny_unknown_fields)]
+pub enum HistoryImport {
+    Json(String),
+    Checked { json: String, sha256: String },
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -113,11 +113,17 @@ pub enum GithubBundle {
 
 impl HistoryImport {
     pub fn decode(&self) -> Result<History> {
-        ensure!(
-            artifact::sha256_bytes(self.json.as_bytes()) == self.sha256,
-            "History transport checksum does not match its UTF-8 content"
-        );
-        let history: History = serde_json::from_str(&self.json).context("decode history export")?;
+        let json = match self {
+            Self::Json(json) => json,
+            Self::Checked { json, sha256 } => {
+                ensure!(
+                    artifact::sha256_bytes(json.as_bytes()) == *sha256,
+                    "History transport checksum does not match its UTF-8 content"
+                );
+                json
+            }
+        };
+        let history: History = serde_json::from_str(json).context("decode history export")?;
         history.validate()?;
         Ok(history)
     }
@@ -475,7 +481,10 @@ mod tests {
     #[test]
     fn malformed_or_truncated_history_never_passes_import_validation() {
         let mut input = fixture();
-        input.json.push(' ');
+        let HistoryImport::Checked { json, .. } = &mut input else {
+            panic!("fixture must contain a checked transport")
+        };
+        json.push(' ');
         assert!(input.decode().unwrap_err().to_string().contains("checksum"));
         let original = fixture().decode().unwrap();
         let mut history = original.clone();
@@ -502,6 +511,31 @@ mod tests {
         let mut history = original;
         history.executions[0].materialization.availability = MaterializationAvailability::Complete;
         assert!(history.validate().is_err());
+    }
+
+    #[test]
+    fn raw_file_and_checked_transport_decode_the_same_history() {
+        let checked = fixture();
+        let HistoryImport::Checked { json, .. } = &checked else {
+            panic!("fixture must contain a checked transport")
+        };
+        let raw: HistoryImport = serde_json::from_value(serde_json::json!(json)).unwrap();
+        assert_eq!(
+            serde_json::to_value(raw.decode().unwrap()).unwrap(),
+            serde_json::to_value(checked.decode().unwrap()).unwrap()
+        );
+        assert!(
+            serde_json::from_value::<HistoryImport>(serde_json::json!({"json": json})).is_err()
+        );
+        let mut invalid = checked.decode().unwrap();
+        invalid.executions.pop();
+        assert!(
+            HistoryImport::Json(serde_json::to_string(&invalid).unwrap())
+                .decode()
+                .unwrap_err()
+                .to_string()
+                .contains("counts")
+        );
     }
 
     #[test]
@@ -537,6 +571,9 @@ mod tests {
         let published: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
         assert_eq!(published, schema);
         let validator = jsonschema::JSONSchema::compile(&published).unwrap();
-        assert!(validator.is_valid(&serde_json::from_str::<Value>(&fixture().json).unwrap()));
+        let HistoryImport::Checked { json, .. } = fixture() else {
+            panic!("fixture must contain a checked transport")
+        };
+        assert!(validator.is_valid(&serde_json::from_str::<Value>(&json).unwrap()));
     }
 }

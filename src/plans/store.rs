@@ -37,6 +37,10 @@ pub(crate) enum Request {
     ImportHistory {
         history: crate::history::HistoryImport,
     },
+    RenameImportedExecution {
+        execution_id: String,
+        label: String,
+    },
     ReproduceReference {
         reference_execution_id: String,
         #[serde(default)]
@@ -822,6 +826,14 @@ impl PlanStore {
     pub(crate) async fn handle(self: &Arc<Self>, request: Request) -> Result<Value> {
         match request {
             Request::ImportHistory { history } => self.persistence()?.import_history(history).await,
+            Request::RenameImportedExecution {
+                execution_id,
+                label,
+            } => {
+                self.persistence()?
+                    .rename_imported_execution(&execution_id, &label)
+                    .await
+            }
             Request::ReproduceReference {
                 reference_execution_id,
                 label,

@@ -116,5 +116,19 @@ describe('SemanticTestFlow', () => {
     expect(html).toContain('Additional runtime counters')
     expect(html).not.toContain('<table')
     expect(html).not.toContain('Security review execution')
+    const multiple = renderToStaticMarkup(
+      <>
+        <SemanticTestFlow detail={detail} />
+        <SemanticTestFlow detail={detail} />
+      </>,
+    )
+    const headings = [...multiple.matchAll(/<h3 id="([^"]+)"/g)].map(
+      (match) => match[1],
+    )
+    expect(headings).toHaveLength(2)
+    expect(new Set(headings).size).toBe(2)
+    for (const id of headings) {
+      expect(multiple).toContain(`aria-labelledby="${id}"`)
+    }
   })
 })

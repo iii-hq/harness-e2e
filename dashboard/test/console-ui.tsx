@@ -7,6 +7,18 @@ import {
   useState,
 } from 'react'
 
+export function Tooltip({ children }: { children?: ReactNode }) {
+  return <>{children}</>
+}
+
+export function TooltipTrigger({ children }: { children?: ReactNode }) {
+  return <>{children}</>
+}
+
+export function TooltipContent() {
+  return null
+}
+
 export function PageShell(props: HTMLAttributes<HTMLDivElement>) {
   return <div {...props} />
 }

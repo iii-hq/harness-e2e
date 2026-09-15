@@ -1,7 +1,16 @@
-import { ExternalLink, PencilLine } from 'lucide-react'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@iii-dev/console-ui'
+import {
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  PencilLine,
+  RotateCcw,
+  Trash2,
+  X,
+} from 'lucide-react'
 import {
   type FormEvent,
-  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -17,7 +26,13 @@ import {
   type SparklinePoint,
 } from '@/components/PlanCharts'
 import { PlanProgress, Requirements } from '@/components/PlanStatus'
-import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
+import {
+  formatPrimaryMetric,
+  PRIMARY_SUMMARY_METRICS,
+  PrimaryMetricsView,
+  primaryMetricChange,
+  primaryMetricLabels,
+} from '@/components/PrimaryMetricsView'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -45,7 +60,10 @@ import {
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
+  type ImportedPlan,
+  type JsonObject,
   type LocalPlan,
+  type Plan,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import {
@@ -64,7 +82,6 @@ import {
   type PlanMetricComparison,
   type PlanMetricId,
   type PlanScenarioComparison,
-  executionMetricValue as planMetricValue,
 } from '@/lib/plan-comparison'
 import {
   downloadJson,
@@ -72,8 +89,77 @@ import {
   type PlanRequirements,
   planAction,
 } from '@/lib/plan-execution'
-import { buildPrimaryMetrics } from '@/lib/primary-metrics'
+import {
+  aggregatePrimaryMetrics,
+  comparePrimaryMetrics,
+  type MetricId,
+  type PrimaryMetrics,
+} from '@/lib/primary-metrics'
+import {
+  comparisonPrimaryMetrics,
+  exportReleaseControlHistory,
+  getImportedReference,
+  listComparisonExecutions,
+  type RcReference,
+} from '@/lib/release-control-reference'
 import { watchExecution } from '@/lib/watch-execution'
+
+function object(value: unknown): JsonObject {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as JsonObject)
+    : {}
+}
+
+function text(value: unknown) {
+  return typeof value === 'string' ? value : ''
+}
+
+function count(value: unknown) {
+  return typeof value === 'number' && Number.isInteger(value) ? value : null
+}
+
+function model(value: unknown) {
+  const entry = object(value)
+  return { provider: text(entry.provider), model: text(entry.model) }
+}
+
+function frozenSetup(reference: RcReference) {
+  const plan = object(reference.execution.plan)
+  const materialized = object(reference.materialized)
+  const profile = object(materialized.profile)
+  const campaigns = Array.isArray(materialized.campaigns)
+    ? materialized.campaigns.map(object)
+    : []
+  const groups = campaigns.flatMap((campaign) =>
+    Array.isArray(campaign.groups) ? campaign.groups.map(object) : [],
+  )
+  const scenarios = [
+    ...new Set(
+      groups
+        .flatMap((group) =>
+          Array.isArray(group.scenarios) ? group.scenarios : [],
+        )
+        .filter((id): id is string => typeof id === 'string'),
+    ),
+  ]
+  const seeds = new Map<string, string>()
+  for (const shard of reference.shards) {
+    if (!Array.isArray(shard.runs)) continue
+    for (const candidate of shard.runs.map(object)) {
+      const scenario = text(candidate.scenario_id)
+      const seed = candidate.seed
+      if (scenario && (typeof seed === 'number' || typeof seed === 'string'))
+        seeds.set(scenario, String(seed))
+    }
+  }
+  return {
+    subject: model(plan.subject),
+    scenarios,
+    repetitions: count(profile.repetitions),
+    technicalRetries: count(profile.technical_retries),
+    seeds,
+  }
+}
 
 /* ------------------------------------------------------------- helpers */
 
@@ -245,280 +331,222 @@ function lastRunSentence(summary: DashboardExecutionSummary | null) {
 
 /* ----------------------------------------------------------- lifecycle */
 
-/**
- * The plan's one primary action, first on the page (audit PD-04), with an
- * inline confirmation before a run starts (PD-08) and the baseline's own
- * outcome stated before candidates compare against it (PD-09).
- */
-export function PlanLifecycle({
+export function PlanRunDialog({
+  open,
+  onClose,
   plan,
   starting,
   feedback,
   onStart,
+  requirements,
   baselineSummary = null,
   lastRunSummary = null,
+  importedScope,
 }: {
-  plan: LocalPlan
+  open: boolean
+  onClose: () => void
+  plan: LocalPlan | null
+  importedScope?: React.ReactNode
   starting: PlanRunRole | null
   feedback: PlanRunFeedback | null
   onStart: (role: PlanRunRole) => void
+  requirements?: PlanRequirements | null
   baselineSummary?: DashboardExecutionSummary | null
   lastRunSummary?: DashboardExecutionSummary | null
 }) {
-  const [confirming, setConfirming] = useState<PlanRunRole | null>(null)
-  const runningRole: PlanRunRole | null = isRoleRunning(plan, 'baseline')
-    ? 'baseline'
-    : isRoleRunning(plan, 'candidate')
-      ? 'candidate'
-      : null
-  const activeFeedback =
-    feedback && feedback.phase !== 'running' ? feedback : null
-  const nextAction = nextPlanAction(plan)
-  const canStart =
-    nextAction.role !== null && starting === null && runningRole === null
+  const nextAction: PlanNextAction = plan
+    ? nextPlanAction(plan)
+    : {
+        title: 'Run plan',
+        detail:
+          'Run the imported test scope on the current local Harness. Results are kept with this plan history.',
+        role: 'baseline',
+        actionLabel: 'Run plan',
+        executionId: null,
+        state: 'ready',
+      }
+  const role = nextAction.role
   const baselineAttention =
     baselineSummary &&
     buildExecutionPresentation(baselineSummary).attention === 'needs_attention'
   const lastRun = lastRunSentence(lastRunSummary)
-
-  const confirmRole = (role: PlanRunRole) => {
-    setConfirming(null)
-    onStart(role)
-  }
-
-  // Audit ED-26: one line, not a callout — the state is in the header badge
-  // and the charts below say what the run changed.
+  const action = !plan
+    ? 'Run plan'
+    : role === 'baseline'
+      ? plan?.incomplete_execution_ids.length
+        ? 'Retry baseline'
+        : 'Run baseline'
+      : `Run candidate #${plan?.candidate_execution_ids.length + 1}`
   return (
-    <Panel
-      as="section"
-      padding="compact"
-      aria-labelledby="plan-lifecycle-title"
-      data-plan-lifecycle={nextAction.state}
-    >
-      <div
-        className="grid gap-3 @[840px]:grid-cols-[minmax(0,1fr)_auto] @[840px]:items-center"
-        aria-live="polite"
-      >
-        <div className="min-w-0">
-          <h2 id="plan-lifecycle-title" className="m-0 text-sm font-semibold">
-            {nextAction.title}
-          </h2>
-          <p className="mt-0.5 mb-0 max-w-[64rem] text-xs leading-5 text-ink-soft">
-            {nextAction.detail}
-          </p>
-          {baselineAttention && plan.baseline_execution_id ? (
-            <p className="mt-2 mb-0 max-w-[48rem] text-sm leading-6 text-warning">
-              The baseline was captured with failing tests; candidates compare
-              against that failing baseline.{' '}
-              <a
-                className="text-ink underline underline-offset-4"
-                href={hashForExecution(plan.baseline_execution_id)}
-              >
-                open the baseline report
-              </a>
-            </p>
-          ) : null}
-        </div>
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {nextAction.executionId ? (
+    <Dialog
+      open={open}
+      onClose={() => !starting && onClose()}
+      title={role ? `${action}?` : nextAction.title}
+      description={
+        role === 'baseline'
+          ? nextAction.detail
+          : 'Run the saved test scope with the same model, seeds and policy.'
+      }
+      bodyPadding
+      footer={
+        <div className="flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            className={buttonClassName({ variant: 'secondary' })}
+            disabled={starting !== null}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          {role ? (
+            <button
+              type="button"
+              className={buttonClassName({ variant: 'primary' })}
+              disabled={
+                starting !== null ||
+                plan?.protected_executor_required ||
+                plan?.compatible === false
+              }
+              aria-busy={starting !== null}
+              onClick={() => onStart(role)}
+            >
+              {starting ? 'Starting…' : action}
+            </button>
+          ) : nextAction.executionId ? (
             <a
               className={buttonClassName({ variant: 'primary' })}
               href={hashForExecution(nextAction.executionId)}
             >
-              {nextAction.actionLabel}
+              View active execution
             </a>
-          ) : nextAction.role ? (
-            <button
-              className={buttonClassName({ variant: 'primary' })}
-              type="button"
-              onClick={() => setConfirming(nextAction.role)}
-              disabled={!canStart || confirming !== null}
-            >
-              {starting === nextAction.role
-                ? `starting ${roleLabel(nextAction.role).toLowerCase()}…`
-                : nextAction.actionLabel}
-            </button>
-          ) : null}
-          {nextAction.state === 'complete' ? (
-            <>
-              {plan.baseline_execution_id ? (
-                <a
-                  className={buttonClassName({ variant: 'secondary' })}
-                  href={hashForExecution(plan.baseline_execution_id)}
-                >
-                  view baseline execution
-                </a>
-              ) : null}
-              <button
-                className={buttonClassName({ variant: 'secondary' })}
-                type="button"
-                onClick={() => setConfirming('candidate')}
-                disabled={
-                  starting !== null ||
-                  runningRole !== null ||
-                  confirming !== null
-                }
-              >
-                run another candidate
-              </button>
-            </>
           ) : null}
         </div>
+      }
+    >
+      <div className="grid gap-4">
+        {plan ? (
+          <p className="m-0 text-sm font-medium">{scopeSentence(plan)}</p>
+        ) : (
+          importedScope
+        )}
+        {lastRun ? (
+          <p className="m-0 text-xs text-ink-muted">{lastRun}</p>
+        ) : null}
+        {baselineAttention ? (
+          <Callout tone="warning" title="Baseline contains failing tests">
+            This candidate will compare against that failing baseline.
+          </Callout>
+        ) : null}
+        {nextAction.state === 'complete' && nextAction.executionId ? (
+          <a
+            className="text-sm text-ink underline"
+            href={hashForExecution(nextAction.executionId)}
+          >
+            Review latest candidate
+          </a>
+        ) : null}
+        {requirements ? <Requirements value={requirements} /> : null}
+        {feedback && feedback.phase !== 'running' ? (
+          <div data-plan-run-feedback={feedback.phase} aria-live="polite">
+            <Callout
+              tone={feedback.phase === 'error' ? 'danger' : 'info'}
+              title={feedback.message}
+            />
+          </div>
+        ) : null}
       </div>
-      {confirming ? (
-        <div className="mt-4">
-          <Callout
-            tone="info"
-            title={`confirm · ${confirming === 'baseline' ? (plan.incomplete_execution_ids.length ? 'retry baseline' : 'run baseline') : `run candidate #${plan.candidate_execution_ids.length + 1}`}`}
-          >
-            <p className="m-0">
-              {confirming === 'baseline'
-                ? 'This captures the scope, seeds and policy and starts a run: '
-                : 'This reruns the saved scope: '}
-              <span className="font-mono">{scopeSentence(plan)}</span>
-              {lastRun ? ` · ${lastRun}` : ''}.
-            </p>
-            <div className="mt-3 flex flex-wrap gap-2">
-              <button
-                className={buttonClassName({
-                  variant: 'primary',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => confirmRole(confirming)}
-              >
-                {confirming === 'baseline'
-                  ? plan.incomplete_execution_ids.length
-                    ? 'confirm · retry baseline'
-                    : 'confirm · run baseline'
-                  : 'confirm · run candidate'}
-              </button>
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => setConfirming(null)}
-              >
-                cancel
-              </button>
-            </div>
-          </Callout>
-        </div>
-      ) : null}
-      {lastRunSummary?.live_progress ? (
-        <LiveProgressPanel
-          progress={lastRunSummary.live_progress}
-          running={
-            lastRunSummary.status === 'running' ||
-            lastRunSummary.status === 'cancelling'
-          }
-        />
-      ) : null}
-      {lastRunSummary?.live_progress_error ? (
-        <p className="mt-4 text-sm text-warning" role="status">
-          {lastRunSummary.live_progress_error}
-        </p>
-      ) : null}
-      {activeFeedback ? (
-        <div className="mt-4" data-plan-run-feedback={activeFeedback.phase}>
-          <Callout
-            tone={activeFeedback.phase === 'error' ? 'danger' : 'info'}
-            title={activeFeedback.message}
-          >
-            {activeFeedback.executionId ? (
-              <a
-                className="text-ink underline underline-offset-4"
-                href={hashForExecution(activeFeedback.executionId)}
-              >
-                open active execution
-              </a>
-            ) : null}
-          </Callout>
-        </div>
-      ) : null}
-    </Panel>
+    </Dialog>
   )
 }
 
 /* --------------------------------------------------------------- scope */
 
-/** Audit PD-06 / ED-26: the scope stays visible test by test — as one band of
- *  facts, the way the execution page carries its identity, not a panel. The
- *  endpoint is provenance and lives in that layer. */
 export function PlanScope({
   plan,
-  baselineSummary = null,
+  reference,
 }: {
-  plan: LocalPlan
-  baselineSummary?: DashboardExecutionSummary | null
+  plan: Plan
+  reference?: RcReference | null
 }) {
-  const scenarios = plan.scenarios.length
-    ? plan.scenarios.map((scenario) => ({
+  const frozen = reference ? frozenSetup(reference) : null
+  const scope =
+    plan.origin === 'remote'
+      ? {
+          scenarios: [],
+          scenario_ids: frozen?.scenarios ?? [],
+          runs: frozen?.repetitions,
+          technical_retries: frozen?.technicalRetries,
+          seed: null,
+          ...model(object(plan.configuration).subject),
+        }
+      : plan
+  const scenarios = scope.scenarios.length
+    ? scope.scenarios.map((scenario) => ({
         id: scenario.scenario_id,
-        label: `${scenario.scenario_id} · ${shortDefinition(scenario.behavior_sha256)}`,
+        definition: shortDefinition(scenario.behavior_sha256),
         title: definitionTitle(scenario.behavior_sha256),
       }))
-    : plan.scenario_ids.map((id) => ({ id, label: id, title: undefined }))
-  const baselineCaptured =
-    baselineSummary?.completed_at ?? baselineSummary?.started_at ?? null
-  const facts: Array<[string, ReactNode]> = [
-    [
-      plan.locked ? 'scope · saved' : 'scope',
-      <span className="flex flex-wrap gap-x-2 gap-y-1" key="scope">
-        {scenarios.map((scenario, index) => (
-          <a
-            className="text-ink underline-offset-4 hover:underline"
-            href={hashForTestHistory(scenario.id)}
-            key={scenario.id}
-            title={scenario.title}
-          >
-            {scenario.label}
-            {index < scenarios.length - 1 ? ' ·' : ''}
-          </a>
-        ))}
-      </span>,
-    ],
-    [
-      'runs',
-      `${plan.runs} per test · ${plan.technical_retries} retr${plan.technical_retries === 1 ? 'y' : 'ies'} · ${plan.seed === null ? 'canonical seed' : `seed ${plan.seed}`}`,
-    ],
-    [
-      'model',
-      plan.model
-        ? `${plan.model}${plan.provider ? ` · ${plan.provider}` : ''}`
-        : 'not set',
-    ],
-    [
-      'baseline captured',
-      baselineCaptured
-        ? formatDate(baselineCaptured)
-        : plan.baseline_execution_id
-          ? 'date unavailable'
-          : 'not captured',
-    ],
-    ['created', formatDate(plan.created_at)],
-    [
-      'id',
-      plan.id.length > 20
-        ? `${plan.id.slice(0, 9)}…${plan.id.slice(-8)}`
-        : plan.id,
-    ],
-  ]
+    : scope.scenario_ids.map((id) => ({
+        id,
+        definition: null,
+        title: undefined,
+      }))
   return (
-    <dl
-      className="m-0 flex flex-wrap gap-x-6 gap-y-2 rounded-[6px] bg-[var(--surface-fill)] px-4 py-3 font-mono text-xs"
-      aria-label="Plan scope"
+    <section
+      id="plan-scope"
+      className="min-w-0 rounded-[6px] bg-[var(--surface-fill)] p-5"
+      aria-labelledby="plan-scope-title"
       data-plan-scope
     >
-      {facts.map(([label, value]) => (
-        <div className="flex min-w-0 items-baseline gap-2" key={label}>
-          <dt className="ds-label whitespace-nowrap">{label}</dt>
-          <dd className="m-0 min-w-0 break-words text-ink">{value}</dd>
-        </div>
-      ))}
-    </dl>
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="plan-scope-title" className="m-0 text-base font-semibold">
+          Test scope
+        </h2>
+        <span className="text-xs text-ink-muted">
+          {scenarios.length} {scenarios.length === 1 ? 'test' : 'tests'} ·{' '}
+          {scope.runs} {scope.runs === 1 ? 'run' : 'runs'} per test
+        </span>
+      </div>
+      <dl className="m-0 mt-4 flex flex-wrap gap-x-8 gap-y-3 text-xs">
+        {[
+          ['Model', scope.model || 'Not set'],
+          ['Provider', scope.provider || 'Not set'],
+          ['Technical retries', scope.technical_retries],
+          [
+            'Seed',
+            plan.origin === 'remote'
+              ? 'Frozen per test'
+              : (scope.seed ?? 'Canonical'),
+          ],
+        ].map(([label, value]) => (
+          <div key={label} className="grid gap-1">
+            <dt className="text-ink-muted">{label}</dt>
+            <dd className="m-0 font-mono text-ink">{value}</dd>
+          </div>
+        ))}
+      </dl>
+      <ul className="m-0 mt-4 flex list-none flex-wrap gap-2 p-0">
+        {scenarios.map((scenario) => (
+          <li key={scenario.id}>
+            <a
+              className={buttonClassName({
+                variant: 'secondary',
+                size: 'compact',
+              })}
+              href={hashForTestHistory(scenario.id)}
+              title={scenario.title}
+            >
+              {scenarioName(scenario.id)}
+              {scenario.definition ? (
+                <span className="font-mono text-label text-ink-muted">
+                  {scenario.definition}
+                </span>
+              ) : null}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
   )
 }
 
@@ -547,77 +575,112 @@ function executionStatus(
 type ExecutionHistoryRow = {
   id: string
   role: 'baseline' | 'candidate' | 'attempt'
-  label: string
   detail: string
   summary: DashboardExecutionSummary | null
   fallback: 'running' | 'incomplete' | null
-  candidateNumber: number | null
 }
 
 export function executionHistoryRows(
-  plan: LocalPlan,
+  plan: Plan,
   summaries: Record<string, DashboardExecutionSummary>,
+  executionIds?: string[],
 ): ExecutionHistoryRow[] {
   const rows: ExecutionHistoryRow[] = []
   const retained = new Set<string>()
-  if (plan.baseline_execution_id) {
-    retained.add(plan.baseline_execution_id)
-    rows.push({
-      id: plan.baseline_execution_id,
-      role: 'baseline',
-      label: 'Baseline',
-      detail: '',
-      summary: summaries[plan.baseline_execution_id] ?? null,
-      fallback: null,
-      candidateNumber: null,
-    })
+  if (plan.origin !== 'remote') {
+    if (plan.baseline_execution_id) {
+      retained.add(plan.baseline_execution_id)
+      rows.push({
+        id: plan.baseline_execution_id,
+        role: 'baseline',
+        detail: '',
+        summary: summaries[plan.baseline_execution_id] ?? null,
+        fallback: null,
+      })
+    }
+    if (
+      plan.last_attempt_id &&
+      ['baseline_running', 'candidate_running'].includes(plan.state)
+    ) {
+      retained.add(plan.last_attempt_id)
+      const baselineRun = plan.state === 'baseline_running'
+      rows.push({
+        id: plan.last_attempt_id,
+        role: baselineRun ? 'baseline' : 'candidate',
+        detail: 'Active execution',
+        summary: summaries[plan.last_attempt_id] ?? null,
+        fallback: 'running',
+      })
+    }
+    for (
+      let index = plan.candidate_execution_ids.length - 1;
+      index >= 0;
+      index--
+    ) {
+      const id = plan.candidate_execution_ids[index]
+      if (retained.has(id)) continue
+      retained.add(id)
+      rows.push({
+        id,
+        role: 'candidate',
+        detail:
+          index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
+        summary: summaries[id] ?? null,
+        fallback: null,
+      })
+    }
+    for (const id of [...plan.incomplete_execution_ids].reverse()) {
+      if (retained.has(id)) continue
+      rows.push({
+        id,
+        role: 'attempt',
+        detail: 'Incomplete results',
+        summary: summaries[id] ?? null,
+        fallback: 'incomplete',
+      })
+    }
   }
-  if (
-    plan.last_attempt_id &&
-    ['baseline_running', 'candidate_running'].includes(plan.state)
-  ) {
-    retained.add(plan.last_attempt_id)
-    const baselineRun = plan.state === 'baseline_running'
-    rows.push({
-      id: plan.last_attempt_id,
-      role: baselineRun ? 'baseline' : 'candidate',
-      label: baselineRun ? 'Baseline in progress' : 'Candidate in progress',
-      detail: 'Active execution',
-      summary: summaries[plan.last_attempt_id] ?? null,
-      fallback: 'running',
-      candidateNumber: null,
-    })
-  }
-  for (
-    let index = plan.candidate_execution_ids.length - 1;
-    index >= 0;
-    index--
-  ) {
-    const id = plan.candidate_execution_ids[index]
-    retained.add(id)
-    rows.push({
-      id,
-      role: 'candidate',
-      label: `Candidate #${index + 1}`,
-      detail: index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
-      summary: summaries[id] ?? null,
-      fallback: null,
-      candidateNumber: index + 1,
-    })
-  }
-  for (const id of [...plan.incomplete_execution_ids].reverse()) {
-    if (retained.has(id)) continue
+  for (const id of executionIds ??
+    (plan.origin === 'remote' ? plan.execution_ids : [])) {
+    if (rows.some((row) => row.id === id)) continue
     rows.push({
       id,
       role: 'attempt',
-      label: 'Incomplete attempt',
-      detail: 'Excluded from comparison',
+      detail: '',
       summary: summaries[id] ?? null,
-      fallback: 'incomplete',
-      candidateNumber: null,
+      fallback: null,
     })
   }
-  return rows
+  return rows.sort((a, b) => {
+    const left = Date.parse(a.summary?.started_at ?? '')
+    const right = Date.parse(b.summary?.started_at ?? '')
+    return (
+      (Number.isFinite(left) ? left : Infinity) -
+      (Number.isFinite(right) ? right : Infinity)
+    )
+  })
+}
+
+function executionHistoryLabel(
+  plan: Plan,
+  row: Pick<ExecutionHistoryRow, 'id' | 'summary'>,
+) {
+  const label =
+    row.summary?.execution_label ||
+    (plan.origin !== 'remote' ? plan.candidate_labels?.[row.id] : null)
+  if (label) return label
+  const recordedLabel = row.summary?.label
+  if (recordedLabel && recordedLabel !== plan.label && recordedLabel !== row.id)
+    return recordedLabel
+  return (
+    row.summary?.subjects
+      .map((subject) => subject.model)
+      .filter(Boolean)
+      .join(', ') ||
+    (plan.origin !== 'remote' && row.summary?.origin !== 'remote'
+      ? plan.model
+      : 'Execution')
+  )
 }
 
 export function selectedPlanCandidate(
@@ -630,10 +693,16 @@ export function selectedPlanCandidate(
 }
 
 export function planExecutionLabel(
-  plan: LocalPlan,
+  plan: Plan,
   executionId: string | null,
+  summary?: DashboardExecutionSummary | null,
 ) {
   if (!executionId) return 'Execution unavailable'
+  if (summary) return executionHistoryLabel(plan, { id: executionId, summary })
+  if (plan.origin === 'remote') {
+    const index = plan.execution_ids.indexOf(executionId)
+    return index < 0 ? executionId : `Imported execution #${index + 1}`
+  }
   if (executionId === plan.baseline_execution_id) return 'Official baseline'
   const candidateIndex = plan.candidate_execution_ids.indexOf(executionId)
   if (candidateIndex < 0) return executionId
@@ -696,9 +765,13 @@ function ExecutionNameControl({
           <button
             className={buttonClassName({ variant: 'primary', size: 'compact' })}
             disabled={saving}
+            aria-label={
+              saving ? 'Saving execution name' : 'Save execution name'
+            }
+            title="Save execution name"
             type="submit"
           >
-            {saving ? 'saving…' : 'save'}
+            <Check aria-hidden="true" size={14} />
           </button>
           <button
             className={buttonClassName({
@@ -706,6 +779,8 @@ function ExecutionNameControl({
               size: 'compact',
             })}
             disabled={saving}
+            aria-label="Cancel rename"
+            title="Cancel rename"
             type="button"
             onClick={() => {
               setDraft(label)
@@ -713,7 +788,7 @@ function ExecutionNameControl({
               setEditing(false)
             }}
           >
-            cancel
+            <X aria-hidden="true" size={14} />
           </button>
         </form>
       ) : (
@@ -725,7 +800,6 @@ function ExecutionNameControl({
           onClick={() => setEditing(true)}
         >
           <PencilLine aria-hidden="true" size={14} strokeWidth={1.8} />
-          rename
         </button>
       )}
       {error ? (
@@ -741,12 +815,23 @@ function finiteExecutionMetric(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
-type RunMetric = 'tokens' | 'duration' | 'turns' | 'calls' | 'errors'
+type RunMetric = 'score' | 'tokens' | 'duration' | 'turns' | 'calls' | 'errors'
 
 function executionMetricNumber(
   summary: DashboardExecutionSummary | null,
   metric: RunMetric,
 ) {
+  if (metric === 'score') {
+    const scores =
+      summary?.subjects.flatMap((subject) =>
+        subject.scenarios.map((scenario) =>
+          finiteExecutionMetric(scenario.mean_score),
+        ),
+      ) ?? []
+    return scores.length > 0 && scores.every((score) => score !== null)
+      ? scores.reduce((total, score) => total + score, 0) / scores.length
+      : null
+  }
   const totals = summary?.totals
   return finiteExecutionMetric(
     metric === 'tokens'
@@ -768,6 +853,8 @@ export function executionMetricValue(
   const numeric = executionMetricNumber(summary, metric)
   if (numeric === null) return '—'
   if (metric === 'duration') return formatDuration(numeric)
+  if (metric === 'score')
+    return numeric.toLocaleString('en-US', { maximumFractionDigits: 2 })
   return Math.round(numeric).toLocaleString('en-US')
 }
 
@@ -784,94 +871,46 @@ const RUN_METRICS: Array<{ id: RunMetric; label: string }> = [
  * hidden (audit PD-12); incomplete attempts stay listed but excluded from
  * comparison.
  */
-/** Closed-row scent for the executions layer: who ran, how it ended, when,
- *  and what it consumed (audit ED-26). */
-export function executionsScent(
-  plan: LocalPlan,
-  rows: ExecutionHistoryRow[],
-): string {
-  return rows
-    .map((row) => {
-      const status = executionStatus(row.summary, row.fallback)
-      const timestamp = row.summary?.completed_at || row.summary?.started_at
-      const tokens = executionMetricNumber(row.summary, 'tokens')
-      return [
-        row.role === 'attempt' ? row.label : planExecutionLabel(plan, row.id),
-        status.label,
-        timestamp
-          ? `${row.fallback === 'running' ? 'since ' : ''}${formatDate(timestamp)}`
-          : null,
-        tokens === null
-          ? null
-          : `${Math.round(tokens).toLocaleString('en-US')} tokens`,
-      ]
-        .filter(Boolean)
-        .join(' · ')
-    })
-    .join(' \u00a0·\u00a0 ')
-}
-
 export function PlanRunHistory({
   plan,
   summaries,
-  onRenameCandidate,
-  headless = false,
+  onRenameExecution,
+  executionIds,
 }: {
-  plan: LocalPlan
+  plan: Plan
+  executionIds?: string[]
   summaries: Record<string, DashboardExecutionSummary>
-  onRenameCandidate?: (executionId: string, label: string) => Promise<void>
-  /** Inside the executions layer the layer row is the heading. */
-  headless?: boolean
+  onRenameExecution?: (executionId: string, label: string) => Promise<void>
 }) {
-  const rows = executionHistoryRows(plan, summaries)
+  const rows = executionHistoryRows(plan, summaries, executionIds)
   if (rows.length === 0) return null
   const metrics = RUN_METRICS.filter(({ id }) =>
     rows.some((row) => executionMetricNumber(row.summary, id) !== null),
   )
 
-  const Shell = headless
-    ? ({ children }: { children: ReactNode }) => (
-        <div className="min-w-0" data-plan-run-history="headless">
-          <p className="mt-0 mb-3 text-xs leading-5 text-ink-soft">
-            Every retained run with its result and usage. Incomplete attempts
-            are not included in this comparison.
-          </p>
-          {children}
-        </div>
-      )
-    : ({ children }: { children: ReactNode }) => (
-        <Panel
-          as="section"
-          padding="default"
-          aria-labelledby="plan-run-history-title"
-          data-plan-run-history
-        >
-          <div className="flex flex-wrap items-end justify-between gap-3">
-            <div>
-              <h2
-                id="plan-run-history-title"
-                className="m-0 text-base font-semibold"
-              >
-                runs · {rows.length}
-              </h2>
-              <p className="mt-1 mb-0 text-xs leading-5 text-ink-soft">
-                Every retained run with its result and usage. Incomplete
-                attempts are not included in this comparison.
-              </p>
-            </div>
-          </div>
-          <div className="mt-4">{children}</div>
-        </Panel>
-      )
-
   return (
-    <Shell>
+    <section
+      id="plan-executions"
+      className="min-w-0"
+      aria-labelledby="plan-run-history-title"
+      data-plan-run-history
+    >
+      <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="plan-run-history-title" className="m-0 text-base font-semibold">
+          Executions
+        </h2>
+        <span className="text-xs text-ink-muted">
+          {rows.length} {rows.length === 1 ? 'execution' : 'executions'}
+        </span>
+      </div>
       <DataTable caption={`Plan runs, ${rows.length}`} collapse>
         <thead>
           <tr>
             <th scope="col">Run</th>
             <th scope="col">Result</th>
-            <th scope="col">Captured</th>
+            <th scope="col" className={numericCellClassName}>
+              Score / 100
+            </th>
             {metrics.map((metric) => (
               <th key={metric.id} scope="col" className={numericCellClassName}>
                 {metric.label}
@@ -885,47 +924,53 @@ export function PlanRunHistory({
         <tbody>
           {rows.map((row) => {
             const status = executionStatus(row.summary, row.fallback)
-            const timestamp =
-              row.summary?.completed_at || row.summary?.started_at || ''
-            const role =
-              row.role === 'baseline'
-                ? 'baseline'
-                : row.role === 'candidate'
-                  ? `candidate ${row.candidateNumber ?? ''}`.trim()
-                  : 'attempt'
-            const displayLabel =
-              row.role === 'attempt'
-                ? row.label
-                : planExecutionLabel(plan, row.id)
+            const displayLabel = executionHistoryLabel(plan, row)
+            const imported = row.summary?.origin === 'remote'
+            const startedAt = row.summary?.started_at
+            const canRename =
+              imported || (plan.origin !== 'remote' && row.role === 'candidate')
             return (
               <DataTableRow
                 key={`${row.role}:${row.id}`}
                 data-run-role={row.role}
+                data-execution-id={row.id}
               >
                 <td data-label="Run">
                   <span className="grid gap-1">
-                    <span className="ds-label">{role}</span>
                     <span className="flex flex-wrap items-center gap-2">
                       <strong className="font-mono text-[0.8125rem] text-ink">
                         {displayLabel}
                       </strong>
-                      {row.role === 'candidate' && onRenameCandidate ? (
+                      <span className="rounded bg-panel px-1.5 py-0.5 text-label text-ink-muted">
+                        {imported ? 'release-control' : 'local'}
+                      </span>
+                      {canRename && onRenameExecution ? (
                         <ExecutionNameControl
                           executionId={row.id}
-                          fallbackLabel={`Candidate #${row.candidateNumber ?? 1}`}
-                          label={plan.candidate_labels?.[row.id] ?? ''}
-                          onRename={onRenameCandidate}
+                          fallbackLabel={displayLabel}
+                          label={
+                            imported
+                              ? (row.summary?.execution_label ?? '')
+                              : plan.origin !== 'remote'
+                                ? (plan.candidate_labels?.[row.id] ?? '')
+                                : ''
+                          }
+                          onRename={onRenameExecution}
                         />
                       ) : null}
                     </span>
-                    <code
-                      className="font-mono text-label text-ink-muted"
-                      title={row.id}
-                    >
-                      {row.id.length > 18
-                        ? `${row.id.slice(0, 12)}…${row.id.slice(-4)}`
-                        : row.id}
-                    </code>
+                    {startedAt && Number.isFinite(Date.parse(startedAt)) ? (
+                      <time
+                        className="text-label text-ink-muted"
+                        dateTime={startedAt}
+                      >
+                        {formatDate(startedAt)}
+                      </time>
+                    ) : (
+                      <span className="text-label text-ink-muted">
+                        Execution date unavailable
+                      </span>
+                    )}
                   </span>
                 </td>
                 <td data-label="Result">
@@ -936,13 +981,8 @@ export function PlanRunHistory({
                     </span>
                   ) : null}
                 </td>
-                <td data-label="Captured">
-                  <time
-                    className="text-xs text-ink-soft"
-                    dateTime={timestamp || undefined}
-                  >
-                    {timestamp ? formatDate(timestamp) : 'date unavailable'}
-                  </time>
+                <td data-label="Score / 100" className={numericCellClassName}>
+                  {executionMetricValue(row.summary, 'score')}
                 </td>
                 {metrics.map((metric) => (
                   <td
@@ -968,7 +1008,6 @@ export function PlanRunHistory({
                       size={13}
                       strokeWidth={1.8}
                     />
-                    report
                   </a>
                 </td>
               </DataTableRow>
@@ -976,7 +1015,7 @@ export function PlanRunHistory({
           })}
         </tbody>
       </DataTable>
-    </Shell>
+    </section>
   )
 }
 
@@ -998,34 +1037,6 @@ export const PLAN_COMPARISON_TABLE_METRICS = [
   'function_errors',
   'turns',
 ] as const
-
-/** Layer 0 draws these as trend tiles, grouped the way the execution page
- *  groups its metrics: what came out, then what it consumed. */
-export const PLAN_TREND_BANDS: Array<{
-  id: string
-  label: string
-  metrics: PlanMetricId[]
-}> = [
-  {
-    id: 'evidence',
-    label: 'evidence',
-    metrics: ['coverage', 'technical_failures'],
-  },
-  {
-    id: 'consumption',
-    label: 'consumption',
-    metrics: [
-      'tokens',
-      'tokens_per_completion',
-      'failed_attempt_tokens',
-      'duration',
-      'turns',
-    ],
-  },
-]
-const PLAN_TREND_METRICS: PlanMetricId[] = PLAN_TREND_BANDS.flatMap(
-  (band) => band.metrics,
-)
 
 const PLAN_SCENARIO_TABLE_METRICS: PlanMetricId[] = [
   'duration',
@@ -1063,7 +1074,8 @@ type MetricRow = {
 }
 
 export type PlanComparisonInput = {
-  plan: LocalPlan
+  plan: Plan
+  executionIds?: string[]
   summaries: Record<string, DashboardExecutionSummary>
   visualBaselineId: string | null
   comparisonCandidateIds: string[]
@@ -1095,22 +1107,18 @@ export function buildPlanComparisonModel(
   const {
     plan,
     summaries,
+    executionIds,
     visualBaselineId,
     comparisonCandidateIds,
     selectedCandidateId,
     scenarioComparison = null,
   } = input
-  // Comparison is only useful once there is an official baseline and a
-  // second completed execution to compare with it.
-  if (!plan.baseline_execution_id || plan.candidate_execution_ids.length === 0)
-    return null
-  const rows = executionHistoryRows(plan, summaries)
+  if (!visualBaselineId || comparisonCandidateIds.length === 0) return null
+  const rows = executionHistoryRows(plan, summaries, executionIds)
   const baseline = visualBaselineId
     ? (summaries[visualBaselineId] ?? null)
     : null
-  const selectableRows = rows.filter(
-    (row) => row.role !== 'attempt' && row.fallback !== 'running',
-  )
+  const selectableRows = rows.filter((row) => row.fallback !== 'running')
   const visualBaselineRow = rows.find((row) => row.id === visualBaselineId)
   const comparisonRows = rows.filter((row) =>
     comparisonCandidateIds.includes(row.id),
@@ -1145,7 +1153,7 @@ export function buildPlanComparisonModel(
       ? [
           {
             id: column.row.id,
-            label: planExecutionLabel(plan, column.row.id),
+            label: planExecutionLabel(plan, column.row.id, column.row.summary),
             comparison,
           },
         ]
@@ -1178,9 +1186,10 @@ export function buildPlanComparisonModel(
 }
 
 export type PlanTrendTile = {
-  id: PlanMetricId
+  id: MetricId
   label: string
   value: string
+  partial: boolean
   delta: string | null
   tone: PlanMetricComparison['tone']
   reference: number | null
@@ -1200,38 +1209,70 @@ function formatWith(
 /** One tile per metric: the selected candidate's value, its delta against the
  *  reference, and every completed execution in capture order behind it. */
 export function planTrendTiles(
-  plan: LocalPlan,
-  summaries: Record<string, DashboardExecutionSummary>,
+  plan: Plan,
   model: PlanComparisonModel,
   visualBaselineId: string | null,
-  ids: PlanMetricId[],
+  metricsByExecution: Record<string, PrimaryMetrics>,
+  excludeEmptyTests = false,
 ): PlanTrendTile[] {
   const orderedIds = [
-    plan.baseline_execution_id,
-    ...plan.candidate_execution_ids,
-  ].filter((id): id is string => Boolean(id))
+    ...new Set(
+      [
+        ...(plan.origin === 'remote'
+          ? plan.execution_ids
+          : [plan.baseline_execution_id, ...plan.candidate_execution_ids]),
+        ...model.rows
+          .filter((row) => row.fallback !== 'running')
+          .map((row) => row.id),
+      ].filter((id): id is string => Boolean(id)),
+    ),
+  ]
   const running =
+    plan.origin !== 'remote' &&
     ['baseline_running', 'candidate_running'].includes(plan.state) &&
     plan.last_attempt_id &&
     !orderedIds.includes(plan.last_attempt_id)
       ? plan.last_attempt_id
       : null
   const selected = model.selectedColumn
-  const referenceSource = model.columns[0]?.metricSource ?? null
-  return ids.map((id) => {
-    const source = selected?.metricSource
-      ? metricById(selected.metricSource, id)
+  const baseline = visualBaselineId
+    ? metricsByExecution[visualBaselineId]
+    : undefined
+  const candidate = selected ? metricsByExecution[selected.row.id] : undefined
+  const selectedMetrics =
+    baseline && candidate
+      ? comparePrimaryMetrics(baseline, candidate, excludeEmptyTests)
       : null
-    const descriptor =
-      source ?? (referenceSource ? metricById(referenceSource, id) : null)
-    const side: 'baseline' | 'candidate' = selected?.rowComparison
-      ? 'candidate'
-      : 'baseline'
+  const scope = new Set(selectedMetrics?.tests.map((test) => test.key))
+  const historyMetrics = Object.fromEntries(
+    orderedIds.map((executionId) => {
+      const metrics = metricsByExecution[executionId]
+      return [
+        executionId,
+        metrics && excludeEmptyTests && selectedMetrics
+          ? comparePrimaryMetrics(
+              selectedMetrics.baseline,
+              aggregatePrimaryMetrics(
+                metrics.tests.filter((test) => scope.has(test.key)),
+              ),
+              false,
+            ).candidate
+          : metrics,
+      ]
+    }),
+  )
+  return PRIMARY_SUMMARY_METRICS.map((id) => {
+    const a = selectedMetrics?.baseline.metrics[id] ?? baseline?.metrics[id]
+    const b = selectedMetrics?.candidate.metrics[id] ?? candidate?.metrics[id]
     const points: SparklinePoint[] = orderedIds.map((executionId) => {
-      const value = planMetricValue(summaries[executionId] ?? null, id)
+      const metric =
+        executionId === visualBaselineId
+          ? a
+          : historyMetrics[executionId]?.metrics[id]
+      const value = metric?.value ?? metric?.observed ?? null
       return {
         id: executionId,
-        label: `${planExecutionLabel(plan, executionId)} · ${formatWith(descriptor, value)}`,
+        label: `${planExecutionLabel(plan, executionId, model.rows.find((row) => row.id === executionId)?.summary)} · ${formatPrimaryMetric(id, value)}${metric?.value === null && metric.observed !== null ? ' · Partial' : ''}`,
         value,
         role:
           executionId === visualBaselineId
@@ -1248,16 +1289,18 @@ export function planTrendTiles(
         value: null,
         role: 'running',
       })
+    const metric = selected ? b : a
     return {
       id,
-      label: descriptor?.label ?? titleCase(id),
-      value: source ? formatPlanMetricValue(source, side) : '—',
-      delta:
-        source && selected?.rowComparison
-          ? formatPlanMetricDelta(source)
-          : null,
-      tone: source?.tone ?? 'unavailable',
-      reference: planMetricValue(model.baseline, id),
+      label: primaryMetricLabels[id],
+      value: formatPrimaryMetric(id, metric?.value ?? metric?.observed ?? null),
+      partial: metric?.value === null && metric.observed !== null,
+      delta: selected ? primaryMetricChange(id, a, b).label : null,
+      tone:
+        metric?.value == null && metric?.observed == null
+          ? 'unavailable'
+          : 'neutral',
+      reference: a?.value ?? a?.observed ?? null,
       points,
     }
   })
@@ -1270,46 +1313,37 @@ function hasMoved(metric: PlanMetricComparison): boolean {
   return metric.delta_percent === null || Math.abs(metric.delta_percent) >= 0.05
 }
 
-function trendMetricsOf(scenario: PlanScenarioComparison) {
-  const available = [...scenario.metrics, ...scenario.execution_metrics]
-  return PLAN_TREND_METRICS.flatMap((id) => {
-    const metric = available.find((candidate) => candidate.id === id)
-    return metric && metric.baseline !== null && metric.candidate !== null
-      ? [metric]
-      : []
-  })
-}
-
-/** What moved by test: one group per test, one bar per metric that changed,
- *  the unchanged ones named once instead of drawn as empty rows. */
 export function planMovementGroups(
-  comparison: PlanComparison | null,
+  baseline: PrimaryMetrics | undefined,
+  candidate: PrimaryMetrics | undefined,
+  metricId: MetricId,
+  excludeEmptyTests = false,
 ): DivergingGroup[] {
-  if (!comparison) return []
-  return comparison.scenarios.map((scenario) => {
-    const metrics = trendMetricsOf(scenario)
-    const moved = metrics.filter(hasMoved)
-    const unchanged = metrics.filter(
-      (metric) => metric.delta !== null && !hasMoved(metric),
+  if (!baseline || !candidate) return []
+  return comparePrimaryMetrics(
+    baseline,
+    candidate,
+    excludeEmptyTests,
+  ).tests.map((test) => {
+    const a = test.baseline?.metrics[metricId]
+    const b = test.candidate?.metrics[metricId]
+    const change = primaryMetricChange(metricId, a, b)
+    const partial = [a, b].some(
+      (metric) => metric?.value === null && metric.observed !== null,
     )
     return {
-      id: scenario.id,
-      title: scenarioName(scenario.id),
-      subtitle: scenario.compatible
-        ? `${moved.length} of ${metrics.length} metrics moved`
-        : (scenario.reason ?? 'not comparable'),
-      rows: moved.map((metric) => ({
-        id: metric.id,
-        label: metric.label.toLowerCase(),
-        change: metric.delta_percent,
-        valueLabel: formatPlanMetricDelta(metric),
-      })),
-      unchanged: unchanged
-        .map(
-          (metric) =>
-            `${metric.label.toLowerCase()} ${formatPlanMetricValue(metric, 'baseline')}`,
-        )
-        .join(' · '),
+      id: test.key,
+      title: scenarioName(test.label),
+      subtitle: `A ${formatPrimaryMetric(metricId, a?.value ?? a?.observed ?? null)} · B ${formatPrimaryMetric(metricId, b?.value ?? b?.observed ?? null)}${partial ? ' · Partial' : ''}`,
+      rows: [
+        {
+          id: metricId,
+          label: '',
+          change: change.percentage,
+          valueLabel: change.label,
+        },
+      ],
+      unchanged: '',
     }
   })
 }
@@ -1328,7 +1362,7 @@ export function planLayerScents(model: PlanComparisonModel): {
   const byTest = selected
     ? selected.comparison.scenarios
         .map((scenario) => {
-          const moved = trendMetricsOf(scenario)
+          const moved = [...scenario.metrics, ...scenario.execution_metrics]
             .filter(
               (metric) =>
                 PLAN_SCENARIO_SUMMARY_METRICS.includes(
@@ -1345,15 +1379,13 @@ export function planLayerScents(model: PlanComparisonModel): {
     : 'exact values per test once a candidate completes'
   const reference = model.columns[0]
   const candidate = model.selectedColumn ?? model.columns[1]
-  const metrics = model.metricRows
-    .filter((row) => !PLAN_TREND_METRICS.includes(row.id))
-    .map((row) => {
-      const left = row.entries.find((entry) => entry.column === reference)
-      const right = row.entries.find((entry) => entry.column === candidate)
-      const descriptor = left?.metric ?? right?.metric ?? null
-      const label = descriptor?.label.toLowerCase() ?? titleCase(row.id)
-      return `${label} ${formatWith(descriptor, left?.value ?? null)} → ${formatWith(descriptor, right?.value ?? null)}`
-    })
+  const metrics = model.metricRows.map((row) => {
+    const left = row.entries.find((entry) => entry.column === reference)
+    const right = row.entries.find((entry) => entry.column === candidate)
+    const descriptor = left?.metric ?? right?.metric ?? null
+    const label = descriptor?.label.toLowerCase() ?? titleCase(row.id)
+    return `${label} ${formatWith(descriptor, left?.value ?? null)} → ${formatWith(descriptor, right?.value ?? null)}`
+  })
   if (model.hiddenMetrics > 0)
     metrics.push(
       `${model.hiddenMetrics} metric${model.hiddenMetrics === 1 ? '' : 's'} not reported`,
@@ -1367,23 +1399,30 @@ export function planLayerScents(model: PlanComparisonModel): {
 export function PlanExecutionHistory({
   plan,
   summaries,
+  executionIds,
   visualBaselineId,
   comparisonCandidateIds,
   selectedCandidateId,
   scenarioComparison = null,
+  metricsByExecution,
+  excludeEmptyTests = false,
   onVisualBaselineChange,
   onToggleCandidate,
   loading,
   error = null,
 }: PlanComparisonInput & {
+  metricsByExecution: Record<string, PrimaryMetrics>
+  excludeEmptyTests?: boolean
   onVisualBaselineChange: (id: string) => void
   onToggleCandidate: (id: string, selected: boolean) => void
   loading: boolean
   error?: string | null
 }) {
+  const [selectedMetric, setSelectedMetric] = useState<MetricId>('score')
   const model = buildPlanComparisonModel({
     plan,
     summaries,
+    executionIds,
     visualBaselineId,
     comparisonCandidateIds,
     selectedCandidateId,
@@ -1392,24 +1431,28 @@ export function PlanExecutionHistory({
   if (!model) return null
   const tiles = planTrendTiles(
     plan,
-    summaries,
     model,
     visualBaselineId,
-    PLAN_TREND_METRICS,
+    metricsByExecution,
+    excludeEmptyTests,
   )
-  const selectedComparison =
-    model.scenarioComparisons.find((entry) => entry.id === selectedCandidateId)
-      ?.comparison ?? null
-  const groups = planMovementGroups(selectedComparison)
+  const groups = planMovementGroups(
+    visualBaselineId ? metricsByExecution[visualBaselineId] : undefined,
+    selectedCandidateId ? metricsByExecution[selectedCandidateId] : undefined,
+    selectedMetric,
+    excludeEmptyTests,
+  )
   const referenceLabel = visualBaselineId
-    ? planExecutionLabel(plan, visualBaselineId)
+    ? planExecutionLabel(plan, visualBaselineId, summaries[visualBaselineId])
     : 'reference'
   const candidateLabel = selectedCandidateId
-    ? planExecutionLabel(plan, selectedCandidateId)
+    ? planExecutionLabel(
+        plan,
+        selectedCandidateId,
+        summaries[selectedCandidateId],
+      )
     : 'candidate'
-  const completedCount = tiles[0]?.points.filter(
-    (point) => point.value !== null,
-  ).length
+  const executionCount = tiles[0]?.points.length ?? 0
 
   return (
     <Panel
@@ -1441,7 +1484,7 @@ export function PlanExecutionHistory({
             >
               {model.selectableRows.map((row) => (
                 <option key={row.id} value={row.id}>
-                  {planExecutionLabel(plan, row.id)}
+                  {planExecutionLabel(plan, row.id, row.summary)}
                 </option>
               ))}
             </Select>
@@ -1471,7 +1514,7 @@ export function PlanExecutionHistory({
                         onToggleCandidate(row.id, event.target.checked)
                       }
                     />
-                    <span>{planExecutionLabel(plan, row.id)}</span>
+                    <span>{planExecutionLabel(plan, row.id, row.summary)}</span>
                   </label>
                 )
               })}
@@ -1480,15 +1523,12 @@ export function PlanExecutionHistory({
         <span className="font-mono text-label text-ink-muted">
           {loading
             ? 'loading…'
-            : 'the official baseline stored with the plan never changes here'}
+            : 'recorded execution history never changes here'}
         </span>
       </div>
       {error ? (
         <div className="mt-4">
-          <Callout
-            tone="warning"
-            title="Execution summaries could not be loaded"
-          >
+          <Callout tone="warning" title="Execution metrics could not be loaded">
             Retained ids and report links remain available.{' '}
             <span className="font-mono">{error}</span>
           </Callout>
@@ -1504,78 +1544,88 @@ export function PlanExecutionHistory({
           </p>
         </div>
       ) : null}
-      <div className="mt-5 grid gap-5" data-plan-trend>
-        {PLAN_TREND_BANDS.map((band, index) => (
-          <div className="grid min-w-0 gap-2" key={band.id}>
-            <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <span className="ds-label">
-                {band.label} · {candidateLabel.toLowerCase()} vs{' '}
-                {referenceLabel.toLowerCase()}
-              </span>
-              {index === 0 ? (
-                <span className="font-mono text-label text-ink-muted">
-                  sparkline: {completedCount ?? 0} completed execution
-                  {completedCount === 1 ? '' : 's'} in capture order · gray dot
-                  is the reference · hollow dot is still running
+      <div className="mt-5 grid gap-3" data-plan-trend>
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <span className="ds-label">
+            Group metrics ·{' '}
+            {selectedCandidateId
+              ? `${candidateLabel} vs ${referenceLabel}`
+              : referenceLabel}
+          </span>
+          <span className="font-mono text-label text-ink-muted">
+            {executionCount} executions · gray is A · hollow means no metric or
+            still running
+          </span>
+        </div>
+        <div className="grid min-w-0 gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-3">
+          {tiles.map((tile) => (
+            <article
+              className="grid min-w-0 gap-1.5 rounded-[6px] bg-panel p-3"
+              key={tile.id}
+              data-trend-metric={tile.id}
+            >
+              <span className="ds-label">{tile.label}</span>
+              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                <strong className="font-mono text-xl font-semibold tracking-tight text-ink">
+                  {tile.value}
+                </strong>
+                {tile.delta ? (
+                  <span
+                    className={`font-mono text-label ${metricToneClass[tile.tone]}`}
+                  >
+                    {tile.delta}
+                  </span>
+                ) : null}
+              </div>
+              {tile.partial ? (
+                <span className="text-xs text-ink-muted">
+                  {tile.id === 'score' ? 'Partial mean' : 'Observed subtotal'}
                 </span>
               ) : null}
-            </div>
-            <div
-              className={`grid min-w-0 gap-3 @[560px]:grid-cols-2 ${
-                band.metrics.length > 3
-                  ? '@[960px]:grid-cols-5'
-                  : '@[960px]:grid-cols-2'
-              }`}
-            >
-              {tiles
-                .filter((tile) => band.metrics.includes(tile.id))
-                .map((tile) => (
-                  <article
-                    className="grid min-w-0 gap-1.5 rounded-[6px] bg-panel p-3"
-                    key={tile.id}
-                    data-trend-metric={tile.id}
-                  >
-                    <span className="ds-label">{tile.label.toLowerCase()}</span>
-                    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                      <strong className="font-mono text-xl font-semibold tracking-tight text-ink">
-                        {tile.value}
-                      </strong>
-                      <span
-                        className={`font-mono text-label ${metricToneClass[tile.tone]}`}
-                      >
-                        {tile.delta ?? 'not comparable'}
-                      </span>
-                    </div>
-                    <Sparkline
-                      points={tile.points}
-                      reference={tile.reference}
-                      label={`${tile.label} across executions`}
-                    />
-                  </article>
-                ))}
-            </div>
-          </div>
-        ))}
+              <Sparkline
+                points={tile.points}
+                reference={tile.reference}
+                label={`${tile.label} across executions`}
+              />
+            </article>
+          ))}
+        </div>
       </div>
       {groups.length > 0 ? (
         <div className="mt-5 grid min-w-0 gap-2" data-plan-what-moved>
           <div className="flex flex-wrap items-baseline justify-between gap-3">
             <span className="ds-label">
-              what moved by test · relative change vs{' '}
-              {referenceLabel.toLowerCase()} · left decreases, right increases
+              Change by test · relative change vs {referenceLabel.toLowerCase()}{' '}
+              · left decreases, right increases
             </span>
-            <span className="inline-flex flex-wrap items-center gap-4 font-mono text-label text-ink-muted">
-              <span>labels carry the metric&apos;s own unit</span>
-            </span>
+            <label
+              className="inline-flex items-center gap-2 text-sm"
+              htmlFor="plan-movement-metric"
+            >
+              Metric
+              <Select
+                id="plan-movement-metric"
+                value={selectedMetric}
+                onChange={(event) =>
+                  setSelectedMetric(event.target.value as MetricId)
+                }
+              >
+                {Object.entries(primaryMetricLabels).map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </Select>
+            </label>
           </div>
           <div className="rounded-[6px] bg-panel px-4 pt-3 pb-2">
             <DivergingBars
               groups={groups}
-              label={`Relative change per test, ${candidateLabel} against ${referenceLabel}`}
+              label={`Relative change in ${primaryMetricLabels[selectedMetric]} per test, ${candidateLabel} against ${referenceLabel}`}
             />
             <p className="mt-2 mb-0 font-mono text-label text-ink-muted">
-              a bar is relative change against the reference run · exact values
-              in the by-test layer below
+              Bars show percentage change relative to A. Exact A/B values appear
+              with each test.
             </p>
           </div>
         </div>
@@ -1590,7 +1640,7 @@ export function PlanMetricsTable({
   plan,
   model,
 }: {
-  plan: LocalPlan
+  plan: Plan
   model: PlanComparisonModel
 }) {
   return (
@@ -1624,7 +1674,7 @@ export function PlanMetricsTable({
                     {selected ? ' · selected' : ''}
                   </span>
                   <strong className="font-mono text-[0.8125rem] font-semibold text-ink">
-                    {planExecutionLabel(plan, row.id)}
+                    {planExecutionLabel(plan, row.id, row.summary)}
                   </strong>
                   <span className="font-mono text-label font-normal text-ink-muted">
                     {[
@@ -1665,7 +1715,11 @@ export function PlanMetricsTable({
                           .join(' ') || undefined
                       }
                       data-execution-id={column.row.id}
-                      data-label={planExecutionLabel(plan, column.row.id)}
+                      data-label={planExecutionLabel(
+                        plan,
+                        column.row.id,
+                        column.row.summary,
+                      )}
                       key={column.row.id}
                     >
                       {metric ? (
@@ -2107,6 +2161,18 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   )
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plan, setPlan] = useState<LocalPlan | null>(null)
+  const [importedPlan, setImportedPlan] = useState<ImportedPlan | null>(null)
+  const [reference, setReference] = useState<RcReference | null>(null)
+  const [relatedExecutionIds, setRelatedExecutionIds] = useState<string[]>([])
+  const [updatingHistory, setUpdatingHistory] = useState(false)
+  const displayPlan = importedPlan ?? plan
+  const frozen = reference ? frozenSetup(reference) : null
+  const configuredSubject = model(object(importedPlan?.configuration).subject)
+  const runSubject =
+    configuredSubject.provider && configuredSubject.model
+      ? configuredSubject
+      : frozen?.subject
+
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
   >({})
@@ -2121,15 +2187,18 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
     null,
   )
-  const [baselineDetail, setBaselineDetail] =
-    useState<DashboardExecutionDetail | null>(null)
-  const [candidateDetail, setCandidateDetail] =
-    useState<DashboardExecutionDetail | null>(null)
+  const [executionDetails, setExecutionDetails] = useState<
+    Record<string, DashboardExecutionDetail>
+  >({})
+  const [excludeEmptyTests, setExcludeEmptyTests] = useState(false)
+  const [trendLoading, setTrendLoading] = useState(false)
+  const [trendError, setTrendError] = useState<string | null>(null)
   const [comparisonLoading, setComparisonLoading] = useState(false)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [starting, setStarting] = useState<PlanRunRole | null>(null)
+  const [runOpen, setRunOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [runFeedback, setRunFeedback] = useState<PlanRunFeedback | null>(null)
@@ -2140,10 +2209,81 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const load = useCallback(async () => {
     const next = bridge ?? (await getDashboardDataBridge())
     setBridge(next)
-    const plan = await next.getPlan(planId)
-    if (plan.origin === 'remote')
-      throw new Error('Imported history has a separate read-only detail.')
-    setPlan(plan)
+    const [loaded, allPlans, executions] = await Promise.all([
+      next.getPlan(planId),
+      next.listPlans(),
+      listComparisonExecutions(),
+    ])
+    const remotePlans = allPlans.plans.filter(
+      (entry): entry is ImportedPlan =>
+        entry.origin === 'remote' &&
+        (entry.id === loaded.id ||
+          (loaded.origin !== 'remote' &&
+            executions.some(
+              (execution) =>
+                entry.execution_ids.includes(execution.id) &&
+                execution.run_id === loaded.reference_execution_id,
+            ))),
+    )
+    const importedIds = new Set(
+      remotePlans.flatMap((entry) => entry.execution_ids),
+    )
+    const sourceIds = new Set(
+      executions
+        .filter((entry) => importedIds.has(entry.id))
+        .map((entry) => entry.run_id),
+    )
+    const localPlans = allPlans.plans.filter(
+      (entry): entry is LocalPlan =>
+        entry.origin !== 'remote' &&
+        (entry.id === loaded.id ||
+          Boolean(
+            entry.reference_execution_id &&
+              sourceIds.has(entry.reference_execution_id),
+          )),
+    )
+    const localPlanIds = new Set(localPlans.map((entry) => entry.id))
+    const eligible = executions.filter(
+      (entry) =>
+        importedIds.has(entry.id) ||
+        (entry.origin !== 'remote' &&
+          typeof entry.plan_id === 'string' &&
+          localPlanIds.has(entry.plan_id)),
+    )
+    setRelatedExecutionIds(eligible.map((entry) => entry.id))
+    setExecutionSummaries(
+      Object.fromEntries(eligible.map((entry) => [entry.id, entry])),
+    )
+    setImportedPlan(loaded.origin === 'remote' ? loaded : null)
+    if (loaded.origin === 'remote') {
+      const latest = executions
+        .filter((entry) => loaded.execution_ids.includes(entry.id))
+        .sort(
+          (a, b) =>
+            Date.parse(b.started_at ?? '') - Date.parse(a.started_at ?? ''),
+        )[0]
+      const snapshot = latest ? await getImportedReference(latest.id) : null
+      setReference(snapshot)
+      const configured = model(object(loaded.configuration).subject)
+      const subject =
+        configured.provider && configured.model
+          ? configured
+          : snapshot
+            ? frozenSetup(snapshot).subject
+            : configured
+      const linked = localPlans
+        .filter(
+          (entry) =>
+            entry.reference_execution_id === latest?.run_id &&
+            entry.model === subject.model &&
+            entry.provider === subject.provider,
+        )
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
+      setPlan(linked[0] ?? null)
+    } else {
+      setPlan(loaded)
+      setReference(null)
+    }
   }, [bridge, planId])
 
   useEffect(() => {
@@ -2154,14 +2294,23 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const running =
     plan !== null &&
     ['baseline_running', 'candidate_running'].includes(plan.state)
+  const localPlanId = plan?.id
   // Audit PD-15: only the plan polls; summaries reload when the ids change.
   useEffect(() => {
-    if (!running) return
+    if (!running || !bridge || !localPlanId) return
     const timer = window.setInterval(() => {
-      void load().catch(() => undefined)
+      void bridge
+        .getPlan(localPlanId)
+        .then((next) => {
+          if (next.origin === 'remote') return
+          setPlan(next)
+          if (!['baseline_running', 'candidate_running'].includes(next.state))
+            void load()
+        })
+        .catch(() => undefined)
     }, 2_000)
     return () => window.clearInterval(timer)
-  }, [load, running])
+  }, [bridge, load, running, localPlanId])
 
   useEffect(() => {
     if (!bridge || !running || !plan?.last_attempt_id?.startsWith('plan-')) {
@@ -2225,59 +2374,39 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   }
 
   const executionIdKey = [
+    ...relatedExecutionIds,
+    ...(importedPlan?.execution_ids ?? []),
     plan?.baseline_execution_id ?? '',
     ...(plan?.candidate_execution_ids ?? []),
     ...(plan?.incomplete_execution_ids ?? []),
     plan?.last_attempt_id ?? '',
   ]
     .filter(Boolean)
-    .join(' ')
+    .join('\u0000')
   const executionIds = useMemo(
-    () => (executionIdKey ? executionIdKey.split(' ') : []),
+    () => (executionIdKey ? executionIdKey.split('\u0000') : []),
     [executionIdKey],
   )
   const comparableExecutionIds = useMemo(
-    () => [
-      ...new Set(
-        [
-          plan?.baseline_execution_id ?? '',
-          ...(plan?.candidate_execution_ids ?? []),
-          ...(plan?.incomplete_execution_ids ?? []),
-          plan?.last_attempt_id ?? '',
-        ].filter(Boolean),
-      ),
-    ],
-    [
-      plan?.baseline_execution_id,
-      plan?.candidate_execution_ids,
-      plan?.incomplete_execution_ids,
-      plan?.last_attempt_id,
-    ],
+    () =>
+      displayPlan
+        ? executionHistoryRows(displayPlan, executionSummaries, [
+            ...new Set(executionIds),
+          ]).map((row) => row.id)
+        : [],
+    [displayPlan, executionIds, executionSummaries],
   )
   const visualBaselineId =
     visualBaselineOverride &&
     comparableExecutionIds.includes(visualBaselineOverride)
       ? visualBaselineOverride
-      : (plan?.baseline_execution_id ??
-        plan?.last_attempt_id ??
-        comparableExecutionIds[0] ??
-        null)
+      : (comparableExecutionIds[0] ?? null)
   const comparisonCandidateIds = useMemo(
     () =>
       comparableExecutionIds.filter(
-        (id) =>
-          id !== visualBaselineId &&
-          (plan?.candidate_execution_ids.includes(id) ||
-            id === plan?.baseline_execution_id) &&
-          !excludedComparisonIds.includes(id),
+        (id) => id !== visualBaselineId && !excludedComparisonIds.includes(id),
       ),
-    [
-      comparableExecutionIds,
-      excludedComparisonIds,
-      visualBaselineId,
-      plan?.candidate_execution_ids,
-      plan?.baseline_execution_id,
-    ],
+    [comparableExecutionIds, visualBaselineId, excludedComparisonIds],
   )
 
   useEffect(() => {
@@ -2329,34 +2458,32 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }
   }, [bridge, plan?.last_attempt_id, running])
 
+  const baselineDetail = visualBaselineId
+    ? (executionDetails[visualBaselineId] ?? null)
+    : null
+  const candidateDetail = selectedCandidateId
+    ? (executionDetails[selectedCandidateId] ?? null)
+    : null
+
   useEffect(() => {
-    const baselineId = visualBaselineId
-    if (!bridge || !baselineId) {
-      setBaselineDetail(null)
-      setCandidateDetail(null)
-      setComparisonError(null)
-      setComparisonLoading(false)
-      return
-    }
+    if (!bridge || !visualBaselineId) return
     let cancelled = false
     setComparisonLoading(true)
     setComparisonError(null)
-    void Promise.all([
-      bridge.getExecution(baselineId),
-      selectedCandidateId
-        ? bridge.getExecution(selectedCandidateId)
-        : Promise.resolve(null),
-    ])
-      .then(([baseline, candidate]) => {
-        if (cancelled) return
-        setBaselineDetail(baseline)
-        setCandidateDetail(candidate)
+    void Promise.all(
+      [visualBaselineId, selectedCandidateId]
+        .filter((id): id is string => Boolean(id))
+        .map(async (id) => [id, await bridge.getExecution(id)] as const),
+    )
+      .then((entries) => {
+        if (!cancelled)
+          setExecutionDetails((current) => ({
+            ...current,
+            ...Object.fromEntries(entries),
+          }))
       })
       .catch((cause) => {
-        if (cancelled) return
-        setBaselineDetail(null)
-        setCandidateDetail(null)
-        setComparisonError(errorText(cause))
+        if (!cancelled) setComparisonError(errorText(cause))
       })
       .finally(() => {
         if (!cancelled) setComparisonLoading(false)
@@ -2367,35 +2494,54 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   }, [bridge, selectedCandidateId, visualBaselineId])
 
   useEffect(() => {
-    const activeId = plan?.last_attempt_id
-    if (
-      !bridge ||
-      !running ||
-      !activeId ||
-      (activeId !== visualBaselineId && activeId !== selectedCandidateId)
+    if (!bridge || !openLayers.trends) return
+    let cancelled = false
+    setTrendLoading(true)
+    setTrendError(null)
+    void Promise.allSettled(
+      comparableExecutionIds.map(
+        async (id) => [id, await bridge.getExecution(id)] as const,
+      ),
     )
-      return
+      .then((results) => {
+        if (cancelled) return
+        setExecutionDetails((current) => ({
+          ...current,
+          ...Object.fromEntries(
+            results.flatMap((result) =>
+              result.status === 'fulfilled' ? [result.value] : [],
+            ),
+          ),
+        }))
+        const failed = results.find((result) => result.status === 'rejected')
+        if (failed?.status === 'rejected')
+          setTrendError(errorText(failed.reason))
+      })
+      .finally(() => {
+        if (!cancelled) setTrendLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [bridge, comparableExecutionIds, openLayers.trends])
+
+  useEffect(() => {
+    const activeId = plan?.last_attempt_id
+    if (!bridge || !running || !activeId) return
     let active = true
     const stop = watchExecution(bridge, activeId, async () => {
       const detail = await bridge.getExecution(activeId)
-      if (!active) return
-      if (activeId === visualBaselineId) setBaselineDetail(detail)
-      else setCandidateDetail(detail)
+      if (active)
+        setExecutionDetails((current) => ({ ...current, [activeId]: detail }))
     })
     return () => {
       active = false
       stop()
     }
-  }, [
-    bridge,
-    running,
-    plan?.last_attempt_id,
-    visualBaselineId,
-    selectedCandidateId,
-  ])
+  }, [bridge, running, plan?.last_attempt_id])
 
   const start = async (role: PlanRunRole) => {
-    if (!bridge || !plan) return
+    if (!bridge || (!plan && !reference)) return
     setStarting(role)
     setRunFeedback({
       role,
@@ -2404,9 +2550,22 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       executionId: null,
     })
     try {
+      let runPlan = plan
+      if (!runPlan) {
+        if (!reference || !importedPlan) return
+        runPlan = await planAction<LocalPlan>(bridge, {
+          action: 'reproduce_reference',
+          reference_execution_id: reference.execution.id,
+          label: importedPlan.label,
+          subject: runSubject,
+          materialized: reference.materialized,
+          shards: reference.shards,
+        })
+      }
+      setPlan(runPlan)
       const checked = await planAction<PlanRequirements>(bridge, {
         action: 'requirements',
-        plan_id: plan.id,
+        plan_id: runPlan.id,
       })
       setRequirements(checked)
       if (!checked.ready) {
@@ -2419,8 +2578,10 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
         })
         return
       }
-      const nextPlan = await bridge.startPlan(plan.id, role)
+      const nextPlan = await bridge.startPlan(runPlan.id, role)
       setPlan(nextPlan)
+      setSelectedCandidateId(nextPlan.last_attempt_id)
+      setRunOpen(false)
       setRunFeedback({
         role,
         phase: 'running',
@@ -2429,6 +2590,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
           : `${roleLabel(role)} started. Check the execution detail for the latest report.`,
         executionId: nextPlan.last_attempt_id,
       })
+      void load().catch((cause) => setLoadError(errorText(cause)))
     } catch (cause) {
       setRunFeedback({
         role,
@@ -2441,20 +2603,22 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }
   }
 
-  const baselineMetrics = useMemo(
+  const metricsByExecution = useMemo(
     () =>
-      baselineDetail?.id === visualBaselineId
-        ? buildPrimaryMetrics(baselineDetail)
-        : null,
-    [baselineDetail, visualBaselineId],
+      Object.fromEntries(
+        Object.entries(executionDetails).flatMap(([id, detail]) => {
+          const metrics = comparisonPrimaryMetrics(detail, null).baseline
+          return metrics ? [[id, metrics] as const] : []
+        }),
+      ),
+    [executionDetails],
   )
-  const candidateMetrics = useMemo(
-    () =>
-      candidateDetail?.id === selectedCandidateId
-        ? buildPrimaryMetrics(candidateDetail)
-        : null,
-    [candidateDetail, selectedCandidateId],
-  )
+  const baselineMetrics = visualBaselineId
+    ? metricsByExecution[visualBaselineId]
+    : undefined
+  const candidateMetrics = selectedCandidateId
+    ? metricsByExecution[selectedCandidateId]
+    : undefined
 
   const comparison = useMemo(() => {
     if (!visualBaselineId || !selectedCandidateId) return null
@@ -2482,19 +2646,17 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     visualBaselineId,
   ])
   const changeVisualBaseline = (id: string) => {
-    if (!plan || !comparableExecutionIds.includes(id)) return
+    if (id === visualBaselineId || !comparableExecutionIds.includes(id)) return
     const availableCandidates = comparableExecutionIds.filter(
       (candidateId) =>
         candidateId !== id && !excludedComparisonIds.includes(candidateId),
     )
-    setVisualBaselineOverride(id === plan.baseline_execution_id ? null : id)
+    setVisualBaselineOverride(id)
     setSelectedCandidateId((current) =>
       current && current !== id && availableCandidates.includes(current)
         ? current
         : (availableCandidates.at(-1) ?? null),
     )
-    setBaselineDetail(null)
-    setCandidateDetail(null)
     setComparisonError(null)
   }
   const toggleComparisonCandidate = (id: string, selected: boolean) => {
@@ -2513,8 +2675,21 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       )
     }
   }
-  const renameCandidate = async (executionId: string, label: string) => {
-    if (!bridge || !plan) return
+  const renameExecution = async (executionId: string, label: string) => {
+    if (!bridge) return
+    if (executionSummaries[executionId]?.origin === 'remote') {
+      await bridge.planControl({
+        action: 'rename_imported_execution',
+        execution_id: executionId,
+        label,
+      })
+      const summaries = await loadExecutionSummaries(bridge.listExecutions, [
+        executionId,
+      ])
+      setExecutionSummaries((current) => ({ ...current, ...summaries }))
+      return
+    }
+    if (!plan) return
     const candidateLabels = { ...(plan.candidate_labels ?? {}) }
     const normalized = label.trim()
     if (normalized) candidateLabels[executionId] = normalized
@@ -2525,18 +2700,28 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     setPlan(nextPlan)
   }
 
-  const readiness = plan ? planReadiness(plan) : null
+  const readiness = plan
+    ? planReadiness(plan)
+    : importedPlan
+      ? {
+          status: 'unavailable' as const,
+          label: 'imported local copy',
+          detail: '',
+        }
+      : null
   const latestCandidateId = plan?.candidate_execution_ids.at(-1) ?? null
   const baselineSummary = plan?.baseline_execution_id
     ? (executionSummaries[plan.baseline_execution_id] ?? null)
     : null
   const lastRunSummary =
-    (latestCandidateId ? executionSummaries[latestCandidateId] : null) ??
-    baselineSummary
-  const historyRows = plan ? executionHistoryRows(plan, executionSummaries) : []
-  const comparisonInput = plan
+    running && plan?.last_attempt_id
+      ? (executionSummaries[plan.last_attempt_id] ?? null)
+      : ((latestCandidateId ? executionSummaries[latestCandidateId] : null) ??
+        baselineSummary)
+  const comparisonInput = displayPlan
     ? {
-        plan,
+        plan: displayPlan,
+        executionIds: comparableExecutionIds,
         summaries: executionSummaries,
         visualBaselineId,
         comparisonCandidateIds,
@@ -2549,26 +2734,43 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   function executionChoiceLabel(id: string) {
     const summary = executionSummaries[id]
     return [
-      plan ? planExecutionLabel(plan, id) : id,
-      summary?.subjects
-        .map((subject) => subject.model)
-        .filter(Boolean)
-        .join(', '),
-      summary?.completed_at ? formatDate(summary.completed_at) : null,
+      summary?.origin === 'remote' ? 'Release Control' : 'Local',
+      displayPlan
+        ? executionHistoryLabel(displayPlan, { id, summary: summary ?? null })
+        : 'Execution',
+      summary?.started_at ? formatDate(summary.started_at) : null,
       summary ? titleCase(summary.status) : null,
     ]
       .filter(Boolean)
       .join(' · ')
   }
 
+  const updateHistory = async () => {
+    if (!bridge || !importedPlan) return
+    setUpdatingHistory(true)
+    try {
+      await bridge.planControl({
+        action: 'import_history',
+        history: await exportReleaseControlHistory(
+          importedPlan.source.plan_key,
+        ),
+      })
+      await load()
+    } catch (cause) {
+      setLoadError(errorText(cause))
+    } finally {
+      setUpdatingHistory(false)
+    }
+  }
+
   return (
     <>
       <DashboardPageActions
         active="plans"
-        context={plan ? plan.label || plan.id : undefined}
+        context={displayPlan ? displayPlan.label || displayPlan.id : undefined}
         actionsLabel="Plan actions"
         actions={
-          plan?.baseline_execution_id && latestCandidateId ? (
+          comparableExecutionIds.length > 1 ? (
             <button
               type="button"
               className={buttonClassName({
@@ -2598,7 +2800,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             ))}
           </div>
         ) : null}
-        {loadError && !plan ? (
+        {loadError && !displayPlan ? (
           <EmptyState
             tone="error"
             title="Plan unavailable"
@@ -2621,101 +2823,209 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             }
           />
         ) : null}
-        {plan && readiness ? (
+        {displayPlan && readiness ? (
           <div className="grid gap-5">
             <PageHeader
-              className="pm-page-header"
+              className="pm-page-header execution-header"
               breadcrumb={[
                 { label: 'plans', href: hashForPlans() },
-                { label: plan.label || plan.id },
+                { label: displayPlan.label || displayPlan.id },
               ]}
-              title={plan.label || plan.id}
-              summary={plan.purpose || ''}
-              actions={
-                <div className="flex flex-wrap items-center gap-2">
+              title={displayPlan.label || displayPlan.id}
+              summary={
+                <>
                   <StatusBadge
                     status={readiness.status}
                     label={readiness.label}
                   />
-                  <a
-                    className={buttonClassName({
-                      variant: 'secondary',
-                      size: 'compact',
-                    })}
-                    href={`${hashForNewPlan()}/edit/${plan.id}`}
-                  >
-                    Edit plan
-                  </a>
-                  <button
-                    type="button"
-                    className={buttonClassName({
-                      variant: 'quiet',
-                      size: 'compact',
-                    })}
-                    onClick={() => setDeleteOpen(true)}
-                  >
-                    Delete plan
-                  </button>
-                  <a
-                    className={buttonClassName({
-                      variant: 'secondary',
-                      size: 'compact',
-                    })}
-                    href={`${hashForNewPlan()}/duplicate/${plan.id}`}
-                  >
-                    Duplicate plan
-                  </a>
-                  <button
-                    type="button"
-                    className={buttonClassName({
-                      variant: 'quiet',
-                      size: 'compact',
-                    })}
-                    onClick={() => void exportPlan()}
-                  >
-                    Export plan
-                  </button>
-                </div>
+                  <span>{displayPlan.purpose}</span>
+                </>
+              }
+              actions={
+                <>
+                  {running && plan?.last_attempt_id ? (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <a
+                          className={buttonClassName({ variant: 'secondary' })}
+                          href={hashForExecution(plan.last_attempt_id)}
+                          aria-label="View active execution"
+                        >
+                          <ExternalLink size={16} aria-hidden="true" />
+                        </a>
+                      </TooltipTrigger>
+                      <TooltipContent>View active execution</TooltipContent>
+                    </Tooltip>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <button
+                          type="button"
+                          className={buttonClassName({ variant: 'secondary' })}
+                          aria-label={
+                            plan?.baseline_execution_id
+                              ? 'Re-run plan'
+                              : 'Run plan'
+                          }
+                          disabled={
+                            starting !== null ||
+                            running ||
+                            (!plan &&
+                              (!frozen?.scenarios.length ||
+                                frozen.repetitions === null ||
+                                frozen.technicalRetries === null ||
+                                !runSubject?.model ||
+                                !runSubject.provider ||
+                                !frozen.scenarios.every((scenario) =>
+                                  frozen.seeds.has(scenario),
+                                ))) ||
+                            plan?.protected_executor_required ||
+                            plan?.compatible === false
+                          }
+                          onClick={() => {
+                            setRunFeedback(null)
+                            setRequirements(null)
+                            setRunOpen(true)
+                          }}
+                        >
+                          <RotateCcw size={16} aria-hidden="true" />
+                        </button>
+                      </TooltipTrigger>
+                      <TooltipContent>
+                        {plan?.baseline_execution_id
+                          ? 'Re-run plan'
+                          : 'Run plan'}
+                      </TooltipContent>
+                    </Tooltip>
+                  )}
+                  {importedPlan ? (
+                    <button
+                      type="button"
+                      className={buttonClassName({ variant: 'quiet' })}
+                      disabled={updatingHistory}
+                      onClick={() => void updateHistory()}
+                    >
+                      {updatingHistory ? 'Updating…' : 'Update history'}
+                    </button>
+                  ) : null}
+                  {plan && !importedPlan ? (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            className={buttonClassName({ variant: 'quiet' })}
+                            href={`${hashForNewPlan()}/edit/${plan.id}`}
+                            aria-label="Edit plan"
+                          >
+                            <PencilLine size={16} aria-hidden="true" />
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent>Edit plan</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <a
+                            className={buttonClassName({ variant: 'quiet' })}
+                            href={`${hashForNewPlan()}/duplicate/${plan.id}`}
+                            aria-label="Duplicate plan"
+                          >
+                            <Copy size={16} aria-hidden="true" />
+                          </a>
+                        </TooltipTrigger>
+                        <TooltipContent>Duplicate plan</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className={buttonClassName({ variant: 'quiet' })}
+                            onClick={() => void exportPlan()}
+                            aria-label="Export plan"
+                          >
+                            <Download size={16} aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>Export plan</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            className={buttonClassName({ variant: 'quiet' })}
+                            onClick={() => setDeleteOpen(true)}
+                            aria-label="Delete plan"
+                          >
+                            <Trash2 size={16} aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent>Delete plan</TooltipContent>
+                      </Tooltip>
+                    </>
+                  ) : null}
+                </>
               }
             />
-            {requirements ? <Requirements value={requirements} /> : null}
             {loadError ? (
               <Callout tone="warning" title="Plan action unavailable">
                 {loadError}
               </Callout>
             ) : null}
-            {plan.protected_executor_required ? (
+            <PlanRunDialog
+              open={runOpen}
+              onClose={() => setRunOpen(false)}
+              plan={plan}
+              importedScope={
+                frozen ? (
+                  <div className="grid gap-3 text-sm">
+                    <p>
+                      {frozen.scenarios.length} tests · {frozen.repetitions} run
+                      per test · {runSubject?.provider} / {runSubject?.model}
+                    </p>
+                    <p>
+                      Technical retries: {frozen.technicalRetries} · Seeds:{' '}
+                      {[...frozen.seeds]
+                        .map(([scenario, seed]) => `${scenario} ${seed}`)
+                        .join(' · ')}
+                    </p>
+                    {runSubject?.model !== frozen.subject.model ? (
+                      <Callout tone="info">
+                        The retained execution used {frozen.subject.provider} /{' '}
+                        {frozen.subject.model}. This run uses the current plan
+                        model shown above.
+                      </Callout>
+                    ) : null}
+                  </div>
+                ) : undefined
+              }
+              starting={starting}
+              feedback={runFeedback}
+              onStart={(role) => void start(role)}
+              requirements={requirements}
+              baselineSummary={baselineSummary}
+              lastRunSummary={lastRunSummary}
+            />
+            {plan?.protected_executor_required ? (
               <Callout tone="warning" title="Protected executor required">
                 Export this plan for Release Control. Its fault-injection work
                 requires the protected executor.
               </Callout>
-            ) : plan.compatible === false ? (
+            ) : plan?.compatible === false ? (
               <Callout tone="warning" title="Saved scope unavailable">
                 A saved scenario contract is unavailable in this runner. The
                 plan and its evidence remain available.
               </Callout>
-            ) : (
-              <DisclosureLayer
-                id="plan-run"
-                label="Run plan"
-                scent={
-                  running ? 'Execution in progress' : 'Run the saved test scope'
-                }
-                open={openLayers.run ?? (!visualBaselineId || running)}
-                onToggle={(open) =>
-                  setOpenLayers((current) => ({ ...current, run: open }))
-                }
-              >
-                <PlanLifecycle
-                  plan={plan}
-                  starting={starting}
-                  feedback={runFeedback}
-                  onStart={(role) => void start(role)}
-                  baselineSummary={baselineSummary}
-                  lastRunSummary={lastRunSummary}
-                />
-              </DisclosureLayer>
-            )}
+            ) : null}
+            {lastRunSummary?.live_progress ? (
+              <LiveProgressPanel
+                progress={lastRunSummary.live_progress}
+                running={running}
+              />
+            ) : null}
+            {lastRunSummary?.live_progress_error ? (
+              <p className="text-sm text-warning" role="status">
+                {lastRunSummary.live_progress_error}
+              </p>
+            ) : null}
             {activeExecution ? (
               <>
                 <PlanProgress execution={activeExecution} />
@@ -2825,15 +3135,19 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                 baselineMetrics &&
                 (!selectedCandidateId || candidateMetrics) ? (
                   <PrimaryMetricsView
+                    showTests
+                    summaryOnly
+                    excludeEmptyTests={excludeEmptyTests}
+                    onExcludeEmptyTestsChange={setExcludeEmptyTests}
                     key={`${visualBaselineId}:${selectedCandidateId ?? ''}`}
                     baseline={baselineMetrics}
                     baselineExecutionId={visualBaselineId}
                     candidateExecutionId={selectedCandidateId ?? undefined}
                     candidate={candidateMetrics ?? undefined}
-                    baselineLabel={planExecutionLabel(plan, visualBaselineId)}
+                    baselineLabel={executionChoiceLabel(visualBaselineId)}
                     candidateLabel={
                       selectedCandidateId
-                        ? planExecutionLabel(plan, selectedCandidateId)
+                        ? executionChoiceLabel(selectedCandidateId)
                         : undefined
                     }
                   />
@@ -2841,38 +3155,13 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               </section>
             ) : null}
             <div className="grid min-w-0 gap-3">
-              <DisclosureLayer
-                id="plan-scope"
-                label="Plan scope"
-                scent={`${plan.scenario_ids.length} tests · ${plan.runs} repetitions`}
-                open={openLayers.scope ?? !visualBaselineId}
-                onToggle={(open) =>
-                  setOpenLayers((current) => ({ ...current, scope: open }))
-                }
-              >
-                <PlanScope plan={plan} baselineSummary={baselineSummary} />
-              </DisclosureLayer>
-              {historyRows.length > 0 ? (
-                <DisclosureLayer
-                  id="plan-executions"
-                  label={`executions · ${historyRows.length}`}
-                  scent={executionsScent(plan, historyRows)}
-                  open={openLayers.executions ?? false}
-                  onToggle={(open) =>
-                    setOpenLayers((current) => ({
-                      ...current,
-                      executions: open,
-                    }))
-                  }
-                >
-                  <PlanRunHistory
-                    plan={plan}
-                    summaries={executionSummaries}
-                    onRenameCandidate={renameCandidate}
-                    headless
-                  />
-                </DisclosureLayer>
-              ) : null}
+              <PlanRunHistory
+                plan={displayPlan}
+                executionIds={comparableExecutionIds}
+                summaries={executionSummaries}
+                onRenameExecution={renameExecution}
+              />
+              <PlanScope plan={displayPlan} reference={reference} />
               {comparisonInput && comparisonCandidateIds.length > 0 ? (
                 <DisclosureLayer
                   id="plan-trends"
@@ -2885,25 +3174,39 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                 >
                   <PlanExecutionHistory
                     {...comparisonInput}
+                    metricsByExecution={metricsByExecution}
+                    excludeEmptyTests={excludeEmptyTests}
                     onVisualBaselineChange={changeVisualBaseline}
                     onToggleCandidate={toggleComparisonCandidate}
-                    loading={historyLoading}
-                    error={historyError}
+                    loading={
+                      historyLoading || trendLoading || comparisonLoading
+                    }
+                    error={historyError || trendError || comparisonError}
                   />
                   <PlanComparisonLayers {...comparisonInput} />
                 </DisclosureLayer>
               ) : null}
-              <DisclosureLayer
-                id="plan-provenance"
-                label="provenance"
-                scent={planProvenanceScent(plan)}
-                open={openLayers.provenance ?? false}
-                onToggle={(open) =>
-                  setOpenLayers((current) => ({ ...current, provenance: open }))
-                }
-              >
-                <PlanProvenance plan={plan} />
-              </DisclosureLayer>
+              {plan ? (
+                <DisclosureLayer
+                  id="plan-provenance"
+                  label="provenance"
+                  scent={planProvenanceScent(plan)}
+                  open={openLayers.provenance ?? false}
+                  onToggle={(open) =>
+                    setOpenLayers((current) => ({
+                      ...current,
+                      provenance: open,
+                    }))
+                  }
+                >
+                  <PlanProvenance plan={plan} />
+                </DisclosureLayer>
+              ) : importedPlan ? (
+                <p className="text-xs text-ink-muted">
+                  Release Control · {importedPlan.source.instance_id} ·{' '}
+                  {importedPlan.source.plan_key}
+                </p>
+              ) : null}
             </div>
           </div>
         ) : null}

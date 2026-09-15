@@ -1,16 +1,45 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
-import { comparePrimaryMetrics } from '@/lib/primary-metrics'
 import {
+  type DashboardIiiClient,
+  installDashboardIiiClient,
+} from '@/lib/iii-client'
+import {
+  buildPrimaryMetrics,
+  comparePrimaryMetrics,
+} from '@/lib/primary-metrics'
+import {
+  comparisonPrimaryMetrics,
+  discoverReleaseControlHistory,
+  exportReleaseControlHistory,
   getImportedReference,
-  listImportedExecutions,
-  localReferencePrimaryMetrics,
+  listComparisonExecutions,
   localScenarioObservations,
   type RcReference,
   referencePrimaryMetrics,
   referenceScenarioObservations,
   referenceSummary,
 } from '@/lib/release-control-reference'
+
+it('shows the actionable Release Control error when history export is unavailable', async () => {
+  const trigger = vi.fn().mockRejectedValue({
+    code: 'invocation_failed',
+    message: 'RELEASE_CONTROL_INSTANCE_ID is required for history export',
+  })
+  installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+
+  await expect(exportReleaseControlHistory('harness-smoke')).rejects.toThrow(
+    'RELEASE_CONTROL_INSTANCE_ID is required for history export',
+  )
+  await expect(discoverReleaseControlHistory()).rejects.toThrow(
+    'RELEASE_CONTROL_INSTANCE_ID is required for history export',
+  )
+  expect(trigger).toHaveBeenCalledWith(
+    'release-control::test-plans::export',
+    { planKey: 'harness-smoke' },
+    { namespace: 'default' },
+  )
+})
 
 function comparisonCandidate(
   rows: Array<{
@@ -64,6 +93,7 @@ function comparisonCandidate(
               behavior_sha256:
                 'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
             },
+            execution_policy: { max_turns: 8 },
             aggregate: {
               planned_runs: 1,
               observed_runs: 1,
@@ -237,7 +267,7 @@ describe('Release Control reference adapter', () => {
   })
 
   it('requires the local Harness bridge for imported history', async () => {
-    await expect(listImportedExecutions()).rejects.toThrow('initialized')
+    await expect(listComparisonExecutions()).rejects.toThrow('initialized')
   })
 })
 
@@ -258,6 +288,35 @@ describe('shared primary metrics projection', () => {
     expect(metrics.metrics.score.value).toBe(75)
   })
 
+  it('keeps materialized tests with no RC run visible and separate from unscored runs', () => {
+    const remote = comparisonReference([
+      { scenario: 'zero', seed: '1', score: 0 },
+      { scenario: 'unscored', seed: '2', score: null },
+    ])
+    remote.materialized = {
+      profile: { repetitions: 1 },
+      campaigns: [{ groups: [{ scenarios: ['zero', 'unscored', 'missing'] }] }],
+    }
+    remote.aggregate.planned_runs = 3
+
+    const metrics = referencePrimaryMetrics(remote)
+    expect(
+      metrics.tests.map((test) => [
+        test.label,
+        test.executedRuns,
+        test.metrics.score.samples,
+        test.repetitions,
+      ]),
+    ).toEqual([
+      ['missing', 0, 0, 1],
+      ['unscored', 1, 0, 1],
+      ['zero', 1, 1, 1],
+    ])
+    expect(metrics.metrics.score.value).toBeNull()
+    remote.materialized = null
+    expect(referencePrimaryMetrics(remote).tests).toHaveLength(2)
+  })
+
   it('keeps the RC token total and leaves unavailable breakdowns and total spend absent', () => {
     const metrics = referencePrimaryMetrics(
       comparisonReference([{ scenario: 'alpha', seed: '1', score: 80 }]),
@@ -267,98 +326,85 @@ describe('shared primary metrics projection', () => {
     expect(metrics.metrics.inputTokens.value).toBeNull()
     expect(metrics.metrics.outputTokens.value).toBeNull()
     expect(metrics.metrics.cacheRead.value).toBeNull()
-    expect(metrics.metrics.costUsd.value).toBe(0.01)
+    expect(metrics.metrics.costUsd.value).toBeNull()
   })
 
-  it('allows matched case and contracts but blocks incompatible contracts or repetitions', () => {
-    const remote = referencePrimaryMetrics(
-      comparisonReference([{ scenario: 'alpha', seed: '7', score: 80 }]),
+  it('compares RC and local metrics without requiring native policy evidence', () => {
+    const first = comparisonReference([
+      { scenario: 'alpha', seed: '7', score: 80 },
+    ])
+    first.runs[0].identity = undefined
+    const second = comparisonReference([
+      { scenario: 'alpha', seed: '7', score: 90 },
+    ])
+    const remote = referencePrimaryMetrics(first)
+
+    expect(remote.metrics.score.value).toBe(80)
+    expect(
+      comparePrimaryMetrics(remote, referencePrimaryMetrics(second), false)
+        .deltas.score,
+    ).toBe(10)
+    const local = buildPrimaryMetrics(
+      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: 90 }]),
     )
-    const localDetail = comparisonCandidate([
+    expect(comparePrimaryMetrics(remote, local, false).deltas.score).toBe(10)
+    const projected = comparisonPrimaryMetrics(
+      {
+        origin: 'remote',
+        remote_reference: first,
+      } as unknown as DashboardExecutionDetail,
+      comparisonCandidate([{ scenario: 'alpha', seed: 7, score: 90 }]),
+    )
+    expect(projected.baseline?.metrics.score.value).toBe(80)
+    expect(projected.candidate?.metrics.score.value).toBe(90)
+  })
+
+  it('compares local values despite differences in case, policy, contract, or repetitions', () => {
+    const first = comparisonCandidate([
+      { scenario: 'alpha', seed: 7, score: 80 },
+    ])
+    const second = comparisonCandidate([
       { scenario: 'alpha', seed: 7, score: 90 },
     ])
-    const local = localReferencePrimaryMetrics(localDetail, true)
-
-    expect(comparePrimaryMetrics(remote, local, false).deltas.score).toBe(10)
-    expect(
+    const compare = (detail: DashboardExecutionDetail) =>
       comparePrimaryMetrics(
-        remote,
-        localReferencePrimaryMetrics(localDetail, false),
+        buildPrimaryMetrics(first),
+        buildPrimaryMetrics(detail),
         false,
-      ).deltas.score,
-    ).toBeNull()
+      ).deltas.score
 
-    const changedCase = structuredClone(localDetail)
-    const changedScenario = changedCase.reports[0]?.report?.scenarios[0]
-    if (!changedScenario) throw new Error('fixture must contain a scenario')
-    changedScenario.case_id = 'another-case'
-    expect(
-      comparePrimaryMetrics(
-        remote,
-        localReferencePrimaryMetrics(changedCase, true),
-        false,
-      ).deltas.score,
-    ).toBeNull()
-
-    const report = localDetail.reports[0]?.report
+    expect(compare(second)).toBe(10)
+    for (const field of [
+      'case_id',
+      'inputs_sha256',
+      'behavior_sha256',
+      'execution_policy',
+    ] as const) {
+      const changed = structuredClone(second)
+      const scenario = changed.reports[0]?.report?.scenarios[0]
+      if (!scenario?.case) throw new Error('fixture must contain a case')
+      if (field === 'case_id') scenario.case_id = 'another-case'
+      if (field === 'inputs_sha256')
+        scenario.case.inputs_sha256 = 'other-inputs'
+      if (field === 'behavior_sha256')
+        scenario.case.behavior_sha256 = 'other-behavior'
+      if (field === 'execution_policy')
+        scenario.execution_policy = { max_turns: 9 }
+      expect(compare(changed)).toBe(10)
+    }
+    const changedContract = structuredClone(second)
+    const report = changedContract.reports[0]?.report
     if (!report) throw new Error('fixture must contain a report')
-    report.result_contract_sha256 = 'changed-contract'
+    report.result_contract_sha256 = 'other-contract'
+    expect(compare(changedContract)).toBe(10)
     expect(
-      comparePrimaryMetrics(
-        remote,
-        localReferencePrimaryMetrics(localDetail, true),
-        false,
-      ).deltas.score,
-    ).toBeNull()
-
-    const repeated = comparisonCandidate([
-      { scenario: 'alpha', seed: 7, score: 90, repetition: 0 },
-      { scenario: 'alpha', seed: 7, score: 95, repetition: 1 },
-    ])
-    expect(
-      comparePrimaryMetrics(
-        remote,
-        localReferencePrimaryMetrics(repeated, true),
-        false,
-      ).deltas.score,
-    ).toBeNull()
-  })
-
-  it('blocks shifted repetition slots and changed model cohorts before aggregating', () => {
-    const remoteReference = comparisonReference([
-      { scenario: 'alpha', seed: '7', score: 80, repetition: 0 },
-      { scenario: 'alpha', seed: '7', score: 90, repetition: 1 },
-    ])
-    const shifted = comparisonCandidate([
-      { scenario: 'alpha', seed: 7, score: 90, repetition: 1 },
-      { scenario: 'alpha', seed: 7, score: 95, repetition: 2 },
-    ])
-
-    expect(
-      comparePrimaryMetrics(
-        referencePrimaryMetrics(remoteReference),
-        localReferencePrimaryMetrics(shifted, true),
-        false,
-      ).deltas.score,
-    ).toBeNull()
-
-    const changedCohort = structuredClone(remoteReference)
-    const first = changedCohort.runs[0]
-    if (!first?.identity) throw new Error('fixture must contain run identity')
-    first.identity.subjectModel = 'other-model'
-    expect(
-      comparePrimaryMetrics(
-        referencePrimaryMetrics(changedCohort),
-        localReferencePrimaryMetrics(
-          comparisonCandidate([
-            { scenario: 'alpha', seed: 7, score: 90, repetition: 0 },
-            { scenario: 'alpha', seed: 7, score: 95, repetition: 1 },
-          ]),
-          true,
-        ),
-        false,
-      ).deltas.score,
-    ).toBeNull()
+      compare(
+        comparisonCandidate([
+          { scenario: 'alpha', seed: 7, score: 90, repetition: 0 },
+          { scenario: 'alpha', seed: 7, score: 95, repetition: 1 },
+        ]),
+      ),
+    ).toBe(12.5)
   })
 
   it('keeps every RC aggregate unavailable when the global planned scope is incomplete', () => {
@@ -395,13 +441,12 @@ describe('shared primary metrics projection', () => {
         { scenario: 'missing', seed: '3', score: null },
       ]),
     )
-    const local = localReferencePrimaryMetrics(
+    const local = buildPrimaryMetrics(
       comparisonCandidate([
         { scenario: 'kept', seed: 1, score: 90 },
         { scenario: 'zero', seed: 2, score: 0 },
         { scenario: 'missing', seed: 3, score: 90 },
       ]),
-      true,
     )
 
     const filtered = comparePrimaryMetrics(remote, local, true)

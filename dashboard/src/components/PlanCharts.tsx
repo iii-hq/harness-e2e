@@ -205,7 +205,7 @@ export function DivergingBars({
           <text
             x={pct(xOf(value))}
             y={height - 8}
-            textAnchor="middle"
+            textAnchor={value === 100 ? 'end' : 'middle'}
             fontSize="10"
             fill={MUTED}
             fontFamily="var(--font-mono)"
@@ -273,9 +273,9 @@ export function DivergingBars({
                   />
                   <text
                     x={pct(tip)}
-                    dx={increased ? 10 : -10}
-                    y={yMid + 4}
-                    textAnchor={increased ? 'start' : 'end'}
+                    dx={increased ? -4 : 4}
+                    y={yMid - 9}
+                    textAnchor={increased ? 'end' : 'start'}
                     fontSize="11"
                     fill="var(--text, #0a0a0a)"
                     fontFamily="var(--font-mono)"

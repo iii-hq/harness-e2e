@@ -11,7 +11,7 @@ import {
 } from '@/components/ExecutionComparisonPanel'
 import {
   getImportedReference,
-  listImportedExecutions,
+  listComparisonExecutions,
   localScenarioObservations,
   referenceScenarioObservations,
 } from '@/lib/release-control-reference'
@@ -1059,7 +1059,11 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     setReferenceError(null)
     setReferenceLoading(true)
     try {
-      setReferenceOptions(await listImportedExecutions())
+      setReferenceOptions(
+        (await listComparisonExecutions()).filter(
+          (execution) => execution.origin === 'remote',
+        ),
+      )
     } catch (error) {
       setReferenceError(String(error))
       setReferenceOptions([])

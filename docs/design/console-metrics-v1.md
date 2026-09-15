@@ -65,7 +65,7 @@ Para tokens, turnos, calls, errors, tempo acumulado e custo:
 2. Somar os runs de cada teste.
 3. Somar os testes do recorte para o agrupado do plano.
 
-O tempo acumulado pode superar o tempo decorrido em planos com testes paralelos. O rótulo deve conservar essa distinção. Uma comparação de consumo exige escopo e repetições compatíveis; mais repetições não podem parecer uma regressão de consumo sem contexto.
+O tempo acumulado pode superar o tempo decorrido em planos com testes paralelos. O rótulo deve conservar essa distinção. O delta de consumo expressa a diferença entre os valores exibidos; o escopo e as repetições permanecem disponíveis como contexto.
 
 ### Nota
 
@@ -90,7 +90,7 @@ Cada métrica deve distinguir valor completo, subtotal/média observada e indisp
 - **Algumas medições ausentes:** mostrar o subtotal observado com `parcial · N/M runs` ou `N/M testes`, com a unidade do denominador explícita.
 - **Nota parcial do plano:** mostrar a média observada e `N/M testes com nota`; a tabela identifica quais testes estão sem nota.
 - **Carregando:** manter a estrutura e usar placeholders. Não apresentar temporariamente “sem dados” ou valores zero.
-- **Em andamento:** valores observados são provisórios. O denominador é o escopo esperado, e os deltas terminais ficam indisponíveis enquanto o par não estiver finalizado.
+- **Em andamento:** valores observados e seus deltas são provisórios; manter a indicação de parcialidade.
 - **Erro de carregamento:** erro localizado na superfície que falhou; não substituir valores ausentes por zero.
 
 O subtotal só usa medições oficiais completas das unidades conhecidas. Se o runtime invalida o total de um run por falta de telemetria, esse run permanece indisponível para aquela métrica; não recuperar um subtotal de mensagens ou gerações e apresentá-lo como total do run. Cobertura de custo e sua origem são dimensões separadas: uma estimativa pode estar completa, enquanto um valor numérico sem cobertura conhecida não prova totalidade.
@@ -101,9 +101,9 @@ Números abreviados são apenas formatação; os cálculos usam valores completo
 
 ### Identidade e conjunto comum
 
-Os lados A e B são execuções explícitas de plano. A identidade do teste inclui versão e casos; nomes iguais não bastam. Mudanças de identidade incompatíveis ficam visíveis e identificadas, sem delta controlado. Mudanças de modelo ou stack podem ser a variável da comparação: não exigir igualdade justamente da variável que A/B se propõe a comparar. Explicitar o contexto e controlar as demais condições relevantes, incluindo repetições e política de execução.
+Os lados A e B são execuções explícitas do mesmo plano. A tabela pareia os testes pelo identificador do cenário. Conforme definido com o usuário em 2026-09-14, diferenças de versão, casos, modelo, stack, política ou repetições não bloqueiam a diferença numérica entre métricas disponíveis. A identidade histórica permanece preservada nas execuções.
 
-Sem filtro, resumo e tabela incluem a união dos testes dos dois lados. Um teste sem resultado em um lado mantém esse lado parcial; não reduzir silenciosamente o denominador ao conjunto comum. Com o filtro ativo, resumo e tabela usam exatamente o mesmo recorte simétrico. Incompatibilidade de casos, contratos, política ou repetições bloqueia os deltas, sem esconder os valores medidos. Uma linha compatível pode manter seu delta mesmo quando o agregado não permite comparação. Mostrar a quantidade incluída e os motivos de exclusão junto do recorte, sem ocupar a área principal com detalhes técnicos.
+Sem filtro, resumo e tabela incluem a união dos testes dos dois lados. Um teste sem resultado em um lado mantém esse lado parcial. Com o filtro ativo, resumo e tabela usam exatamente o mesmo recorte simétrico. Calcular cada delta a partir dos valores exibidos na própria linha ou no agregado. Mostrar a quantidade incluída e os motivos de exclusão junto do recorte.
 
 ### Filtro opcional
 
@@ -113,11 +113,11 @@ Para cada teste da união dos dois lados:
 
 `incluir = resultado_A_disponível && resultado_B_disponível && nota_A > 0 && nota_B > 0`
 
-Resultado disponível inclui nota final agregada disponível. Se a condição falhar, excluir o teste inteiro de **A e B**, de todas as métricas, da média do plano e da tabela principal. Não manter o consumo de um teste excluído em um dos totais.
+Resultado disponível inclui a nota completa ou a média observada exibida. Se a condição falhar, excluir o teste inteiro de **A e B**, de todas as métricas, da média do plano e da tabela principal. Não manter o consumo de um teste excluído em um dos totais.
 
 - Nota A=80, B=0: excluir os dois lados.
 - Nota A ausente, B=90: excluir os dois lados.
-- Notas positivas em ambos, custo B ausente: manter o teste; custo B continua parcial/indisponível e seu delta fica indisponível.
+- Notas positivas em ambos, custo B ausente: manter o teste; apenas o delta do custo ausente fica indisponível.
 - A=[0,100] → nota do teste 50, B=[80,80] → nota 80: manter o teste. O filtro atua sobre a nota agregada do teste, sem remover repetições isoladas.
 - Nenhum teste elegível: mostrar “Nenhum teste com resultado positivo em ambos os lados”, totais e notas `—`, sem divisão por zero.
 
@@ -129,8 +129,8 @@ Exibir `2 de 4 testes incluídos · 2 ocultos`, com motivos consultáveis em uma
 - Nota: diferença em **pontos**, não percentual relativo.
 - Demais métricas: diferença absoluta; percentual opcional `(B − A) / A × 100` quando A>0.
 - A=0 e B disponível: mostrar diferença absoluta; percentual `—`. A=0/B=0 tem diferença absoluta 0.
-- Se uma métrica estiver parcial/ausente em qualquer lado, seu delta agregado é `—`; valores observados e cobertura continuam visíveis. Contagens N/M iguais não provam cobertura da mesma população.
-- A linha de um teste completo pode ter delta mesmo que outro teste torne o agrupado parcial.
+- Usar o valor completo ou, quando parcial, o valor observado que aparece na tela. `Not comparable` aparece apenas se a métrica estiver ausente em A ou B.
+- As indicações de média/subtotal parcial permanecem visíveis. Zero é um valor disponível; quando A é zero, mostrar a diferença absoluta e indicar que a variação percentual não pode ser calculada.
 - Sinais e setas representam direção numérica. Menos tokens, tempo ou gasto não recebem automaticamente rótulo de “melhor”; a nota permanece visível junto do consumo.
 
 ## 7. Composição dos dois wireframes
@@ -149,7 +149,7 @@ Arquivo: [console-metrics-v1.examples.json](./console-metrics-v1.examples.json).
 
 Quatro testes: `minimal_path`, `persistent_state`, `contention_ledger`, `timer_wake`. Em B, `contention_ledger` tem nota zero e `timer_wake` não tem resultado.
 
-- Sem filtro: A tem nota 81,75 com 4/4 testes; B tem média observada 62 com 3/4 testes. O delta agregado da nota fica indisponível.
+- Sem filtro: A tem nota 81,75 com 4/4 testes; B tem média observada 62 com 3/4 testes. A diferença entre os valores exibidos é −19,75 pontos (−24,16%), mantendo B identificado como parcial.
 - Com filtro: ficam `minimal_path` e `persistent_state`, igualmente nos dois lados.
 
 | Métrica filtrada | A | B | B − A |

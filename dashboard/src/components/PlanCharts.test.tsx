@@ -73,8 +73,8 @@ describe('plan charts', () => {
     // one starts left of it. Labels sit at the tip, in text ink.
     expect(tokens).toMatch(/<rect x="58\.00%"/)
     expect(duration).toMatch(/<rect x="5[0-7]\.\d\d%"/)
-    expect(tokens).toContain('text-anchor="start"')
-    expect(duration).toContain('text-anchor="end"')
+    expect(tokens).toContain('text-anchor="end"')
+    expect(duration).toContain('text-anchor="start"')
     expect(html).toContain('fill="var(--accent, #b8420f)"')
     expect(html).not.toMatch(/var\(--(?:success|danger)/)
     expect(html).toContain('>reference<')

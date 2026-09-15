@@ -7,6 +7,7 @@ import type {
 import {
   buildPrimaryMetrics,
   comparePrimaryMetrics,
+  excludeUnsuccessfulTests,
 } from '@/lib/primary-metrics'
 
 type RunOptions = {
@@ -121,6 +122,71 @@ function detail(
 }
 
 describe('primary execution metrics', () => {
+  it('uses reported input and output without requiring or adding cache telemetry', () => {
+    const metrics = buildPrimaryMetrics(
+      detail([
+        {
+          id: 'minimal_path',
+          runs: [
+            run('observed', {
+              input: 3675,
+              output: 1360,
+              cacheRead: 42496,
+              cacheWrite: null,
+            }),
+          ],
+        },
+      ]),
+    ).metrics
+
+    expect(metrics.inputTokens.value).toBe(3675)
+    expect(metrics.totalTokens.value).toBe(5035)
+    expect(metrics.cacheRead.value).toBe(42496)
+    expect(metrics.cacheWrite).toMatchObject({
+      value: null,
+      observed: null,
+      samples: 0,
+    })
+  })
+
+  it('excludes zero-score and failed tests from every repetition without mutating evidence', () => {
+    const evidence = detail([
+      { id: 'kept', runs: [run('k1', { score: 0 }), run('k2', { score: 80 })] },
+      { id: 'zero', runs: [run('z', { score: 0 })] },
+      {
+        id: 'failed',
+        runs: [run('f1'), { ...run('f2'), status: 'hard_gate_failed' }],
+      },
+      {
+        id: 'invalid',
+        runs: [{ ...run('i'), technical: 'technical_invalid' }],
+      },
+      { id: 'unreported-score', runs: [run('u', { score: null })] },
+      { id: 'unavailable', available: false },
+    ])
+    const original = JSON.stringify(evidence)
+    const filtered = excludeUnsuccessfulTests(evidence)
+    expect(filtered.reports.map((record) => record.scenario_id)).toEqual([
+      'kept',
+      'unreported-score',
+      'unavailable',
+    ])
+    expect(
+      buildPrimaryMetrics(filtered).tests.find((test) => test.label === 'kept')
+        ?.metrics,
+    ).toMatchObject({
+      score: { value: 40 },
+      inputTokens: { value: 20 },
+      costUsd: { value: 0.2 },
+    })
+    expect(JSON.stringify(evidence)).toBe(original)
+    expect(
+      excludeUnsuccessfulTests(
+        detail([{ id: 'zero', runs: [run('z', { score: 0 })] }]),
+      ).reports,
+    ).toEqual([])
+  })
+
   it('gives each test equal score weight after averaging its repetitions', () => {
     const result = buildPrimaryMetrics(
       detail([
@@ -172,12 +238,11 @@ describe('primary execution metrics', () => {
     ).metrics
 
     expect(metrics).toMatchObject({
-      inputNormal: { value: 14 },
       cacheRead: { value: 26 },
       cacheWrite: { value: 5 },
-      inputTokens: { value: 45 },
+      inputTokens: { value: 14 },
       outputTokens: { value: 3 },
-      totalTokens: { value: 48 },
+      totalTokens: { value: 17 },
       turns: { value: 6 },
       functionCalls: { value: 8 },
       functionErrors: { value: 1 },
@@ -205,25 +270,53 @@ describe('primary execution metrics', () => {
       samples: 1,
       expected: 2,
     })
-    expect(partial?.metrics.inputNormal).toEqual({
+    expect(partial?.metrics.inputTokens).toEqual({
       value: null,
       observed: 10,
       samples: 1,
       expected: 2,
     })
-    expect(partial?.metrics.inputTokens).toEqual({
-      value: null,
-      observed: null,
-      samples: 0,
-      expected: 2,
-    })
     expect(result.metrics.score).toEqual({
       value: null,
-      observed: null,
-      samples: 0,
+      observed: 100,
+      samples: 1,
       expected: 2,
     })
     expect(result.metrics.costUsd.observed).toBeNull()
+  })
+
+  it('counts recorded runs separately from scored and missing runs', () => {
+    const result = buildPrimaryMetrics(
+      detail([
+        { id: 'zero', runs: [run('z', { score: 0 })] },
+        { id: 'unscored', runs: [run('u', { score: null })] },
+        { id: 'partial', planned: 2, runs: [run('p')] },
+        { id: 'unavailable', available: false },
+      ]),
+    )
+
+    expect(
+      result.tests.map((test) => [
+        test.label,
+        test.executedRuns,
+        test.metrics.score.samples,
+        test.repetitions,
+      ]),
+    ).toEqual([
+      ['partial', 1, 1, 2],
+      ['unavailable', 0, 0, 1],
+      ['unscored', 1, 0, 1],
+      ['zero', 1, 1, 1],
+    ])
+    const comparison = comparePrimaryMetrics(
+      result,
+      buildPrimaryMetrics(detail([{ id: 'zero', runs: [run('z')] }])),
+      false,
+    )
+    expect(
+      comparison.candidate.tests.find((test) => test.label === 'unscored')
+        ?.executedRuns,
+    ).toBe(0)
   })
 
   it('does not declare complete coverage when the planned scope is unknown', () => {
@@ -258,7 +351,7 @@ describe('primary execution metrics', () => {
       value: null,
       observed: 100,
     })
-    expect(result.tests[0].metrics.inputNormal.observed).toBe(10)
+    expect(result.tests[0].metrics.inputTokens.observed).toBe(10)
   })
 
   it('deduplicates repeated native projections and logical runs', () => {
@@ -272,7 +365,7 @@ describe('primary execution metrics', () => {
 
     expect(result.tests).toHaveLength(1)
     expect(result.tests[0].repetitions).toBe(1)
-    expect(result.metrics.inputTokens.value).toBe(33)
+    expect(result.metrics.inputTokens.value).toBe(10)
   })
 
   it('rejects an unsafe aggregate instead of rounding an exact counter', () => {
@@ -292,8 +385,8 @@ describe('primary execution metrics', () => {
       ]),
     )
 
-    expect(result.metrics.inputNormal.value).toBeNull()
-    expect(result.metrics.inputNormal.observed).toBeNull()
+    expect(result.metrics.inputTokens.value).toBeNull()
+    expect(result.metrics.inputTokens.observed).toBeNull()
   })
 })
 
@@ -315,21 +408,21 @@ describe('primary metrics comparison', () => {
     )
 
     const unfiltered = comparePrimaryMetrics(baseline, candidate, false)
-    expect(unfiltered.baseline.metrics.inputNormal.value).toBe(90)
+    expect(unfiltered.baseline.metrics.inputTokens.value).toBe(90)
     expect(unfiltered.candidate.metrics.score.value).toBeNull()
-    expect(unfiltered.deltas.score).toBeNull()
+    expect(unfiltered.deltas.score).toBe(-35)
 
     const filtered = comparePrimaryMetrics(baseline, candidate, true)
     expect(filtered).toMatchObject({ excluded: 2, totalTests: 3 })
     expect(filtered.baseline.tests.map((test) => test.label)).toEqual(['kept'])
     expect(filtered.candidate.tests.map((test) => test.label)).toEqual(['kept'])
-    expect(filtered.baseline.metrics.inputNormal.value).toBe(10)
-    expect(filtered.candidate.metrics.inputNormal.value).toBe(8)
+    expect(filtered.baseline.metrics.inputTokens.value).toBe(10)
+    expect(filtered.candidate.metrics.inputTokens.value).toBe(8)
     expect(filtered.deltas.score).toBe(10)
-    expect(filtered.deltas.inputNormal).toBe(-2)
+    expect(filtered.deltas.inputTokens).toBe(-2)
   })
 
-  it('suppresses deltas for incompatible cases, repetitions, or partial metrics', () => {
+  it('compares available metrics across different cases, repetitions, and partial reports', () => {
     const baseline = buildPrimaryMetrics(
       detail([
         { id: 'changed-case', caseId: 'case-a', runs: [run('a-case')] },
@@ -353,14 +446,13 @@ describe('primary metrics comparison', () => {
       'changed-runs',
       'partial',
     ])
-    expect(result.deltas.score).toBeNull()
-    expect(result.deltas.inputTokens).toBeNull()
-    expect(result.deltas.cacheRead).toBeNull()
+    expect(result.deltas.score).toBe(0)
+    expect(result.deltas.inputTokens).toBe(10)
+    expect(result.deltas.cacheRead).toBe(0)
+    expect(result.candidate.metrics.cacheRead.value).toBeNull()
   })
 
-  // The definition digest is the compatibility boundary: the same scenario
-  // evaluated by a different definition is reported, never subtracted.
-  it('refuses a delta when the scenario definition changed', () => {
+  it('keeps a delta when the scenario definition changed', () => {
     const baseline = detail([{ id: 'moved', runs: [run('a')] }])
     const candidate = detail([
       {
@@ -381,10 +473,10 @@ describe('primary metrics comparison', () => {
     expect(result.tests[0].definition).toBe(
       'sha256:a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1',
     )
-    expect(result.deltas.score).toBeNull()
+    expect(result.deltas.score).toBe(0)
   })
 
-  it('requires explicit report and case identity for a controlled delta', () => {
+  it('calculates deltas without report identity', () => {
     const baseline = detail([{ id: 'identity', runs: [run('a')] }])
     const candidate = detail([{ id: 'identity', runs: [run('b')] }])
     const report = candidate.reports[0].report
@@ -399,6 +491,62 @@ describe('primary metrics comparison', () => {
 
     expect(result.baseline.metrics.score.value).toBe(100)
     expect(result.candidate.metrics.score.value).toBe(100)
-    expect(result.deltas.score).toBeNull()
+    expect(result.deltas.score).toBe(0)
+  })
+
+  it('blocks only the missing metric and treats zero as available', () => {
+    const baseline = buildPrimaryMetrics(
+      detail([
+        {
+          id: 'test',
+          runs: [run('a', { score: 0, cost: 0, cacheRead: null })],
+        },
+      ]),
+    )
+    const candidate = buildPrimaryMetrics(
+      detail([
+        {
+          id: 'test',
+          runs: [run('b', { score: 10, cost: 0.1, cacheRead: 20 })],
+        },
+      ]),
+    )
+    expect(
+      comparePrimaryMetrics(baseline, candidate, false).deltas,
+    ).toMatchObject({
+      score: 10,
+      costUsd: 0.1,
+      inputTokens: 0,
+      cacheRead: null,
+    })
+    expect(
+      comparePrimaryMetrics(candidate, baseline, false).deltas.cacheRead,
+    ).toBeNull()
+  })
+
+  it('compares partial means without declaring them complete or filtering them out', () => {
+    const baseline = buildPrimaryMetrics(
+      detail([
+        { id: 'partial', planned: 2, runs: [run('a', { score: 80 })] },
+        { id: 'full', runs: [run('a-full', { score: 60 })] },
+      ]),
+    )
+    const candidate = buildPrimaryMetrics(
+      detail([
+        { id: 'partial', planned: 3, runs: [run('b', { score: 100 })] },
+        { id: 'full', runs: [run('b-full', { score: 80 })] },
+      ]),
+    )
+    const comparison = comparePrimaryMetrics(baseline, candidate, true)
+    expect(comparison.excluded).toBe(0)
+    expect(comparison.baseline.metrics.score).toMatchObject({
+      value: null,
+      observed: 70,
+    })
+    expect(comparison.candidate.metrics.score).toMatchObject({
+      value: null,
+      observed: 90,
+    })
+    expect(comparison.deltas.score).toBe(20)
   })
 })

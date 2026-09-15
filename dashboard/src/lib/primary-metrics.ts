@@ -8,7 +8,6 @@ export type MetricId =
   | 'totalTokens'
   | 'inputTokens'
   | 'outputTokens'
-  | 'inputNormal'
   | 'cacheRead'
   | 'cacheWrite'
   | 'turns'
@@ -31,9 +30,8 @@ export type PrimaryTest = {
    *  the pooled runs do not agree on one. */
   definition: string | null
   metrics: Record<MetricId, MetricValue>
-  /** Stable case and execution-policy identity used only to control deltas. */
-  identity: string | null
   repetitions: number
+  executedRuns: number
   scopeKnown: boolean
 }
 
@@ -62,7 +60,6 @@ export type PrimaryTestValues = {
   label: string
   definition: string | null
   expected: number
-  identity: string | null
   scopeKnown: boolean
   values: Record<MetricId, Array<number | null>>
 }
@@ -72,7 +69,6 @@ const metricIds: MetricId[] = [
   'totalTokens',
   'inputTokens',
   'outputTokens',
-  'inputNormal',
   'cacheRead',
   'cacheWrite',
   'turns',
@@ -89,8 +85,6 @@ type TestAccumulator = {
   label: string
   definitions: Set<string>
   expected: number
-  identities: Set<string>
-  identityKnown: boolean
   scopeKnown: boolean
   values: Record<MetricId, Array<number | null>>
 }
@@ -126,7 +120,6 @@ export function buildPrimaryMetrics(
       seenUnavailable.add(source)
       const test = accumulator(tests, key, record.scenario_id, definition)
       test.expected += 1
-      test.identityKnown = false
       continue
     }
 
@@ -165,10 +158,6 @@ export function buildPrimaryMetrics(
       } else {
         test.expected += planned
       }
-      const identity = caseIdentity(scenario, record.report)
-      if (identity === null) test.identityKnown = false
-      else test.identities.add(identity)
-
       for (const run of scenario.runs) {
         test.values.score.push(score(run.score))
         const values = primaryRunValues(run)
@@ -182,17 +171,57 @@ export function buildPrimaryMetrics(
   const projected = [...tests.values()]
     .map(projectTest)
     .sort((left, right) => left.label.localeCompare(right.label))
-  return fromTests(projected)
+  return aggregatePrimaryMetrics(projected)
 }
 
 export function buildPrimaryMetricsFromValues(
   tests: PrimaryTestValues[],
 ): PrimaryMetrics {
-  return fromTests(
+  return aggregatePrimaryMetrics(
     tests
       .map(projectValues)
       .sort((left, right) => left.label.localeCompare(right.label)),
   )
+}
+
+export function excludeUnsuccessfulTests(
+  detail: DashboardExecutionDetail,
+): DashboardExecutionDetail {
+  const excluded = new Set(
+    buildPrimaryMetrics(detail)
+      .tests.filter((test) => test.metrics.score.value === 0)
+      .map((test) => test.label),
+  )
+  for (const record of detail.reports) {
+    for (const scenario of record.report?.scenarios ?? []) {
+      if (
+        scenario.passed === false ||
+        scenario.runs.some(
+          (run) =>
+            [
+              'hard_gate_failed',
+              'subject_error',
+              'resource_limit',
+              'infrastructure_error',
+            ].includes(run.status) || run.technical === 'technical_invalid',
+        )
+      )
+        excluded.add(scenario.scenario_id)
+    }
+  }
+  return {
+    ...detail,
+    reports: detail.reports.flatMap((record) => {
+      if (!record.report)
+        return excluded.has(record.scenario_id) ? [] : [record]
+      const scenarios = record.report.scenarios.filter(
+        (scenario) => !excluded.has(scenario.scenario_id),
+      )
+      return scenarios.length > 0
+        ? [{ ...record, report: { ...record.report, scenarios } }]
+        : []
+    }),
+  }
 }
 
 export function comparePrimaryMetrics(
@@ -222,8 +251,9 @@ export function comparePrimaryMetrics(
     .sort((left, right) => left.label.localeCompare(right.label))
   const selected = rows.filter(({ baseline, candidate }) => {
     if (!excludeZeroOrMissing) return true
-    const a = baseline?.metrics.score.value
-    const b = candidate?.metrics.score.value
+    const a = baseline?.metrics.score.value ?? baseline?.metrics.score.observed
+    const b =
+      candidate?.metrics.score.value ?? candidate?.metrics.score.observed
     return (
       a !== null &&
       a !== undefined &&
@@ -233,29 +263,18 @@ export function comparePrimaryMetrics(
       b > 0
     )
   })
-  const baseline = fromTests(
+  const baseline = aggregatePrimaryMetrics(
     selected.map(
       ({ baseline, candidate }) =>
         baseline ?? missingTest(candidate as PrimaryTest),
     ),
   )
-  const candidate = fromTests(
+  const candidate = aggregatePrimaryMetrics(
     selected.map(
       ({ baseline, candidate }) =>
         candidate ?? missingTest(baseline as PrimaryTest),
     ),
   )
-  const allCompatible = selected.every(
-    ({ baseline, candidate }) =>
-      baseline !== null &&
-      candidate !== null &&
-      baseline.scopeKnown &&
-      candidate.scopeKnown &&
-      baseline.identity !== null &&
-      baseline.identity === candidate.identity &&
-      baseline.repetitions === candidate.repetitions,
-  )
-
   return {
     baseline,
     candidate,
@@ -263,22 +282,24 @@ export function comparePrimaryMetrics(
     excluded: rows.length - selected.length,
     totalTests: rows.length,
     deltas: Object.fromEntries(
-      metricIds.map((metric) => {
-        const a = baseline.metrics[metric].value
-        const b = candidate.metrics[metric].value
-        return [
-          metric,
-          !allCompatible || a === null || b === null ? null : b - a,
-        ]
-      }),
+      metricIds.map((metric) => [
+        metric,
+        metricDelta(baseline.metrics[metric], candidate.metrics[metric]),
+      ]),
     ) as Record<MetricId, number | null>,
   }
+}
+
+export function metricDelta(baseline?: MetricValue, candidate?: MetricValue) {
+  const a = baseline?.value ?? baseline?.observed ?? null
+  const b = candidate?.value ?? candidate?.observed ?? null
+  return a === null || b === null ? null : b - a
 }
 
 function missingTest(source: PrimaryTest): PrimaryTest {
   return {
     ...source,
-    identity: null,
+    executedRuns: 0,
     scopeKnown: false,
     metrics: Object.fromEntries(
       metricIds.map((metric) => [
@@ -310,8 +331,6 @@ function accumulator(
     label,
     definitions: new Set(definition ? [definition] : []),
     expected: 0,
-    identities: new Set(),
-    identityKnown: true,
     scopeKnown: true,
     values: Object.fromEntries(
       metricIds.map((id) => [id, []]),
@@ -325,10 +344,6 @@ function projectTest(test: TestAccumulator): PrimaryTest {
   return projectValues({
     ...test,
     definition: test.definitions.size === 1 ? [...test.definitions][0] : null,
-    identity:
-      test.identityKnown && test.identities.size > 0
-        ? stable([...test.identities].sort())
-        : null,
   })
 }
 
@@ -351,21 +366,30 @@ function projectValues(test: PrimaryTestValues): PrimaryTest {
     label: test.label,
     definition: test.definition,
     metrics,
-    identity: test.identity,
     repetitions: expected,
+    executedRuns: test.values.score.length,
     scopeKnown: test.scopeKnown,
   }
 }
 
-function fromTests(tests: PrimaryTest[]): PrimaryMetrics {
+export function aggregatePrimaryMetrics(tests: PrimaryTest[]): PrimaryMetrics {
   const scopeKnown = tests.every((test) => test.scopeKnown)
   const metrics = Object.fromEntries(
     metricIds.map((metric) => {
       if (metric === 'score') {
-        const values = tests.map((test) => test.metrics.score.value)
+        const values = tests.map(
+          (test) => test.metrics.score.value ?? test.metrics.score.observed,
+        )
         return [
           metric,
-          metricValue(values, tests.length, true, scopeKnown, false),
+          metricValue(
+            values,
+            tests.length,
+            true,
+            scopeKnown &&
+              tests.every((test) => test.metrics.score.value !== null),
+            false,
+          ),
         ]
       }
       const expected = tests.reduce(
@@ -424,13 +448,9 @@ function metricValue(
 
 export function primaryRunValues(run: DashboardRunProjection): AttemptValues {
   const attempts: unknown[] = [...(run.retry_attempts ?? []), run]
-  const inputNormal = sumAttempts(attempts, 'input_tokens')
+  const inputTokens = sumAttempts(attempts, 'input_tokens')
   const cacheRead = sumAttempts(attempts, 'cache_read_tokens')
   const cacheWrite = sumAttempts(attempts, 'cache_write_tokens')
-  const inputTokens =
-    inputNormal === null || cacheRead === null || cacheWrite === null
-      ? null
-      : sum([inputNormal, cacheRead, cacheWrite], true)
   const outputTokens = sumAttempts(attempts, 'output_tokens')
   return {
     totalTokens:
@@ -439,7 +459,6 @@ export function primaryRunValues(run: DashboardRunProjection): AttemptValues {
         : sum([inputTokens, outputTokens], true),
     inputTokens,
     outputTokens,
-    inputNormal,
     cacheRead,
     cacheWrite,
     turns: sumAttempts(attempts, 'turns'),
@@ -494,12 +513,6 @@ function subjectDefinition(
   return string(scenario?.behavior_sha256)
 }
 
-/**
- * A test pools by scenario id alone. The definition digest gates comparability
- * through `caseIdentity`, not through the key: a Release Control ledger has no
- * digest to key on, and dropping the pair would hide the test instead of
- * reporting it as not comparable.
- */
 function testKey(label: string): string {
   return stable([label])
 }

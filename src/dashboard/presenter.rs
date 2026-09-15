@@ -196,6 +196,7 @@ pub(super) fn execution_summary(
         "total_tokens": totals.0,
         "function_calls": totals.1,
         "function_call_errors": totals.2,
+        "turns": totals.3,
         "failed_attempt_tokens": failed_attempt_token_total(&aggregates),
         "tokens_per_completion": pooled_tokens_per_completion(&aggregates),
     });
@@ -649,21 +650,28 @@ pub(super) fn contract_fingerprint(value: &Value) -> String {
     format!("fnv1a32:{hash:08x}")
 }
 
-fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f64>) {
+fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f64>, Option<f64>) {
     let mut tokens = Vec::new();
     let mut calls = Vec::new();
     let mut errors = Vec::new();
+    let mut turns = Vec::new();
     for scenario in &report.scenarios {
         for run in &scenario.runs {
             tokens.push(run_total_tokens(run));
             calls.push(run_function_calls(&scenario.scenario_id, run));
             errors.push(run_function_call_errors(&scenario.scenario_id, run));
+            turns.push(
+                run.metrics
+                    .as_ref()
+                    .map(|metrics| metrics.totals.turns as f64),
+            );
         }
     }
     (
         sum_complete(&tokens),
         sum_complete(&calls),
         sum_complete(&errors),
+        sum_complete(&turns),
     )
 }
 

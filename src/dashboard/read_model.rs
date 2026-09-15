@@ -400,7 +400,28 @@ impl DashboardReadModel {
         )
     }
 
-    pub(crate) fn from_projections(projections: Vec<ExecutionProjection>) -> Result<Self> {
+    pub(crate) fn from_projections(mut projections: Vec<ExecutionProjection>) -> Result<Self> {
+        for projection in &mut projections {
+            if !projection.summary["totals"]["turns"].is_null() {
+                continue;
+            }
+            let turns = projection.summary["scenario_metrics"]
+                .as_array()
+                .filter(|metrics| !metrics.is_empty())
+                .and_then(|metrics| {
+                    metrics
+                        .iter()
+                        .map(|metric| {
+                            let count = metric["run_count"].as_u64()?;
+                            if count == 0 || metric["samples"]["turns"].as_u64()? != count {
+                                return None;
+                            }
+                            Some(metric["averages"]["turns"].as_f64()? * count as f64)
+                        })
+                        .sum::<Option<f64>>()
+                });
+            projection.summary["totals"]["turns"] = json!(turns);
+        }
         let revision = artifact::sha256_value(
             &projections
                 .iter()
@@ -1759,6 +1780,41 @@ mod tests {
         assert_eq!(history.total, 1);
         assert_eq!(history.observations[0].mean_score, Some(90.0));
         assert_eq!(history.observations[0].median_tokens, None);
+    }
+
+    #[test]
+    fn retained_projection_restores_only_fully_reported_turns() {
+        let mut projection = ExecutionProjection::from_stored(&StoredRun {
+            metadata: super::super::tests::metadata(),
+            report: Some(super::super::tests::report()),
+            live_progress: None,
+            live_progress_error: None,
+        })
+        .unwrap();
+        projection.summary["totals"]
+            .as_object_mut()
+            .unwrap()
+            .remove("turns");
+        projection.summary["scenario_metrics"] = json!([
+            {"run_count": 2, "averages": {"turns": 3.0}, "samples": {"turns": 2}},
+            {"run_count": 1, "averages": {"turns": 5.0}, "samples": {"turns": 1}}
+        ]);
+        let restored = DashboardReadModel::from_projections(vec![projection.clone()]).unwrap();
+        assert_eq!(restored.summaries[0]["totals"]["turns"], 11.0);
+
+        projection.summary["scenario_metrics"][0]["samples"]["turns"] = json!(0);
+        let incomplete = DashboardReadModel::from_projections(vec![projection.clone()]).unwrap();
+        assert!(incomplete.summaries[0]["totals"]["turns"].is_null());
+
+        projection.summary["scenario_metrics"][0]["samples"]["turns"] = json!(2);
+        for metric in projection.summary["scenario_metrics"]
+            .as_array_mut()
+            .unwrap()
+        {
+            metric["averages"]["turns"] = json!(0);
+        }
+        let zero = DashboardReadModel::from_projections(vec![projection]).unwrap();
+        assert_eq!(zero.summaries[0]["totals"]["turns"], 0.0);
     }
 
     #[test]

@@ -7,6 +7,7 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import { TestCriteriaList } from '@/components/AboutTestPanel'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
+import { SemanticTestFlow } from '@/components/SemanticTestFlow'
 import { SystemOutcomeBadge } from '@/components/SystemOutcome'
 import {
   buttonClassName,
@@ -25,7 +26,6 @@ import {
   type AssessmentWorkspaceModel,
   assessmentFilterCounts,
   buildAssessmentWorkspace,
-  buildHarnessRecommendation,
   matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -59,7 +59,7 @@ function formatRunDuration(durationMs: number | null) {
 
 function RunMetricCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-line bg-panel-subtle p-3">
+    <div className="min-w-0">
       <small className="block text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
         {label}
       </small>
@@ -241,7 +241,7 @@ function PrimaryMetricBoard({
   return (
     <section
       className={`grid grid-flow-dense grid-cols-1 gap-px overflow-hidden bg-line sm:grid-cols-2 lg:grid-cols-4 ${
-        standalone ? 'rounded-lg border border-line' : 'border-y border-line'
+        standalone ? 'border-b border-line' : 'border-y border-line'
       }`}
       aria-label={`${titleCase(run.scenarioId)} primary metrics`}
       data-primary-run-metrics
@@ -481,7 +481,61 @@ function AssessmentDetailContent({
           completed, not that it produced the right thing.
         </Callout>
       ) : null}
-      <PrimaryMetricBoard run={run} standalone />
+      <section
+        className="@container/run-metrics overflow-hidden rounded-lg border border-line bg-panel"
+        aria-label="Run metrics"
+      >
+        <PrimaryMetricBoard run={run} standalone />
+        <div
+          className="grid grid-cols-1 gap-5 p-4 @[400px]/run-metrics:grid-cols-2 @[700px]/run-metrics:grid-cols-3"
+          data-run-metrics-detail
+        >
+          <RunMetricCard
+            label="Input tokens"
+            value={formatMetricCount(run.metrics.inputTokens)}
+          />
+          <RunMetricCard
+            label="Output tokens"
+            value={formatMetricCount(run.metrics.outputTokens)}
+          />
+          <RunMetricCard
+            label="Cache read"
+            value={formatMetricCount(run.metrics.cacheReadTokens)}
+          />
+          <RunMetricCard
+            label="Cache written"
+            value={formatMetricCount(run.metrics.cacheWriteTokens)}
+          />
+          <RunMetricCard
+            label="Reasoning tokens"
+            value={formatMetricCount(run.metrics.reasoningTokens)}
+          />
+          <RunMetricCard
+            label="Sessions"
+            value={formatMetricCount(run.metrics.sessions)}
+          />
+          <RunMetricCard
+            label="Turns"
+            value={formatMetricCount(run.metrics.turns)}
+          />
+          <RunMetricCard
+            label="Function calls"
+            value={formatMetricCount(run.metrics.functionCalls)}
+          />
+          {primaryRunMetrics(run).some(
+            (metric) => metric.label === 'Runtime',
+          ) ? null : (
+            <RunMetricCard
+              label="Runtime"
+              value={formatRunDuration(run.metrics.durationMs)}
+            />
+          )}
+          <RunMetricCard
+            label="Function errors"
+            value={formatMetricCount(run.metrics.functionCallErrors)}
+          />
+        </div>
+      </section>
 
       <section aria-labelledby={`${safeId(run.key)}-outcome`}>
         <div className="mb-3 flex items-center gap-2">
@@ -507,71 +561,6 @@ function AssessmentDetailContent({
         </div>
         <SystemOutcomeBadge outcome={{ value: run.systemStatus }} />
       </section>
-
-      <section
-        className="grid gap-2"
-        aria-labelledby={`${safeId(run.key)}-next`}
-      >
-        <h4
-          id={`${safeId(run.key)}-next`}
-          className="m-0 text-label font-semibold uppercase tracking-[0.06em] text-ink-muted"
-        >
-          Suggested next step
-        </h4>
-        <p className="m-0 text-sm leading-5 text-pretty text-ink-soft">
-          {buildHarnessRecommendation(run)}
-        </p>
-      </section>
-
-      <details className="rounded-lg border border-line bg-panel-subtle">
-        <summary
-          id={`${safeId(run.key)}-runtime`}
-          className="min-h-11 cursor-pointer px-4 py-3 text-sm font-semibold text-ink"
-        >
-          Runtime telemetry
-        </summary>
-        <div
-          className="grid gap-2 border-t border-line p-3 sm:grid-cols-2 lg:grid-cols-4"
-          data-run-metrics-detail
-        >
-          <RunMetricCard
-            label="Input tokens"
-            value={formatMetricCount(run.metrics.inputTokens)}
-          />
-          <RunMetricCard
-            label="Output tokens"
-            value={formatMetricCount(run.metrics.outputTokens)}
-          />
-          <RunMetricCard
-            label="Cache read"
-            value={formatMetricCount(run.metrics.cacheReadTokens)}
-          />
-          <RunMetricCard
-            label="Reasoning tokens"
-            value={formatMetricCount(run.metrics.reasoningTokens)}
-          />
-          <RunMetricCard
-            label="Sessions"
-            value={formatMetricCount(run.metrics.sessions)}
-          />
-          <RunMetricCard
-            label="Turns"
-            value={formatMetricCount(run.metrics.turns)}
-          />
-          <RunMetricCard
-            label="Function calls"
-            value={formatMetricCount(run.metrics.functionCalls)}
-          />
-          <RunMetricCard
-            label="Duration"
-            value={formatRunDuration(run.metrics.durationMs)}
-          />
-          <RunMetricCard
-            label="Function errors"
-            value={formatMetricCount(run.metrics.functionCallErrors)}
-          />
-        </div>
-      </details>
 
       <section
         className="grid gap-3"
@@ -646,8 +635,28 @@ export function AssessmentDetailDialog({
   run: AssessmentRunView
   detail?: DashboardExecutionDetail | null
   onClose: () => void
-  onTranscript?: (run: AssessmentRunView, title: string) => void
 }) {
+  const scopedDetail = detail && {
+    ...detail,
+    reports: detail.reports
+      .filter((record) => record.subject_id === run.subjectId && record.report)
+      .map((record) => ({
+        ...record,
+        report: record.report && {
+          ...record.report,
+          scenarios: record.report.scenarios
+            .filter((scenario) => scenario.scenario_id === run.scenarioId)
+            .map((scenario) => ({
+              ...scenario,
+              runs: scenario.runs.filter(
+                (candidate) =>
+                  candidate.run_id === run.runId &&
+                  candidate.attempt_id === run.attemptId,
+              ),
+            })),
+        },
+      })),
+  }
   // Audit AW-06: the design-system Dialog opens as a modal and moves focus
   // to the title, so keyboard and screen-reader users land on the record.
   return (
@@ -684,6 +693,7 @@ export function AssessmentDetailDialog({
       }
     >
       <AssessmentDetailContent run={run} entries={run.assessments} />
+      {scopedDetail && <SemanticTestFlow detail={scopedDetail} />}
     </Dialog>
   )
 }
@@ -924,7 +934,6 @@ export function AssessmentPanel({
           run={selectedRun}
           detail={detail}
           onClose={() => setSelectedRunKey(null)}
-          onTranscript={onTranscript}
         />
       )}
     </div>
