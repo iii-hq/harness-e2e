@@ -17,11 +17,11 @@
 //! of truth for perft node counts and legal-move sets, so this scenario never
 //! reimplements chess.
 //!
-//! Determinism and reproducibility: `materialize` is a pure function of its
-//! `(namespace, seed)` and the pinned constants below — it never reads the
-//! filesystem or environment, so `cargo test --lib` works without the fixture
-//! present. Only `setup`, `evaluate`, `capture`, and `cleanup` touch the fixture
-//! checkout or the copied workspace.
+//! Determinism and reproducibility: `case` and `spec` are pure functions of
+//! their `(seed)` / `(run_id)` and the pinned constants below — they never read
+//! the filesystem or environment, so `cargo test --lib` works without the
+//! fixture present. Only `setup`, `evaluate`, `capture`, and `cleanup` touch the
+//! fixture checkout or the copied workspace.
 
 use std::ffi::OsStr;
 use std::fs;
@@ -39,10 +39,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::chess_engine;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-    CleanupFuture, DeliverableCaptureFuture, DeliverableContract, EvaluationFuture,
-    ExecutionPolicy, InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
+    CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "chess_engine_build";
@@ -146,53 +145,56 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
 
 // --- Scenario construction ---------------------------------------------------
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ChessEngineBuild;
 
-pub fn materialize(namespace: &str, seed: u64) -> Result<MaterializedScenario> {
-    // Pure: inputs are derived only from pinned constants — no filesystem or
-    // environment access, so materialization works without the fixture present.
-    let inputs = json!({
-        "fixture_repository": FIXTURE_REPOSITORY,
-        "fixture_subtree": CHESS_SUBTREE,
-        "fixture_revision": FIXTURE_REVISION,
-        "chess_manifest_sha256": CHESS_MANIFEST_SHA256,
-        "engine_relpath": ENGINE_RELPATH,
-        "perft_cli": "python3 engine/engine.py perft <FEN> <DEPTH>",
-        "legalmoves_cli": "python3 engine/engine.py legalmoves <FEN>",
-        "network_profile": NETWORK_PROFILE,
-    });
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        inputs,
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::coder".to_string(),
-            "iii::shell".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
+#[async_trait]
+impl Scenario for ChessEngineBuild {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = workspace_root(run_id);
-    let engine = engine_path(&root);
-    let readme = root.join("README.md");
-    let protocol = root.join("PROTOCOL.md");
-    let public_perft = root.join("tests/public_perft.py");
-    let public_legalmoves = root.join("tests/public_legalmoves.py");
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"A pinned chess fixture repository has been copied into your workspace at `{root}`.
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARY)
+    }
+
+    fn case(&self, seed: u64) -> Result<ScenarioCase> {
+        // Pure: inputs are derived only from pinned constants — no filesystem or
+        // environment access, so materialization works without the fixture present.
+        let inputs = json!({
+            "fixture_repository": FIXTURE_REPOSITORY,
+            "fixture_subtree": CHESS_SUBTREE,
+            "fixture_revision": FIXTURE_REVISION,
+            "chess_manifest_sha256": CHESS_MANIFEST_SHA256,
+            "engine_relpath": ENGINE_RELPATH,
+            "perft_cli": "python3 engine/engine.py perft <FEN> <DEPTH>",
+            "legalmoves_cli": "python3 engine/engine.py legalmoves <FEN>",
+            "network_profile": NETWORK_PROFILE,
+        });
+        ScenarioCase::new(
+            ID,
+            seed,
+            inputs,
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCoder,
+                Capability::IiiShell,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let root = workspace_root(run_id);
+        let engine = engine_path(&root);
+        let readme = root.join("README.md");
+        let protocol = root.join("PROTOCOL.md");
+        let public_perft = root.join("tests/public_perft.py");
+        let public_legalmoves = root.join("tests/public_legalmoves.py");
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"A pinned chess fixture repository has been copied into your workspace at `{root}`.
 
 Read `{readme}` and `{protocol}` first — they describe the repository layout and the exact CLI
 protocol you must preserve.
@@ -214,31 +216,140 @@ In both cases write only that line to stdout, leave stderr empty, and exit 0.
 You may self-check with `python3 {public_perft}` and `python3 {public_legalmoves}`. Do not edit the
 tests, the protocol, or the fixture metadata. When you are done, finish with a one-line note that
 the engine is implemented."#,
-            root = root.display(),
-            readme = readme.display(),
-            protocol = protocol.display(),
-            engine = engine.display(),
-            public_perft = public_perft.display(),
-            public_legalmoves = public_legalmoves.display(),
-        ),
-        filesystem_root: Some(root),
-        // Reasoning subjects spend their whole output budget thinking about
-        // move generation before the first edit: five daily runs ended at
-        // exactly 16 384 reasoning tokens with `stop_reason: end`, no text and
-        // no call, leaving the stubs untouched. The budget has to hold a full
-        // planning turn; the total-token and stuck bounds still cap the run.
-        execution: ExecutionPolicy {
-            max_turns: 48,
-            max_output_tokens: Some(65_536),
-            max_total_tokens: Some(1_000_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &["http::*", "browser::*", "github::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
+                root = root.display(),
+                readme = readme.display(),
+                protocol = protocol.display(),
+                engine = engine.display(),
+                public_perft = public_perft.display(),
+                public_legalmoves = public_legalmoves.display(),
+            ),
+            filesystem_root: Some(root),
+            // Reasoning subjects spend their whole output budget thinking about
+            // move generation before the first edit: five daily runs ended at
+            // exactly 16 384 reasoning tokens with `stop_reason: end`, no text and
+            // no call, leaving the stubs untouched. The budget has to hold a full
+            // planning turn; the total-token and stuck bounds still cap the run.
+            execution: ExecutionPolicy {
+                max_turns: 48,
+                max_output_tokens: Some(65_536),
+                max_total_tokens: Some(1_000_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &["http::*", "browser::*", "github::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        for function in ["coder::read-file", "coder::update-file", "shell::exec"] {
+            if !context.function_exists(function).await? {
+                bail!("required chess-engine build capability '{function}' is unavailable");
+            }
+        }
+
+        prepare_workspace(run_id).await
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let workspace = workspace_root(run_id);
+        let engine = engine_path(&workspace);
+        let source = read_engine_source(&engine);
+        let battery = run_full_battery(&engine).await.ok();
+        let perft_exact = battery.as_ref().is_some_and(BatteryReport::perft_exact);
+        let legal_correct = battery
+            .as_ref()
+            .is_some_and(BatteryReport::legal_moves_correct);
+
+        // Provenance is asserted only once both correctness gates pass.
+        let provenance = if perft_exact && legal_correct {
+            vec![ProvenanceEvidence {
+                kind: "file".to_string(),
+                source_id: ENGINE_RELPATH.to_string(),
+                relation: "authored_engine".to_string(),
+            }]
+        } else {
+            Vec::new()
+        };
+
+        Ok(vec![CapturedDeliverable {
+            id: ENGINE_SOURCE_ID.to_string(),
+            kind: ENGINE_SOURCE_KIND.to_string(),
+            content: CapturedDeliverableContent::TextUtf8(source),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "perft_exact".to_string(),
+                    passed: perft_exact,
+                    reason: match battery.as_ref() {
+                        Some(battery) => {
+                            reason_over("perft_exact", battery.perft.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
+                        None => "engine battery did not run".to_string(),
+                    },
+                },
+                CapturedInvariant {
+                    id: "legal_moves_correct".to_string(),
+                    passed: legal_correct,
+                    reason: match battery.as_ref() {
+                        Some(battery) => {
+                            reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                                report.value_ok
+                            })
+                        }
+                        None => "engine battery did not run".to_string(),
+                    },
+                },
+            ],
+            provenance,
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let engine = engine_path(&workspace_root(run_id));
+        let battery = run_full_battery(&engine).await?;
+        Ok(assessment::build_evaluation(
+            crate::report::CompletionState::Completed,
+            [
+                PERFT_EXACT.full_or_zero(
+                    battery.perft_exact(),
+                    reason_over("perft_exact", battery.perft.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                LEGAL_MOVES_CORRECT.full_or_zero(
+                    battery.legal_moves_correct(),
+                    reason_over("legal_moves_correct", battery.legal.iter(), |report| {
+                        report.value_ok
+                    }),
+                ),
+                INTERFACE_CONTRACT.full_or_zero(
+                    battery.interface_contract(),
+                    reason_over("interface_contract", battery.all(), |report| {
+                        report.interface_ok
+                    }),
+                ),
+                BUILD_DISCIPLINE.full_or_zero(
+                    battery.build_discipline(),
+                    reason_over("build_discipline", battery.all(), |report| report.finished),
+                ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        remove_workspace(&workspace_root(run_id))
     }
 }
 
@@ -271,18 +382,6 @@ fn deliverable_contract() -> DeliverableContract {
 }
 
 // --- setup: verify capabilities, validate + copy the frozen fixture ----------
-
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        for function in ["coder::read-file", "coder::update-file", "shell::exec"] {
-            if !context.function_exists(function).await? {
-                bail!("required chess-engine build capability '{function}' is unavailable");
-            }
-        }
-
-        prepare_workspace(run_id).await
-    })
-}
 
 async fn prepare_workspace(run_id: &str) -> Result<()> {
     let fixture = super::fixture::prepare(super::fixture::SHARED_BUNDLE, FIXTURE_REVISION).await?;
@@ -634,116 +733,13 @@ fn reason_over<'a>(
 
 // --- evaluate: runner-side battery vs kernel oracle --------------------------
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let engine = engine_path(&workspace_root(run_id));
-        let battery = run_full_battery(&engine).await?;
-        Ok(assessment::build_evaluation(
-            crate::report::CompletionState::Completed,
-            [
-                PERFT_EXACT.full_or_zero(
-                    battery.perft_exact(),
-                    reason_over("perft_exact", battery.perft.iter(), |report| {
-                        report.value_ok
-                    }),
-                ),
-                LEGAL_MOVES_CORRECT.full_or_zero(
-                    battery.legal_moves_correct(),
-                    reason_over("legal_moves_correct", battery.legal.iter(), |report| {
-                        report.value_ok
-                    }),
-                ),
-                INTERFACE_CONTRACT.full_or_zero(
-                    battery.interface_contract(),
-                    reason_over("interface_contract", battery.all(), |report| {
-                        report.interface_ok
-                    }),
-                ),
-                BUILD_DISCIPLINE.full_or_zero(
-                    battery.build_discipline(),
-                    reason_over("build_discipline", battery.all(), |report| report.finished),
-                ),
-            ],
-        ))
-    })
-}
-
 // --- capture: read the engine source before cleanup --------------------------
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let workspace = workspace_root(run_id);
-        let engine = engine_path(&workspace);
-        let source = read_engine_source(&engine);
-        let battery = run_full_battery(&engine).await.ok();
-        let perft_exact = battery.as_ref().is_some_and(BatteryReport::perft_exact);
-        let legal_correct = battery
-            .as_ref()
-            .is_some_and(BatteryReport::legal_moves_correct);
-
-        // Provenance is asserted only once both correctness gates pass.
-        let provenance = if perft_exact && legal_correct {
-            vec![ProvenanceEvidence {
-                kind: "file".to_string(),
-                source_id: ENGINE_RELPATH.to_string(),
-                relation: "authored_engine".to_string(),
-            }]
-        } else {
-            Vec::new()
-        };
-
-        Ok(vec![CapturedDeliverable {
-            id: ENGINE_SOURCE_ID.to_string(),
-            kind: ENGINE_SOURCE_KIND.to_string(),
-            content: CapturedDeliverableContent::TextUtf8(source),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "perft_exact".to_string(),
-                    passed: perft_exact,
-                    reason: match battery.as_ref() {
-                        Some(battery) => {
-                            reason_over("perft_exact", battery.perft.iter(), |report| {
-                                report.value_ok
-                            })
-                        }
-                        None => "engine battery did not run".to_string(),
-                    },
-                },
-                CapturedInvariant {
-                    id: "legal_moves_correct".to_string(),
-                    passed: legal_correct,
-                    reason: match battery.as_ref() {
-                        Some(battery) => {
-                            reason_over("legal_moves_correct", battery.legal.iter(), |report| {
-                                report.value_ok
-                            })
-                        }
-                        None => "engine battery did not run".to_string(),
-                    },
-                },
-            ],
-            provenance,
-        }])
-    })
-}
 
 fn read_engine_source(engine_path: &Path) -> String {
     fs::read_to_string(engine_path).unwrap_or_default()
 }
 
 // --- cleanup: guarded removal of the copied workspace ------------------------
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move { remove_workspace(&workspace_root(run_id)) })
-}
 
 fn workspace_root(run_id: &str) -> PathBuf {
     let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
@@ -1008,8 +1004,12 @@ mod tests {
     #[test]
     fn materialize_is_reproducible_across_namespaces() {
         let seed = super::super::stable_seed(ID);
-        let first = materialize("attempt-a", seed).unwrap();
-        let retry = materialize("attempt-b", seed).unwrap();
+        let first = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("attempt-a", seed)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("attempt-b", seed)
+            .unwrap();
         first.validate().unwrap();
         retry.validate().unwrap();
 
@@ -1020,7 +1020,6 @@ mod tests {
 
         // Contract/capture coherence.
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
-        assert!(first.capture.is_some());
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
         for invariant in &first.case.deliverable_contract.invariants {
@@ -1048,12 +1047,13 @@ mod tests {
         // No fixture and no fixture env var are required to materialize: the
         // filesystem_root points at the copy destination under the workspace
         // base, never at the fixture checkout.
-        let materialized = materialize("no-fixture", 7).unwrap();
+        let materialized = crate::scenarios::ScenarioId::ChessEngineBuild
+            .materialize("no-fixture", 7)
+            .unwrap();
         let root = materialized.spec.filesystem_root.expect("filesystem root");
         let root = root.to_string_lossy();
         assert!(root.contains("scenario-workspaces"));
         assert!(root.ends_with(&format!("{ID}-no-fixture")));
-        assert!(materialized.capture.is_some());
     }
 
     #[test]

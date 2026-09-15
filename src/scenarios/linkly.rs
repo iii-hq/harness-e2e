@@ -118,53 +118,24 @@ fn now_ms() -> u128 {
         .unwrap_or(0)
 }
 
-pub fn scenario(_run_id: &str) -> ScenarioSpec {
-    ScenarioSpec {
-        id: ID,
-        prompt: PROMPTS[0].trim_end().to_string(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 256,
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(6_000_000),
-            stuck_timeout_seconds: 900,
-            max_validation_retries: None,
-        },
-        denied_functions: &[
-            "approval::*",
-            "configuration::register",
-            "shell::workspace::*",
-        ],
-        criteria: metrics()
-            .iter()
-            .map(|m| {
-                CriterionSpec::scored(
-                    m["id"].as_str().unwrap(),
-                    m["weight"].as_u64().unwrap() as u8,
-                    m["question"].as_str().unwrap(),
-                    EvaluationDimension::Deliverable,
-                )
-            })
-            .collect(),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
+pub struct LinklyTutorial;
+
+#[async_trait]
+impl Scenario for LinklyTutorial {
+    fn id(&self) -> &'static str {
+        ID
     }
-}
 
-/// Chapters 2–7 and the guard, sent on the same session after the first
-/// prompt completes.
-pub fn dialogue_followups(_run_id: &str) -> Vec<String> {
-    PROMPTS[1..]
-        .iter()
-        .map(|prompt| prompt.trim_end().to_string())
-        .collect()
-}
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::ScriptedDialogue
+    }
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    Ok(MaterializedScenario {
-        spec: scenario(namespace),
-        case: ScenarioCase::new(
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
             ID,
             super::stable_seed(ID),
             json!({
@@ -175,12 +146,12 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 "prompts_sha256": crate::artifact::sha256_bytes(PROMPTS.concat().as_bytes()),
             }),
             vec![
-                "e2e::control-plane-v1".into(),
-                "iii::functions".into(),
-                "iii::compose".into(),
-                "harness::scripted-dialogue-v1".into(),
-                "node".into(),
-                "curl".into(),
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiCompose,
+                Capability::HarnessScriptedDialogueV1,
+                Capability::Node,
+                Capability::Curl,
             ],
             DeliverableContract {
                 artifacts: vec![ArtifactExpectation {
@@ -194,23 +165,285 @@ pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> 
                 provenance_required: true,
                 capture_before_cleanup: true,
             },
-        )?,
-        capture: Some(capture),
-    })
-}
+        )
+    }
 
-/// The subject's `fs_scope` root once `setup` has found the project; `None`
-/// for other scenarios or before setup ran.
-pub fn prepared_filesystem_root(scenario_id: &str, run_id: &str) -> Result<Option<PathBuf>> {
-    if scenario_id != ID {
-        return Ok(None);
+    fn spec(&self, _run_id: &str) -> ScenarioSpec {
+        ScenarioSpec {
+            id: ID,
+            prompt: PROMPTS[0].trim_end().to_string(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 256,
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(6_000_000),
+                stuck_timeout_seconds: 900,
+                max_validation_retries: None,
+            },
+            denied_functions: &[
+                "approval::*",
+                "configuration::register",
+                "shell::workspace::*",
+            ],
+            criteria: metrics()
+                .iter()
+                .map(|m| {
+                    CriterionSpec::scored(
+                        m["id"].as_str().unwrap(),
+                        m["weight"].as_u64().unwrap() as u8,
+                        m["question"].as_str().unwrap(),
+                        EvaluationDimension::Deliverable,
+                    )
+                })
+                .collect(),
+        }
     }
-    let path = root(run_id).join("project.json");
-    if !path.is_file() {
-        return Ok(None);
+
+    /// Chapters 2–7 and the guard, sent on the same session after the first
+    /// prompt completes.
+    fn dialogue_followups(&self, _run_id: &str) -> Vec<String> {
+        PROMPTS[1..]
+            .iter()
+            .map(|prompt| prompt.trim_end().to_string())
+            .collect()
     }
-    let project: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
-    Ok(project["project_root"].as_str().map(PathBuf::from))
+
+    /// The subject's `fs_scope` root once `setup` has found the project;
+    /// `None` before setup ran.
+    fn prepared_root(&self, run_id: &str) -> Result<Option<PathBuf>> {
+        let path = root(run_id).join("project.json");
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let project: Value = serde_json::from_slice(&std::fs::read(&path)?)?;
+        Ok(project["project_root"].as_str().map(PathBuf::from))
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        let directory = root(run_id);
+        std::fs::create_dir_all(directory.join("validation/checks"))?;
+        std::fs::create_dir_all(directory.join("validation/http"))?;
+        let status = context
+            .trigger_value("compose::status", json!({}))
+            .await
+            .context(
+            "compose::status failed; is the Linkly stack up and the runner attached to its engine?",
+        )?;
+        let compose_file = PathBuf::from(
+            status["file"]
+                .as_str()
+                .context("compose::status did not name the project file")?,
+        );
+        let discovered = compose_file
+            .parent()
+            .context("compose file has no parent directory")?
+            .to_path_buf();
+        let project = match std::env::var_os("HARNESS_E2E_LINKLY_PROJECT") {
+            Some(explicit) => {
+                let explicit = PathBuf::from(explicit);
+                if explicit != discovered {
+                    bail!(
+                        "HARNESS_E2E_LINKLY_PROJECT ({}) is not the project Compose is running ({})",
+                        explicit.display(),
+                        discovered.display()
+                    );
+                }
+                explicit
+            }
+            None => discovered,
+        };
+        let problems = scaffold_problems(&project);
+        if !problems.is_empty() {
+            bail!(
+                "{} is not a fresh {TEMPLATE_SOURCE} scaffold: {}",
+                project.display(),
+                problems.join("; ")
+            );
+        }
+        let ready = ready_containers(&status);
+        let missing: Vec<_> = BASELINE_CONTAINERS
+            .iter()
+            .filter(|name| !ready.iter().any(|ready| ready == *name))
+            .collect();
+        if !missing.is_empty() {
+            bail!("baseline containers are not ready: {missing:?} (ready: {ready:?})");
+        }
+        let providers: Vec<_> = ready
+            .iter()
+            .filter(|name| name.starts_with("provider-"))
+            .cloned()
+            .collect();
+        if providers.is_empty() {
+            bail!("no provider-* container is ready; enable one in worker-compose.yaml with its key in .env");
+        }
+        let listed = context
+            .trigger_value("engine::functions::list", json!({"prefix": "link::"}))
+            .await?;
+        let existing: Vec<_> = function_ids(&listed)
+            .into_iter()
+            .filter(|id| id.starts_with("link::"))
+            .collect();
+        if !existing.is_empty() {
+            bail!("link functions are already registered ({existing:?}); this scaffold has been built before");
+        }
+        let probe = curl(&[
+            "-sS",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "10",
+            &format!("{HTTP_BASE}/s/e2e-preflight"),
+        ])
+        .await
+        .context("the http worker did not answer on 127.0.0.1:3111")?;
+        let record = json!({
+            "project_root": project,
+            "compose_file": compose_file,
+            "namespace": status["namespace"],
+            "ready_containers": ready,
+            "providers": providers,
+            "session_id": session_id(run_id),
+            "http_probe": probe.trim(),
+            "at_ms": now_ms(),
+        });
+        std::fs::write(
+            directory.join("project.json"),
+            serde_json::to_vec_pretty(&record)?,
+        )?;
+        std::fs::write(
+            directory.join("validation/preflight.json"),
+            serde_json::to_vec_pretty(&json!({"record": record, "compose_status": status}))?,
+        )?;
+        spawn_monitor(context, run_id, directory.join("validation/samples.jsonl"));
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        stop_monitor(run_id);
+        let directory = root(run_id);
+        let validation = directory.join("validation");
+        std::fs::create_dir_all(validation.join("checks"))?;
+        std::fs::create_dir_all(validation.join("http"))?;
+        let project_info: Value = serde_json::from_slice(
+            &std::fs::read(directory.join("project.json"))
+                .context("Linkly setup did not record the project")?,
+        )?;
+        let project = PathBuf::from(
+            project_info["project_root"]
+                .as_str()
+                .context("project.json has no project_root")?,
+        );
+        let mut probe = Probe {
+            context,
+            validation: validation.clone(),
+            project: project.clone(),
+            tag: digest(run_id)[..8].to_string(),
+            transcript: &observation.transcript,
+            preflight_ready: project_info["ready_containers"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|name| name.as_str().map(str::to_owned))
+                .collect(),
+            session: session_id(run_id),
+            steps: Vec::new(),
+            http_counter: 0,
+            observations: Vec::new(),
+            trace_id: None,
+            stream_items: Vec::new(),
+        };
+        probe.run_all().await;
+        let observations = json!({"observations": probe.observations});
+        write_json(&validation.join("observations.json"), &observations)?;
+
+        let samples: Vec<Value> = std::fs::read_to_string(validation.join("samples.jsonl"))
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let first_turns = exchange_first_turns(&observation.transcript);
+        let chapters = json!(chapters(&samples, &first_turns));
+        write_json(
+            &validation.join("chapters.json"),
+            &json!({
+                "chapters": chapters,
+                "first_turns": first_turns,
+                "samples": samples.len(),
+                "sample_interval_seconds": SAMPLE_INTERVAL.as_secs(),
+            }),
+        )?;
+        let metrics = context
+            .trigger_value(
+                "harness::metrics",
+                json!({"root_session_id": session_id(run_id)}),
+            )
+            .await
+            .unwrap_or_else(|error| json!({"error": format!("{error:#}")}));
+        write_json(&validation.join("metrics.json"), &metrics)?;
+        std::fs::create_dir_all(validation.join("project"))?;
+        std::fs::write(validation.join("project/tree.txt"), project_tree(&project))?;
+        if let Ok(compose) = std::fs::read(project.join("worker-compose.yaml")) {
+            std::fs::write(validation.join("project/worker-compose.yaml"), compose)?;
+        }
+
+        let bundle = evidence_bundle(&directory, &["validation"])?;
+        Ok(vec![CapturedDeliverable {
+            id: EVIDENCE_ID.into(),
+            kind: "application_audit".into(),
+            content: json!({
+                "root": directory,
+                "project": project_info,
+                "files": bundle["files"],
+                "omitted_files": bundle["omitted_files"],
+                "observations": observations["observations"],
+                "chapters": chapters,
+            })
+            .into(),
+            invariants: vec![],
+            provenance: vec![ProvenanceEvidence {
+                kind: "filesystem_path".into(),
+                source_id: directory.display().to_string(),
+                relation: "validated_before_cleanup".into(),
+            }],
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        // `capture` probed the application and embedded the very observations it
+        // wrote to `validation/observations.json` in the evidence deliverable.
+        let validation = observation
+            .deliverables
+            .iter()
+            .find(|deliverable| deliverable.id == EVIDENCE_ID)
+            .and_then(|deliverable| deliverable.content.as_json())
+            .context("Linkly evidence deliverable was not captured")?;
+        Ok(ObjectiveEvaluation {
+            completion: if observation.metrics.complete {
+                CompletionState::Completed
+            } else {
+                CompletionState::TaskIncomplete
+            },
+            awards: atomic_awards(metrics(), validation)?,
+            infrastructure_error: None,
+        })
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        stop_monitor(run_id);
+        Ok(())
+    }
 }
 
 /// Why `project` is not a fresh `linkly-agentic` scaffold; empty when it is.
@@ -375,109 +608,6 @@ fn stop_monitor(run_id: &str) {
     }
 }
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let directory = root(run_id);
-        std::fs::create_dir_all(directory.join("validation/checks"))?;
-        std::fs::create_dir_all(directory.join("validation/http"))?;
-        let status = context
-            .trigger_value("compose::status", json!({}))
-            .await
-            .context(
-            "compose::status failed; is the Linkly stack up and the runner attached to its engine?",
-        )?;
-        let compose_file = PathBuf::from(
-            status["file"]
-                .as_str()
-                .context("compose::status did not name the project file")?,
-        );
-        let discovered = compose_file
-            .parent()
-            .context("compose file has no parent directory")?
-            .to_path_buf();
-        let project = match std::env::var_os("HARNESS_E2E_LINKLY_PROJECT") {
-            Some(explicit) => {
-                let explicit = PathBuf::from(explicit);
-                if explicit != discovered {
-                    bail!(
-                        "HARNESS_E2E_LINKLY_PROJECT ({}) is not the project Compose is running ({})",
-                        explicit.display(),
-                        discovered.display()
-                    );
-                }
-                explicit
-            }
-            None => discovered,
-        };
-        let problems = scaffold_problems(&project);
-        if !problems.is_empty() {
-            bail!(
-                "{} is not a fresh {TEMPLATE_SOURCE} scaffold: {}",
-                project.display(),
-                problems.join("; ")
-            );
-        }
-        let ready = ready_containers(&status);
-        let missing: Vec<_> = BASELINE_CONTAINERS
-            .iter()
-            .filter(|name| !ready.iter().any(|ready| ready == *name))
-            .collect();
-        if !missing.is_empty() {
-            bail!("baseline containers are not ready: {missing:?} (ready: {ready:?})");
-        }
-        let providers: Vec<_> = ready
-            .iter()
-            .filter(|name| name.starts_with("provider-"))
-            .cloned()
-            .collect();
-        if providers.is_empty() {
-            bail!("no provider-* container is ready; enable one in worker-compose.yaml with its key in .env");
-        }
-        let listed = context
-            .trigger_value("engine::functions::list", json!({"prefix": "link::"}))
-            .await?;
-        let existing: Vec<_> = function_ids(&listed)
-            .into_iter()
-            .filter(|id| id.starts_with("link::"))
-            .collect();
-        if !existing.is_empty() {
-            bail!("link functions are already registered ({existing:?}); this scaffold has been built before");
-        }
-        let probe = curl(&[
-            "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "--max-time",
-            "10",
-            &format!("{HTTP_BASE}/s/e2e-preflight"),
-        ])
-        .await
-        .context("the http worker did not answer on 127.0.0.1:3111")?;
-        let record = json!({
-            "project_root": project,
-            "compose_file": compose_file,
-            "namespace": status["namespace"],
-            "ready_containers": ready,
-            "providers": providers,
-            "session_id": session_id(run_id),
-            "http_probe": probe.trim(),
-            "at_ms": now_ms(),
-        });
-        std::fs::write(
-            directory.join("project.json"),
-            serde_json::to_vec_pretty(&record)?,
-        )?;
-        std::fs::write(
-            directory.join("validation/preflight.json"),
-            serde_json::to_vec_pretty(&json!({"record": record, "compose_status": status}))?,
-        )?;
-        spawn_monitor(context, run_id, directory.join("validation/samples.jsonl"));
-        Ok(())
-    })
-}
-
 /// Run `curl` with `args`; stdout on success (non-zero exit is an error).
 /// A missing binary surfaces as `io::ErrorKind::NotFound`, which the checks
 /// report as unavailable rather than as a product failure.
@@ -570,7 +700,6 @@ fn listed(value: &Value) -> Vec<Value> {
 fn sum_counts(rows: &[Value]) -> f64 {
     rows.iter().filter_map(|row| row["count"].as_f64()).sum()
 }
-/// Parse "imported N … skipped M" out of a client's output (prose or JSON).
 /// Whether the second import run proved idempotency, given what the first one
 /// reported.
 ///
@@ -601,6 +730,7 @@ fn idempotent_verdict(first: Option<(u64, u64)>, second: Option<(u64, u64)>) -> 
     }
 }
 
+/// Parse "imported N … skipped M" out of a client's output (prose or JSON).
 fn import_counts(text: &str) -> Option<(u64, u64)> {
     let lower = text.to_ascii_lowercase();
     let number_after = |keyword: &str| {
@@ -1531,137 +1661,13 @@ fn restarts_the_project(outcome: &super::common::ObservedFunctionOutcome) -> boo
             .is_none_or(str::is_empty)
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        stop_monitor(run_id);
-        let directory = root(run_id);
-        let validation = directory.join("validation");
-        std::fs::create_dir_all(validation.join("checks"))?;
-        std::fs::create_dir_all(validation.join("http"))?;
-        let project_info: Value = serde_json::from_slice(
-            &std::fs::read(directory.join("project.json"))
-                .context("Linkly setup did not record the project")?,
-        )?;
-        let project = PathBuf::from(
-            project_info["project_root"]
-                .as_str()
-                .context("project.json has no project_root")?,
-        );
-        let mut probe = Probe {
-            context,
-            validation: validation.clone(),
-            project: project.clone(),
-            tag: digest(run_id)[..8].to_string(),
-            transcript: &observation.transcript,
-            preflight_ready: project_info["ready_containers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|name| name.as_str().map(str::to_owned))
-                .collect(),
-            session: session_id(run_id),
-            steps: Vec::new(),
-            http_counter: 0,
-            observations: Vec::new(),
-            trace_id: None,
-            stream_items: Vec::new(),
-        };
-        probe.run_all().await;
-        let observations = json!({"observations": probe.observations});
-        write_json(&validation.join("observations.json"), &observations)?;
-
-        let samples: Vec<Value> = std::fs::read_to_string(validation.join("samples.jsonl"))
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect();
-        let first_turns = exchange_first_turns(&observation.transcript);
-        let chapters = json!(chapters(&samples, &first_turns));
-        write_json(
-            &validation.join("chapters.json"),
-            &json!({
-                "chapters": chapters,
-                "first_turns": first_turns,
-                "samples": samples.len(),
-                "sample_interval_seconds": SAMPLE_INTERVAL.as_secs(),
-            }),
-        )?;
-        let metrics = context
-            .trigger_value(
-                "harness::metrics",
-                json!({"root_session_id": session_id(run_id)}),
-            )
-            .await
-            .unwrap_or_else(|error| json!({"error": format!("{error:#}")}));
-        write_json(&validation.join("metrics.json"), &metrics)?;
-        std::fs::create_dir_all(validation.join("project"))?;
-        std::fs::write(validation.join("project/tree.txt"), project_tree(&project))?;
-        if let Ok(compose) = std::fs::read(project.join("worker-compose.yaml")) {
-            std::fs::write(validation.join("project/worker-compose.yaml"), compose)?;
-        }
-
-        let bundle = evidence_bundle(&directory, &["validation"])?;
-        Ok(vec![CapturedDeliverable {
-            id: EVIDENCE_ID.into(),
-            kind: "application_audit".into(),
-            content: json!({
-                "root": directory,
-                "project": project_info,
-                "files": bundle["files"],
-                "omitted_files": bundle["omitted_files"],
-                "observations": observations["observations"],
-                "chapters": chapters,
-            })
-            .into(),
-            invariants: vec![],
-            provenance: vec![ProvenanceEvidence {
-                kind: "filesystem_path".into(),
-                source_id: directory.display().to_string(),
-                relation: "validated_before_cleanup".into(),
-            }],
-        }])
-    })
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let validation: Value = serde_json::from_slice(&std::fs::read(
-            root(run_id).join("validation/observations.json"),
-        )?)?;
-        Ok(ObjectiveEvaluation {
-            completion: if observation.metrics.complete {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            awards: atomic_awards(metrics(), &validation)?,
-            infrastructure_error: None,
-        })
-    })
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        stop_monitor(run_id);
-        Ok(())
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn twenty_two_atomic_criteria_total_one_hundred_points() {
-        let scenario = scenario("test");
+        let scenario = LinklyTutorial.spec("test");
         scenario.validate().unwrap();
         assert_eq!(scenario.criteria.len(), 22);
         assert_eq!(
@@ -1676,7 +1682,7 @@ mod tests {
             .criteria
             .iter()
             .all(|c| c.description.matches('?').count() == 1));
-        let materialized = materialize("test", 7).unwrap();
+        let materialized = ScenarioId::LinklyTutorial.materialize("test", 7).unwrap();
         materialized.validate().unwrap();
         assert_eq!(materialized.case.seed, super::super::stable_seed(ID));
         assert_eq!(materialized.case.deliverable_contract.artifacts.len(), 1);
@@ -1684,10 +1690,13 @@ mod tests {
 
     #[test]
     fn the_dialogue_is_the_seven_chapters_then_the_guard() {
-        let followups = dialogue_followups("test");
+        let followups = LinklyTutorial.dialogue_followups("test");
         assert_eq!(followups.len(), 7);
-        assert_eq!(scenario("test").prompt, PROMPTS[0].trim_end());
-        assert!(scenario("test").prompt.starts_with("Build the link worker"));
+        assert_eq!(LinklyTutorial.spec("test").prompt, PROMPTS[0].trim_end());
+        assert!(LinklyTutorial
+            .spec("test")
+            .prompt
+            .starts_with("Build the link worker"));
         assert!(followups.iter().all(|prompt| !prompt.trim().is_empty()));
         assert!(followups[6].contains("compose::restart"));
         assert!(followups[5].contains("Turn a browser tab into a worker"));
@@ -1907,7 +1916,6 @@ mod tests {
     fn evidence_roots_and_sessions_are_attempt_scoped() {
         assert_ne!(root("a"), root("b"));
         assert_eq!(session_id("run-1"), "e2e_run-1");
-        assert_eq!(prepared_filesystem_root("other", "run").unwrap(), None);
-        assert_eq!(prepared_filesystem_root(ID, "never-set-up").unwrap(), None);
+        assert_eq!(LinklyTutorial.prepared_root("never-set-up").unwrap(), None);
     }
 }

@@ -9,10 +9,12 @@ use anyhow::Result;
 use serde_json::json;
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CriterionSpec,
-    DeliverableContract, ExecutionPolicy, InvariantSpec, MaterializedScenario, ObjectiveEvaluation,
-    ProvenanceEvidence, ScenarioCase, ScenarioId, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    CriterionSpec, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
+    ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization, ScenarioExecutionKind,
+    ScenarioId, ScenarioObservation, ScenarioSpec,
 };
+use crate::context::E2eContext;
 use crate::report::EvaluationDimension;
 
 pub const REPORT_ID: &str = "swe_service_report";
@@ -101,80 +103,102 @@ pub fn is_swe(scenario: ScenarioId) -> bool {
     Case::from_scenario(scenario).is_some()
 }
 
-pub fn spec(scenario: ScenarioId) -> ScenarioSpec {
-    let case = Case::from_scenario(scenario).expect("SWE scenario identity");
-    ScenarioSpec {
-        id: case.id,
-        prompt: case.description().into(),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: case.generations(),
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(case.tokens()),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["e2e::*", "github::*", "configuration::*", "compose::*", "router::*"],
-        criteria: vec![CriterionSpec::scored(
-            "swe_delivery", 100,
-            "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
-            EvaluationDimension::Deliverable,
-        )],
-        setup: None,
-        evaluate: |_context, _observation, _run_id| Box::pin(async {
-            Ok(ObjectiveEvaluation {
-                completion: crate::report::CompletionState::Undetermined,
-                awards: Vec::new(),
-                infrastructure_error: None,
-            })
-        }),
-        cleanup: None,
-    }
-}
+/// One SWE ticket, or the continuous journey, identified by its registered id.
+pub struct SweService(pub ScenarioId);
 
-pub fn materialize(scenario: ScenarioId) -> Result<MaterializedScenario> {
-    let selection = Case::from_scenario(scenario).expect("SWE scenario identity");
-    let case = ScenarioCase::new(
-        selection.id,
-        super::stable_seed(selection.id),
-        json!({
-            "fixture_repository": FIXTURE_REPOSITORY,
-            "fixture_revision": FIXTURE_REVISION,
-            "mode": selection.mode(),
-            "entry_snapshot": selection.first_ticket() - 1,
-            "task": selection.ticket,
-            "task_count": if selection.journey() { 8 } else { 1 },
-            "deadline_seconds": selection.deadline_seconds(),
-            "delegation": "optional",
-            "curriculum_version": 1,
-        }),
-        vec![
-            "iii::functions".into(),
-            "e2e::control-plane-v1".into(),
-            "swe::isolated-python-workspace".into(),
-        ],
-        DeliverableContract {
-            artifacts: vec![ArtifactExpectation {
-                id: REPORT_ID.into(),
-                kind: "swe-service-report".into(),
-                media_type: "application/json".into(),
-                schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
-                max_size_bytes: 16 * 1024 * 1024,
-            }],
-            invariants: vec![InvariantSpec {
-                id: "delivery_complete".into(),
-                description: "All requested SWE tickets are accepted within the execution limits."
-                    .into(),
-            }],
-            provenance_required: true,
-            capture_before_cleanup: true,
-        },
-    )?;
-    Ok(MaterializedScenario {
-        spec: spec(scenario),
-        case,
-        capture: None,
-    })
+#[async_trait]
+impl Scenario for SweService {
+    fn id(&self) -> &'static str {
+        self.0.as_str()
+    }
+
+    fn execution_kind(&self) -> ScenarioExecutionKind {
+        ScenarioExecutionKind::CompositeFlow
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let selection = Case::from_scenario(self.0).expect("SWE scenario identity");
+        ScenarioCase::new(
+            selection.id,
+            super::stable_seed(selection.id),
+            json!({
+                "fixture_repository": FIXTURE_REPOSITORY,
+                "fixture_revision": FIXTURE_REVISION,
+                "mode": selection.mode(),
+                "entry_snapshot": selection.first_ticket() - 1,
+                "task": selection.ticket,
+                "task_count": if selection.journey() { 8 } else { 1 },
+                "deadline_seconds": selection.deadline_seconds(),
+                "delegation": "optional",
+                "curriculum_version": 1,
+            }),
+            vec![
+                Capability::IiiFunctions,
+                Capability::E2eControlPlaneV1,
+                Capability::SweIsolatedPythonWorkspace,
+            ],
+            DeliverableContract {
+                artifacts: vec![ArtifactExpectation {
+                    id: REPORT_ID.into(),
+                    kind: "swe-service-report".into(),
+                    media_type: "application/json".into(),
+                    schema: json!({"type":"object","required":["schema","scenario_id","fixture_revision","accepted_head","accepted_tickets","terminal_status","accepted_patch","unaccepted_patch"],"properties":{"schema":{"const":"swe-service-report"},"accepted_tickets":{"type":"array"},"terminal_status":{"type":"string"}}}),
+                    max_size_bytes: 16 * 1024 * 1024,
+                }],
+                invariants: vec![InvariantSpec {
+                    id: "delivery_complete".into(),
+                    description:
+                        "All requested SWE tickets are accepted within the execution limits.".into(),
+                }],
+                provenance_required: true,
+                capture_before_cleanup: true,
+            },
+        )
+    }
+
+    fn spec(&self, _run_id: &str) -> ScenarioSpec {
+        let case = Case::from_scenario(self.0).expect("SWE scenario identity");
+        ScenarioSpec {
+            id: case.id,
+            prompt: case.description().into(),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: case.generations(),
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(case.tokens()),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["e2e::*", "github::*", "configuration::*", "compose::*", "router::*"],
+            criteria: vec![CriterionSpec::scored(
+                "swe_delivery", 100,
+                "Deliver the requested ticket or all eight journey tickets while preserving accepted software and protected checks.",
+                EvaluationDimension::Deliverable,
+            )],
+        }
+    }
+
+    /// The trusted runtime owns the verdict; the generic report bridge attaches it.
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        _run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        Ok(ObjectiveEvaluation {
+            completion: crate::report::CompletionState::Undetermined,
+            awards: Vec::new(),
+            infrastructure_error: None,
+        })
+    }
 }
 
 /// Read the trusted runtime's typed termination outcome for the generic report bridge.

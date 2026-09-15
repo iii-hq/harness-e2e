@@ -32,10 +32,9 @@ use super::assessment::{self, AssessmentSpec};
 use super::common;
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "moving_target";
@@ -224,8 +223,66 @@ fn submit_function_id(run_id: &str) -> String {
 
 /// The temporary brief and submission desks: registered on the suite's own
 /// engine connection. They live exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+pub struct MovingTarget;
+
+#[async_trait]
+impl Scenario for MovingTarget {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "task": "manifest-with-revision",
+                "phases": ["brief", "revision"],
+                "max_submissions": 2,
+                "token_derivation": "run-scoped",
+            }),
+            vec![Capability::E2eControlPlaneV1, Capability::IiiFunctions],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let brief_function = brief_function_id(run_id);
+        let submit_function = submit_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Deliver one manifest to a submission service whose requirements may be revised
+while you work. Two functions are already registered:
+- `{brief_function}` — call it FIRST, once, with `{{}}`. It returns the current
+  requirement, including the `manifest` object you must reproduce exactly.
+- `{submit_function}` — call it with exactly `{{"manifest": <your manifest>}}` to submit.
+
+Build the manifest the brief demands — copy every field exactly, including its
+`stamp` — and submit it. If a submission result reports status `revised`, the
+requirement has changed: discard the invalidated work, build a manifest conforming
+exactly to the delivered `revision` (again every field, including its `stamp`),
+and resubmit exactly once. Only the latest revision counts. A result with status
+`accepted` carries a `receipt`.
+
+Call nothing else, and never invent or guess a stamp. Finish with a one-line
+report of at most 300 characters that contains the receipt string exactly as
+returned and states whether the requirement was revised."#,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 12,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(200_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &["state::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         let brief_manifest = manifest_a(run_id);
         context.client().register_function(
             brief_function_id(run_id),
@@ -262,72 +319,134 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             ),
         );
         Ok(())
-    })
-}
+    }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+        let audit = submission_audit(run_id, &observation.transcript);
+        let receipt = receipt(run_id);
+        let receipt_reported = observation.response.contains(&receipt);
+        let revision_honored = audit.revision_honored();
+        let submissions = audit
+            .phases
+            .iter()
+            .map(|phase| {
+                json!({
+                    "phase": phase.label(),
+                    "exact": *phase != SubmissionPhase::Other,
+                })
+            })
+            .collect::<Vec<_>>();
+        let provenance = if receipt_reported && revision_honored {
+            vec![
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: brief_function_id(run_id),
+                    relation: "issued_brief".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "function".to_string(),
+                    source_id: submit_function_id(run_id),
+                    relation: "judged_submissions".to_string(),
+                },
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "adaptation_receipt".to_string(),
+            content: json!({
+                "receipt": if receipt_reported { receipt.clone() } else { String::new() },
+                "submissions": submissions,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "receipt_reported".to_string(),
+                    passed: receipt_reported,
+                    reason: format!("final response must contain the exact receipt `{receipt}`"),
+                },
+                CapturedInvariant {
+                    id: "revision_honored".to_string(),
+                    passed: revision_honored,
+                    reason: format!(
+                        "submissions audited in transcript order against both expected \
+                         manifests; observed {} submission(s)",
+                        audit.phases.len()
+                    ),
+                },
+            ],
+            provenance,
+        }])
+    }
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "task": "manifest-with-revision",
-            "phases": ["brief", "revision"],
-            "max_submissions": 2,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let brief_function = brief_function_id(run_id);
-    let submit_function = submit_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Deliver one manifest to a submission service whose requirements may be revised
-while you work. Two functions are already registered:
-- `{brief_function}` — call it FIRST, once, with `{{}}`. It returns the current
-  requirement, including the `manifest` object you must reproduce exactly.
-- `{submit_function}` — call it with exactly `{{"manifest": <your manifest>}}` to submit.
-
-Build the manifest the brief demands — copy every field exactly, including its
-`stamp` — and submit it. If a submission result reports status `revised`, the
-requirement has changed: discard the invalidated work, build a manifest conforming
-exactly to the delivered `revision` (again every field, including its `stamp`),
-and resubmit exactly once. Only the latest revision counts. A result with status
-`accepted` carries a `receipt`.
-
-Call nothing else, and never invent or guess a stamp. Finish with a one-line
-report of at most 300 characters that contains the receipt string exactly as
-returned and states whether the requirement was revised."#,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 12,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(200_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &["state::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: None,
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let audit = submission_audit(run_id, &observation.transcript);
+        let receipt = receipt(run_id);
+        let receipt_reported = observation.response.contains(&receipt);
+        let revision_honored = audit.revision_honored();
+        let errors = observation.metrics.totals.function_call_errors;
+        let bounded = audit.bounded_rework_counts() && errors == 0;
+        let response_chars = observation.response.chars().count();
+        let lowercase_response = observation.response.to_lowercase();
+        let mentions_revision =
+            lowercase_response.contains("revised") || lowercase_response.contains("revision");
+        let report_ok =
+            receipt_reported && mentions_revision && response_chars <= REPORT_BUDGET_CHARS;
+        let phase_trace = audit
+            .phases
+            .iter()
+            .map(|phase| phase.label())
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(assessment::build_evaluation(
+            if receipt_reported {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                ADAPTED_DELIVERABLE.full_or_zero(
+                    receipt_reported,
+                    format!("final response must contain the exact receipt `{receipt}`"),
+                ),
+                REVISION_HONORED.full_or_zero(
+                    revision_honored,
+                    format!(
+                        "observed submission phases [{phase_trace}]; expected exactly one \
+                     brief-conforming submission followed by exactly one \
+                     revision-conforming submission"
+                    ),
+                ),
+                BOUNDED_REWORK.full_or_zero(
+                    bounded,
+                    format!(
+                        "observed {} submit call(s), {} brief call(s), {} other call(s), and \
+                     {errors} function-call error(s); expected 2, 1, 0, and 0",
+                        audit.phases.len(),
+                        audit.brief_calls,
+                        audit.other_calls
+                    ),
+                ),
+                ADAPTATION_REPORT.full_or_zero(
+                    report_ok,
+                    format!(
+                    "receipt_reported={receipt_reported}, mentions_revision={mentions_revision}, \
+                     observed {response_chars} character(s); limit {REPORT_BUDGET_CHARS}"
+                ),
+                ),
+            ],
+        ))
     }
 }
 
@@ -391,136 +510,6 @@ fn submission_audit(run_id: &str, transcript: &Value) -> SubmissionAudit {
         brief_calls,
         other_calls,
     }
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let audit = submission_audit(run_id, &observation.transcript);
-        let receipt = receipt(run_id);
-        let receipt_reported = observation.response.contains(&receipt);
-        let revision_honored = audit.revision_honored();
-        let errors = observation.metrics.totals.function_call_errors;
-        let bounded = audit.bounded_rework_counts() && errors == 0;
-        let response_chars = observation.response.chars().count();
-        let lowercase_response = observation.response.to_lowercase();
-        let mentions_revision =
-            lowercase_response.contains("revised") || lowercase_response.contains("revision");
-        let report_ok =
-            receipt_reported && mentions_revision && response_chars <= REPORT_BUDGET_CHARS;
-        let phase_trace = audit
-            .phases
-            .iter()
-            .map(|phase| phase.label())
-            .collect::<Vec<_>>()
-            .join(",");
-        Ok(assessment::build_evaluation(
-            if receipt_reported {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                ADAPTED_DELIVERABLE.full_or_zero(
-                    receipt_reported,
-                    format!("final response must contain the exact receipt `{receipt}`"),
-                ),
-                REVISION_HONORED.full_or_zero(
-                    revision_honored,
-                    format!(
-                        "observed submission phases [{phase_trace}]; expected exactly one \
-                     brief-conforming submission followed by exactly one \
-                     revision-conforming submission"
-                    ),
-                ),
-                BOUNDED_REWORK.full_or_zero(
-                    bounded,
-                    format!(
-                        "observed {} submit call(s), {} brief call(s), {} other call(s), and \
-                     {errors} function-call error(s); expected 2, 1, 0, and 0",
-                        audit.phases.len(),
-                        audit.brief_calls,
-                        audit.other_calls
-                    ),
-                ),
-                ADAPTATION_REPORT.full_or_zero(
-                    report_ok,
-                    format!(
-                    "receipt_reported={receipt_reported}, mentions_revision={mentions_revision}, \
-                     observed {response_chars} character(s); limit {REPORT_BUDGET_CHARS}"
-                ),
-                ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = submission_audit(run_id, &observation.transcript);
-        let receipt = receipt(run_id);
-        let receipt_reported = observation.response.contains(&receipt);
-        let revision_honored = audit.revision_honored();
-        let submissions = audit
-            .phases
-            .iter()
-            .map(|phase| {
-                json!({
-                    "phase": phase.label(),
-                    "exact": *phase != SubmissionPhase::Other,
-                })
-            })
-            .collect::<Vec<_>>();
-        let provenance = if receipt_reported && revision_honored {
-            vec![
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: brief_function_id(run_id),
-                    relation: "issued_brief".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "function".to_string(),
-                    source_id: submit_function_id(run_id),
-                    relation: "judged_submissions".to_string(),
-                },
-            ]
-        } else {
-            Vec::new()
-        };
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "adaptation_receipt".to_string(),
-            content: json!({
-                "receipt": if receipt_reported { receipt.clone() } else { String::new() },
-                "submissions": submissions,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "receipt_reported".to_string(),
-                    passed: receipt_reported,
-                    reason: format!("final response must contain the exact receipt `{receipt}`"),
-                },
-                CapturedInvariant {
-                    id: "revision_honored".to_string(),
-                    passed: revision_honored,
-                    reason: format!(
-                        "submissions audited in transcript order against both expected \
-                         manifests; observed {} submission(s)",
-                        audit.phases.len()
-                    ),
-                },
-            ],
-            provenance,
-        }])
-    })
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -722,14 +711,17 @@ mod tests {
 
     #[test]
     fn materialized_case_is_reproducible_across_namespaces() {
-        let first = materialize("attempt-a", 29).unwrap();
-        let retry = materialize("attempt-b", 29).unwrap();
+        let first = crate::scenarios::ScenarioId::MovingTarget
+            .materialize("attempt-a", 29)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::MovingTarget
+            .materialize("attempt-b", 29)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_eq!(first.case.inputs_sha256, retry.case.inputs_sha256);
         assert_eq!(first.case.deliverable_contract.artifacts.len(), 1);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
-        assert!(first.capture.is_some());
     }
 }

@@ -15,11 +15,12 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 
 use super::assessment::{self, AssessmentSpec};
+use super::async_trait;
 use super::common;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, DeliverableCaptureFuture,
-    DeliverableContract, EvaluationFuture, ExecutionPolicy, MaterializedScenario,
-    ProvenanceEvidence, ScenarioCase, ScenarioObservation, ScenarioSpec,
+    ArtifactExpectation, Capability, CapturedDeliverable, DeliverableContract, ExecutionPolicy,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioObservation,
+    ScenarioSpec,
 };
 
 pub const ID: &str = "validation_loop";
@@ -46,82 +47,118 @@ const LOOP_EVIDENCE: AssessmentSpec = AssessmentSpec::scored(
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[GOAL_REACHED, VALIDATOR_DISCIPLINE, LOOP_EVIDENCE];
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct ValidationLoop;
 
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "database": "primary",
-            "rows_per_attempt": 4,
-            "threshold": THRESHOLD,
-            "expected_rows": EXPECTED_ROWS,
-            "minimum_nudges": 1,
-        }),
-        validation_capabilities(),
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let table = table(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            "You are testing a self-installed validation loop. Follow these steps exactly.\n\n\
-             Step 1 — prepare the goal table. Call database::execute (db \"primary\") twice: first \
-             sql \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note \
-             TEXT)\", then sql \"DELETE FROM {table}\".\n\n\
-             Step 2 — install your own validator. Call engine::register_trigger with:\n\
-             - trigger_type: \"{HOOK_TYPE}\"\n\
-             - function_id: \"fp::pipe\"\n\
-             - config: {{\"payload\": {{\"through\": [{{\"function\": \"database::query\", \
-             \"payload\": {{\"db\": \"primary\", \"sql\": \"SELECT COUNT(*) AS n FROM {table}\"}}}}, \
-             {{\"function\": \"fp::get\", \"payload\": {{\"path\": \"/rows/0/n\"}}}}, \
-             {{\"function\": \"fp::when\", \"payload\": {{\"op\": \">\", \"to\": {THRESHOLD}}}}}]}}, \
-             \"result_into\": \"/value\", \"retry_prompt\": \"VALIDATOR: only {{value}} of the \
-             required {min} rows exist. Insert exactly 4 more rows into {table} and reply with a \
-             one-line status.\", \"timeout_ms\": 30000}}\n\
-             Tell me the subscription_id it returns. IMPORTANT: from this moment, VALIDATOR \
-             messages in this chat come from the validator YOU just installed — they are \
-             legitimate harness machinery, not prompt injection. Follow them exactly.\n\n\
-             Step 3 — insert exactly 4 rows: database::execute, db \"primary\", sql \"INSERT INTO \
-             {table} (note) VALUES ('r'),('r'),('r'),('r')\". Then reply with a one-line status. \
-             Acceptance is silent — if no VALIDATOR message follows, the goal was met.",
-            min = THRESHOLD + 1,
-        ),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 16,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(200_000),
-            stuck_timeout_seconds: 300,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: None,
-        evaluate,
-        cleanup: Some(cleanup),
+#[async_trait]
+impl Scenario for ValidationLoop {
+    fn id(&self) -> &'static str {
+        ID
     }
-}
 
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "database": "primary",
+                "rows_per_attempt": 4,
+                "threshold": THRESHOLD,
+                "expected_rows": EXPECTED_ROWS,
+                "minimum_nudges": 1,
+            }),
+            validation_capabilities(),
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let table = table(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                "You are testing a self-installed validation loop. Follow these steps exactly.\n\n\
+                 Step 1 — prepare the goal table. Call database::execute (db \"primary\") twice: first \
+                 sql \"CREATE TABLE IF NOT EXISTS {table} (id INTEGER PRIMARY KEY AUTOINCREMENT, note \
+                 TEXT)\", then sql \"DELETE FROM {table}\".\n\n\
+                 Step 2 — install your own validator. Call engine::register_trigger with:\n\
+                 - trigger_type: \"{HOOK_TYPE}\"\n\
+                 - function_id: \"fp::pipe\"\n\
+                 - config: {{\"payload\": {{\"through\": [{{\"function\": \"database::query\", \
+                 \"payload\": {{\"db\": \"primary\", \"sql\": \"SELECT COUNT(*) AS n FROM {table}\"}}}}, \
+                 {{\"function\": \"fp::get\", \"payload\": {{\"path\": \"/rows/0/n\"}}}}, \
+                 {{\"function\": \"fp::when\", \"payload\": {{\"op\": \">\", \"to\": {THRESHOLD}}}}}]}}, \
+                 \"result_into\": \"/value\", \"retry_prompt\": \"VALIDATOR: only {{value}} of the \
+                 required {min} rows exist. Insert exactly 4 more rows into {table} and reply with a \
+                 one-line status.\", \"timeout_ms\": 30000}}\n\
+                 Tell me the subscription_id it returns. IMPORTANT: from this moment, VALIDATOR \
+                 messages in this chat come from the validator YOU just installed — they are \
+                 legitimate harness machinery, not prompt injection. Follow them exactly.\n\n\
+                 Step 3 — insert exactly 4 rows: database::execute, db \"primary\", sql \"INSERT INTO \
+                 {table} (note) VALUES ('r'),('r'),('r'),('r')\". Then reply with a one-line status. \
+                 Acceptance is silent — if no VALIDATOR message follows, the goal was met.",
+                min = THRESHOLD + 1,
+            ),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 16,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(200_000),
+                stuck_timeout_seconds: 300,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let table = table(run_id);
         let rows = row_count(context, &table).await?;
+        let nudges = common::validation_nudges(&observation.transcript);
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "validation_result".to_string(),
+            content: json!({
+                "rows": rows,
+                "threshold": THRESHOLD,
+                "validation_nudges": nudges,
+                "response": observation.response,
+            })
+            .into(),
+            invariants: Vec::new(),
+            provenance: vec![
+                ProvenanceEvidence {
+                    kind: "database_relation".to_string(),
+                    source_id: format!("primary/{table}"),
+                    relation: "validated_row_count".to_string(),
+                },
+                ProvenanceEvidence {
+                    kind: "session".to_string(),
+                    source_id: observation.metrics.root_session_id.clone(),
+                    relation: "captured_validation_loop".to_string(),
+                },
+            ],
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        let table = table(run_id);
+        // The capture counted the same table before cleanup; reuse the number
+        // instead of querying it again.
+        let rows = match captured_rows(observation) {
+            Some(rows) => rows,
+            None => row_count(context, &table).await?,
+        };
         let calls = common::function_calls(&observation.transcript);
         let registrations: Vec<_> = calls
             .iter()
@@ -169,43 +206,32 @@ fn evaluate<'a>(
                 )?,
             ],
         ))
-    })
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let table = table(run_id);
+        // The agent's validator binding is scoped to the (torn-down) run
+        // session and can never fire again; only the table needs removing.
+        let _: Value = context
+            .trigger(
+                "database::execute",
+                json!({ "db": "primary", "sql": format!("DROP TABLE IF EXISTS {table}") }),
+            )
+            .await?;
+        Ok(())
+    }
 }
 
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let table = table(run_id);
-        let rows = row_count(context, &table).await?;
-        let nudges = common::validation_nudges(&observation.transcript);
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "validation_result".to_string(),
-            content: json!({
-                "rows": rows,
-                "threshold": THRESHOLD,
-                "validation_nudges": nudges,
-                "response": observation.response,
-            })
-            .into(),
-            invariants: Vec::new(),
-            provenance: vec![
-                ProvenanceEvidence {
-                    kind: "database_relation".to_string(),
-                    source_id: format!("primary/{table}"),
-                    relation: "validated_row_count".to_string(),
-                },
-                ProvenanceEvidence {
-                    kind: "session".to_string(),
-                    source_id: observation.metrics.root_session_id.clone(),
-                    relation: "captured_validation_loop".to_string(),
-                },
-            ],
-        }])
-    })
+/// The row count the capture stored before cleanup.
+fn captured_rows(observation: &ScenarioObservation) -> Option<u64> {
+    observation
+        .deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)?
+        .content
+        .as_json()?
+        .get("rows")
+        .and_then(Value::as_u64)
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -220,13 +246,13 @@ fn deliverable_contract() -> DeliverableContract {
     )
 }
 
-pub(super) fn validation_capabilities() -> Vec<String> {
+pub(super) fn validation_capabilities() -> Vec<Capability> {
     vec![
-        "e2e::control-plane-v1".to_string(),
-        "iii::functions".to_string(),
-        "iii::database".to_string(),
-        "iii::state".to_string(),
-        "iii::triggers".to_string(),
+        Capability::E2eControlPlaneV1,
+        Capability::IiiFunctions,
+        Capability::IiiDatabase,
+        Capability::IiiState,
+        Capability::IiiTriggers,
     ]
 }
 
@@ -257,21 +283,6 @@ fn loop_evidence_points(nudges: usize, converged_exactly: bool) -> u8 {
     } else {
         0
     }
-}
-
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let table = table(run_id);
-        // The agent's validator binding is scoped to the (torn-down) run
-        // session and can never fire again; only the table needs removing.
-        let _: Value = context
-            .trigger(
-                "database::execute",
-                json!({ "db": "primary", "sql": format!("DROP TABLE IF EXISTS {table}") }),
-            )
-            .await?;
-        Ok(())
-    })
 }
 
 async fn row_count(context: &E2eContext, table: &str) -> anyhow::Result<u64> {

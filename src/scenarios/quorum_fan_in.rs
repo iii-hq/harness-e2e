@@ -26,10 +26,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    common, ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSpec,
+    async_trait, common, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "quorum_fan_in";
@@ -111,10 +110,57 @@ fn straggle_function_id(run_id: &str) -> String {
     format!("e2etest::straggle_{}", suffix(run_id))
 }
 
-/// The temporary straggler gate: registered on the suite's own engine
-/// connection, alive exactly as long as this process.
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+pub struct QuorumFanIn;
+
+#[async_trait]
+impl Scenario for QuorumFanIn {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn case(&self, seed: u64) -> anyhow::Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            seed,
+            json!({
+                "members": MEMBER_COUNT,
+                "quorum": QUORUM_INDEXES.len(),
+                "straggler": member_key(STRAGGLER_INDEX),
+                "report_marker": REPORT_MARKER,
+                "token_derivation": "run-scoped",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiState,
+                Capability::IiiTriggers,
+                Capability::E2eSubagents,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let names = Names::new(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: prompt(&names, run_id),
+            filesystem_root: None,
+            execution: ExecutionPolicy {
+                max_turns: 20,
+                max_output_tokens: Some(8_192),
+                max_total_tokens: Some(800_000),
+                stuck_timeout_seconds: 360,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    /// The temporary straggler gate: registered on the suite's own engine
+    /// connection, alive exactly as long as this process.
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
         context.client().register_function(
             straggle_function_id(run_id),
             RegisterFunction::new_async(move |_request: StraggleRequest| async move {
@@ -129,225 +175,14 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
             ),
         );
         Ok(())
-    })
-}
-
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
-
-pub fn materialize(namespace: &str, seed: u64) -> anyhow::Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        seed,
-        json!({
-            "members": MEMBER_COUNT,
-            "quorum": QUORUM_INDEXES.len(),
-            "straggler": member_key(STRAGGLER_INDEX),
-            "report_marker": REPORT_MARKER,
-            "token_derivation": "run-scoped",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "iii::state".to_string(),
-            "iii::triggers".to_string(),
-            "e2e::subagents".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let names = Names::new(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: prompt(&names, run_id),
-        filesystem_root: None,
-        execution: ExecutionPolicy {
-            max_turns: 20,
-            max_output_tokens: Some(8_192),
-            max_total_tokens: Some(800_000),
-            stuck_timeout_seconds: 360,
-            max_validation_retries: None,
-        },
-        denied_functions: &[],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
-}
 
-fn prompt(names: &Names, run_id: &str) -> String {
-    format!(
-        r#"Run a quorum fan-in with exactly 3 parallel members in the isolated state scope `{scope}`.
-
-The control plane is parent-owned: a reaction may wake this coordinator, but it never starts an
-agent. Every member must be spawned directly from a live coordinator turn. The rule of this run
-is K-of-N: two members are a quorum, and the third must never hold you up.
-
-Do all of the following in ONE response, in this order:
-
-1. Arm exactly one one-shot state wake over the whole scope, with top-level label
-   `{quorum_label}`. Gate it with the shipped named-set barrier using id `{barrier_id}`,
-   expecting exactly these keys: `member-00`, `member-01`, and carry each event's new value.
-   The barrier deliberately excludes `member-02`. The registration is wake-only: omit any
-   function target. Register nothing else.
-2. Directly spawn all 3 leaf members in parallel — every spawn in this same response — and note
-   each spawn result's child session id; you will need the straggler's later. Give each member
-   its assignment inline:
-
-- `member-00` → token `{token_0}`: write exactly one state value at `{scope}` / `member-00`:
-  `{{ "member": 0, "token": "{token_0}" }}`, then do nothing else.
-- `member-01` → token `{token_1}`: write exactly one state value at `{scope}` / `member-01`:
-  `{{ "member": 1, "token": "{token_1}" }}`, then do nothing else.
-- `member-02` → token `{token_2}`: FIRST call the function `{straggle_function}` with `{{}}` and
-  wait for its result; only after it returns, write `{scope}` / `member-02`:
-  `{{ "member": 2, "token": "{token_2}" }}`. It must not write before that call returns.
-
-Narrow each member to function discovery plus its listed calls. Members must not spawn,
-register reactions, read state, or coordinate. End the coordinator turn immediately after the
-spawns.
-
-When the `{quorum_label}` barrier wake arrives, the quorum is met and the straggler is now
-waste. First stop it: call `harness::stop` with the straggler's child session id from its
-spawn result — `{{ "session_id": "<that id>" }}`. Then reply with a single line that starts
-with `{marker}` and contains the tokens of `member-00` and `member-01` verbatim — and does NOT
-contain the token of `member-02`. Do not answer before the barrier wake."#,
-        scope = names.scope,
-        quorum_label = names.quorum_label,
-        barrier_id = names.barrier_id,
-        straggle_function = straggle_function_id(run_id),
-        token_0 = member_token(run_id, 0),
-        token_1 = member_token(run_id, 1),
-        token_2 = member_token(run_id, STRAGGLER_INDEX),
-        marker = REPORT_MARKER,
-    )
-}
-
-fn evaluate<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move { evaluate_quorum(context, observation, run_id).await })
-}
-
-async fn evaluate_quorum(
-    context: &E2eContext,
-    observation: &ScenarioObservation,
-    run_id: &str,
-) -> anyhow::Result<ObjectiveEvaluation> {
-    let names = Names::new(run_id);
-    let calls = common::function_calls(&observation.transcript);
-
-    let registrations: Vec<_> = calls
-        .iter()
-        .enumerate()
-        .filter(|(_, call)| call.function_id == "engine::register_trigger")
-        .collect();
-    let quorum_watch = registrations
-        .iter()
-        .find(|(_, call)| is_quorum_watch(call, &names))
-        .map(|(position, _)| *position);
-    let spawns: Vec<_> = calls
-        .iter()
-        .enumerate()
-        .filter(|(_, call)| call.function_id == "harness::spawn")
-        .collect();
-    let armed_before_spawns = quorum_watch.is_some_and(|watch| {
-        registrations.len() == 1 && spawns.iter().all(|(position, _)| *position > watch)
-    });
-
-    let records = common::trigger_fired_records(&observation.transcript);
-    let quorum_records: Vec<_> = records
-        .iter()
-        .filter(|record| {
-            record.get("label").and_then(Value::as_str) == Some(names.quorum_label.as_str())
-        })
-        .collect();
-    let retired = quorum_records
-        .iter()
-        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
-        .count();
-    let pending = quorum_records
-        .iter()
-        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(false))
-        .count();
-    let barrier_woke = quorum_records.len() == 2 && retired == 1 && pending == 1;
-
-    let children = depth_one_children(observation, &names);
-    let audit = stop_audit(&observation.transcript, &names.quorum_label);
-    let stopped_after_barrier = audit.stopped_child_after_barrier(&children);
-    let straggler_value = get_state(context, &names.scope, &member_key(STRAGGLER_INDEX)).await?;
-    let straggler_never_wrote = straggler_value.is_null();
-    let three_children = children.len() == usize::from(MEMBER_COUNT);
-
-    let reports = response_reports(&observation.response, run_id);
-
-    let single_response_spawns =
-        max_parallel_spawns(&observation.transcript) == usize::from(MEMBER_COUNT);
-    let sessions_direct = observation.metrics.totals.sessions == u64::from(MEMBER_COUNT) + 1;
-    let no_errors = observation.metrics.totals.function_call_errors == 0;
-
-    Ok(assessment::build_evaluation(
-        if reports {
-            crate::report::CompletionState::Completed
-        } else {
-            crate::report::CompletionState::TaskIncomplete
-        },
-        [
-            QUORUM_REPORT.full_or_zero(
-                reports,
-                format!(
-                    "report must start with `{REPORT_MARKER}`, carry both quorum tokens verbatim, \
-                 and omit the straggler token"
-                ),
-            ),
-            QUORUM_WAKE.full_or_zero(
-                armed_before_spawns && barrier_woke,
-                format!(
-                    "registrations={}, armed_before_spawns={armed_before_spawns}, \
-                 quorum_records={}, barrier_woke={barrier_woke}",
-                    registrations.len(),
-                    quorum_records.len()
-                ),
-            ),
-            STRAGGLER_STOPPED.full_or_zero(
-                stopped_after_barrier && straggler_never_wrote && three_children,
-                format!(
-                    "stop_after_barrier={stopped_after_barrier}, straggler_written={}, \
-                 direct_children={}/{MEMBER_COUNT}, stop_calls={}",
-                    !straggler_never_wrote,
-                    children.len(),
-                    audit.stop_calls.len()
-                ),
-            ),
-            FAN_OUT_DISCIPLINE.full_or_zero(
-                single_response_spawns && sessions_direct && no_errors,
-                format!(
-                    "single_response_spawns={single_response_spawns}, total_sessions={}, \
-                 function_errors={}",
-                    observation.metrics.totals.sessions,
-                    observation.metrics.totals.function_call_errors
-                ),
-            ),
-        ],
-    ))
-}
-
-fn capture<'a>(
-    context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<Vec<CapturedDeliverable>> {
         let names = Names::new(run_id);
         let mut quorum_rows = Vec::new();
         let mut exact_rows = 0usize;
@@ -422,7 +257,207 @@ fn capture<'a>(
             ],
             provenance,
         }])
-    })
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> anyhow::Result<ObjectiveEvaluation> {
+        evaluate_quorum(observation, run_id).await
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> anyhow::Result<()> {
+        let names = Names::new(run_id);
+        let listed = context
+            .trigger_value(
+                "harness::triggers::list",
+                json!({ "session_id": names.root_session }),
+            )
+            .await?;
+        for subscription_id in listed
+            .get("subscriptions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
+        {
+            let _: Value = context
+                .trigger(
+                    "harness::triggers::unregister",
+                    json!({
+                        "session_id": names.root_session,
+                        "subscription_id": subscription_id,
+                    }),
+                )
+                .await?;
+        }
+        for index in 0..MEMBER_COUNT {
+            let _: Value = context
+                .trigger(
+                    "state::delete",
+                    json!({ "scope": names.scope, "key": member_key(index) }),
+                )
+                .await?;
+        }
+        // The barrier record is NOT ours to delete: `state_barrier` is the state
+        // worker's private bookkeeping and every external write to it is refused
+        // (`RESERVED_SCOPE`). Nothing leaks either — the id is per-run
+        // (`quorum:<run_id>:members`) and this stack's store is in-memory.
+        Ok(())
+    }
+}
+
+fn prompt(names: &Names, run_id: &str) -> String {
+    format!(
+        r#"Run a quorum fan-in with exactly 3 parallel members in the isolated state scope `{scope}`.
+
+The control plane is parent-owned: a reaction may wake this coordinator, but it never starts an
+agent. Every member must be spawned directly from a live coordinator turn. The rule of this run
+is K-of-N: two members are a quorum, and the third must never hold you up.
+
+Do all of the following in ONE response, in this order:
+
+1. Arm exactly one one-shot state wake over the whole scope, with top-level label
+   `{quorum_label}`. Gate it with the shipped named-set barrier using id `{barrier_id}`,
+   expecting exactly these keys: `member-00`, `member-01`, and carry each event's new value.
+   The barrier deliberately excludes `member-02`. The registration is wake-only: omit any
+   function target. Register nothing else.
+2. Directly spawn all 3 leaf members in parallel — every spawn in this same response — and note
+   each spawn result's child session id; you will need the straggler's later. Give each member
+   its assignment inline:
+
+- `member-00` → token `{token_0}`: write exactly one state value at `{scope}` / `member-00`:
+  `{{ "member": 0, "token": "{token_0}" }}`, then do nothing else.
+- `member-01` → token `{token_1}`: write exactly one state value at `{scope}` / `member-01`:
+  `{{ "member": 1, "token": "{token_1}" }}`, then do nothing else.
+- `member-02` → token `{token_2}`: FIRST call the function `{straggle_function}` with `{{}}` and
+  wait for its result; only after it returns, write `{scope}` / `member-02`:
+  `{{ "member": 2, "token": "{token_2}" }}`. It must not write before that call returns.
+
+Narrow each member to function discovery plus its listed calls. Members must not spawn,
+register reactions, read state, or coordinate. End the coordinator turn immediately after the
+spawns.
+
+When the `{quorum_label}` barrier wake arrives, the quorum is met and the straggler is now
+waste. First stop it: call `harness::stop` with the straggler's child session id from its
+spawn result — `{{ "session_id": "<that id>" }}`. Then reply with a single line that starts
+with `{marker}` and contains the tokens of `member-00` and `member-01` verbatim — and does NOT
+contain the token of `member-02`. Do not answer before the barrier wake."#,
+        scope = names.scope,
+        quorum_label = names.quorum_label,
+        barrier_id = names.barrier_id,
+        straggle_function = straggle_function_id(run_id),
+        token_0 = member_token(run_id, 0),
+        token_1 = member_token(run_id, 1),
+        token_2 = member_token(run_id, STRAGGLER_INDEX),
+        marker = REPORT_MARKER,
+    )
+}
+
+async fn evaluate_quorum(
+    observation: &ScenarioObservation,
+    run_id: &str,
+) -> anyhow::Result<ObjectiveEvaluation> {
+    let names = Names::new(run_id);
+    let calls = common::function_calls(&observation.transcript);
+
+    let registrations: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.function_id == "engine::register_trigger")
+        .collect();
+    let quorum_watch = registrations
+        .iter()
+        .find(|(_, call)| is_quorum_watch(call, &names))
+        .map(|(position, _)| *position);
+    let spawns: Vec<_> = calls
+        .iter()
+        .enumerate()
+        .filter(|(_, call)| call.function_id == "harness::spawn")
+        .collect();
+    let armed_before_spawns = quorum_watch.is_some_and(|watch| {
+        registrations.len() == 1 && spawns.iter().all(|(position, _)| *position > watch)
+    });
+
+    let records = common::trigger_fired_records(&observation.transcript);
+    let quorum_records: Vec<_> = records
+        .iter()
+        .filter(|record| {
+            record.get("label").and_then(Value::as_str) == Some(names.quorum_label.as_str())
+        })
+        .collect();
+    let retired = quorum_records
+        .iter()
+        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(true))
+        .count();
+    let pending = quorum_records
+        .iter()
+        .filter(|record| record.get("retired").and_then(Value::as_bool) == Some(false))
+        .count();
+    let barrier_woke = quorum_records.len() == 2 && retired == 1 && pending == 1;
+
+    let children = depth_one_children(observation, &names);
+    let audit = stop_audit(&observation.transcript, &names.quorum_label);
+    let stopped_after_barrier = audit.stopped_child_after_barrier(&children);
+    // `capture` already read this exact state location before cleanup and
+    // stored the verdict verbatim in the quorum record, so the evaluator reads
+    // the captured value instead of triggering `state::get` a second time.
+    let straggler_never_wrote = !captured_straggler_written(&observation.deliverables);
+    let three_children = children.len() == usize::from(MEMBER_COUNT);
+
+    let reports = response_reports(&observation.response, run_id);
+
+    let single_response_spawns =
+        max_parallel_spawns(&observation.transcript) == usize::from(MEMBER_COUNT);
+    let sessions_direct = observation.metrics.totals.sessions == u64::from(MEMBER_COUNT) + 1;
+    let no_errors = observation.metrics.totals.function_call_errors == 0;
+
+    Ok(assessment::build_evaluation(
+        if reports {
+            crate::report::CompletionState::Completed
+        } else {
+            crate::report::CompletionState::TaskIncomplete
+        },
+        [
+            QUORUM_REPORT.full_or_zero(
+                reports,
+                format!(
+                    "report must start with `{REPORT_MARKER}`, carry both quorum tokens verbatim, \
+                 and omit the straggler token"
+                ),
+            ),
+            QUORUM_WAKE.full_or_zero(
+                armed_before_spawns && barrier_woke,
+                format!(
+                    "registrations={}, armed_before_spawns={armed_before_spawns}, \
+                 quorum_records={}, barrier_woke={barrier_woke}",
+                    registrations.len(),
+                    quorum_records.len()
+                ),
+            ),
+            STRAGGLER_STOPPED.full_or_zero(
+                stopped_after_barrier && straggler_never_wrote && three_children,
+                format!(
+                    "stop_after_barrier={stopped_after_barrier}, straggler_written={}, \
+                 direct_children={}/{MEMBER_COUNT}, stop_calls={}",
+                    !straggler_never_wrote,
+                    children.len(),
+                    audit.stop_calls.len()
+                ),
+            ),
+            FAN_OUT_DISCIPLINE.full_or_zero(
+                single_response_spawns && sessions_direct && no_errors,
+                format!(
+                    "single_response_spawns={single_response_spawns}, total_sessions={}, \
+                 function_errors={}",
+                    observation.metrics.totals.sessions,
+                    observation.metrics.totals.function_call_errors
+                ),
+            ),
+        ],
+    ))
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -474,46 +509,18 @@ fn deliverable_contract() -> DeliverableContract {
     }
 }
 
-fn cleanup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let names = Names::new(run_id);
-        let listed = context
-            .trigger_value(
-                "harness::triggers::list",
-                json!({ "session_id": names.root_session }),
-            )
-            .await?;
-        for subscription_id in listed
-            .get("subscriptions")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .filter_map(|subscription| subscription.get("subscription_id").and_then(Value::as_str))
-        {
-            let _: Value = context
-                .trigger(
-                    "harness::triggers::unregister",
-                    json!({
-                        "session_id": names.root_session,
-                        "subscription_id": subscription_id,
-                    }),
-                )
-                .await?;
-        }
-        for index in 0..MEMBER_COUNT {
-            let _: Value = context
-                .trigger(
-                    "state::delete",
-                    json!({ "scope": names.scope, "key": member_key(index) }),
-                )
-                .await?;
-        }
-        // The barrier record is NOT ours to delete: `state_barrier` is the state
-        // worker's private bookkeeping and every external write to it is refused
-        // (`RESERVED_SCOPE`). Nothing leaks either — the id is per-run
-        // (`quorum:<run_id>:members`) and this stack's store is in-memory.
-        Ok(())
-    })
+/// Whether the captured quorum record saw a straggler write. A record is
+/// always present when the evaluator runs — capture precedes evaluation and a
+/// failed capture aborts the attempt — and an absent one is read as a write,
+/// which withholds the straggler award rather than granting it unproven.
+fn captured_straggler_written(deliverables: &[CapturedDeliverable]) -> bool {
+    deliverables
+        .iter()
+        .find(|deliverable| deliverable.id == DELIVERABLE_ID)
+        .and_then(|deliverable| deliverable.content.as_json())
+        .and_then(|content| content.get("straggler_written"))
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 async fn get_state(context: &E2eContext, scope: &str, key: &str) -> anyhow::Result<Value> {
@@ -854,10 +861,38 @@ mod tests {
         assert!(audit.stopped_child_after_barrier(&children));
     }
 
+    fn quorum_record(content: Value) -> CapturedDeliverable {
+        CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "quorum_record".to_string(),
+            content: content.into(),
+            invariants: Vec::new(),
+            provenance: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_straggler_verdict_comes_from_the_captured_record() {
+        assert!(!captured_straggler_written(&[quorum_record(
+            json!({ "straggler_written": false })
+        )]));
+        assert!(captured_straggler_written(&[quorum_record(
+            json!({ "straggler_written": true })
+        )]));
+        // A record that never arrived withholds the award instead of granting
+        // an unproven one.
+        assert!(captured_straggler_written(&[]));
+        assert!(captured_straggler_written(&[quorum_record(json!({}))]));
+    }
+
     #[test]
     fn materialization_is_reproducible() {
-        let first = materialize("attempt-a", 77).unwrap();
-        let retry = materialize("attempt-b", 77).unwrap();
+        let first = crate::scenarios::ScenarioId::QuorumFanIn
+            .materialize("attempt-a", 77)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::QuorumFanIn
+            .materialize("attempt-b", 77)
+            .unwrap();
         first.validate().unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
@@ -865,6 +900,5 @@ mod tests {
         assert_ne!(first.spec.prompt, retry.spec.prompt);
         assert!(first.case.deliverable_contract.capture_before_cleanup);
         assert!(first.case.deliverable_contract.provenance_required);
-        assert!(first.capture.is_some());
     }
 }

@@ -29,6 +29,137 @@ pub fn scenario_contract_sha256(
     }))
 }
 
+/// What a scenario needs from the engine, the runner host or a fixture to run.
+/// The closed list keeps the catalog honest: a new need is a new variant, and
+/// every id is spelled once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Capability {
+    #[serde(rename = "browser::interactive")]
+    BrowserInteractive,
+    #[serde(rename = "cross_repo_contract_simulator::v1")]
+    CrossRepoContractSimulatorV1,
+    #[serde(rename = "curl")]
+    Curl,
+    #[serde(rename = "docker")]
+    Docker,
+    #[serde(rename = "e2e::adaptive-flow-v1")]
+    E2eAdaptiveFlowV1,
+    #[serde(rename = "e2e::control-plane-v1")]
+    E2eControlPlaneV1,
+    #[serde(rename = "e2e::filesystem")]
+    E2eFilesystem,
+    #[serde(rename = "e2e::git")]
+    E2eGit,
+    #[serde(rename = "e2e::run-scoped-fixtures")]
+    E2eRunScopedFixtures,
+    #[serde(rename = "e2e::shell")]
+    E2eShell,
+    #[serde(rename = "e2e::subagents")]
+    E2eSubagents,
+    #[serde(rename = "e2e::workflow-resume-v1")]
+    E2eWorkflowResumeV1,
+    #[serde(rename = "fixture::multi-origin-http")]
+    FixtureMultiOriginHttp,
+    #[serde(rename = "git")]
+    Git,
+    #[serde(rename = "git::deterministic-fixture-v1")]
+    GitDeterministicFixtureV1,
+    #[serde(rename = "git::offline-bundle")]
+    GitOfflineBundle,
+    #[serde(rename = "github::security-read")]
+    GithubSecurityRead,
+    #[serde(rename = "github::trusted-handoff")]
+    GithubTrustedHandoff,
+    #[serde(rename = "harness::independent_session")]
+    HarnessIndependentSession,
+    #[serde(rename = "harness::post-turn-validation")]
+    HarnessPostTurnValidation,
+    #[serde(rename = "harness::scripted-dialogue-v1")]
+    HarnessScriptedDialogueV1,
+    #[serde(rename = "iii::coder")]
+    IiiCoder,
+    #[serde(rename = "iii::compose")]
+    IiiCompose,
+    #[serde(rename = "iii::database")]
+    IiiDatabase,
+    #[serde(rename = "iii::functions")]
+    IiiFunctions,
+    #[serde(rename = "iii::registry")]
+    IiiRegistry,
+    #[serde(rename = "iii::shell")]
+    IiiShell,
+    #[serde(rename = "iii::state")]
+    IiiState,
+    #[serde(rename = "iii::triggers")]
+    IiiTriggers,
+    #[serde(rename = "iii::workers")]
+    IiiWorkers,
+    #[serde(rename = "incident_fixture::v1")]
+    IncidentFixtureV1,
+    #[serde(rename = "node")]
+    Node,
+    #[serde(rename = "playwright")]
+    Playwright,
+    #[serde(rename = "python3")]
+    Python3,
+    #[serde(rename = "release_shadow::read-only-v1")]
+    ReleaseShadowReadOnlyV1,
+    #[serde(rename = "release_train_simulator::v1")]
+    ReleaseTrainSimulatorV1,
+    #[serde(rename = "security_scan::on-demand")]
+    SecurityScanOnDemand,
+    #[serde(rename = "security_scan::v1")]
+    SecurityScanV1,
+    #[serde(rename = "swe::isolated-python-workspace")]
+    SweIsolatedPythonWorkspace,
+}
+
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BrowserInteractive => "browser::interactive",
+            Self::CrossRepoContractSimulatorV1 => "cross_repo_contract_simulator::v1",
+            Self::Curl => "curl",
+            Self::Docker => "docker",
+            Self::E2eAdaptiveFlowV1 => "e2e::adaptive-flow-v1",
+            Self::E2eControlPlaneV1 => "e2e::control-plane-v1",
+            Self::E2eFilesystem => "e2e::filesystem",
+            Self::E2eGit => "e2e::git",
+            Self::E2eRunScopedFixtures => "e2e::run-scoped-fixtures",
+            Self::E2eShell => "e2e::shell",
+            Self::E2eSubagents => "e2e::subagents",
+            Self::E2eWorkflowResumeV1 => "e2e::workflow-resume-v1",
+            Self::FixtureMultiOriginHttp => "fixture::multi-origin-http",
+            Self::Git => "git",
+            Self::GitDeterministicFixtureV1 => "git::deterministic-fixture-v1",
+            Self::GitOfflineBundle => "git::offline-bundle",
+            Self::GithubSecurityRead => "github::security-read",
+            Self::GithubTrustedHandoff => "github::trusted-handoff",
+            Self::HarnessIndependentSession => "harness::independent_session",
+            Self::HarnessPostTurnValidation => "harness::post-turn-validation",
+            Self::HarnessScriptedDialogueV1 => "harness::scripted-dialogue-v1",
+            Self::IiiCoder => "iii::coder",
+            Self::IiiCompose => "iii::compose",
+            Self::IiiDatabase => "iii::database",
+            Self::IiiFunctions => "iii::functions",
+            Self::IiiRegistry => "iii::registry",
+            Self::IiiShell => "iii::shell",
+            Self::IiiState => "iii::state",
+            Self::IiiTriggers => "iii::triggers",
+            Self::IiiWorkers => "iii::workers",
+            Self::IncidentFixtureV1 => "incident_fixture::v1",
+            Self::Node => "node",
+            Self::Playwright => "playwright",
+            Self::Python3 => "python3",
+            Self::ReleaseShadowReadOnlyV1 => "release_shadow::read-only-v1",
+            Self::ReleaseTrainSimulatorV1 => "release_train_simulator::v1",
+            Self::SecurityScanOnDemand => "security_scan::on-demand",
+            Self::SecurityScanV1 => "security_scan::v1",
+            Self::SweIsolatedPythonWorkspace => "swe::isolated-python-workspace",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum HumanHorizonBasis {
@@ -127,32 +258,22 @@ impl ScenarioCharacterization {
         Ok(characterization)
     }
 
-    fn for_scenario(scenario_id: &str) -> Self {
-        let execution = match scenario_id {
-            "git_regression_forensics" => ExecutionRealism::FrozenRealArtifact,
-            "research_pipeline"
-            | "security_review"
-            | "incident_response"
-            | "todo_worker_simple"
-            | "todo_worker_planned"
-            | "engineering_ticket"
-            | "trend_blog"
-            | "tool_contract_recovery"
-            | "policy_bound_action"
-            | "cross_app_transaction"
-            | "performance_regression"
-            | "browser_cross_site"
-            | "swe_config_isolation"
-            | "swe_cache_invalidation"
-            | "swe_batch_replay"
-            | "swe_replay_recovery"
-            | "swe_contract_migration"
-            | "swe_tenant_isolation"
-            | "swe_replay_performance"
-            | "swe_release_handoff"
-            | "swe_service_journey" => ExecutionRealism::RealisticSimulator,
-            _ => ExecutionRealism::Synthetic,
-        };
+    /// A synthetic exercise of the engine, with no real artifact behind it.
+    pub fn synthetic() -> Self {
+        Self::with_execution(ExecutionRealism::Synthetic)
+    }
+
+    /// A realistic simulator of the product surface under test.
+    pub fn realistic() -> Self {
+        Self::with_execution(ExecutionRealism::RealisticSimulator)
+    }
+
+    /// A frozen real artifact, such as a real repository at a pinned revision.
+    pub fn frozen_real_artifact() -> Self {
+        Self::with_execution(ExecutionRealism::FrozenRealArtifact)
+    }
+
+    fn with_execution(execution: ExecutionRealism) -> Self {
         Self {
             human_horizon: HumanHorizon::default(),
             realism: ScenarioRealism {
@@ -251,7 +372,7 @@ pub struct ScenarioCase {
     pub inputs_sha256: String,
     #[serde(default)]
     pub characterization: ScenarioCharacterization,
-    pub required_capabilities: Vec<String>,
+    pub required_capabilities: Vec<Capability>,
     pub deliverable_contract: DeliverableContract,
 }
 
@@ -260,11 +381,11 @@ impl ScenarioCase {
         scenario_id: impl Into<String>,
         seed: u64,
         inputs: Value,
-        required_capabilities: Vec<String>,
+        required_capabilities: Vec<Capability>,
         deliverable_contract: DeliverableContract,
     ) -> Result<Self> {
         let scenario_id = scenario_id.into();
-        let characterization = ScenarioCharacterization::for_scenario(&scenario_id);
+        let characterization = ScenarioCharacterization::synthetic();
         let case = Self {
             case_id: format!("{scenario_id}:seed-{seed:016x}"),
             scenario_id,
@@ -333,13 +454,6 @@ impl ScenarioCase {
             bail!("scenario case inputs do not match inputs_sha256");
         }
         self.characterization.validate()?;
-        if self
-            .required_capabilities
-            .iter()
-            .any(|capability| capability.trim().is_empty())
-        {
-            bail!("scenario case has an empty required capability");
-        }
         let unique_capabilities = self
             .required_capabilities
             .iter()

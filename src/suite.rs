@@ -24,9 +24,8 @@ use crate::report::{
 };
 use crate::scenarios::common;
 use crate::scenarios::{
-    CriterionAward, MaterializedScenario, ObjectiveEvaluation, ScenarioCase,
-    ScenarioDeliverableCapture, ScenarioExecutionKind, ScenarioId, ScenarioObservation,
-    ScenarioSpec,
+    CriterionAward, MaterializedScenario, ObjectiveEvaluation, Scenario, ScenarioCase,
+    ScenarioExecutionKind, ScenarioId, ScenarioObservation, ScenarioSpec,
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
@@ -69,7 +68,10 @@ fn subject_cost_cap_usd(scenario_id: &str) -> Option<f64> {
     }
 }
 
-pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> FunctionPolicy {
+pub(crate) fn e2e_function_policy(
+    spec: &ScenarioSpec,
+    allowed: Option<Vec<String>>,
+) -> FunctionPolicy {
     let mut deny = vec!["e2e::*".to_string()];
     deny.extend(
         spec.denied_functions
@@ -79,8 +81,7 @@ pub(crate) fn e2e_function_policy(spec: &ScenarioSpec, run_id: &str) -> Function
     deny.sort();
     deny.dedup();
     FunctionPolicy {
-        allow: crate::scenarios::allowed_functions(spec.id, run_id)
-            .unwrap_or_else(|| vec!["*".into()]),
+        allow: allowed.unwrap_or_else(|| vec!["*".into()]),
         deny,
         ..FunctionPolicy::default()
     }
@@ -1161,11 +1162,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             return report;
         }
     };
-    let MaterializedScenario {
-        spec,
-        case,
-        capture,
-    } = materialized;
+    let MaterializedScenario { spec, case, module } = materialized;
     let expects_deliverables = !case.deliverable_contract.artifacts.is_empty();
     let mut report = E2eRunReport::new(
         run_id.to_string(),
@@ -1213,7 +1210,7 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
                 session_id: &session_id,
                 spec: &spec,
                 case: &case,
-                capture,
+                module,
                 progress_interval,
                 control,
                 output,
@@ -1267,14 +1264,12 @@ async fn run_once(context: &Arc<E2eContext>, request: AttemptRequest<'_>) -> E2e
             ),
         );
     }
-    if let Some(cleanup) = spec.cleanup {
-        if let Err(error) = cleanup(context, &attempt_id).await {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Cleanup,
-                format!("scenario '{}': scenario cleanup failed: {error:#}", spec.id),
-            );
-        }
+    if let Err(error) = module.cleanup(context, &attempt_id).await {
+        report.push_failure(
+            RunStatus::InfrastructureError,
+            FailurePhase::Cleanup,
+            format!("scenario '{}': scenario cleanup failed: {error:#}", spec.id),
+        );
     }
     if crate::scenarios::kanban::IDS.contains(&spec.id) && report.deliverables.is_empty() {
         let diagnostic =
@@ -2205,7 +2200,7 @@ struct ExecutionRequest<'a> {
     session_id: &'a str,
     spec: &'a ScenarioSpec,
     case: &'a ScenarioCase,
-    capture: Option<ScenarioDeliverableCapture>,
+    module: &'static dyn Scenario,
     progress_interval: Option<Duration>,
     control: Option<&'a SuiteControl>,
     output: &'a std::path::Path,
@@ -2251,30 +2246,25 @@ async fn execute(
         session_id,
         spec,
         case,
-        capture,
+        module,
         progress_interval,
         control,
         output,
     } = request;
     let stuck_timeout = Duration::from_secs(spec.execution.stuck_timeout_seconds);
     let filesystem_metadata = prepare_filesystem_root(spec)?;
-    if let Some(setup) = spec.setup {
-        setup(context, run_id)
-            .await
-            .map_err(|error| scenario_setup_failure(error.to_string()))?;
-    }
-    // Engineering fixtures are allocated during setup. Use that validated,
-    // attempt-owned root for the subject and its descendants, never the host cwd.
-    let filesystem_metadata =
-        crate::scenarios::engineering_ticket::prepared_filesystem_root(spec.id, run_id)
-            .map_err(|error| scenario_setup_failure(error.to_string()))?
-            .or(
-                crate::scenarios::linkly::prepared_filesystem_root(spec.id, run_id)
-                    .map_err(|error| scenario_setup_failure(error.to_string()))?,
-            )
-            .map(|root| json!({ "fs_scope": { "root": root } }))
-            .or(filesystem_metadata);
-    let required_functions = crate::scenarios::required_functions(spec.id, run_id);
+    module
+        .setup(context, run_id)
+        .await
+        .map_err(|error| scenario_setup_failure(error.to_string()))?;
+    // Fixtures allocated during setup own the subject's root: use that
+    // validated, attempt-owned root for it and its descendants, never the host cwd.
+    let filesystem_metadata = module
+        .prepared_root(run_id)
+        .map_err(|error| scenario_setup_failure(error.to_string()))?
+        .map(|root| json!({ "fs_scope": { "root": root } }))
+        .or(filesystem_metadata);
+    let required_functions = module.required_functions(run_id);
     report.worker_contracts = context
         .observe_function_contracts(&required_functions)
         .await
@@ -2291,7 +2281,7 @@ async fn execute(
         .await
         .map_err(|error| infrastructure_failure(FailurePhase::Execute, error.to_string()))?;
     let mut messages = vec![spec.prompt.clone()];
-    messages.extend(crate::scenarios::dialogue_followups(spec.id, run_id));
+    messages.extend(module.dialogue_followups(run_id));
     let scripted_dialogue = messages.len() > 1;
     let mut metrics = None;
     for (exchange, message) in messages.into_iter().enumerate() {
@@ -2327,7 +2317,10 @@ async fn execute(
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
                         max_validation_retries: spec.execution.max_validation_retries,
-                        functions: Some(e2e_function_policy(spec, run_id)),
+                        functions: Some(e2e_function_policy(
+                            spec,
+                            module.allowed_functions(run_id),
+                        )),
                         metadata: filesystem_metadata.clone(),
                     }),
                 },
@@ -2364,7 +2357,7 @@ async fn execute(
                     let failure = subject_failure(FailurePhase::Execute, error.to_string());
                     capture_partial_observation(context, session_id, report).await;
                     capture_failed_subject_assets(
-                        context, capture, case, session_id, output, control, report,
+                        context, module, case, session_id, output, control, report,
                     )
                     .await;
                     return Err(failure);
@@ -2421,17 +2414,10 @@ async fn execute(
     };
     report.transcript = Some(observation.transcript.clone());
     report.metrics = Some(observation.metrics.clone());
-    if let Some(capture) = capture {
-        let captured = capture_assets_before_cleanup(
-            context,
-            capture,
-            &observation,
-            spec.id,
-            run_id,
-            output,
-            report,
-        )
-        .await?;
+    if !observation.case.deliverable_contract.artifacts.is_empty() {
+        let captured = module.capture(context, &observation, run_id).await;
+        let captured =
+            capture_assets_before_cleanup(captured, &observation, spec.id, output, report).await?;
         report.scenario_measurements = captured_measurements(&captured).map_err(|error| {
             RunFailure::new(
                 RunStatus::InfrastructureError,
@@ -2451,7 +2437,8 @@ async fn execute(
         report,
     )
     .await;
-    let objective = (spec.evaluate)(context, &observation, run_id)
+    let objective = module
+        .evaluate(context, &observation, run_id)
         .await
         .map_err(|error| {
             RunFailure::new(
@@ -2624,15 +2611,13 @@ fn score_assessment_outcome(awarded: Option<u8>, possible: u8) -> AssessmentOutc
 }
 
 async fn capture_assets_before_cleanup(
-    context: &E2eContext,
-    capture: ScenarioDeliverableCapture,
+    captured: anyhow::Result<Vec<crate::scenarios::CapturedDeliverable>>,
     observation: &ScenarioObservation,
     scenario_id: &str,
-    run_id: &str,
     output: &Path,
     report: &mut E2eRunReport,
 ) -> Result<Vec<crate::scenarios::CapturedDeliverable>, RunFailure> {
-    let captured = match capture(context, observation, run_id).await {
+    let captured = match captured {
         Ok(captured) => captured,
         Err(error) => {
             let mut message = format!(
@@ -2778,16 +2763,13 @@ async fn capture_partial_observation(
 
 async fn capture_failed_subject_assets(
     context: &E2eContext,
-    capture: Option<ScenarioDeliverableCapture>,
+    module: &'static dyn Scenario,
     case: &ScenarioCase,
     session_id: &str,
     output: &Path,
     control: Option<&SuiteControl>,
     report: &mut E2eRunReport,
 ) {
-    let Some(capture) = capture else {
-        return;
-    };
     if control.is_some_and(|control| *control.cancellation.borrow()) {
         return;
     }
@@ -2811,7 +2793,7 @@ async fn capture_failed_subject_assets(
     };
     capture_confirmed_failed_subject_assets(
         context,
-        capture,
+        module,
         case,
         &status,
         control.is_some_and(|control| *control.cancellation.borrow()),
@@ -2823,7 +2805,7 @@ async fn capture_failed_subject_assets(
 
 async fn capture_confirmed_failed_subject_assets(
     context: &E2eContext,
-    capture: ScenarioDeliverableCapture,
+    module: &'static dyn Scenario,
     case: &ScenarioCase,
     status: &StatusReport,
     cancelled: bool,
@@ -2834,13 +2816,15 @@ async fn capture_confirmed_failed_subject_assets(
         return;
     };
     report.terminal_status = Some(status.clone());
+    if case.deliverable_contract.artifacts.is_empty() {
+        return;
+    }
     let attempt_id = report.attempt_id.clone();
+    let captured = module.capture(context, &observation, &attempt_id).await;
     if let Err(error) = capture_assets_before_cleanup(
-        context,
-        capture,
+        captured,
         &observation,
         case.scenario_id.as_str(),
-        &attempt_id,
         output,
         report,
     )
@@ -3065,8 +3049,8 @@ mod tests {
     use super::*;
     use crate::report::{CompletionState, EvaluationDimension};
     use crate::scenarios::{
-        ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent, CapturedInvariant,
-        InvariantSpec, ProvenanceEvidence,
+        async_trait, ArtifactExpectation, CapturedDeliverable, CapturedDeliverableContent,
+        CapturedInvariant, InvariantSpec, ProvenanceEvidence,
     };
     use crate::wire::{
         SessionMetricsPayload, SessionMetricsResponse, SessionUsageTotals, StatusReportPayload,
@@ -3131,12 +3115,29 @@ mod tests {
         .sealed_for_tests()
     }
 
-    fn partial_asset_capture<'a>(
-        _context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        attempt_id: &'a str,
-    ) -> crate::scenarios::DeliverableCaptureFuture<'a> {
-        Box::pin(async move {
+    /// A scenario that preserves one partial deliverable from a failed subject.
+    struct PartialAssetCapture;
+
+    #[async_trait]
+    impl Scenario for PartialAssetCapture {
+        fn id(&self) -> &'static str {
+            "failed_capture"
+        }
+
+        fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+            unreachable!("the capture tests never materialize the case")
+        }
+
+        fn spec(&self, _run_id: &str) -> crate::scenarios::ScenarioSpec {
+            unreachable!("the capture tests never build the spec")
+        }
+
+        async fn capture(
+            &self,
+            _context: &E2eContext,
+            observation: &ScenarioObservation,
+            attempt_id: &str,
+        ) -> anyhow::Result<Vec<CapturedDeliverable>> {
             assert!(!observation.metrics.complete);
             assert_eq!(attempt_id, "attempt");
             Ok(vec![CapturedDeliverable {
@@ -3154,19 +3155,54 @@ mod tests {
                     relation: "created".into(),
                 }],
             }])
-        })
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> anyhow::Result<ObjectiveEvaluation> {
+            unreachable!("the capture tests never evaluate")
+        }
     }
 
-    fn failed_asset_capture<'a>(
-        _context: &'a E2eContext,
-        observation: &'a ScenarioObservation,
-        attempt_id: &'a str,
-    ) -> crate::scenarios::DeliverableCaptureFuture<'a> {
-        Box::pin(async move {
+    /// A scenario whose capture itself fails after the subject failed.
+    struct FailedAssetCapture;
+
+    #[async_trait]
+    impl Scenario for FailedAssetCapture {
+        fn id(&self) -> &'static str {
+            "failed_capture"
+        }
+
+        fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+            unreachable!("the capture tests never materialize the case")
+        }
+
+        fn spec(&self, _run_id: &str) -> crate::scenarios::ScenarioSpec {
+            unreachable!("the capture tests never build the spec")
+        }
+
+        async fn capture(
+            &self,
+            _context: &E2eContext,
+            observation: &ScenarioObservation,
+            attempt_id: &str,
+        ) -> anyhow::Result<Vec<CapturedDeliverable>> {
             assert!(!observation.metrics.complete);
             assert_eq!(attempt_id, "attempt");
             anyhow::bail!("secondary capture failure")
-        })
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            _observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> anyhow::Result<ObjectiveEvaluation> {
+            unreachable!("the capture tests never evaluate")
+        }
     }
 
     fn resource_limited_report() -> E2eRunReport {
@@ -3189,7 +3225,7 @@ mod tests {
 
         capture_confirmed_failed_subject_assets(
             &context,
-            partial_asset_capture,
+            &PartialAssetCapture,
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3224,7 +3260,7 @@ mod tests {
 
         capture_confirmed_failed_subject_assets(
             &context,
-            failed_asset_capture,
+            &FailedAssetCapture,
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3830,15 +3866,7 @@ mod tests {
             .to_string()
             .contains("fingerprint changed"));
     }
-    use crate::scenarios::{CriterionSpec, ExecutionPolicy, ScenarioEvaluator};
-
-    fn evaluator<'a>(
-        _context: &'a E2eContext,
-        _observation: &'a ScenarioObservation,
-        _run_id: &'a str,
-    ) -> crate::scenarios::EvaluationFuture<'a> {
-        unreachable!()
-    }
+    use crate::scenarios::{CriterionSpec, ExecutionPolicy};
 
     fn spec() -> ScenarioSpec {
         ScenarioSpec {
@@ -3859,9 +3887,6 @@ mod tests {
                 "objective",
                 EvaluationDimension::StructuralIntegrity,
             )],
-            setup: None,
-            evaluate: evaluator as ScenarioEvaluator,
-            cleanup: None,
         }
     }
 
@@ -4066,7 +4091,7 @@ mod tests {
 
     #[test]
     fn e2e_policy_denies_the_control_plane_without_scenario_overrides() {
-        let policy = e2e_function_policy(&spec(), "test-run");
+        let policy = e2e_function_policy(&spec(), None);
         assert_eq!(policy.allow, ["*"]);
         assert_eq!(policy.deny, ["e2e::*"]);
         assert_eq!(policy.expose, Default::default());
@@ -4076,7 +4101,7 @@ mod tests {
     fn e2e_policy_applies_scenario_denies() {
         let mut scenario = spec();
         scenario.denied_functions = &["state::*"];
-        let policy = e2e_function_policy(&scenario, "test-run");
+        let policy = e2e_function_policy(&scenario, None);
 
         assert_eq!(policy.allow, ["*"]);
         assert_eq!(policy.deny, ["e2e::*", "state::*"]);

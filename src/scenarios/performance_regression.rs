@@ -23,10 +23,9 @@ use crate::report::EvaluationDimension;
 use super::assessment::{self, AssessmentSpec};
 use super::validation_loop::suffix;
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioCharacterization, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "performance_regression";
@@ -226,56 +225,62 @@ impl PerformanceAudit {
     }
 }
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
+pub struct PerformanceRegression;
 
-pub fn allowed_functions(_run_id: &str) -> Vec<String> {
-    vec![
-        "engine::functions::list".into(),
-        "engine::functions::info".into(),
-        "coder::*".into(),
-        "shell::*".into(),
-    ]
-}
+#[async_trait]
+impl Scenario for PerformanceRegression {
+    fn id(&self) -> &'static str {
+        ID
+    }
 
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "stable-unique-quadratic-regression",
-            "language": "python",
-            "canonical_seed": CANONICAL_SEED,
-            "allowed_production_paths": [PRODUCTION_PATH],
-            "protected_paths": [TEST_PATH, TASK_PATH],
-            "workloads": [WORKLOAD_SMALL, WORKLOAD_LARGE],
-            "deterministic_work_limit": WORK_LIMIT_LARGE,
-            "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
-            "wall_clock_policy": "advisory",
-        }),
-        vec![
-            "e2e::control-plane-v1".to_string(),
-            "iii::functions".to_string(),
-            "e2e::filesystem".to_string(),
-            "e2e::shell".to_string(),
-            "python3".to_string(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
 
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = fixture_root(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"Fix the performance regression in this isolated fixture: `{}`.
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        Ok(ScenarioCharacterization::realistic())
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "stable-unique-quadratic-regression",
+                "language": "python",
+                "canonical_seed": CANONICAL_SEED,
+                "allowed_production_paths": [PRODUCTION_PATH],
+                "protected_paths": [TEST_PATH, TASK_PATH],
+                "workloads": [WORKLOAD_SMALL, WORKLOAD_LARGE],
+                "deterministic_work_limit": WORK_LIMIT_LARGE,
+                "minimum_reduction_factor": MINIMUM_REDUCTION_FACTOR,
+                "wall_clock_policy": "advisory",
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eFilesystem,
+                Capability::E2eShell,
+                Capability::Python3,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let root = fixture_root(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Fix the performance regression in this isolated fixture: `{}`.
 
 `stable_unique` is functionally correct but performs quadratic work on distinct inputs. Preserve
 its contract: return the first occurrence of each hashable value in encounter order and accept any
@@ -292,22 +297,232 @@ Do not modify tests or `task.json`, add files, access the network, or write outs
 The runner owns hidden semantic and instrumented-work probes. Report the changed file, public test
 result, and why the new algorithm is near-linear. Do not claim a wall-clock speedup you did not
 measure yourself."#,
-            root.display()
-        ),
-        filesystem_root: Some(root),
-        execution: ExecutionPolicy {
-            max_turns: 32,
-            max_output_tokens: Some(16_384),
-            max_total_tokens: Some(400_000),
-            stuck_timeout_seconds: 600,
-            max_validation_retries: None,
-        },
-        denied_functions: &["web::*", "scrapling::*", "http::*"],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
+                root.display()
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                max_turns: 32,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: Some(400_000),
+                stuck_timeout_seconds: 600,
+                max_validation_retries: None,
+            },
+            denied_functions: &["web::*", "scrapling::*", "http::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
     }
+
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        let root = fixture_root(run_id);
+        reset_fixture(&root)?;
+        let public = run_python(
+            &root,
+            &[
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tests",
+                "-p",
+                "test_*.py",
+            ],
+        )
+        .await?;
+        if !public.success {
+            bail!(
+                "canonical performance fixture public suite is not green: {}",
+                public.stderr
+            );
+        }
+        let hidden = run_json_probe::<ProbeOutput>(&root, HIDDEN_PROBE).await?;
+        if !hidden.correctness || hidden.work_256 <= WORK_LIMIT_LARGE {
+            bail!(
+                "canonical fixture no longer has the intended correct quadratic baseline: correctness={}, work_256={}",
+                hidden.correctness,
+                hidden.work_256
+            );
+        }
+        let wall = run_json_probe::<WallClockOutput>(&root, WALL_CLOCK_PROBE).await?;
+        baselines()
+            .lock()
+            .expect("performance baseline lock poisoned")
+            .insert(
+                run_id.to_string(),
+                Baseline {
+                    work_256: hidden.work_256,
+                    median_ns: wall.median_ns,
+                },
+            );
+        Ok(())
+    }
+
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let audit = audit_fixture(run_id).await?;
+        let functional = audit.functional_correctness();
+        let deterministic = audit.deterministic_improvement();
+        let scope = audit.scope_valid();
+        let wall = audit.wall_clock_improved();
+        let mut measurements = vec![json!({
+            "id": "candidate_operations",
+            "value": audit.hidden.work_256,
+            "unit": "operations",
+        })];
+        if let Some(baseline) = &audit.baseline {
+            measurements.extend([
+                json!({
+                    "id": "baseline_operations",
+                    "value": baseline.work_256,
+                    "unit": "operations",
+                }),
+                json!({
+                    "id": "operation_reduction_ratio",
+                    "value": baseline.work_256 as f64 / audit.hidden.work_256.max(1) as f64,
+                    "unit": "ratio",
+                }),
+                json!({
+                    "id": "baseline_median_ns",
+                    "value": baseline.median_ns,
+                    "unit": "ns",
+                }),
+            ]);
+        }
+        if let Some(candidate_median_ns) = audit.candidate_median_ns {
+            measurements.push(json!({
+                "id": "candidate_median_ns",
+                "value": candidate_median_ns,
+                "unit": "ns",
+            }));
+        }
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "performance_audit".to_string(),
+            content: json!({
+                "public_tests_passed": audit.public_tests_passed,
+                "hidden_correctness": audit.hidden.correctness,
+                "work": {
+                    "workload_128": audit.hidden.work_128,
+                    "workload_256": audit.hidden.work_256,
+                    "baseline_256": audit.baseline.as_ref().map(|baseline| baseline.work_256),
+                    "limit_256": WORK_LIMIT_LARGE,
+                },
+                "wall_clock": {
+                    "policy": "advisory",
+                    "baseline_median_ns": audit.baseline.as_ref().map(|baseline| baseline.median_ns),
+                    "candidate_median_ns": audit.candidate_median_ns,
+                    "improved": wall,
+                },
+                "scope": {
+                    "protected_files_exact": audit.protected_files_exact,
+                    "production_patch_present": audit.production_patch_present,
+                    "unexpected_paths": audit.unexpected_paths,
+                },
+                "measurements": measurements,
+            })
+            .into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "functional_behavior_preserved".to_string(),
+                    passed: functional,
+                    reason: "public and hidden semantic probes independently exercised the final source"
+                        .to_string(),
+                },
+                CapturedInvariant {
+                    id: "deterministic_work_reduced".to_string(),
+                    passed: deterministic,
+                    reason: format!(
+                        "candidate used {} instrumented operation(s) at workload {WORKLOAD_LARGE}",
+                        audit.hidden.work_256
+                    ),
+                },
+                CapturedInvariant {
+                    id: "protected_fixture_exact".to_string(),
+                    passed: scope,
+                    reason: "only the allowed production path may differ from the frozen fixture"
+                        .to_string(),
+                },
+            ],
+            provenance: vec![ProvenanceEvidence {
+                kind: "filesystem".to_string(),
+                source_id: fixture_root(run_id).join(PRODUCTION_PATH).display().to_string(),
+                relation: "independently_probed".to_string(),
+            }],
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let audit = audit_fixture(run_id).await?;
+        let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
+        let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
+        Ok(assessment::build_evaluation(
+            if audit.production_patch_present {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+            FUNCTIONAL_CORRECTNESS.full_or_zero(
+                audit.functional_correctness(),
+                format!(
+                    "public_tests_passed={}, hidden_correctness={}; public_output={:?}; hidden_output={:?}",
+                    audit.public_tests_passed,
+                    audit.hidden.correctness,
+                    audit.public_output,
+                    audit.hidden_output
+                ),
+            ),
+            DETERMINISTIC_IMPROVEMENT.full_or_zero(
+                audit.deterministic_improvement(),
+                format!(
+                    "baseline_work_256={baseline_work:?}, candidate_work_128={}, candidate_work_256={}, limit_256={WORK_LIMIT_LARGE}, minimum_reduction={MINIMUM_REDUCTION_FACTOR}x",
+                    audit.hidden.work_128, audit.hidden.work_256
+                ),
+            ),
+            PATCH_SCOPE.full_or_zero(
+                audit.scope_valid(),
+                format!(
+                    "protected_files_exact={}, production_patch_present={}, unexpected_paths={:?}",
+                    audit.protected_files_exact,
+                    audit.production_patch_present,
+                    audit.unexpected_paths
+                ),
+            ),
+            WALL_CLOCK_SIGNAL.full_or_zero(
+                audit.wall_clock_improved(),
+                format!(
+                    "run-local baseline_median_ns={baseline_median:?}, candidate_median_ns={:?}; advisory only",
+                    audit.candidate_median_ns
+                ),
+            ),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        baselines()
+            .lock()
+            .expect("performance baseline lock poisoned")
+            .remove(run_id);
+        remove_fixture_root(&fixture_root(run_id))
+    }
+}
+
+pub fn allowed_functions(_run_id: &str) -> Vec<String> {
+    vec![
+        "engine::functions::list".into(),
+        "engine::functions::info".into(),
+        "coder::*".into(),
+        "shell::*".into(),
+    ]
 }
 
 fn fixture_root(run_id: &str) -> PathBuf {
@@ -377,52 +592,6 @@ fn remove_fixture_root(root: &Path) -> Result<()> {
             .with_context(|| format!("failed removing fixture root {}", root.display()))?;
     }
     Ok(())
-}
-
-fn setup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let root = fixture_root(run_id);
-        reset_fixture(&root)?;
-        let public = run_python(
-            &root,
-            &[
-                "-m",
-                "unittest",
-                "discover",
-                "-s",
-                "tests",
-                "-p",
-                "test_*.py",
-            ],
-        )
-        .await?;
-        if !public.success {
-            bail!(
-                "canonical performance fixture public suite is not green: {}",
-                public.stderr
-            );
-        }
-        let hidden = run_json_probe::<ProbeOutput>(&root, HIDDEN_PROBE).await?;
-        if !hidden.correctness || hidden.work_256 <= WORK_LIMIT_LARGE {
-            bail!(
-                "canonical fixture no longer has the intended correct quadratic baseline: correctness={}, work_256={}",
-                hidden.correctness,
-                hidden.work_256
-            );
-        }
-        let wall = run_json_probe::<WallClockOutput>(&root, WALL_CLOCK_PROBE).await?;
-        baselines()
-            .lock()
-            .expect("performance baseline lock poisoned")
-            .insert(
-                run_id.to_string(),
-                Baseline {
-                    work_256: hidden.work_256,
-                    median_ns: wall.median_ns,
-                },
-            );
-        Ok(())
-    })
 }
 
 async fn run_python(root: &Path, args: &[&str]) -> Result<CommandOutcome> {
@@ -573,159 +742,6 @@ async fn audit_fixture(run_id: &str) -> Result<PerformanceAudit> {
     })
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let audit = audit_fixture(run_id).await?;
-        let baseline_work = audit.baseline.as_ref().map(|baseline| baseline.work_256);
-        let baseline_median = audit.baseline.as_ref().map(|baseline| baseline.median_ns);
-        Ok(assessment::build_evaluation(
-            if audit.production_patch_present {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-            FUNCTIONAL_CORRECTNESS.full_or_zero(
-                audit.functional_correctness(),
-                format!(
-                    "public_tests_passed={}, hidden_correctness={}; public_output={:?}; hidden_output={:?}",
-                    audit.public_tests_passed,
-                    audit.hidden.correctness,
-                    audit.public_output,
-                    audit.hidden_output
-                ),
-            ),
-            DETERMINISTIC_IMPROVEMENT.full_or_zero(
-                audit.deterministic_improvement(),
-                format!(
-                    "baseline_work_256={baseline_work:?}, candidate_work_128={}, candidate_work_256={}, limit_256={WORK_LIMIT_LARGE}, minimum_reduction={MINIMUM_REDUCTION_FACTOR}x",
-                    audit.hidden.work_128, audit.hidden.work_256
-                ),
-            ),
-            PATCH_SCOPE.full_or_zero(
-                audit.scope_valid(),
-                format!(
-                    "protected_files_exact={}, production_patch_present={}, unexpected_paths={:?}",
-                    audit.protected_files_exact,
-                    audit.production_patch_present,
-                    audit.unexpected_paths
-                ),
-            ),
-            WALL_CLOCK_SIGNAL.full_or_zero(
-                audit.wall_clock_improved(),
-                format!(
-                    "run-local baseline_median_ns={baseline_median:?}, candidate_median_ns={:?}; advisory only",
-                    audit.candidate_median_ns
-                ),
-            ),
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let audit = audit_fixture(run_id).await?;
-        let functional = audit.functional_correctness();
-        let deterministic = audit.deterministic_improvement();
-        let scope = audit.scope_valid();
-        let wall = audit.wall_clock_improved();
-        let mut measurements = vec![json!({
-            "id": "candidate_operations",
-            "value": audit.hidden.work_256,
-            "unit": "operations",
-        })];
-        if let Some(baseline) = &audit.baseline {
-            measurements.extend([
-                json!({
-                    "id": "baseline_operations",
-                    "value": baseline.work_256,
-                    "unit": "operations",
-                }),
-                json!({
-                    "id": "operation_reduction_ratio",
-                    "value": baseline.work_256 as f64 / audit.hidden.work_256.max(1) as f64,
-                    "unit": "ratio",
-                }),
-                json!({
-                    "id": "baseline_median_ns",
-                    "value": baseline.median_ns,
-                    "unit": "ns",
-                }),
-            ]);
-        }
-        if let Some(candidate_median_ns) = audit.candidate_median_ns {
-            measurements.push(json!({
-                "id": "candidate_median_ns",
-                "value": candidate_median_ns,
-                "unit": "ns",
-            }));
-        }
-        Ok(vec![CapturedDeliverable {
-            id: DELIVERABLE_ID.to_string(),
-            kind: "performance_audit".to_string(),
-            content: json!({
-                "public_tests_passed": audit.public_tests_passed,
-                "hidden_correctness": audit.hidden.correctness,
-                "work": {
-                    "workload_128": audit.hidden.work_128,
-                    "workload_256": audit.hidden.work_256,
-                    "baseline_256": audit.baseline.as_ref().map(|baseline| baseline.work_256),
-                    "limit_256": WORK_LIMIT_LARGE,
-                },
-                "wall_clock": {
-                    "policy": "advisory",
-                    "baseline_median_ns": audit.baseline.as_ref().map(|baseline| baseline.median_ns),
-                    "candidate_median_ns": audit.candidate_median_ns,
-                    "improved": wall,
-                },
-                "scope": {
-                    "protected_files_exact": audit.protected_files_exact,
-                    "production_patch_present": audit.production_patch_present,
-                    "unexpected_paths": audit.unexpected_paths,
-                },
-                "measurements": measurements,
-            })
-            .into(),
-            invariants: vec![
-                CapturedInvariant {
-                    id: "functional_behavior_preserved".to_string(),
-                    passed: functional,
-                    reason: "public and hidden semantic probes independently exercised the final source"
-                        .to_string(),
-                },
-                CapturedInvariant {
-                    id: "deterministic_work_reduced".to_string(),
-                    passed: deterministic,
-                    reason: format!(
-                        "candidate used {} instrumented operation(s) at workload {WORKLOAD_LARGE}",
-                        audit.hidden.work_256
-                    ),
-                },
-                CapturedInvariant {
-                    id: "protected_fixture_exact".to_string(),
-                    passed: scope,
-                    reason: "only the allowed production path may differ from the frozen fixture"
-                        .to_string(),
-                },
-            ],
-            provenance: vec![ProvenanceEvidence {
-                kind: "filesystem".to_string(),
-                source_id: fixture_root(run_id).join(PRODUCTION_PATH).display().to_string(),
-                relation: "independently_probed".to_string(),
-            }],
-        }])
-    })
-}
-
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -769,19 +785,10 @@ fn deliverable_contract() -> DeliverableContract {
     }
 }
 
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        baselines()
-            .lock()
-            .expect("performance baseline lock poisoned")
-            .remove(run_id);
-        remove_fixture_root(&fixture_root(run_id))
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scenarios::ScenarioId;
 
     #[test]
     fn bytecode_caches_are_not_patch_scope_violations() {
@@ -846,8 +853,12 @@ mod tests {
 
     #[test]
     fn scenario_and_materialization_validate() {
-        scenario("performance-test").validate().unwrap();
-        materialize("performance-test", CANONICAL_SEED)
+        PerformanceRegression
+            .spec("performance-test")
+            .validate()
+            .unwrap();
+        ScenarioId::PerformanceRegression
+            .materialize("performance-test", CANONICAL_SEED)
             .unwrap()
             .validate()
             .unwrap();

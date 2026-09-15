@@ -15,10 +15,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CleanupFuture, CriterionAward, CriterionSpec,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    MaterializedScenario, ObjectiveEvaluation, ProvenanceEvidence, ScenarioCase,
-    ScenarioObservation, ScenarioSetup, ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CriterionAward,
+    CriterionSpec, DeliverableContract, ExecutionPolicy, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
@@ -81,20 +80,96 @@ pub fn function_id(run_id: &str) -> String {
     format!("kanban_eval_{:x}::exec", Sha256::digest(run_id.as_bytes()))
 }
 
-pub fn spec(index: usize, run_id: &str) -> ScenarioSpec {
-    let case = case(index);
-    let setups: [ScenarioSetup; 7] = [
-        setup_c1, setup_c2, setup_c3, setup_c4, setup_c5, setup_c6, setup_c7,
-    ];
-    ScenarioSpec {
-        id: case.id.as_str(),
-        prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
-            catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
-        filesystem_root: None,
-        execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
-            max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
-        denied_functions: &["harness::spawn", "shell::*", "coder::*", "compose::*", "router::*", "harness::send", "harness::run"],
-        criteria: criteria(index), setup: Some(setups[index]), evaluate, cleanup: Some(cleanup),
+/// One of the seven Kanban cases, indexed into [`IDS`] in catalog order.
+pub struct Kanban(pub usize);
+
+#[async_trait]
+impl Scenario for Kanban {
+    fn id(&self) -> &'static str {
+        IDS[self.0]
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let item = case(self.0);
+        ScenarioCase::new(
+            IDS[self.0],
+            super::stable_seed(IDS[self.0]),
+            json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
+                "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
+                "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
+                "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::Docker,
+                Capability::Node,
+                Capability::Playwright,
+            ],
+            DeliverableContract {
+                artifacts: vec![ArtifactExpectation {
+                    id: REPORT.into(),
+                    kind: "application_audit".into(),
+                    media_type: "application/json".into(),
+                    schema: json!({"type":"object", "required":["result","provenance","diff"]}),
+                    max_size_bytes: 16 * 1024 * 1024,
+                }],
+                provenance_required: true,
+                capture_before_cleanup: true,
+                ..Default::default()
+            },
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let case = case(self.0);
+        ScenarioSpec {
+            id: case.id.as_str(),
+            prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
+                catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
+            filesystem_root: None,
+            execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
+                max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
+            denied_functions: &["harness::spawn", "shell::*", "coder::*", "compose::*", "router::*", "harness::send", "harness::run"],
+            criteria: criteria(self.0),
+        }
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        vec![function_id(run_id)]
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(vec![function_id(run_id)])
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        setup(context, run_id, self.0).await
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        capture(context, observation, run_id).await
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        evaluate(context, observation, run_id).await
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        cleanup(context, run_id).await
     }
 }
 
@@ -121,43 +196,6 @@ fn criteria(index: usize) -> Vec<CriterionSpec> {
         .collect()
 }
 
-pub fn materialize(index: usize, run_id: &str) -> Result<MaterializedScenario> {
-    let item = case(index);
-    let contract = DeliverableContract {
-        artifacts: vec![ArtifactExpectation {
-            id: REPORT.into(),
-            kind: "application_audit".into(),
-            media_type: "application/json".into(),
-            schema: json!({"type":"object", "required":["result","provenance","diff"]}),
-            max_size_bytes: 16 * 1024 * 1024,
-        }],
-        provenance_required: true,
-        capture_before_cleanup: true,
-        ..Default::default()
-    };
-    let case = ScenarioCase::new(
-        IDS[index],
-        super::stable_seed(IDS[index]),
-        json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
-            "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
-            "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
-            "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "docker".into(),
-            "node".into(),
-            "playwright".into(),
-        ],
-        contract,
-    )?;
-    Ok(MaterializedScenario {
-        spec: spec(index, run_id),
-        case,
-        capture: Some(capture),
-    })
-}
-
 #[derive(Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ExecRequest {
@@ -166,21 +204,6 @@ struct ExecRequest {
     #[schemars(skip)]
     _caller: Option<String>,
 }
-
-macro_rules! setup_hook {
-    ($name:ident, $index:expr) => {
-        fn $name<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-            Box::pin(setup(context, run_id, $index))
-        }
-    };
-}
-setup_hook!(setup_c1, 0);
-setup_hook!(setup_c2, 1);
-setup_hook!(setup_c3, 2);
-setup_hook!(setup_c4, 3);
-setup_hook!(setup_c5, 4);
-setup_hook!(setup_c6, 5);
-setup_hook!(setup_c7, 6);
 
 async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
     let path = root(run_id);
@@ -394,59 +417,57 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
     Ok(())
 }
 
-fn capture<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
-        let path = root(run_id);
-        fs::write(
-            path.join("run/subject-complete"),
-            br#"{"model_invoked":true}"#,
-        )?;
-        let deadline = Instant::now() + Duration::from_secs(1200);
-        let exit = loop {
-            if let Some(exit) = registry()
-                .lock()
-                .unwrap()
-                .get_mut(run_id)
-                .context("missing controller")?
-                .process
-                .try_wait()?
-            {
-                break exit;
-            }
-            if Instant::now() >= deadline {
-                bail!("Kanban private evaluation timed out");
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        };
-        let content = diagnostics(run_id)?;
-        let result = content.get("result").context("missing evaluation result")?;
-        let expected_exit = match (
-            result["status"].as_str(),
-            result["functional_status"].as_str(),
-        ) {
-            (Some("infrastructure_failed" | "evaluation_failed"), _) => 2,
-            (_, Some("passed")) => 0,
-            _ => 1,
-        };
-        if exit.code() != Some(expected_exit) {
-            bail!("controller exit disagrees with evidence: {exit}");
+async fn capture(
+    _context: &E2eContext,
+    _observation: &ScenarioObservation,
+    run_id: &str,
+) -> Result<Vec<CapturedDeliverable>> {
+    let path = root(run_id);
+    fs::write(
+        path.join("run/subject-complete"),
+        br#"{"model_invoked":true}"#,
+    )?;
+    let deadline = Instant::now() + Duration::from_secs(1200);
+    let exit = loop {
+        if let Some(exit) = registry()
+            .lock()
+            .unwrap()
+            .get_mut(run_id)
+            .context("missing controller")?
+            .process
+            .try_wait()?
+        {
+            break exit;
         }
-        Ok(vec![CapturedDeliverable {
-            id: REPORT.into(),
-            kind: "application_audit".into(),
-            content: content.into(),
-            invariants: vec![],
-            provenance: vec![ProvenanceEvidence {
-                kind: "isolated_runtime".into(),
-                source_id: format!("kanban-evaluation/{run_id}/evidence"),
-                relation: "private_probes_before_cleanup".into(),
-            }],
-        }])
-    })
+        if Instant::now() >= deadline {
+            bail!("Kanban private evaluation timed out");
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    };
+    let content = diagnostics(run_id)?;
+    let result = content.get("result").context("missing evaluation result")?;
+    let expected_exit = match (
+        result["status"].as_str(),
+        result["functional_status"].as_str(),
+    ) {
+        (Some("infrastructure_failed" | "evaluation_failed"), _) => 2,
+        (_, Some("passed")) => 0,
+        _ => 1,
+    };
+    if exit.code() != Some(expected_exit) {
+        bail!("controller exit disagrees with evidence: {exit}");
+    }
+    Ok(vec![CapturedDeliverable {
+        id: REPORT.into(),
+        kind: "application_audit".into(),
+        content: content.into(),
+        invariants: vec![],
+        provenance: vec![ProvenanceEvidence {
+            kind: "isolated_runtime".into(),
+            source_id: format!("kanban-evaluation/{run_id}/evidence"),
+            relation: "private_probes_before_cleanup".into(),
+        }],
+    }])
 }
 
 pub(crate) fn diagnostics(run_id: &str) -> Result<Value> {
@@ -523,54 +544,52 @@ pub(crate) fn diagnostics(run_id: &str) -> Result<Value> {
     Ok(Value::Object(content))
 }
 
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    _run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let value = observation
-            .deliverables
-            .iter()
-            .find(|d| d.id == REPORT)
-            .context("missing Kanban evidence")?
-            .content
-            .as_json()
-            .context("invalid Kanban evidence")?;
-        validate_evaluation(value)?;
-        let result = &value["result"];
-        let index = IDS
-            .iter()
-            .position(|id| *id == observation.case.scenario_id)
-            .context("unknown Kanban case")?;
-        let awards = criteria(index)
-            .into_iter()
-            .map(|criterion| {
-                let check = result["checks"]
-                    .as_array()
-                    .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
-                CriterionAward {
-                    id: criterion.id.into(),
-                    awarded: Some(if check.is_some_and(|c| c["status"] == "passed") {
-                        criterion.weight
-                    } else {
-                        0
-                    }),
-                    reason: check
-                        .map(|c| c["detail"].to_string())
-                        .unwrap_or_else(|| "Required check missing".into()),
-                }
-            })
-            .collect();
-        Ok(ObjectiveEvaluation {
-            completion: if result["status"] == "passed" {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            awards,
-            infrastructure_error: None,
+async fn evaluate(
+    _context: &E2eContext,
+    observation: &ScenarioObservation,
+    _run_id: &str,
+) -> Result<ObjectiveEvaluation> {
+    let value = observation
+        .deliverables
+        .iter()
+        .find(|d| d.id == REPORT)
+        .context("missing Kanban evidence")?
+        .content
+        .as_json()
+        .context("invalid Kanban evidence")?;
+    validate_evaluation(value)?;
+    let result = &value["result"];
+    let index = IDS
+        .iter()
+        .position(|id| *id == observation.case.scenario_id)
+        .context("unknown Kanban case")?;
+    let awards = criteria(index)
+        .into_iter()
+        .map(|criterion| {
+            let check = result["checks"]
+                .as_array()
+                .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
+            CriterionAward {
+                id: criterion.id.into(),
+                awarded: Some(if check.is_some_and(|c| c["status"] == "passed") {
+                    criterion.weight
+                } else {
+                    0
+                }),
+                reason: check
+                    .map(|c| c["detail"].to_string())
+                    .unwrap_or_else(|| "Required check missing".into()),
+            }
         })
+        .collect();
+    Ok(ObjectiveEvaluation {
+        completion: if result["status"] == "passed" {
+            CompletionState::Completed
+        } else {
+            CompletionState::TaskIncomplete
+        },
+        awards,
+        infrastructure_error: None,
     })
 }
 
@@ -607,65 +626,63 @@ fn validate_evaluation(value: &Value) -> Result<()> {
     Ok(())
 }
 
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        let runtime = registry().lock().unwrap().remove(run_id);
-        let path = root(run_id).join("run");
-        let mut failures = Vec::new();
-        if path.is_dir() {
-            if let Err(error) = fs::write(path.join("cancel"), b"cleanup") {
+async fn cleanup(_context: &E2eContext, run_id: &str) -> Result<()> {
+    let runtime = registry().lock().unwrap().remove(run_id);
+    let path = root(run_id).join("run");
+    let mut failures = Vec::new();
+    if path.is_dir() {
+        if let Err(error) = fs::write(path.join("cancel"), b"cleanup") {
+            failures.push(error.to_string());
+        }
+    }
+    if let Some(mut runtime) = runtime {
+        if let Some(monitor) = runtime.monitor {
+            monitor.abort();
+        }
+        if let Some(function) = runtime.function {
+            function.unregister();
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while matches!(runtime.process.try_wait(), Ok(None)) && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        if !matches!(runtime.process.try_wait(), Ok(Some(_))) {
+            if let Err(error) = runtime.process.kill() {
+                failures.push(error.to_string());
+            }
+            if let Err(error) = runtime.process.wait() {
                 failures.push(error.to_string());
             }
         }
-        if let Some(mut runtime) = runtime {
-            if let Some(monitor) = runtime.monitor {
-                monitor.abort();
+    }
+    let state = path.join("containers.json");
+    if state.is_file() {
+        let value: Value = serde_json::from_slice(&fs::read(state)?)?;
+        for container in value["containers"]
+            .as_array()
+            .context("invalid container state")?
+        {
+            let id = container.as_str().context("invalid container id")?;
+            if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+                bail!("invalid cleanup identity");
             }
-            if let Some(function) = runtime.function {
-                function.unregister();
-            }
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while matches!(runtime.process.try_wait(), Ok(None)) && Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            if !matches!(runtime.process.try_wait(), Ok(Some(_))) {
-                if let Err(error) = runtime.process.kill() {
-                    failures.push(error.to_string());
-                }
-                if let Err(error) = runtime.process.wait() {
-                    failures.push(error.to_string());
-                }
-            }
-        }
-        let state = path.join("containers.json");
-        if state.is_file() {
-            let value: Value = serde_json::from_slice(&fs::read(state)?)?;
-            for container in value["containers"]
-                .as_array()
-                .context("invalid container state")?
-            {
-                let id = container.as_str().context("invalid container id")?;
-                if id.len() != 64 || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    bail!("invalid cleanup identity");
-                }
-                let mut command = tokio::process::Command::new("docker");
-                command
-                    .args(["rm", "-f", id])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true);
-                match tokio::time::timeout(Duration::from_secs(15), command.status()).await {
-                    Ok(Ok(status)) if status.success() => {}
-                    other => failures.push(format!("container cleanup {id}: {other:?}")),
-                }
+            let mut command = tokio::process::Command::new("docker");
+            command
+                .args(["rm", "-f", id])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .kill_on_drop(true);
+            match tokio::time::timeout(Duration::from_secs(15), command.status()).await {
+                Ok(Ok(status)) if status.success() => {}
+                other => failures.push(format!("container cleanup {id}: {other:?}")),
             }
         }
-        if failures.is_empty() {
-            Ok(())
-        } else {
-            bail!("Kanban cleanup: {}", failures.join("; "))
-        }
-    })
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        bail!("Kanban cleanup: {}", failures.join("; "))
+    }
 }
 
 #[cfg(test)]
@@ -770,7 +787,10 @@ mod tests {
     #[test]
     fn pinned_cases_are_valid_and_do_not_expose_future_revisions_in_prompts() {
         for (index, id) in IDS.iter().enumerate() {
-            let materialized = materialize(index, "contract-test").unwrap();
+            let scenario: crate::scenarios::ScenarioId = id.parse().unwrap();
+            let materialized = scenario
+                .materialize("contract-test", scenario.canonical_seed())
+                .unwrap();
             materialized.validate().unwrap();
             assert_eq!(case(index).id, *id);
             assert!(!materialized

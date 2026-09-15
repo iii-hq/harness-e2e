@@ -25,10 +25,9 @@ use crate::report::EvaluationDimension;
 
 use super::assessment::{self, AssessmentSpec};
 use super::{
-    ArtifactExpectation, CapturedDeliverable, CapturedInvariant, CleanupFuture,
-    DeliverableCaptureFuture, DeliverableContract, EvaluationFuture, ExecutionPolicy,
-    InvariantSpec, MaterializedScenario, ProvenanceEvidence, ScenarioCase, ScenarioObservation,
-    ScenarioSpec,
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation, ProvenanceEvidence,
+    Scenario, ScenarioCase, ScenarioObservation, ScenarioSpec,
 };
 
 pub const ID: &str = "engineering_endurance_ladder";
@@ -901,8 +900,117 @@ fn snapshot(run_id: &str) -> Option<EnduranceSnapshot> {
     })
 }
 
-fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
+/// Ten cumulative engineering rungs over one durable-queue fixture.
+pub struct EngineeringEnduranceLadder;
+
+#[async_trait]
+impl Scenario for EngineeringEnduranceLadder {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "task": "cumulative-durable-queue-engineering",
+                "language": "python",
+                "rungs": TICKETS.iter().enumerate().map(|(index, ticket)| json!({
+                    "rung": index + 1,
+                    "id": ticket.id,
+                    "title": ticket.title,
+                })).collect::<Vec<_>>(),
+                "max_attempts_per_rung": MAX_ATTEMPTS_PER_RUNG,
+                "production_paths": [PRODUCTION_PATH],
+                "protected_paths": [PUBLIC_TEST_PATH, MANIFEST_PATH, GITIGNORE_PATH],
+                "termination": "first_rung_with_three_rejected_checkpoints_or_all_complete",
+                "github_handoff": {
+                    "repository": "iii-hq/e2e-fixture",
+                    "publisher": "trusted_runner_only",
+                    "branch_prefix": "benchmark-runs/endurance/",
+                    "subject_credentials": false,
+                },
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::E2eFilesystem,
+                Capability::E2eShell,
+                Capability::E2eGit,
+                Capability::Python3,
+                Capability::GithubTrustedHandoff,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let root = fixture_root(run_id);
+        let checkpoint = checkpoint_function_id(run_id);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"You are the sole implementer in a cumulative engineering endurance run. Work in the
+isolated Git repository `{}`. Read `{MANIFEST_PATH}`, the source, and the public tests before
+editing. Network and GitHub access are forbidden.
+
+{} 
+
+For every rung:
+1. inspect and reproduce the current behavior;
+2. edit production code only (never tests, manifest, refs, branch, or Git configuration);
+3. run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py'`;
+4. create one or more non-merge commits and leave the worktree clean;
+5. call `{checkpoint}` with the rung number and exact `git rev-parse HEAD` SHA.
+
+On `rejected`, repair in this same session and checkpoint the same rung again; you may replace
+unaccepted commits, but never rewrite an accepted checkpoint. On `accepted`, implement exactly
+the `next_ticket` returned by the trusted checkpoint. On `completed` or `capability_failure`, stop
+and report accepted rung count, terminal rung, and last accepted SHA. Do not invent future tickets
+or stop merely because one checkpoint was rejected."#,
+                root.display(),
+                ticket_text(1),
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                max_turns: 320,
+                max_output_tokens: Some(32_768),
+                max_total_tokens: Some(3_000_000),
+                stuck_timeout_seconds: 1_200,
+                max_validation_retries: None,
+            },
+            denied_functions: &[
+                "web::*",
+                "scrapling::*",
+                "http::*",
+                "github::*",
+                "harness::spawn",
+                "harness::trigger::*",
+                "state::*",
+                "database::*",
+            ],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    fn required_functions(&self, run_id: &str) -> Vec<String> {
+        required_functions(run_id)
+    }
+
+    fn allowed_functions(&self, run_id: &str) -> Option<Vec<String>> {
+        Some(allowed_functions(run_id))
+    }
+
+    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
         release_fixture(run_id);
         let root = fixture_root(run_id);
         write_fixture(&root)?;
@@ -954,232 +1062,14 @@ fn setup<'a>(context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
         lock_unpoisoned(fixture_registry())
             .insert(run_id.to_string(), FixtureRuntime { function, state });
         Ok(())
-    })
-}
-
-fn cleanup<'a>(_context: &'a E2eContext, run_id: &'a str) -> CleanupFuture<'a> {
-    Box::pin(async move {
-        release_fixture(run_id);
-        remove_fixture(&fixture_root(run_id))?;
-        Ok(())
-    })
-}
-
-fn scenario_for_case(run_id: &str) -> ScenarioSpec {
-    let root = fixture_root(run_id);
-    let checkpoint = checkpoint_function_id(run_id);
-    ScenarioSpec {
-        id: ID,
-        prompt: format!(
-            r#"You are the sole implementer in a cumulative engineering endurance run. Work in the
-isolated Git repository `{}`. Read `{MANIFEST_PATH}`, the source, and the public tests before
-editing. Network and GitHub access are forbidden.
-
-{} 
-
-For every rung:
-1. inspect and reproduce the current behavior;
-2. edit production code only (never tests, manifest, refs, branch, or Git configuration);
-3. run `PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -p 'test_*.py'`;
-4. create one or more non-merge commits and leave the worktree clean;
-5. call `{checkpoint}` with the rung number and exact `git rev-parse HEAD` SHA.
-
-On `rejected`, repair in this same session and checkpoint the same rung again; you may replace
-unaccepted commits, but never rewrite an accepted checkpoint. On `accepted`, implement exactly
-the `next_ticket` returned by the trusted checkpoint. On `completed` or `capability_failure`, stop
-and report accepted rung count, terminal rung, and last accepted SHA. Do not invent future tickets
-or stop merely because one checkpoint was rejected."#,
-            root.display(),
-            ticket_text(1),
-        ),
-        filesystem_root: Some(root),
-        execution: ExecutionPolicy {
-            max_turns: 320,
-            max_output_tokens: Some(32_768),
-            max_total_tokens: Some(3_000_000),
-            stuck_timeout_seconds: 1_200,
-            max_validation_retries: None,
-        },
-        denied_functions: &[
-            "web::*",
-            "scrapling::*",
-            "http::*",
-            "github::*",
-            "harness::spawn",
-            "harness::trigger::*",
-            "state::*",
-            "database::*",
-        ],
-        criteria: assessment::criteria(ASSESSMENTS),
-        setup: Some(setup),
-        evaluate,
-        cleanup: Some(cleanup),
     }
-}
 
-pub fn scenario(run_id: &str) -> ScenarioSpec {
-    scenario_for_case(run_id)
-}
-
-pub fn materialize(namespace: &str, _seed: u64) -> Result<MaterializedScenario> {
-    let case = ScenarioCase::new(
-        ID,
-        CANONICAL_SEED,
-        json!({
-            "task": "cumulative-durable-queue-engineering",
-            "language": "python",
-            "rungs": TICKETS.iter().enumerate().map(|(index, ticket)| json!({
-                "rung": index + 1,
-                "id": ticket.id,
-                "title": ticket.title,
-            })).collect::<Vec<_>>(),
-            "max_attempts_per_rung": MAX_ATTEMPTS_PER_RUNG,
-            "production_paths": [PRODUCTION_PATH],
-            "protected_paths": [PUBLIC_TEST_PATH, MANIFEST_PATH, GITIGNORE_PATH],
-            "termination": "first_rung_with_three_rejected_checkpoints_or_all_complete",
-            "github_handoff": {
-                "repository": "iii-hq/e2e-fixture",
-                "publisher": "trusted_runner_only",
-                "branch_prefix": "benchmark-runs/endurance/",
-                "subject_credentials": false,
-            },
-        }),
-        vec![
-            "e2e::control-plane-v1".into(),
-            "iii::functions".into(),
-            "e2e::filesystem".into(),
-            "e2e::shell".into(),
-            "e2e::git".into(),
-            "python3".into(),
-            "github::trusted-handoff".into(),
-        ],
-        deliverable_contract(),
-    )?;
-    Ok(MaterializedScenario {
-        spec: scenario_for_case(namespace),
-        case,
-        capture: Some(capture),
-    })
-}
-
-fn evaluate<'a>(
-    _context: &'a E2eContext,
-    _observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> EvaluationFuture<'a> {
-    Box::pin(async move {
-        let snapshot = snapshot(run_id).context("endurance fixture state is unavailable")?;
-        let terminal = matches!(
-            snapshot.terminal_status.as_deref(),
-            Some("completed" | "capability_failure")
-        );
-        let accepted = snapshot
-            .records
-            .iter()
-            .filter(|record| record.accepted)
-            .collect::<Vec<_>>();
-        let git_integrity = accepted.iter().all(|record| {
-            record.evidence.worktree_clean
-                && record.evidence.branch_valid
-                && record.evidence.refs_valid
-                && record.evidence.git_config_valid
-                && record.evidence.remotes_valid
-                && record.evidence.ancestry_valid
-                && record.evidence.non_merge_commits > 0
-                && record.evidence.scope_valid
-        });
-        let regression_integrity = accepted.iter().all(|record| {
-            record.evidence.public_tests_passed && record.evidence.hidden_probes_passed
-        });
-        let depth_points = ((u64::from(snapshot.accepted_rungs)
-            * u64::from(CAPABILITY_DEPTH.weight()))
-            / TICKETS.len() as u64) as u8;
-        let rejection_count = snapshot
-            .records
-            .iter()
-            .filter(|record| !record.accepted)
-            .count();
-        let convergence_points = if snapshot.accepted_rungs == 0 {
-            0
-        } else {
-            CONVERGENCE
-                .weight()
-                .saturating_sub(rejection_count.min(CONVERGENCE.weight() as usize) as u8)
-        };
-        let changed_lines: u64 = accepted
-            .iter()
-            .map(|record| record.evidence.changed_lines)
-            .sum();
-        let efficiency_points = if snapshot.accepted_rungs == 0 {
-            0
-        } else if changed_lines <= u64::from(snapshot.accepted_rungs) * 250 {
-            EFFICIENCY.weight()
-        } else if changed_lines <= u64::from(snapshot.accepted_rungs) * 500 {
-            3
-        } else {
-            1
-        };
-        Ok(assessment::build_evaluation(
-            if terminal {
-                crate::report::CompletionState::Completed
-            } else {
-                crate::report::CompletionState::TaskIncomplete
-            },
-            [
-                CAPABILITY_DEPTH.award(
-                    depth_points,
-                    format!(
-                        "accepted {}/{} cumulative rungs",
-                        snapshot.accepted_rungs,
-                        TICKETS.len()
-                    ),
-                )?,
-                TERMINAL_PROTOCOL.full_or_zero(
-                    terminal,
-                    format!(
-                        "terminal_status={:?}, terminal_rung={:?}",
-                        snapshot.terminal_status, snapshot.terminal_rung
-                    ),
-                ),
-                GIT_INTEGRITY.full_or_zero(
-                    git_integrity,
-                    format!(
-                        "{} accepted checkpoint(s) retained clean Git scope and ancestry",
-                        accepted.len()
-                    ),
-                ),
-                REGRESSION_INTEGRITY.full_or_zero(
-                    regression_integrity,
-                    format!(
-                        "{} accepted checkpoint(s) passed public and cumulative hidden probes",
-                        accepted.len()
-                    ),
-                ),
-                CONVERGENCE.award(
-                    convergence_points,
-                    format!(
-                        "{} rejected round(s) across {} accepted rung(s)",
-                        rejection_count, snapshot.accepted_rungs
-                    ),
-                )?,
-                EFFICIENCY.award(
-                    efficiency_points,
-                    format!(
-                        "{} changed line(s) across accepted rung ranges",
-                        changed_lines
-                    ),
-                )?,
-            ],
-        ))
-    })
-}
-
-fn capture<'a>(
-    _context: &'a E2eContext,
-    observation: &'a ScenarioObservation,
-    run_id: &'a str,
-) -> DeliverableCaptureFuture<'a> {
-    Box::pin(async move {
+    async fn capture(
+        &self,
+        _context: &E2eContext,
+        observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
         let snapshot = snapshot(run_id).context("endurance fixture state is unavailable")?;
         let accepted_records = snapshot
             .records
@@ -1311,7 +1201,124 @@ fn capture<'a>(
                 relation: "cumulative_checkpoint_ranges".into(),
             }],
         }])
-    })
+    }
+
+    async fn evaluate(
+        &self,
+        _context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let snapshot = snapshot(run_id).context("endurance fixture state is unavailable")?;
+        let terminal = matches!(
+            snapshot.terminal_status.as_deref(),
+            Some("completed" | "capability_failure")
+        );
+        let accepted = snapshot
+            .records
+            .iter()
+            .filter(|record| record.accepted)
+            .collect::<Vec<_>>();
+        let git_integrity = accepted.iter().all(|record| {
+            record.evidence.worktree_clean
+                && record.evidence.branch_valid
+                && record.evidence.refs_valid
+                && record.evidence.git_config_valid
+                && record.evidence.remotes_valid
+                && record.evidence.ancestry_valid
+                && record.evidence.non_merge_commits > 0
+                && record.evidence.scope_valid
+        });
+        let regression_integrity = accepted.iter().all(|record| {
+            record.evidence.public_tests_passed && record.evidence.hidden_probes_passed
+        });
+        let depth_points = ((u64::from(snapshot.accepted_rungs)
+            * u64::from(CAPABILITY_DEPTH.weight()))
+            / TICKETS.len() as u64) as u8;
+        let rejection_count = snapshot
+            .records
+            .iter()
+            .filter(|record| !record.accepted)
+            .count();
+        let convergence_points = if snapshot.accepted_rungs == 0 {
+            0
+        } else {
+            CONVERGENCE
+                .weight()
+                .saturating_sub(rejection_count.min(CONVERGENCE.weight() as usize) as u8)
+        };
+        let changed_lines: u64 = accepted
+            .iter()
+            .map(|record| record.evidence.changed_lines)
+            .sum();
+        let efficiency_points = if snapshot.accepted_rungs == 0 {
+            0
+        } else if changed_lines <= u64::from(snapshot.accepted_rungs) * 250 {
+            EFFICIENCY.weight()
+        } else if changed_lines <= u64::from(snapshot.accepted_rungs) * 500 {
+            3
+        } else {
+            1
+        };
+        Ok(assessment::build_evaluation(
+            if terminal {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                CAPABILITY_DEPTH.award(
+                    depth_points,
+                    format!(
+                        "accepted {}/{} cumulative rungs",
+                        snapshot.accepted_rungs,
+                        TICKETS.len()
+                    ),
+                )?,
+                TERMINAL_PROTOCOL.full_or_zero(
+                    terminal,
+                    format!(
+                        "terminal_status={:?}, terminal_rung={:?}",
+                        snapshot.terminal_status, snapshot.terminal_rung
+                    ),
+                ),
+                GIT_INTEGRITY.full_or_zero(
+                    git_integrity,
+                    format!(
+                        "{} accepted checkpoint(s) retained clean Git scope and ancestry",
+                        accepted.len()
+                    ),
+                ),
+                REGRESSION_INTEGRITY.full_or_zero(
+                    regression_integrity,
+                    format!(
+                        "{} accepted checkpoint(s) passed public and cumulative hidden probes",
+                        accepted.len()
+                    ),
+                ),
+                CONVERGENCE.award(
+                    convergence_points,
+                    format!(
+                        "{} rejected round(s) across {} accepted rung(s)",
+                        rejection_count, snapshot.accepted_rungs
+                    ),
+                )?,
+                EFFICIENCY.award(
+                    efficiency_points,
+                    format!(
+                        "{} changed line(s) across accepted rung ranges",
+                        changed_lines
+                    ),
+                )?,
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        release_fixture(run_id);
+        remove_fixture(&fixture_root(run_id))?;
+        Ok(())
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -1460,8 +1467,12 @@ class DurableQueue:
 
     #[test]
     fn materialization_is_canonical_across_namespaces() {
-        let first = materialize("alpha-attempt", 7).unwrap();
-        let retry = materialize("omega-attempt", 99).unwrap();
+        let first = crate::scenarios::ScenarioId::EngineeringEnduranceLadder
+            .materialize("alpha-attempt", 7)
+            .unwrap();
+        let retry = crate::scenarios::ScenarioId::EngineeringEnduranceLadder
+            .materialize("omega-attempt", 99)
+            .unwrap();
         assert_eq!(first.case.case_id, retry.case.case_id);
         assert_eq!(first.case.inputs, retry.case.inputs);
         assert_ne!(first.spec.prompt, retry.spec.prompt);
@@ -1470,7 +1481,7 @@ class DurableQueue:
 
     #[test]
     fn subject_capabilities_exclude_github_and_network() {
-        let spec = scenario("attempt");
+        let spec = EngineeringEnduranceLadder.spec("attempt");
         assert!(spec.denied_functions.contains(&"github::*"));
         assert!(spec.denied_functions.contains(&"web::*"));
         assert_eq!(required_functions("attempt").len(), 1);
