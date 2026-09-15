@@ -85,10 +85,44 @@ const NEGATIONS: &[&str] = &[
     "beyond",
     "n't",
 ];
+/// Phrases that state an observable expected result. Plans state outcomes as
+/// behaviour ("emits exactly one entry", "key order ignored", "ordered arrays
+/// preserved") as often as with an expectation verb, so both are accepted.
 const EXPECTATION_TERMS: &[&str] = &[
-    "expect", "should", "must", "return", "assert", "->", "→", "yield", "produce", "result",
-    "respond", "show", "display", "render", "receive", "==", "equal", "contain", "fail", "succeed",
-    "error", "status", "reject", "accept",
+    "expect",
+    "should",
+    "must",
+    "return",
+    "assert",
+    "->",
+    "→",
+    "yield",
+    "produce",
+    "result",
+    "respond",
+    "show",
+    "display",
+    "render",
+    "receive",
+    "==",
+    "equal",
+    "contain",
+    "fail",
+    "succeed",
+    "error",
+    "status",
+    "reject",
+    "accept",
+    "emit",
+    "ignor",
+    "preserv",
+    "unchanged",
+    "identical",
+    "exactly",
+    "only ",
+    "match",
+    "reflect",
+    "remain",
 ];
 
 struct Line {
@@ -103,7 +137,6 @@ struct Section<'a> {
 
 struct Document {
     lines: Vec<Line>,
-    text: String,
 }
 
 struct Outcome {
@@ -129,12 +162,7 @@ impl Document {
                 original: line.trim().chars().take(240).collect(),
             })
             .collect::<Vec<_>>();
-        let text = lines
-            .iter()
-            .map(|line| line.normalized.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-        Self { lines, text }
+        Self { lines }
     }
 
     fn find(&self, term: &str) -> Option<&Line> {
@@ -436,25 +464,57 @@ fn test_expectations(document: &Document) -> Outcome {
     }
 }
 
-/// Excluded work may appear only in sentences that rule it out.
+/// A sentence, heading or lead-in that rules excluded work out.
+fn rules_out(text: &str) -> bool {
+    NEGATIONS.iter().any(|negation| text.contains(negation))
+}
+
+/// Excluded work may appear only where it is ruled out: in its own sentence,
+/// under a heading or lead-in that rules it out, or as the continuation of a
+/// sentence a previous source line already ruled out. Plans wrap prose across
+/// source lines, so a line break alone does not start a new sentence.
 fn scope(document: &Document) -> Outcome {
     let mut violations = Vec::new();
     let mut exclusions = Vec::new();
-    for sentence in document
-        .text
-        .split(['.', '!', '?', ';', '\n'])
-        .map(str::trim)
-        .filter(|sentence| !sentence.is_empty())
-    {
-        let Some(term) = EXCLUDED_WORK.iter().find(|term| sentence.contains(*term)) else {
+    let mut section = false;
+    let mut lead_in = false;
+    let mut continuation = false;
+    for line in &document.lines {
+        let normalized = line.normalized.as_str();
+        if normalized.is_empty() {
+            // A blank line separates a lead-in from the list it introduces,
+            // so it ends a wrapped sentence but not the lead-in itself.
+            continuation = false;
             continue;
-        };
-        let snippet: String = sentence.chars().take(240).collect();
-        if NEGATIONS.iter().any(|negation| sentence.contains(negation)) {
-            exclusions.push(snippet);
-        } else {
-            violations.push(format!("{term}: {snippet}"));
         }
+        let listed = is_list_item(normalized) || table_cells(normalized).is_some();
+        if heading_level(normalized).is_some() {
+            section = rules_out(normalized);
+            lead_in = false;
+            continuation = false;
+        } else if !listed {
+            lead_in = normalized.ends_with(':') && rules_out(normalized);
+        }
+        let sentences = normalized.split(['.', '!', '?']).collect::<Vec<_>>();
+        let last = sentences.len().saturating_sub(1);
+        let mut carried = continuation;
+        for (position, sentence) in sentences.iter().enumerate() {
+            let sentence = sentence.trim();
+            if sentence.is_empty() {
+                continue;
+            }
+            let ruled = carried || rules_out(sentence);
+            if let Some(term) = EXCLUDED_WORK.iter().find(|term| sentence.contains(*term)) {
+                let snippet: String = sentence.chars().take(240).collect();
+                if ruled || section || lead_in {
+                    exclusions.push(snippet);
+                } else {
+                    violations.push(format!("{term}: {snippet}"));
+                }
+            }
+            carried = if position < last { false } else { ruled };
+        }
+        continuation = carried;
     }
     Outcome {
         passed: violations.is_empty(),
@@ -759,5 +819,42 @@ mod tests {
         assert_eq!(by_id(ordered, "planning.test_expectations").1, 1);
         assert_eq!(by_id(reversed, "planning.dependency_order").1, 0);
         assert_eq!(by_id(reversed, "planning.test_expectations").1, 0);
+    }
+
+    #[test]
+    fn a_ruled_out_sentence_keeps_ruling_out_its_wrapped_continuation() {
+        // Plans hard-wrap prose; the negation and the excluded term routinely
+        // land on different source lines.
+        let plan = "## Scope\n\nWe will not add production calls, cli/publishing behaviour changes,\nbinary/download charts, and automated visual regression.\n";
+        let (_, value, reason) = values(plan)
+            .into_iter()
+            .find(|(id, _, _)| id == "planning.scope")
+            .unwrap();
+        assert_eq!(value, 1, "{reason}");
+    }
+
+    #[test]
+    fn a_heading_or_lead_in_rules_out_the_items_it_introduces() {
+        let heading = "## Out of scope\n\n- 30-day download chart\n- database migration\n";
+        let lead_in = "## Plan\n\nThe following are excluded:\n\n- publish the package\n- promote the release\n";
+        let value = |plan: &str| {
+            values(plan)
+                .into_iter()
+                .find(|(id, _, _)| id == "planning.scope")
+                .unwrap()
+        };
+        assert_eq!(value(heading).1, 1, "{}", value(heading).2);
+        assert_eq!(value(lead_in).1, 1, "{}", value(lead_in).2);
+    }
+
+    #[test]
+    fn a_negation_does_not_cover_the_next_sentence_on_the_same_line() {
+        let plan = "## Plan\n\nWe will not add a 30-day download chart. We will publish the comparison page.\n";
+        let (_, value, reason) = values(plan)
+            .into_iter()
+            .find(|(id, _, _)| id == "planning.scope")
+            .unwrap();
+        assert_eq!(value, 0, "{reason}");
+        assert!(reason.contains("publish"), "{reason}");
     }
 }
