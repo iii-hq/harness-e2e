@@ -361,7 +361,11 @@ export async function boardLaneWithCount(page, label, count) {
 }
 
 export function boardTicketTotal(page, count) {
-  return page.getByText(new RegExp(`^(?:${count}\\s+tickets?|total\\s+tickets?\\s*:?\\s*${count})$`, 'i')).filter({ visible: true })
+  const labeled = page.getByLabel(/^total(?: tickets)?$/i)
+    .filter({ hasText: new RegExp(`^\\s*${count}\\s*$`) })
+  const text = page.getByText(new RegExp(`^(?:${count}\\s+tickets?(?:\\s+on\\s+(?:the\\s+)?board\\.?)?|total(?:\\s+tickets?)?\\s*:?\\s*${count})$`, 'i'))
+  // A summary and a labeled output may both present the same total.
+  return labeled.or(text).filter({ visible: true }).first()
 }
 
 export function boardTicketTitle(scope, title) {
@@ -374,7 +378,15 @@ export function boardNavigation(page) {
 
 export function mutationFailureFeedback(page) {
   return page.getByRole('alert').or(page.getByRole('status'))
-    .filter({ hasText: /probe failure|unable.*(?:save|move)|failed.*(?:save|move)|error/i }).filter({ visible: true })
+    .filter({ hasText: /probe failure|unable.*(?:save|move|create|delete)|failed.*(?:save|move|create|delete)|error/i }).filter({ visible: true })
+}
+
+export async function assertClearedDiscussionDraft(page, title) {
+  const draft = page.getByRole('textbox', { name: 'Comment', exact: true }).filter({ visible: true })
+  // Switching stores may return to the board instead of retaining stale details.
+  if (await draft.count() === 0) await page.getByRole('heading', { name: title, exact: true }).click()
+  await eventually(async () => await draft.count() === 1 && await draft.inputValue() === '',
+    'store switch retained an old-store draft or the restored discussion is unavailable')
 }
 
 export async function ticketEditor(page, expectedTitle) {
@@ -714,7 +726,6 @@ const PROBES = {
   },
 
   async kanban_c4_ticket_flow({ api, trigger, control, browser, baseUrl, output, check, criterion }) {
-    let created
     await check('ticket_flow_create_detail_and_delete', async () => {
       const keyboardTicket = await create(trigger, { title: 'Keyboard card probe' })
       const { context, page } = await pageFor(browser, baseUrl, { width: 390, height: 844 })
@@ -747,14 +758,14 @@ const PROBES = {
         await route.continue()
       })
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
-      await expectText(dialog.getByRole('status'), /Unable to create ticket/)
+      await expectText(mutationFailureFeedback(dialog), /\S/)
       expect(await dialog.isVisible() && await dialog.getByLabel('Title').inputValue() === 'Browser-created ticket', 'failed create closed the modal or erased its draft')
       await dialog.getByRole('button', { name: 'Create ticket' }).click()
       await expectText(page.getByRole('heading', { name: 'Browser-created ticket' }), /Browser-created ticket/)
       expect(await dialog.isVisible() === false, 'create dialog stayed open')
       expect(await page.getByRole('heading', { name: 'Browser-created ticket' }).locator('xpath=ancestor::*[self::dialog or @role="dialog" or @aria-modal="true"]').count() === 0, 'ticket details opened in a modal')
       expect(context.pages().length === 1, 'ticket creation opened another tab')
-      created = (await json(await api('/api/tickets'))).tickets.find(({ title }) => title === 'Browser-created ticket')
+      const created = (await json(await api('/api/tickets'))).tickets.find(({ title }) => title === 'Browser-created ticket')
       expect(created, 'created ticket is absent from API list')
       expect((await json(await api(`/api/tickets/${created.id}`))).ticket.key === created.key, 'HTTP UUID lookup failed')
       expect((await json(await api(`/api/tickets/${created.key}`))).ticket.id === created.id, 'HTTP key lookup failed')
@@ -771,6 +782,8 @@ const PROBES = {
       return 'Keyboard and pointer cards, history, failed-create retry, same-tab details, direct links, focus, reload and mobile layout work.'
     })
     await check('ticket_flow_delete_failure_navigation_and_restart', async () => {
+      const remaining = await create(trigger, { title: 'Remaining card probe' })
+      const created = await create(trigger, { title: 'Delete flow probe' })
       const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${created.id}`, { width: 390, height: 844 })
       let failDelete = true
       await page.route('**/api/tickets/**', async (route) => {
@@ -782,7 +795,7 @@ const PROBES = {
         await route.continue()
       })
       await page.getByRole('button', { name: 'Delete ticket' }).click()
-      await expectText(page.getByRole('status').filter({ hasText: /Unable to delete ticket/ }), /Unable to delete ticket/)
+      await expectText(mutationFailureFeedback(page), /\S/)
       expect(await page.getByRole('heading', { name: created.title }).count() === 1, 'failed delete removed the detail view')
 
       await page.unroute('**/api/tickets/**')
@@ -806,7 +819,7 @@ const PROBES = {
       release()
       await delivered
       await eventually(async () => !(await json(await api('/api/tickets'))).tickets.some(({ id }) => id === created.id), 'deleted card remained listed')
-      await eventually(async () => await page.getByRole('heading', { name: 'Keyboard card probe' }).count(), 'board did not load after navigating during deletion')
+      await eventually(async () => await page.getByRole('heading', { name: remaining.title }).count(), 'board did not load after navigating during deletion')
       await eventually(async () => await page.getByRole('heading', { name: created.title, exact: true }).count() === 0, 'deleted card remained visible after the late response')
       expect((await api(`/api/tickets/${created.id}`)).status === 404, 'deleted ticket is still retrievable')
       let deleted = JSON.parse(await control('read_store')).find(({ id }) => id === created.id)
@@ -1283,7 +1296,7 @@ const PROBES = {
       }
       await trigger('configuration::set', { id: 'kanban', value: configuration.value })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Dirty local title' }).count(), 'detail did not recover after restoring the store')))
-      expect(await preservedDraft.inputValue() === '', 'store switch retained an old-store draft')
+      await Promise.all(sessions.slice(0, 2).map(({ page }) => assertClearedDiscussionDraft(page, 'Dirty local title')))
 
       await trigger('kanban::tickets::delete', { id: ticket.id })
       await Promise.all(sessions.slice(0, 2).map(({ page }) => eventually(async () => {
