@@ -264,6 +264,8 @@ def build_contract(
         "subject": plan["subject"],
         "groups": suite_groups(campaign),
     }
+    if plan.get("agent_profile") is not None:
+        suite["agent_profile"] = plan["agent_profile"]
     body = {
         "schema": CONTRACT_SCHEMA,
         # There is no campaign row to name any more; the execution is the unit.

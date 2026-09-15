@@ -1678,6 +1678,7 @@ mod tests {
             let model = |model: String, provider: String| ModelArtifact {
                 model,
                 provider,
+                agent: None,
                 context_window: 128000,
                 max_output_tokens: 4096,
                 supports_tools: Some(true),

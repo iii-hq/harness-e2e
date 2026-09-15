@@ -185,6 +185,7 @@ struct HarnessStepExecutor {
     context: Arc<E2eContext>,
     model: String,
     provider: String,
+    agent: Option<String>,
     sessions: Mutex<HashMap<(String, String), String>>,
 }
 
@@ -192,6 +193,7 @@ struct BoundedHarnessStepExecutor {
     context: Arc<E2eContext>,
     model: String,
     provider: String,
+    agent: Option<String>,
     policy: HarnessStepPolicy,
     sessions: Mutex<HashMap<(String, String), String>>,
 }
@@ -201,6 +203,7 @@ pub fn register_harness_step(
     context: Arc<E2eContext>,
     model: impl Into<String>,
     provider: impl Into<String>,
+    agent: Option<&str>,
 ) -> Result<()> {
     catalog.register(
         harness_descriptor()?,
@@ -208,6 +211,7 @@ pub fn register_harness_step(
             context,
             model: model.into(),
             provider: provider.into(),
+            agent: agent.map(str::to_owned),
             sessions: Mutex::new(HashMap::new()),
         }),
     )
@@ -218,6 +222,7 @@ pub fn register_bounded_harness_step(
     context: Arc<E2eContext>,
     model: impl Into<String>,
     provider: impl Into<String>,
+    agent: Option<&str>,
     policy: HarnessStepPolicy,
 ) -> Result<()> {
     catalog.register(
@@ -226,6 +231,7 @@ pub fn register_bounded_harness_step(
             context,
             model: model.into(),
             provider: provider.into(),
+            agent: agent.map(str::to_owned),
             policy,
             sessions: Mutex::new(HashMap::new()),
         }),
@@ -398,7 +404,7 @@ impl StepExecutor for HarnessStepExecutor {
                     options: Some(SendOptions {
                         provider_options: None,
                         thinking_level: None,
-                        agent: None,
+                        agent: self.agent.clone(),
                         max_turns: Some(config.max_turns),
                         max_cost_usd: None,
                         max_output_tokens: config.max_output_tokens,
@@ -558,7 +564,7 @@ impl StepExecutor for BoundedHarnessStepExecutor {
                     options: Some(SendOptions {
                         provider_options: None,
                         thinking_level: None,
-                        agent: None,
+                        agent: self.agent.clone(),
                         max_turns: Some(config.max_turns),
                         max_cost_usd: None,
                         max_output_tokens: config.max_output_tokens,

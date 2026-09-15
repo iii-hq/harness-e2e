@@ -103,6 +103,7 @@ pub fn register(
     context: Arc<E2eContext>,
     model: &str,
     provider: &str,
+    agent: Option<&str>,
 ) -> Result<Arc<dyn WorkflowCleanupHook>> {
     runtime::register(
         catalog,
@@ -110,5 +111,6 @@ pub fn register(
         context,
         model,
         provider,
+        agent,
     )
 }

@@ -188,6 +188,7 @@ pub(crate) mod tests {
             ModelArtifact {
                 model: "model".into(),
                 provider: "provider".into(),
+                agent: None,
                 context_window: 100,
                 max_output_tokens: 10,
                 supports_tools: Some(true),

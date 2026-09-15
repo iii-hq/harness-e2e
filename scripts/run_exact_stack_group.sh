@@ -395,6 +395,18 @@ compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/statu
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
+if jq -e '.suite.agent_profile != null' "$contract_path" >/dev/null; then
+  failure_phase=agent_profile_resolution
+  agent_request=$(jq -c '{id: .suite.agent_profile}' "$contract_path")
+  agent_deadline=$((SECONDS + 120))
+  # Directory downloads installed workers' profiles asynchronously after boot.
+  until project_trigger directory::agents::get "$agent_request" 10000 \
+    >"$artifact_dir/stack/agent-profile.json" 2>"$artifact_dir/stack/agent-profile-error.log"; do
+    ((SECONDS < agent_deadline)) || fail "Directory profile $(jq -r '.suite.agent_profile' "$contract_path") is unavailable after 120s"
+    sleep 2
+  done
+fi
+
 failure_phase=materialization
 project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
   >"$artifact_dir/catalog.json"

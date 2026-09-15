@@ -1492,9 +1492,17 @@ impl E2eScenarioReport {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct AgentProfileArtifact {
+    pub id: String,
+    pub configuration_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ModelArtifact {
     pub model: String,
     pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<AgentProfileArtifact>,
     pub context_window: u64,
     pub max_output_tokens: u64,
     pub supports_tools: Option<bool>,
@@ -1892,6 +1900,7 @@ impl From<Model> for ModelArtifact {
         Self {
             model: model.id,
             provider: model.provider,
+            agent: None,
             context_window: model.context_window,
             max_output_tokens: model.max_output_tokens,
             supports_tools: model.supports_tools,
@@ -4305,6 +4314,7 @@ mod tests {
         ModelArtifact {
             model: "model".into(),
             provider: "provider".into(),
+            agent: None,
             context_window: 10_000,
             max_output_tokens: 2_000,
             supports_tools: Some(true),

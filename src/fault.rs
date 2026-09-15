@@ -1276,6 +1276,7 @@ mod tests {
             subject: ModelArtifact {
                 model: "model".into(),
                 provider: "provider".into(),
+                agent: None,
                 context_window: 1,
                 max_output_tokens: 1,
                 supports_tools: Some(true),
