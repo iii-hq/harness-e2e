@@ -37,6 +37,9 @@ jq -e --arg group "$campaign_group_id" \
   '.suite.groups | any(.id == $group and .execution_kind != "fault_injection")' \
   "$contract_path" >/dev/null
 project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
+execution_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
+linkly_fixture=$(jq -r --arg id "$campaign_group_id" '.suite.groups[] | select(.id == $id) | (.scenarios // [] | index("linkly_tutorial")) != null' "$contract_path")
+profile_assets=$(jq -r '.runtime.template != null or .suite.agent_profile != null' "$contract_path")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
@@ -319,15 +322,35 @@ if [[ "$campaign_group_id" == case-kanban-* ]]; then
   export HARNESS_E2E_KANBAN_RUNTIME="$kanban_runtime"
 fi
 
-if [[ -n "$project_template" ]]; then
+template_project="$project_dir"
+if [[ -n "$execution_template" ]]; then
+  failure_phase=template_scaffold
+  template_root="$repo_root/target/execution-template"
+  template_revision=$(jq -er '.runtime.template.revision' "$contract_path")
+  [[ "$(git -C "$template_root" rev-parse HEAD)" == "$template_revision" ]] || fail "Execution template revision mismatch"
+  if [[ "$linkly_fixture" == true ]]; then
+    template_project="$run_root/execution-template"
+  fi
+  "$iii_bin" project init --directory "$template_project" --template "$execution_template" \
+    --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/template-scaffold.log" 2>&1
+  jq '.runtime.template' "$contract_path" >"$artifact_dir/stack/template.json"
+  mkdir -p "$run_root/template-assets"
+  for folder in agents skills; do
+    if [[ -d "$template_project/$folder" ]]; then
+      cp -R "$template_project/$folder" "$run_root/template-assets/$folder"
+    fi
+  done
+fi
+
+if [[ "$linkly_fixture" == true ]]; then
   failure_phase=template_scaffold
   template_root="$repo_root/target/linkly-templates"
   template_revision=ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
   [[ "$(git -C "$template_root" rev-parse HEAD)" == "$template_revision" ]] || fail "Linkly template revision mismatch"
   "$iii_bin" project init --directory "$project_dir" --template "$project_template" \
-    --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/template-scaffold.log" 2>&1
+    --template-dir "$template_root/iii" --skip-iii >"$artifact_dir/logs/fixture-scaffold.log" 2>&1
   jq -n --arg template "$project_template" --arg revision "$template_revision" \
-    '{repository:"iii-hq/templates",revision:$revision,template:$template}' >"$artifact_dir/stack/template.json"
+    '{repository:"iii-hq/templates",revision:$revision,template:$template}' >"$artifact_dir/stack/fixture-template.json"
 fi
 
 project_args=(
@@ -342,8 +365,14 @@ project_args=(
   --engine-port "$engine_port"
 )
 if [[ -n "$project_template" ]]; then
-  project_args+=(--template-compose "$compose_file"
+  project_args+=(--template-compose "$template_project/worker-compose.yaml"
     --template-package shell=ide --template-package console=ade)
+  if [[ "$template_project" != "$project_dir" ]]; then
+    project_args+=(--fixture-compose "$compose_file")
+  fi
+fi
+if [[ "$profile_assets" == true ]]; then
+  project_args+=(--profile-root "$project_dir")
 fi
 for secret_file in "$secrets_dir"/*.env; do
   [[ -f "$secret_file" ]] || continue
@@ -377,14 +406,18 @@ compose_started=true
 wait_for_compose
 
 failure_phase=project_assembly
-add_args=("file=$compose_file")
-while IFS= read -r root; do
-  add_args+=("worker=$root")
-done < <(python3 "$contract_tool" roots --contract "$contract_path")
-compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 if [[ -n "$project_template" ]]; then
+  # The template already contains every pinned binary and its dependency
+  # ordering. compose::add would expand renamed roles into duplicate packages.
+  jq -n '{status:"ok",source:"exact-stack-scaffold"}' >"$artifact_dir/stack/add.json"
   cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
+else
+  add_args=("file=$compose_file")
+  while IFS= read -r root; do
+    add_args+=("worker=$root")
+  done < <(python3 "$contract_tool" roots --contract "$contract_path")
+  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 fi
 
 failure_phase=project_start
@@ -394,6 +427,32 @@ compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/statu
 "$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
+
+if [[ "$profile_assets" == true ]]; then
+  failure_phase=profile_assets
+  mkdir -p "$artifact_dir/stack/skills"
+  while IFS= read -r package; do
+    worker=$(jq -r '.worker' <<<"$package")
+    request=$(jq -c '{worker,version}' <<<"$package")
+    receipt="$artifact_dir/stack/skills/$worker.json"
+    error_log="$artifact_dir/stack/skills/$worker.log"
+    if project_trigger directory::skills::download_from_registry "$request" 60000 >"$receipt" 2>"$error_log"; then
+      jq -e --arg version "$(jq -r '.version' <<<"$package")" '.source.version == $version' "$receipt" >/dev/null
+    else
+      # A worker may legitimately publish no skill bundle. Other failures must
+      # not turn a requested profile into an execution with different assets.
+      grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
+    fi
+  done < <(jq -c '.orchestration.nodes[] | select(.kind == "binary") | {worker,version}' "$contract_path")
+  # Registry bundles may also contain profiles. The explicitly selected
+  # template owns collisions; restore its files after the versioned downloads.
+  for folder in agents skills; do
+    if [[ -d "$run_root/template-assets/$folder" ]]; then
+      mkdir -p "$project_dir/$folder"
+      cp -R "$run_root/template-assets/$folder/." "$project_dir/$folder/"
+    fi
+  done
+fi
 
 if jq -e '.suite.agent_profile != null' "$contract_path" >/dev/null; then
   failure_phase=agent_profile_resolution

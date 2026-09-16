@@ -117,6 +117,116 @@ def catalog():
 
 
 class ReleaseControlCampaignTest(unittest.TestCase):
+    def test_execution_template_is_global_without_changing_scenarios_or_agent_admission(self):
+        contract = campaign_contract()
+        baseline = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
+        contract["runtime"]["template"] = {
+            "id": "harness", "repository": "iii-hq/templates", "ref": "main", "revision": "c" * 40,
+        }
+        MODULE.validate_contract(contract)
+        self.assertEqual(MODULE.group_template(contract, "daily-core"), "harness")
+        selected = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
+        self.assertEqual(selected["scenarios"], baseline["scenarios"])
+        self.assertNotIn("agent", selected)
+        contract["suite"]["agent_profile"] = "tech-lead"
+        self.assertEqual(MODULE.materialize_request(contract, catalog(), group_id="daily-core")["agent"], "tech-lead")
+        group = contract["suite"]["groups"][0]
+        group.update(scenarios=["linkly_tutorial"], execution_kind="scripted_dialogue", technical_retries=0)
+        self.assertEqual(MODULE.group_template(contract, group["id"]), "linkly-agentic")
+        for field, value in [("id", "../harness"), ("revision", "main"), ("repository", "other/repo"), ("ref", "feature")]:
+            bad = json.loads(json.dumps(contract))
+            bad["runtime"]["template"][field] = value
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                MODULE.validate_contract(bad)
+
+    def test_local_workers_and_named_package_instances_survive_scaffolding(self):
+        contract = campaign_contract()
+        template = {"containers": {
+            "subject": {"worker": "package://harness", "version": "latest"},
+            "link": {"worker": "path://./link", "scripts": {"run": "pnpm dev"}},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
+        self.assertNotIn("harness", project["containers"])
+        self.assertEqual(project["containers"]["subject"]["version"], "1.9.0")
+        self.assertEqual(project["containers"]["link"], template["containers"]["link"])
+        template["containers"]["link"]["worker"] = "path://../elsewhere"
+        with self.assertRaisesRegex(ValueError, "inside its project"):
+            MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
+
+    def test_fixture_retains_its_roles_while_execution_template_supplies_the_base(self):
+        template = {"engine": {"workers": {"base": {}}}, "containers": {
+            "ide": {"worker": "package://ide"}, "kanban": {"worker": "package://kanban"},
+        }}
+        fixture = {"engine": {"workers": {"iii-stream": {}}}, "containers": {
+            "shell": {"worker": "package://shell", "working_dir": "."},
+        }}
+        merged = MODULE.with_fixture(template, fixture)
+        self.assertEqual(set(merged["containers"]), {"shell", "kanban"})
+        self.assertEqual(merged["containers"]["shell"], fixture["containers"]["shell"])
+        self.assertEqual(set(merged["engine"]["workers"]), {"base", "iii-stream"})
+        self.assertIn("ide", template["containers"])
+
+    def test_selected_assets_are_isolated_and_router_gets_the_provider_secret_files(self):
+        contract = campaign_contract({
+            "harness": "1.9.0", "state": "0.22.1", "iii-directory": "1.2.0",
+            "llm-router": "1.4.0", "provider-deepseek": "0.1.0",
+        })
+        template = {"containers": {worker: {"worker": f"package://{worker}"}
+                    for worker in ("harness", "state", "iii-directory", "llm-router", "provider-deepseek")}}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"),
+            {"provider-deepseek": "/private/provider.env"}, {}, template, profile_root=Path("/isolated/project"))
+        directory = project["containers"]["iii-directory"]["config_override"]
+        self.assertFalse(directory["auto_download"])
+        self.assertEqual(directory["agents_folder"], "/isolated/project/agents")
+        self.assertEqual(directory["skills_folder"], "/isolated/project/.iii/registry-skills")
+        self.assertEqual(directory["local_skills_folder"], "/isolated/project/skills")
+        self.assertTrue(directory["global_agents_folder"].startswith("/isolated/project/"))
+        self.assertEqual(project["containers"]["llm-router"]["env_file"], ["/private/provider.env"])
+
+    def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))
+        block = source[start:source.index("if jq -e '.suite.agent_profile != null'", start)]
+        for mode in ("ok", "missing", "broken"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "project/agents").mkdir(parents=True)
+                (root / "template-assets/agents").mkdir(parents=True)
+                (root / "template-assets/agents/tech-lead.md").write_text("selected template")
+                (root / "contract.json").write_text(json.dumps({"orchestration": {"nodes": [
+                    {"worker": "harness", "version": "1.2.3", "kind": "binary"},
+                ]}}))
+                shell = '''set -Eeuo pipefail
+run_root=$1
+artifact_dir=$1/artifacts
+project_dir=$1/project
+contract_path=$1/contract.json
+profile_assets=true
+fail() { printf '%s\\n' "$1" >&2; return 1; }
+project_trigger() {
+  test "$1" = directory::skills::download_from_registry
+  test "$(jq -r '.version' <<<"$2")" = 1.2.3
+  if [[ "$MODE" == missing ]]; then echo 'D310 not_found: registry worker "harness" has no published skills bundle.' >&2; return 1; fi
+  if [[ "$MODE" == broken ]]; then echo 'registry unavailable' >&2; return 1; fi
+  printf 'downloaded profile' >"$project_dir/agents/tech-lead.md"
+  printf '{"source":{"version":"1.2.3"}}\\n'
+}
+'''
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                    env={**os.environ, "MODE": mode}, capture_output=True, text=True)
+                if mode == "broken":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("Could not load pinned skills", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
+
+    def test_protected_faults_reject_overrides_instead_of_ignoring_them(self):
+        source = (ROOT / "scripts/run_exact_stack_fault.sh").read_text()
+        guard = source.index(".runtime.template != null or .suite.agent_profile != null")
+        self.assertLess(guard, source.index('test -x "$supervisor"'))
+        self.assertIn("does not support execution template or agent profile overrides", source)
+
     def test_agent_profile_is_validated_and_reaches_native_admission(self):
         contract = campaign_contract()
         original = MODULE.materialize_request(contract, catalog(), group_id="daily-core")
@@ -211,6 +321,24 @@ project_trigger() {
             'worker': 'package://ide', 'version': '0.11.14', 'working_dir': '.'
         })
         self.assertNotIn('ide', project['containers'])
+
+    def test_template_assembly_pins_transitive_nodes_once_under_their_existing_roles(self):
+        contract = campaign_contract({"harness": "1.9.0", "state": "0.22.1", "ide": "0.11.14", "ade": "1.0.0"})
+        template = {"containers": {
+            "subject": {"worker": "package://harness", "start_after": ["ide", "ade"]},
+            "shell": {"worker": "package://shell"},
+            "console": {"worker": "package://console"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template,
+                                         {"shell": "ide", "console": "ade"})
+        workers = [container["worker"] for container in project["containers"].values()]
+        for node in contract["orchestration"]["nodes"]:
+            self.assertEqual(workers.count(f"package://{node['worker']}"), 1)
+        self.assertEqual(set(project["containers"]["subject"]["start_after"]), {"state", "shell", "console"})
+        block = RUNNER_SCRIPT.read_text().split("failure_phase=project_assembly", 1)[1].split("failure_phase=project_start", 1)[0]
+        template_branch, default_branch = block.split("else", 1)
+        self.assertNotIn("compose_trigger compose::add", template_branch)
+        self.assertIn("compose_trigger compose::add", default_branch)
 
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
