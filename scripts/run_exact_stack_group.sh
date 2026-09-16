@@ -466,9 +466,15 @@ if jq -e '.suite.agent_profile != null' "$contract_path" >/dev/null; then
   done
 fi
 
+failure_phase=runner_readiness
+runner_deadline=$((SECONDS + wait_seconds))
+until project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 10000 \
+  >"$artifact_dir/catalog.json" 2>"$artifact_dir/logs/runner-readiness.log"; do
+  ((SECONDS < runner_deadline)) || fail "E2E runner did not register e2e::scenarios-list within ${wait_seconds}s"
+  sleep 2
+done
+
 failure_phase=materialization
-project_trigger e2e::scenarios-list "$(jq -cn --argjson seed "$seed" '{seed:$seed}')" 120000 \
-  >"$artifact_dir/catalog.json"
 python3 "$contract_tool" materialize \
   --contract "$contract_path" \
   --catalog "$artifact_dir/catalog.json" \
