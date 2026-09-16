@@ -66,4 +66,6 @@ jobs:
         env:
           SWE_REQUIRE_OS_ISOLATION: "1"
           HARNESS_E2E_BIN: ${{ github.workspace }}/target/debug/harness-e2e
-        run: python3 -m unittest discover -s tests/python -p 'test_*.py'
+        run: |
+          python3 -m pip install --quiet pyyaml
+          python3 -m unittest discover -s tests/python -p 'test_*.py'

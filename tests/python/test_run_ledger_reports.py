@@ -6,9 +6,11 @@ agreement — Release Control reads exactly the fields asserted here.
 """
 
 import importlib.util
+import base64
 import json
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -107,6 +109,13 @@ class ReportPayloadTests(unittest.TestCase):
         (self.tmp / "results.json").write_text(json.dumps({"subject": subject}))
         identity = report_execution.identity_of(Args(plan=self.plan), self.tmp)
         self.assertEqual(identity["subject"], subject)
+
+    def test_template_identity_comes_from_resolution_not_the_requested_branch(self):
+        template = {"id": "harness", "repository": "iii-hq/templates", "ref": "main", "revision": "f" * 40}
+        resolution = self.tmp / "resolution.json"
+        resolution.write_text(json.dumps({"template": template}))
+        self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["template"], template)
+        self.assertNotIn("template", report_execution.identity_of(Args(plan=self.plan), None))
 
     def test_materialized_states_the_shards_and_planned_runs(self):
         """Release Control reads only these fields; it must find all of them."""
@@ -240,6 +249,78 @@ class StackResolutionTests(unittest.TestCase):
         )
         with self.assertRaises(resolve_stack_lock.ResolutionError):
             resolve_stack_lock.runner_selector({"runner": {"version": "latest"}}, {})
+
+    def test_main_freezes_template_for_all_groups_and_keeps_existing_worker_pins(self):
+        template = {"id": "harness-kanban", "repository": "iii-hq/templates", "ref": "main", "revision": "e" * 40}
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        second = json.loads(json.dumps(snapshot["campaigns"][0]))
+        second["campaign_id"] = "regression-r02"
+        snapshot["campaigns"].append(second)
+        def graph(worker, selector, target):
+            names = [worker, "state"] if worker == "harness" else [worker]
+            return self.graph(worker, "1.0.0", [{"worker": name, "version": "1.0.0", "kind": "engine"} for name in names])
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "profile.json").write_text(json.dumps(snapshot))
+            (root / "plan.json").write_text(json.dumps({**PLAN, "template": "harness-kanban", "agent_profile": "tech-lead"}))
+            argv = ["resolve", "--execution-id", "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
+                    "--profile-snapshot", str(root / "profile.json"), "--plan", str(root / "plan.json"),
+                    "--stack", '{"versions":{"harness":"1.0.0"}}', "--cli-version", "0.23.0",
+                    "--oidc-audience", "test", "--output-dir", str(root / "out")]
+            with patch.object(sys, "argv", argv), \
+                 patch.object(resolve_stack_lock, "resolve_template", return_value=(template, {"state": "0.1.0", "kanban": "latest"})) as resolve, \
+                 patch.object(resolve_stack_lock, "resolve_graph", side_effect=graph) as graphs, \
+                 patch.object(resolve_stack_lock, "resolve_cli", return_value={"version": "0.23.0"}), \
+                 patch.object(resolve_stack_lock, "resolve_stack_revision", return_value="f" * 40), \
+                 patch("builtins.print"):
+                self.assertEqual(resolve_stack_lock.main(), 0)
+            self.assertEqual(resolve.call_count, 1)
+            self.assertNotIn("state", [call.args[0] for call in graphs.call_args_list])
+            self.assertIn("kanban", [call.args[0] for call in graphs.call_args_list])
+            for campaign in snapshot["campaigns"]:
+                contract = json.loads((root / "out" / f"{campaign['campaign_id']}.json").read_text())
+                self.assertEqual(contract["runtime"]["template"], template)
+                self.assertEqual(contract["suite"]["agent_profile"], "tech-lead")
+                self.assertEqual(contract["suite"]["groups"][0]["scenarios"], ["minimal_path"])
+            resolution = json.loads((root / "out/resolution.json").read_text())
+            self.assertEqual(resolution["template"], template)
+            self.assertTrue(all(group["template_revision"] == template["revision"] for group in resolution["matrix"]["include"]))
+
+    def test_template_catalog_and_dependencies_are_read_at_one_main_commit(self):
+        files = {
+            "template.yaml": "templates: [harness, new-template]\n",
+            "new-template/template.yaml": "files: [worker-compose.yaml]\noptional: []\n",
+            "new-template/worker-compose.yaml": "containers:\n  board:\n    worker: package://kanban\n    version: latest\n  local:\n    worker: path://./local\n",
+        }
+        urls = []
+        def get(url, **kwargs):
+            urls.append(url)
+            if url.endswith("/commits/main"):
+                return {"sha": "a" * 40}
+            path, ref = url.split("/contents/iii/", 1)[1].split("?ref=")
+            self.assertEqual(ref, "a" * 40)
+            return {"content": base64.b64encode(files[path].encode()).decode()}
+        with patch.object(resolve_stack_lock, "get_json", side_effect=get):
+            identity, packages = resolve_stack_lock.resolve_template("new-template", None)
+        self.assertEqual(identity["revision"], "a" * 40)
+        self.assertEqual(identity["id"], "new-template")
+        self.assertEqual(packages, {"kanban": "latest"})
+        self.assertEqual(sum(url.endswith("/commits/main") for url in urls), 1)
+        for invalid in ("../harness", {}, ""):
+            with self.subTest(invalid=invalid), self.assertRaises(resolve_stack_lock.ResolutionError):
+                resolve_stack_lock.resolve_template(invalid, None)
+        self.assertEqual(resolve_stack_lock.resolve_template(None, None), (None, {}))
+
+    def test_unsupported_or_interactive_templates_fail_before_execution(self):
+        for metadata in ("files: [config.yaml]", "files: [worker-compose.yaml]\noptional: [python]"):
+            responses = [
+                {"sha": "a" * 40},
+                {"content": base64.b64encode(b"templates: [starter]").decode()},
+                {"content": base64.b64encode(metadata.encode()).decode()},
+            ]
+            with self.subTest(metadata=metadata), patch.object(resolve_stack_lock, "get_json", side_effect=responses):
+                with self.assertRaises(resolve_stack_lock.ResolutionError):
+                    resolve_stack_lock.resolve_template("starter", None)
 
     def test_only_linkly_adds_template_workers_to_the_frozen_runtime(self):
         snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))

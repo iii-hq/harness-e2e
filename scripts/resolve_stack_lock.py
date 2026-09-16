@@ -16,6 +16,7 @@ contract, because a campaign has to be able to say afterwards what it ran.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
@@ -31,6 +32,7 @@ REGISTRY_API_URL = os.environ.get("HARNESS_E2E_REGISTRY_API_URL", "https://api.w
 GITHUB_API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com")
 III_REPOSITORY = "iii-hq/iii"
 WORKERS_REPOSITORY = "iii-hq/workers"
+TEMPLATES_REPOSITORY = "iii-hq/templates"
 
 CONTRACT_SCHEMA = "rc-e2e/v2"
 CLI_TARGET = "x86_64-unknown-linux-gnu"
@@ -73,6 +75,7 @@ EXACT_VERSION = re.compile(
 )
 GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 
 class ResolutionError(RuntimeError):
@@ -85,6 +88,49 @@ def canonical(value: Any) -> str:
 
 def canonical_sha256(value: Any) -> str:
     return f"sha256:{hashlib.sha256(canonical(value).encode()).hexdigest()}"
+
+
+def resolve_template(template_id: str | None, token: str | None) -> tuple[dict[str, str] | None, dict[str, str]]:
+    """Resolve main once; the same source and package set serve every shard."""
+    if template_id is None:
+        return None, {}
+    if not isinstance(template_id, str) or not TEMPLATE_ID.fullmatch(template_id):
+        raise ResolutionError("template must be an iii template id")
+    import yaml
+
+    revision = get_json(f"{GITHUB_API_URL}/repos/{TEMPLATES_REPOSITORY}/commits/main", token=token).get("sha")
+    if not isinstance(revision, str) or not GIT_SHA.fullmatch(revision):
+        raise ResolutionError("templates main did not resolve to a commit")
+
+    def manifest(path: str) -> dict[str, Any]:
+        entry = get_json(f"{GITHUB_API_URL}/repos/{TEMPLATES_REPOSITORY}/contents/iii/{path}?ref={revision}", token=token)
+        value = yaml.safe_load(base64.b64decode(entry["content"]))
+        if not isinstance(value, dict):
+            raise ResolutionError(f"template manifest {path} must be an object")
+        return value
+
+    if template_id not in manifest("template.yaml").get("templates", []):
+        raise ResolutionError(f"template {template_id} is not in the iii catalog")
+    metadata = manifest(f"{template_id}/template.yaml")
+    if "worker-compose.yaml" not in metadata.get("files", []):
+        raise ResolutionError(f"template {template_id} does not provide a Compose project")
+    if metadata.get("optional"):
+        raise ResolutionError(f"template {template_id} requires interactive language selection")
+    compose = manifest(f"{template_id}/worker-compose.yaml")
+    packages = {}
+    for name, container in compose.get("containers", {}).items():
+        source = container.get("worker", "")
+        if source.startswith("package://"):
+            package = source.removeprefix("package://")
+            # These are historical package names in published project templates.
+            package = {"shell": "ide", "console": "ade"}.get(package, package)
+            selector = str(container.get("version", "latest"))
+            if package in packages and packages[package] != selector:
+                raise ResolutionError(f"template {template_id} declares conflicting versions of {package}")
+            packages[package] = selector
+        elif not source.startswith("path://./") or ".." in Path(source.removeprefix("path://")).parts:
+            raise ResolutionError(f"template worker {name} has an unsupported source: {source}")
+    return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": "main", "revision": revision}, packages
 
 
 def get_json(url: str, payload: dict[str, Any] | None = None, token: str | None = None) -> Any:
@@ -265,6 +311,7 @@ def build_contract(
     cli: dict[str, str],
     stack_revision: str,
     oidc_audience: str,
+    template: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     profile = snapshot["profile"]
     suite = {
@@ -287,7 +334,7 @@ def build_contract(
         "attempt": 1,
         "stack_revision": stack_revision,
         "orchestration": orchestration,
-        "runtime": {"cli": cli},
+        "runtime": {"cli": cli, **({"template": template} if template else {})},
         "security": {"oidc_audience": oidc_audience},
         "suite": suite,
     }
@@ -316,6 +363,7 @@ def main() -> int:
     if not isinstance(stack, dict):
         raise ResolutionError("stack must be a JSON object")
     pinned = stack.get("versions") if isinstance(stack.get("versions"), dict) else {}
+    template, template_packages = resolve_template(plan.get("template"), token)
 
     roles = {TARGET_ROOT: "target", RUNNER_ROOT: "runner"}
     runtime = runtime_roots(snapshot)
@@ -324,6 +372,16 @@ def main() -> int:
         resolve_graph(worker, runner_selector(plan, pinned) if worker == RUNNER_ROOT else str(pinned.get(worker, "latest")), CLI_TARGET)
         for worker in (TARGET_ROOT, *runtime, RUNNER_ROOT)
     ]
+    # Test-stack pins take precedence over a template's defaults. Resolve only
+    # additional packages; re-resolving shared dependencies at latest could
+    # silently replace the release this execution is meant to measure.
+    resolved = {node["worker"] for graph in graphs for node in graph["nodes"]}
+    for worker, selector in sorted(template_packages.items()):
+        if worker not in resolved:
+            graph = resolve_graph(worker, str(pinned.get(worker, selector)), CLI_TARGET)
+            graphs.append(graph)
+            roles[worker] = "runtime"
+            resolved.update(node["worker"] for node in graph["nodes"])
     orchestration = merge_graphs(roles, graphs)
     harness_version = next(root["version"] for root in orchestration["roots"] if root["worker"] == TARGET_ROOT)
     cli = resolve_cli(args.cli_version, token)
@@ -341,6 +399,7 @@ def main() -> int:
             cli=cli,
             stack_revision=stack_revision,
             oidc_audience=args.oidc_audience,
+            template=template,
         )
         (args.output_dir / f"{campaign['campaign_id']}.json").write_text(json.dumps(contract, indent=2) + "\n")
         for group in contract["suite"]["groups"]:
@@ -351,6 +410,7 @@ def main() -> int:
                     "group_id": group["id"],
                     "execution_kind": group["execution_kind"],
                     "runs_on": ["self-hosted", "harness-e2e"] if fault else ["ubuntu-latest"],
+                    **({"template_revision": template["revision"]} if template else {}),
                 }
             )
 
@@ -361,6 +421,7 @@ def main() -> int:
         "stack_revision": stack_revision,
         "cli_version": cli["version"],
         "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
+        **({"template": template} if template else {}),
     }
     (args.output_dir / "resolution.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(canonical(summary))

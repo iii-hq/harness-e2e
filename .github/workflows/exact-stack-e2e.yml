@@ -130,6 +130,7 @@ jobs:
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
         run: |
           set -euo pipefail
+          python3 -m pip install --quiet pyyaml
           python3 scripts/resolve_stack_lock.py \
             --execution-id '${{ inputs.execution_id }}' \
             --profile-snapshot target/harness-e2e-contract/profile.json \
@@ -283,10 +284,24 @@ jobs:
           path: target/linkly-templates
           persist-credentials: false
 
+      - name: Checkout execution template resolved from main
+        if: matrix.template_revision != ''
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          repository: iii-hq/templates
+          ref: ${{ matrix.template_revision }}
+          path: target/execution-template
+          persist-credentials: false
+
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        if: startsWith(matrix.group_id, 'case-kanban-') || matrix.group_id == 'case-linkly-tutorial'
+        if: matrix.template_revision != '' || startsWith(matrix.group_id, 'case-kanban-') || matrix.group_id == 'case-linkly-tutorial'
         with:
           node-version: 24.18.0
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
+        if: matrix.template_revision != ''
+        with:
+          version: 11.13.1
 
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
         if: matrix.execution_kind == 'fault_injection'

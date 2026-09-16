@@ -288,6 +288,15 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
     if not asset.startswith("iii-") or asset.startswith("iii-" + "worker"):
         raise ValueError("runtime.cli.asset must name the iii CLI archive")
     require_digest(cli.get("sha256"), "runtime.cli.sha256")
+    template = contract["runtime"].get("template")
+    if template is not None:
+        require_keys(template, {"id", "repository", "ref", "revision"}, "runtime.template")
+        if not isinstance(template["id"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", template["id"]):
+            raise ValueError("runtime.template.id must be an iii template id")
+        if template["repository"] != "iii-hq/templates" or template["ref"] != "main":
+            raise ValueError("runtime.template must originate from iii-hq/templates main")
+        if not isinstance(template["revision"], str) or not GIT_SHA.fullmatch(template["revision"]):
+            raise ValueError("runtime.template.revision must be a full lowercase git SHA")
 
     security = require_keys(contract.get("security"), {"oidc_audience"}, "security")
     audience = require_text(security.get("oidc_audience"), "security.oidc_audience")
@@ -518,7 +527,7 @@ def project_roots(contract: dict[str, Any]) -> list[str]:
 def group_template(contract: dict[str, Any], group_id: str) -> str:
     group = next(group for group in contract["suite"]["groups"] if group["id"] == group_id)
     if "linkly_tutorial" not in group.get("scenarios", []):
-        return ""
+        return contract["runtime"].get("template", {}).get("id", "")
     if (group["scenarios"] != ["linkly_tutorial"] or group["runs"] != 1
             or group["technical_retries"] != 0):
         raise ValueError("linkly_tutorial needs a fresh scaffold: one scenario, one run and no retries")
@@ -532,6 +541,26 @@ def project_engine_config(project: dict[str, Any], port: int) -> dict[str, Any]:
     return {"workers": workers}
 
 
+def with_fixture(template: dict[str, Any], fixture: dict[str, Any]) -> dict[str, Any]:
+    """Keep a scenario's required container names/configuration over the chosen base."""
+    result = copy.deepcopy(template)
+    containers = result.setdefault("containers", {})
+    aliases = {"package://shell": "package://ide", "package://console": "package://ade"}
+    for name, container in fixture.get("containers", {}).items():
+        worker = aliases.get(container.get("worker"), container.get("worker"))
+        for previous in list(containers):
+            source = containers[previous].get("worker")
+            if aliases.get(source, source) == worker:
+                del containers[previous]
+        containers[name] = copy.deepcopy(container)
+    engine = result.setdefault("engine", {})
+    engine_workers = engine.get("workers", {}) | fixture.get("engine", {}).get("workers", {})
+    engine.update(fixture.get("engine", {}))
+    if engine_workers:
+        engine["workers"] = engine_workers
+    return result
+
+
 def project_scaffold(
     contract: dict[str, Any],
     namespace: str,
@@ -540,6 +569,7 @@ def project_scaffold(
     environment: dict[str, str],
     template: dict[str, Any] | None = None,
     template_packages: dict[str, str] | None = None,
+    profile_root: Path | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
@@ -548,6 +578,7 @@ def project_scaffold(
 
     orchestration = contract["orchestration"]
     roots = {root["worker"]: root["version"] for root in orchestration["roots"]}
+    versions = {node["worker"]: node["version"] for node in orchestration["nodes"]}
     scenarios = {
         scenario for group in contract["suite"]["groups"] for scenario in group.get("scenarios", [])
     }
@@ -556,14 +587,14 @@ def project_scaffold(
         harness_override["max_children"] = 16
     if "depth_ladder" in scenarios:
         harness_override["max_depth"] = 6
-    unknown_env_files = sorted(set(env_files) - set(roots))
+    unknown_env_files = sorted(set(env_files) - set(versions))
     if unknown_env_files:
         raise ValueError(f"env files name unknown project roots: {', '.join(unknown_env_files)}")
 
     declared_environment: dict[str, dict[str, str]] = {}
     for key, value in environment.items():
         worker, separator, name = key.partition(".")
-        if not separator or worker not in roots or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+        if not separator or worker not in versions or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError(f"invalid container environment assignment: {key}")
         declared_environment.setdefault(worker, {})[name] = value
 
@@ -581,18 +612,51 @@ def project_scaffold(
 
     manifest = copy.deepcopy(template or {})
     containers = manifest.setdefault("containers", {})
-    versions = {node["worker"]: node["version"] for node in orchestration["nodes"]}
+    package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
-        package = (template_packages or {}).get(name, name)
-        if container.get("worker") != f"package://{name}" or package not in versions:
+        source = container.get("worker", "")
+        # Only the executor's private env files may supply credentials.
+        container.pop("env_file", None)
+        if source.startswith("path://"):
+            path = Path(source.removeprefix("path://"))
+            if not path.is_absolute() and (not source.startswith("path://./") or ".." in path.parts):
+                raise ValueError(f"template worker {name} must stay inside its project")
+            continue
+        package = source.removeprefix("package://")
+        package = (template_packages or {}).get(package, package)
+        if not source.startswith("package://") or package not in versions:
             raise ValueError(f"template worker {name} is not in the exact stack")
         container["worker"] = f"package://{package}"
         container["version"] = versions[package]
-        # Only the executor's private env files may supply credentials.
-        container.pop("env_file", None)
-    for worker in sorted(roots):
-        container = containers.setdefault(worker, {})
-        container.update({"worker": f"package://{worker}", "version": roots[worker]})
+        package_names.setdefault(package, []).append(name)
+    assembled = {node["worker"]: node["version"] for node in orchestration["nodes"] if node["kind"] == "binary"} if template is not None else roots
+    for worker in sorted(assembled):
+        if worker not in package_names:
+            if worker in containers:
+                raise ValueError(f"template container {worker} collides with an exact-stack root")
+            containers[worker] = {"worker": f"package://{worker}", "version": assembled[worker]}
+            package_names[worker] = [worker]
+    if template is not None:
+        # Compose expands dependencies by container name. Assemble the frozen
+        # graph here so renamed template roles cannot create duplicate workers.
+        for container in containers.values():
+            if "start_after" in container:
+                container["start_after"] = [
+                    dependency if dependency in containers else package_names.get(
+                        (template_packages or {}).get(dependency, dependency), [dependency]
+                    )[0]
+                    for dependency in container["start_after"]
+                ]
+        for edge in orchestration["edges"]:
+            if edge["from"] not in package_names or edge["to"] not in package_names:
+                continue
+            dependency = package_names[edge["to"]][0]
+            for name in package_names[edge["from"]]:
+                after = containers[name].setdefault("start_after", [])
+                if dependency != name and dependency not in after:
+                    after.append(dependency)
+    for name, container in containers.items():
+        worker = container["worker"].removeprefix("package://")
         if worker in env_files:
             env_file = Path(env_files[worker])
             if not env_file.is_absolute():
@@ -610,13 +674,37 @@ def project_scaffold(
         elif worker == APPLICATION and harness_override:
             container["config_name"] = f"{namespace}-harness"
             container.setdefault("config_override", {}).update(harness_override)
-        containers[worker] = container
-    if template is not None and APPLICATION in containers:
+    if template is not None and APPLICATION in package_names:
         providers = [worker for worker in env_files if worker.startswith("provider-")]
-        after = containers[APPLICATION].setdefault("start_after", [])
-        after.extend(provider for provider in sorted(providers) if provider not in after)
+        after = containers[package_names[APPLICATION][0]].setdefault("start_after", [])
+        after.extend(package_names[provider][0] for provider in sorted(providers) if package_names[provider][0] not in after)
         for provider in providers:
-            containers[provider].setdefault("start_after", ["state", "llm-router"])
+            containers[package_names[provider][0]].setdefault("start_after", [
+                package_names[worker][0] for worker in ("state", "llm-router") if worker in package_names
+            ])
+        # API keys are resolved by llm-router, including when a provider is a
+        # transitive dependency rather than a root of the measurement stack.
+        for name in package_names.get("llm-router", []):
+            containers[name]["env_file"] = [env_files[worker] for worker in sorted(providers)]
+    if profile_root is not None:
+        if not profile_root.is_absolute():
+            raise ValueError("profile root must be absolute")
+        if "iii-directory" not in package_names:
+            if "iii-directory" not in versions:
+                raise ValueError("template profiles require iii-directory in the exact stack")
+            containers["iii-directory"] = {"worker": "package://iii-directory", "version": versions["iii-directory"]}
+            package_names["iii-directory"] = ["iii-directory"]
+        for name in package_names["iii-directory"]:
+            containers[name]["config_name"] = f"{namespace}-directory"
+            containers[name].setdefault("config_override", {}).update({
+                "auto_download": False,
+                "skills_folder": str(profile_root / ".iii/registry-skills"),
+                "local_skills_folder": str(profile_root / "skills"),
+                "agents_folder": str(profile_root / "agents"),
+                "global_agents_folder": str(profile_root / ".iii/empty/agents"),
+                "agents_skills_folder": str(profile_root / ".agents/skills"),
+                "global_agents_skills_folder": str(profile_root / ".iii/empty/skills"),
+            })
     manifest.update({
         "namespace": namespace,
         "startup_timeout": "5m",
@@ -784,6 +872,8 @@ def main() -> int:
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
+    project.add_argument("--fixture-compose", type=Path)
+    project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
     project.add_argument("--engine-config", type=Path)
     project.add_argument("--engine-port", type=int, default=49134)
@@ -839,14 +929,26 @@ def main() -> int:
                 import yaml
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
+            template = yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None
+            if args.fixture_compose:
+                if template is None:
+                    raise ValueError("fixture-compose requires template-compose")
+                # Selected local workers still belong to their own scaffold,
+                # while the scenario keeps its canonical task directory.
+                for container in template.get("containers", {}).values():
+                    source = container.get("worker", "")
+                    if source.startswith("path://./"):
+                        container["worker"] = f"path://{(args.template_compose.parent / source.removeprefix('path://')).resolve()}"
+                template = with_fixture(template, yaml.safe_load(args.fixture_compose.read_text()))
             manifest = project_scaffold(
                 contract,
                 args.namespace,
                 args.data_dir,
                 assignments(args.env_file, "env-file"),
                 assignments(args.environment, "environment"),
-                yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None,
+                template,
                 assignments(args.template_package, "template-package"),
+                args.profile_root,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
