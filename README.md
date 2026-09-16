@@ -179,14 +179,47 @@ by including its ID in the frozen plan:
 For example, `console-ui` identifies **Console UI Engineer**. The runner reads
 the profile from the group's Directory and sends its ID as `agent` to `e2e::run`.
 The profile, its parent profiles, skills, functions, and model/provider must
-be available in that stack. The runner waits up to 120 seconds for Directory's
-background profile downloads; profiles that remain unavailable fail resolution.
+be available in that stack. The runner downloads the stack's versioned skill
+bundles into an isolated Directory and waits up to 120 seconds for the selected
+profile; profiles that remain unavailable fail resolution.
 A profile's model overrides the plan's model; `provider::model` also selects its
 provider. Results record the resolved subject model and profile configuration
 hash, so changes to an existing profile remain visible between executions.
 Each execution keeps the selected profile ID; Run again resolves that ID in its
 test stack. Comparisons remain manual in Release Control. Omitting
 `agent_profile` keeps the built-in agent.
+
+An execution can also select a project template independently of the test-plan
+profile and the agent profile:
+
+```json
+{
+  "template": "harness",
+  "agent_profile": "tech-lead"
+}
+```
+
+The runner reads the `iii/template.yaml` catalog in `iii-hq/templates` from
+`main`, resolves it to one commit before sharding, and records that commit as
+`identity.template.revision`. Every group uses that source. The selected
+Compose project supplies the base; test-stack versions override its package
+selectors, additional packages enter the stack lock, and local workers remain
+local. Template skills override whole downloaded namespaces, and its agent
+files take precedence over downloaded profiles. Machine-global profiles/skills
+are not used when a template or agent override is selected.
+
+Scenarios, prompts, permissions, fixtures, seeds and repetitions are unchanged.
+The evaluated agent is applied to ordinary sessions and workflow/adaptive
+steps; evaluators are unchanged. Linkly retains its pinned task scaffold and
+container roles, with the selected template's base and agent assets applied
+separately. No template keeps the existing generated stack (or required fixture).
+
+To measure a profile's effect, compare the same plan, template commit, model
+and stack with and without `agent_profile`. Changing the template too measures
+their combined effect. Non-Compose templates and templates requiring interactive
+language choices are rejected before boot. Protected fault groups use an
+external supervisor and reject both overrides rather than silently ignoring them.
+No new scenario or CLI change is required.
 
 `scripts/report_execution.py` posts what was observed to Release Control's run
 ledger over OIDC: `materialized` before anything runs, one `shard` per campaign

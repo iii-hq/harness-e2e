@@ -49,6 +49,12 @@ cleanup() {
 trap cleanup EXIT
 trap 'failure_reason="command failed at line $LINENO"' ERR
 
+if jq -e '.runtime.template != null or .suite.agent_profile != null' "$contract_path" >/dev/null; then
+  failure_reason="The protected fault supervisor does not support execution template or agent profile overrides"
+  printf '%s\n' "$failure_reason" >&2
+  exit 2
+fi
+
 test -x "$supervisor"
 test -x "$e2e_bin"
 test -f "$profile_path"
