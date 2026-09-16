@@ -242,7 +242,7 @@ project_trigger() {
 
     def test_runner_waits_for_an_existing_profile_and_fails_if_it_stays_missing(self):
         source = RUNNER_SCRIPT.read_text()
-        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=materialization")]
+        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=runner_readiness")]
         for available_after in [0, 1, 99]:
             with self.subTest(available_after=available_after), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
