@@ -26,6 +26,135 @@ CASE_IDS = [
 
 
 class KanbanProbeContractTest(unittest.TestCase):
+    def test_run_35012256843_totals_and_failure_feedback_accept_equivalent_markup(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest("dashboard Playwright is not installed")
+        script = f"""
+import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
+import {{ boardTicketTotal, mutationFailureFeedback }} from {json.dumps(PROBE.as_uri())}
+const browser = await chromium.launch({{headless:true}})
+try {{
+  const page = await browser.newPage()
+  const totals = []
+  for (const markup of [
+    '<p>Total <output aria-label="Total tickets">5</output></p><p>5 tickets on the board.</p>',
+    '<output aria-label="Total tickets">5</output>',
+    '<p>Total 5</p>', '<p>5 tickets on the board.</p>',
+    '<p>Total 15</p><output aria-label="Total tickets">15</output>',
+    '<p>Loading tickets…</p><output aria-label="Total tickets">—</output>',
+    '<h2>Backlog <span>5</span></h2>',
+  ]) {{
+    await page.setContent(markup)
+    totals.push(await boardTicketTotal(page, 5).count())
+  }}
+  const feedback = []
+  for (const role of ['status', 'alert']) {{
+    for (const message of ['Request failed (probe failure).', 'Unable to create ticket (500)',
+      'Unable to delete ticket (500)', 'Created', 'Deleted', 'Creating ticket…', 'Deleting ticket…']) {{
+      await page.setContent(`<p role="${{role}}">${{message}}</p>`)
+      feedback.push(await mutationFailureFeedback(page).count())
+    }}
+  }}
+  console.log(JSON.stringify({{totals, feedback}}))
+}} finally {{ await browser.close() }}
+"""
+        completed = subprocess.run(["node", "--input-type=module", "--eval", script],
+                                   cwd=ROOT, text=True, capture_output=True, timeout=20)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), {
+            "totals": [1, 1, 1, 1, 0, 0, 0],
+            "feedback": [1, 1, 1, 0, 0, 0, 0] * 2,
+        })
+
+    def test_restored_store_checks_the_discussion_in_details_and_rejects_stale_drafts(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest("dashboard Playwright is not installed")
+        script = f"""
+import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
+import {{ assertClearedDiscussionDraft }} from {json.dumps(PROBE.as_uri())}
+const browser = await chromium.launch({{headless:true}})
+try {{
+  const page = await browser.newPage()
+  page.setDefaultTimeout(1000)
+  const results = []
+  for (const [onBoard, draft] of [[true, ''], [false, ''], [true, 'old-store draft'], [false, 'old-store draft']]) {{
+    await page.setContent(`
+      <a href="#ticket/id"><h2>Restored ticket</h2></a>
+      <section id="details" ${{onBoard ? 'hidden' : ''}}>
+        <label for="comment">Comment</label><textarea id="comment">${{draft}}</textarea>
+      </section>`)
+    await page.locator('a').evaluate(link => {{
+      window.opens = 0
+      link.onclick = () => {{ window.opens++; document.querySelector('#details').hidden = false }}
+    }})
+    let error = null
+    try {{ await assertClearedDiscussionDraft(page, 'Restored ticket') }} catch (failure) {{ error = failure.message }}
+    results.push({{error, opens:await page.evaluate(() => window.opens)}})
+  }}
+  console.log(JSON.stringify(results))
+}} finally {{ await browser.close() }}
+"""
+        completed = subprocess.run(["node", "--input-type=module", "--eval", script],
+                                   cwd=ROOT, text=True, capture_output=True, timeout=25)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        results = json.loads(completed.stdout)
+        self.assertEqual(results[:2], [{"error": None, "opens": 1}, {"error": None, "opens": 0}])
+        for result in results[2:]:
+            self.assertIn("old-store draft", result["error"])
+
+    def test_ticket_deletion_has_its_own_fixture_when_creation_check_is_interrupted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / "calls.jsonl"
+            sdk = root / "iii.mjs"
+            sdk.write_text("""
+import {appendFileSync} from 'node:fs'
+let nextId = 0
+export function registerWorker() {
+  return {
+    trigger: async ({payload}) => {
+      const ticket = {...payload, id:`ticket-${++nextId}`}
+      appendFileSync(process.env.CALLS_LOG, JSON.stringify({create:ticket})+'\\n')
+      return ticket
+    },
+    shutdown: async () => {},
+  }
+}
+""")
+            playwright = root / "playwright.mjs"
+            playwright.write_text("""
+import {appendFileSync} from 'node:fs'
+export const chromium = {
+  launch: async () => ({
+    contexts: () => [], close: async () => {},
+    newContext: async () => ({
+      newPage: async () => ({
+        goto: async url => {
+          appendFileSync(process.env.CALLS_LOG, JSON.stringify({goto:url})+'\\n')
+          throw new Error('browser deliberately interrupted')
+        },
+      }),
+    }),
+  }),
+}
+""")
+            output = root / "evidence"
+            completed = self.run_probe(
+                "--case", "kanban_c4_ticket_flow", "--base-url", "http://127.0.0.1:1",
+                "--engine-url", "ws://127.0.0.1:1", "--output", str(output),
+                env={**os.environ, "III_SDK_MODULE": str(sdk), "PLAYWRIGHT_MODULE": str(playwright),
+                     "CALLS_LOG": str(log)},
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            result = json.loads((output / "result.json").read_text())
+            deletion = next(check for check in result["checks"] if check["id"] == "ticket_flow_delete_failure_navigation_and_restart")
+            self.assertEqual(deletion["detail"], "browser deliberately interrupted")
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            creates = [call["create"] for call in calls if "create" in call]
+            navigations = [call["goto"] for call in calls if "goto" in call]
+            self.assertEqual(len(creates), 3)
+            self.assertEqual(navigations, ["http://127.0.0.1:1", f"http://127.0.0.1:1/#ticket/{creates[-1]['id']}"])
+
     def test_run_34596086686_equivalent_controls_and_real_accessibility_failure(self):
         if not PLAYWRIGHT.exists():
             self.skipTest("dashboard Playwright is not installed")
