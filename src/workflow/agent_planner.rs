@@ -13,6 +13,7 @@ use tokio::sync::watch;
 use crate::context::E2eContext;
 use crate::wire::{
     FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+    E2E_SESSION_KIND,
 };
 
 use super::{
@@ -389,6 +390,7 @@ async fn run_fresh_planner(
                     request.run_id, request.attempt_id
                 )),
                 session: Some(SessionInit {
+                    kind: Some(E2E_SESSION_KIND.into()),
                     title: Some(format!(
                         "Harness E2E adaptive planner: {}",
                         request.metadata.scenario_id

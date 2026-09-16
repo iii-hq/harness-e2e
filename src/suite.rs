@@ -30,7 +30,7 @@ use crate::scenarios::{
 };
 use crate::wire::{
     ControlPlaneEvidence, FunctionPolicy, MessageInput, Model, SendOptions, SendRequest,
-    SendResponse, SessionInit, StatusReport, TurnStatus,
+    SendResponse, SessionInit, StatusReport, TurnStatus, E2E_SESSION_KIND,
 };
 use crate::workflow::{
     adaptive_runtime, composite_definition, composite_descriptor_catalog, composite_runtime,
@@ -2456,6 +2456,7 @@ async fn execute(
                         spec.id
                     )),
                     session: (exchange == 0).then(|| SessionInit {
+                        kind: Some(E2E_SESSION_KIND.into()),
                         title: Some(format!("Harness E2E: {}", spec.id)),
                         metadata: Some(json!({
                             "e2e_run_id": run_id,
