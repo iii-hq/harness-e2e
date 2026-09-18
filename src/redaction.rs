@@ -12,6 +12,7 @@ const DEFAULT_SECRET_ENV_NAMES: &[&str] = &[
     "GH_TOKEN",
     "AWS_SECRET_ACCESS_KEY",
     "CLOUDFLARE_API_TOKEN",
+    "TYPESAFE_API_KEY",
 ];
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

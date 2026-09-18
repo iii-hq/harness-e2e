@@ -253,6 +253,22 @@ write_provider_secret() {
   jq -e --arg worker "$worker" \
     '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
+  write_secret_file "$worker" "$variable" "$value"
+}
+
+# Repassada sem avaliação: o worker recebe a chave quando ela está no ambiente
+# e a execução segue sem ela quando não está. Diferente dos providers, que são
+# roots da orquestração, aqui o alvo é um node do grafo do target.
+forward_worker_secret() {
+  local worker=$1 variable=$2 value=${!2:-}
+  [[ -n "$value" ]] || return 0
+  jq -e --arg worker "$worker" \
+    '.orchestration.nodes | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
+  write_secret_file "$worker" "$variable" "$value"
+}
+
+write_secret_file() {
+  local worker=$1 variable=$2 value=$3
   printf '%s=%s\n' "$variable" "$value" >"$secrets_dir/$worker.env"
   chmod 600 "$secrets_dir/$worker.env"
 }
@@ -283,6 +299,9 @@ failure_phase=fixture_setup
 prepare_code_fixtures
 write_provider_secret provider-deepseek DEEPSEEK_API_KEY
 write_provider_secret provider-zai ZAI_API_KEY
+forward_worker_secret iii-directory TYPESAFE_API_KEY
+forward_worker_secret harness TYPESAFE_API_KEY
+forward_worker_secret harness-e2e TYPESAFE_API_KEY
 
 capture_processes "$artifact_dir/stack/processes-before.json"
 
