@@ -251,42 +251,6 @@ class StackResolutionTests(unittest.TestCase):
         with self.assertRaises(resolve_stack_lock.ResolutionError):
             resolve_stack_lock.runner_selector({"runner": {"version": "latest"}}, {})
 
-    def test_main_freezes_template_for_all_groups_and_keeps_existing_worker_pins(self):
-        template = {"id": "harness-kanban", "repository": "iii-hq/templates", "ref": "main", "revision": "e" * 40}
-        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
-        second = json.loads(json.dumps(snapshot["campaigns"][0]))
-        second["campaign_id"] = "regression-r02"
-        snapshot["campaigns"].append(second)
-        def graph(worker, selector, target):
-            names = [worker, "state"] if worker == "harness" else [worker]
-            return self.graph(worker, "1.0.0", [{"worker": name, "version": "1.0.0", "kind": "engine"} for name in names])
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            (root / "profile.json").write_text(json.dumps(snapshot))
-            (root / "plan.json").write_text(json.dumps({**PLAN, "template": "harness-kanban", "agent_profile": "tech-lead"}))
-            argv = ["resolve", "--execution-id", "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-                    "--profile-snapshot", str(root / "profile.json"), "--plan", str(root / "plan.json"),
-                    "--stack", '{"versions":{"harness":"1.0.0"}}', "--cli-version", "0.23.0",
-                    "--oidc-audience", "test", "--output-dir", str(root / "out")]
-            with patch.object(sys, "argv", argv), \
-                 patch.object(resolve_stack_lock, "resolve_template", return_value=(template, {"state": "0.1.0", "kanban": "latest"})) as resolve, \
-                 patch.object(resolve_stack_lock, "resolve_graph", side_effect=graph) as graphs, \
-                 patch.object(resolve_stack_lock, "resolve_cli", return_value={"version": "0.23.0"}), \
-                 patch.object(resolve_stack_lock, "resolve_stack_revision", return_value="f" * 40), \
-                 patch("builtins.print"):
-                self.assertEqual(resolve_stack_lock.main(), 0)
-            self.assertEqual(resolve.call_count, 1)
-            self.assertNotIn("state", [call.args[0] for call in graphs.call_args_list])
-            self.assertIn("kanban", [call.args[0] for call in graphs.call_args_list])
-            for campaign in snapshot["campaigns"]:
-                contract = json.loads((root / "out" / f"{campaign['campaign_id']}.json").read_text())
-                self.assertEqual(contract["runtime"]["template"], template)
-                self.assertEqual(contract["suite"]["agent_profile"], "tech-lead")
-                self.assertEqual(contract["suite"]["groups"][0]["scenarios"], ["minimal_path"])
-            resolution = json.loads((root / "out/resolution.json").read_text())
-            self.assertEqual(resolution["template"], template)
-            self.assertTrue(all(group["template_revision"] == template["revision"] for group in resolution["matrix"]["include"]))
-
     def test_template_catalog_and_dependencies_are_read_at_one_main_commit(self):
         files = {
             "template.yaml": "templates: [harness, new-template]\n",
@@ -323,60 +287,17 @@ class StackResolutionTests(unittest.TestCase):
                 with self.assertRaises(resolve_stack_lock.ResolutionError):
                     resolve_stack_lock.resolve_template("starter", None)
 
-    def test_only_linkly_adds_template_workers_to_the_frozen_runtime(self):
-        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
-        self.assertEqual(resolve_stack_lock.runtime_roots(snapshot), resolve_stack_lock.RUNTIME_ROOTS)
-        snapshot['campaigns'][0]['groups'][0]['scenarios'] = ['linkly_tutorial']
-        self.assertEqual(set(resolve_stack_lock.runtime_roots(snapshot)),
-                         set(resolve_stack_lock.RUNTIME_ROOTS) | {'http'})
-
     def graph(self, worker, version, nodes=(), edges=()):
         return {"root": {"worker": worker, "version": version}, "nodes": list(nodes), "edges": list(edges)}
 
-    def test_a_worker_cannot_compose_at_two_versions(self):
-        roles = {"harness": "target", "harness-e2e": "runner"}
-        graphs = [
-            self.graph("harness", "1.8.15", [{"worker": "state", "version": "0.22.8", "kind": "engine"}]),
-            self.graph("harness-e2e", "0.7.0", [{"worker": "state", "version": "0.22.7", "kind": "engine"}]),
-        ]
-        with self.assertRaises(resolve_stack_lock.ResolutionError):
-            resolve_stack_lock.merge_graphs(roles, graphs)
-
-    def test_the_merged_graph_is_ordered_and_digested_canonically(self):
-        roles = {"harness": "target", "browser": "runtime"}
-        graphs = [
-            self.graph(
-                "harness",
-                "1.8.15",
-                [{"worker": "state", "version": "0.22.8", "kind": "engine"},
-                 {"worker": "harness", "version": "1.8.15", "kind": "engine"}],
-                [{"from": "harness", "to": "state"}],
-            ),
-            self.graph("browser", "0.2.12", [{"worker": "browser", "version": "0.2.12", "kind": "engine"}]),
-        ]
-        merged = resolve_stack_lock.merge_graphs(roles, graphs)
-        self.assertEqual([root["role"] for root in merged["roots"]], ["runtime", "target"])
-        self.assertEqual([node["worker"] for node in merged["nodes"]], ["browser", "harness", "state"])
-        digest = resolve_stack_lock.canonical_sha256(
-            {"roots": merged["roots"], "nodes": merged["nodes"], "edges": merged["edges"]}
-        )
-        self.assertEqual(merged["graph_sha256"], digest)
-
     def test_the_contract_states_the_profile_the_runner_materialized(self):
-        orchestration = {
-            "roots": [{"worker": "harness", "version": "1.8.15", "role": "target"}],
-            "nodes": [{"worker": "harness", "version": "1.8.15", "kind": "engine"}],
-            "edges": [],
-            "graph_sha256": "sha256:" + "0" * 64,
-        }
         contract = resolve_stack_lock.build_contract(
             PROFILE_SNAPSHOT["campaigns"][0],
             execution_id="b0607faa-096a-4efe-a4a2-a2a9bc06de83",
             snapshot=PROFILE_SNAPSHOT,
             plan=PLAN,
-            orchestration=orchestration,
             cli={"version": "0.23.1-rc.2", "target": "t", "asset": "iii-t.tar.gz", "sha256": "sha256:" + "c" * 64},
-            stack_revision="f" * 40,
+            stack={"harness": "1.8.15"},
             oidc_audience="release-control-harness-e2e",
         )
         self.assertEqual(contract["schema"], resolve_stack_lock.CONTRACT_SCHEMA)
@@ -386,8 +307,8 @@ class StackResolutionTests(unittest.TestCase):
         with_agent = resolve_stack_lock.build_contract(
             PROFILE_SNAPSHOT["campaigns"][0], execution_id=contract["execution_id"],
             snapshot=PROFILE_SNAPSHOT, plan={**PLAN, "agent_profile": agent},
-            orchestration=orchestration, cli=contract["runtime"]["cli"],
-            stack_revision=contract["stack_revision"], oidc_audience="release-control-harness-e2e",
+            cli=contract["runtime"]["cli"],
+            stack=contract["runtime"]["stack"], oidc_audience="release-control-harness-e2e",
         )
         self.assertEqual(with_agent["suite"]["agent_profile"], agent)
         self.assertNotEqual(with_agent["idempotency_key"], contract["idempotency_key"])

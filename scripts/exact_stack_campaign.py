@@ -193,7 +193,6 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             "execution_id",
             "attempt",
             "idempotency_key",
-            "stack_revision",
             "runtime",
             "security",
             "suite",
@@ -208,7 +207,6 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
     require_text(contract.get("execution_id"), "execution_id")
     require_positive_integer(contract.get("attempt"), "attempt")
     require_text(contract.get("idempotency_key"), "idempotency_key")
-    require_text(contract.get("stack_revision"), "stack_revision")
 
     cli = require_keys(
         require_keys(contract.get("runtime"), {"cli"}, "runtime").get("cli"),
@@ -518,6 +516,10 @@ def project_scaffold(
             raise ValueError(f"invalid container environment assignment: {key}")
         declared_environment.setdefault(worker, {})[name] = value
 
+    overrides = contract.get("runtime", {}).get("stack") or {}
+    if not isinstance(overrides, dict):
+        raise ValueError("runtime.stack must be an object of worker selectors")
+
     # The base is the floor: it names the runner, the application under test and
     # the workers the measurement itself needs. A template is a project laid on
     # top of it, and whatever role the template provides replaces the base's.
@@ -552,9 +554,11 @@ def project_scaffold(
         if not source.startswith("package://"):
             raise ValueError(f"declared worker {name} has an unsupported source: {source}")
         container["worker"] = f"package://{package}"
-        # The declaration carries its own selector. Release Control overrides it
-        # per worker; the engine resolves whatever it is left holding.
-        container.setdefault("version", DEFAULT_SELECTOR)
+        # The declaration carries its own selector, and Release Control may hold
+        # a worker to a particular release. The engine resolves what is left.
+        container["version"] = overrides.get(
+            package, container.get("version", DEFAULT_SELECTOR)
+        )
         package_names.setdefault(package, []).append(name)
     for required, role in ((RUNNER, "runner"), (APPLICATION, "application")):
         if required not in package_names:
