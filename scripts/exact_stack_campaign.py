@@ -655,13 +655,17 @@ def project_scaffold(
                 after = containers[name].setdefault("start_after", [])
                 if dependency != name and dependency not in after:
                     after.append(dependency)
+    def attach_env_file(container: dict[str, Any], worker: str) -> None:
+        if worker not in env_files:
+            return
+        env_file = Path(env_files[worker])
+        if not env_file.is_absolute():
+            raise ValueError(f"env file for {worker} must be absolute")
+        container["env_file"] = [str(env_file)]
+
     for name, container in containers.items():
         worker = container["worker"].removeprefix("package://")
-        if worker in env_files:
-            env_file = Path(env_files[worker])
-            if not env_file.is_absolute():
-                raise ValueError(f"env file for {worker} must be absolute")
-            container["env_file"] = [str(env_file)]
+        attach_env_file(container, worker)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == runner_worker(contract):
@@ -690,6 +694,9 @@ def project_scaffold(
                 raise ValueError("template profiles require iii-directory in the exact stack")
             containers["iii-directory"] = {"worker": "package://iii-directory", "version": versions["iii-directory"]}
             package_names["iii-directory"] = ["iii-directory"]
+            # This container is born after the pass above, so it still needs the
+            # executor's private env file when one was supplied for it.
+            attach_env_file(containers["iii-directory"], "iii-directory")
         for name in package_names["iii-directory"]:
             containers[name]["config_name"] = f"{namespace}-directory"
             containers[name].setdefault("config_override", {}).update({

@@ -332,6 +332,7 @@ jobs:
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           HARNESS_E2E_STACK_LOCK: ${{ env.stack_lock }}
         run: scripts/run_exact_stack_group.sh
 
