@@ -249,11 +249,18 @@ prepare_code_fixtures() {
   export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
 }
 
+# A provider the stack declares is expected to have its key, so its absence is
+# said out loud. It is not a gate: the group still runs, and whatever the
+# missing credential breaks is reported as the scenario failure it causes
+# rather than as a refusal to start.
 write_provider_secret() {
   local worker=$1 variable=$2 value=${!2:-}
   jq -e --arg worker "$worker" \
     '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
-  [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
+  if [[ -z "$value" ]]; then
+    log "[WARN] $variable is not set; $worker starts without its credential"
+    return 0
+  fi
   write_secret_file "$worker" "$variable" "$value"
 }
 
