@@ -382,6 +382,7 @@ fi
 
 project_args=(
   --contract "$contract_path"
+  --base-compose "$base_compose"
   --namespace "$namespace"
   --data-dir "$e2e_data"
   --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir"
@@ -397,10 +398,6 @@ if [[ -n "$project_template" ]]; then
   if [[ "$template_project" != "$project_dir" ]]; then
     project_args+=(--fixture-compose "$compose_file")
   fi
-else
-  # Without a template the declared stack comes from the repository, so what
-  # runs is readable in a file instead of synthesized from the resolved roots.
-  project_args+=(--base-compose "$base_compose")
 fi
 if [[ "$profile_assets" == true ]]; then
   project_args+=(--profile-root "$project_dir")
@@ -446,7 +443,7 @@ else
   add_args=("file=$compose_file")
   while IFS= read -r root; do
     add_args+=("worker=$root")
-  done < <(python3 "$contract_tool" roots --contract "$contract_path")
+  done < <(python3 "$contract_tool" roots --contract "$contract_path" --compose "$compose_file")
   compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
   await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 fi
