@@ -146,11 +146,17 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
     runtime = obj(contract.get("runtime"))
     results = obj(read_json(artifacts / "results.json")) if artifacts else {}
     snapshot = obj(read_json(args.profile_snapshot)) if args.profile_snapshot else {}
+    # The versions that ran are the ones the engine installed, which the group
+    # records once the project is up. A declaration carries selectors, so this
+    # is the only place an exact version exists.
+    evidence = obj(read_json(artifacts / "compose-evidence.json")) if artifacts else {}
+    observed = obj(obj(evidence.get("runtime")).get("observed_versions"))
     return prune(
         {
             "plan_sha256": plan.get("sha256"),
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
+            "stack_versions": observed or None,
             "stack_overrides": runtime.get("stack") or None,
             "stack_lock_sha256": args.contract_sha256,
             "runner_revision": args.runner_sha,
