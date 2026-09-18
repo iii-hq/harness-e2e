@@ -727,7 +727,6 @@ def main() -> int:
     materialize.add_argument("--output", type=Path, required=True)
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
-    roots.add_argument("--contract", type=Path, required=True)
     roots.add_argument("--compose", type=Path, required=True)
     template = commands.add_parser("group-template")
     template.add_argument("--contract", type=Path, required=True)

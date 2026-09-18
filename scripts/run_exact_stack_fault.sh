@@ -59,8 +59,10 @@ test -x "$supervisor"
 test -x "$e2e_bin"
 test -f "$profile_path"
 observed_version=$($e2e_bin --version | awk '{print $2}')
-expected_version=$(jq -r '.orchestration.roots[] | select(.role == "runner") | .version' "$contract_path")
-[[ "$observed_version" == "$expected_version" ]]
+# The declaration carries a selector, so an exact version is only expected when
+# Release Control pinned one for this execution.
+expected_version=$(jq -r '.runtime.stack["harness-e2e"] // "latest"' "$contract_path")
+[[ "$expected_version" == "latest" || "$observed_version" == "$expected_version" ]]
 python3 "$contract_tool" manifest --contract "$contract_path" \
   --output "$artifact_dir/campaign-manifest.json"
 python3 "$HARNESS_E2E_HARNESS_ROOT/scripts/run_e2e_campaign.py" \

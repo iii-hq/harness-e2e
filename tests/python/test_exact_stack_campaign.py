@@ -200,14 +200,19 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 (root / "project/agents").mkdir(parents=True)
                 (root / "template-assets/agents").mkdir(parents=True)
                 (root / "template-assets/agents/tech-lead.md").write_text("selected template")
-                (root / "contract.json").write_text(json.dumps({"orchestration": {"nodes": [
-                    {"worker": "harness", "version": "1.2.3", "kind": "binary"},
-                ]}}))
+                (root / "contract.json").write_text("{}")
+                # The declaration names the workers whose skills are pinned.
+                (root / "artifacts/stack").mkdir(parents=True)
+                (root / "artifacts/stack/declared-workers.json").write_text(
+                    json.dumps([{"worker": "harness", "version": "1.2.3"}])
+                )
                 shell = '''set -Eeuo pipefail
 run_root=$1
 artifact_dir=$1/artifacts
 project_dir=$1/project
 contract_path=$1/contract.json
+compose_file=$1/worker-compose.yaml
+contract_tool="$2"
 profile_assets=true
 fail() { printf '%s\\n' "$1" >&2; return 1; }
 project_trigger() {
@@ -219,7 +224,7 @@ project_trigger() {
   printf '{"source":{"version":"1.2.3"}}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
                     env={**os.environ, "MODE": mode}, capture_output=True, text=True)
                 if mode == "broken":
                     self.assertNotEqual(result.returncode, 0)
@@ -268,7 +273,7 @@ project_trigger() {
   printf '{"id":"console-ui"}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
                                         env={**os.environ, "AVAILABLE_AFTER": str(available_after)},
                                         capture_output=True, text=True)
                 calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]

@@ -253,8 +253,6 @@ prepare_code_fixtures() {
 # rather than as a refusal to start.
 write_provider_secret() {
   local worker=$1 variable=$2 value=${!2:-}
-  jq -e --arg worker "$worker" \
-    '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   if [[ -z "$value" ]]; then
     log "[WARN] $variable is not set; $worker starts without its credential"
     return 0
@@ -268,8 +266,6 @@ write_provider_secret() {
 forward_worker_secret() {
   local worker=$1 variable=$2 value=${!2:-}
   [[ -n "$value" ]] || return 0
-  jq -e --arg worker "$worker" \
-    '.orchestration.nodes | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   write_secret_file "$worker" "$variable" "$value"
 }
 
@@ -441,10 +437,14 @@ else
   add_args=("file=$compose_file")
   while IFS= read -r root; do
     add_args+=("worker=$root")
-  done < <(python3 "$contract_tool" roots --contract "$contract_path" --compose "$compose_file")
+  done < <(python3 "$contract_tool" roots --compose "$compose_file")
   compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
   await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 fi
+
+python3 "$contract_tool" roots --compose "$compose_file" \
+  | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
+  | jq -sc '.' >"$artifact_dir/stack/declared-workers.json"
 
 failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
@@ -469,7 +469,7 @@ if [[ "$profile_assets" == true ]]; then
       # not turn a requested profile into an execution with different assets.
       grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
     fi
-  done < <(jq -c '.orchestration.nodes[] | select(.kind == "binary") | {worker,version}' "$contract_path")
+  done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
   # Registry bundles may also contain profiles. The explicitly selected
   # template owns collisions; restore its files after the versioned downloads.
   for folder in agents skills; do
