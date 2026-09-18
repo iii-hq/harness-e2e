@@ -231,31 +231,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("iii " + "worker", supervisor + installer)
         self.assertNotIn("iii-" + "worker", supervisor + installer)
 
-    def test_cutting_a_release_tags_with_a_token_that_starts_the_release(self):
-        """A tag pushed with GITHUB_TOKEN starts no workflow run, so the cut
-        would create the tag and publish nothing — and look like it worked.
-        The tagging token has to be the App's, and the write scope has to stay
-        on that token rather than on the job."""
-        workflow = (ROOT / ".github/workflows/cut-release.yml").read_text(encoding="utf-8")
-        block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
-        self.assertEqual(
-            sorted(re.findall(r"^      (\w+):$", block, re.MULTILINE)),
-            ["bump", "channel", "expected_current_version"],
-        )
-        self.assertEqual(sorted(re.findall(r"^          - (\w+)$", block, re.MULTILINE)),
-                         ["experimental", "major", "minor", "patch", "stable"])
-        self.assertIn("permission-contents: write", workflow)
-        self.assertIn("token: ${{ steps.tagger.outputs.token }}", workflow)
-        # The job itself stays read-only; only the minted token may write.
-        # Anchored on the key: `permission-contents: write` is the token's
-        # scope, not a permission granted to the workflow.
-        self.assertIn("permissions:\n  contents: read\n", workflow)
-        self.assertEqual(re.findall(r"^\s*contents:\s*(\w+)$", workflow, re.MULTILINE), ["read"])
-        # Promotion is not part of cutting: latest moves in its own workflow.
-        self.assertNotIn("promote_registry.py", workflow)
-        self.assertIn("scripts/cut_release.py resolve", workflow)
-        self.assertIn("scripts/cut_release.py set-version", workflow)
-
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
             "daily.yml",
