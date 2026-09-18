@@ -140,13 +140,13 @@ jobs:
             --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
             --output-dir target/harness-e2e-contract/contracts >/dev/null
           printf 'matrix=%s\n' \
-            "$(jq -c '.matrix' target/harness-e2e-contract/contracts/resolution.json)" >>"$GITHUB_OUTPUT"
+            "$(jq -c '.matrix' target/harness-e2e-contract/contracts/dispatch.json)" >>"$GITHUB_OUTPUT"
 
       - name: Validate every materialized contract
         run: |
           set -euo pipefail
           for contract in target/harness-e2e-contract/contracts/*.json; do
-            [[ "$(basename "$contract")" == resolution.json ]] && continue
+            [[ "$(basename "$contract")" == dispatch.json ]] && continue
             python3 scripts/exact_stack_campaign.py validate --contract "$contract" >/dev/null
           done
 
@@ -377,7 +377,7 @@ jobs:
             --artifacts target/harness-e2e-exact-stack \
             --profile-snapshot target/harness-e2e-contract/profile.json \
             --plan target/harness-e2e-contract/plan.json \
-            --resolution target/harness-e2e-contract/contracts/resolution.json \
+            --contract target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json \
             --contract-sha256 '${{ steps.contract.outputs.sha256 }}' \
             --runner-sha '${{ inputs.runner_sha }}' \
             --cli-version '${{ inputs.cli_version }}'
@@ -473,7 +473,7 @@ jobs:
                   >"$destination/failure.json"
               fi
             done < <(python3 scripts/exact_stack_campaign.py groups --contract "$contract")
-          done < <(find target/harness-e2e-contract/contracts -name '*.json' ! -name resolution.json | sort)
+          done < <(find target/harness-e2e-contract/contracts -name '*.json' ! -name dispatch.json | sort)
 
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
@@ -516,6 +516,9 @@ jobs:
           test -f target/harness-e2e-campaign/execution-summary.json \
             || jq -n '{campaigns:[],unavailable:"the finalizer produced no summary"}' \
                  >target/harness-e2e-campaign/execution-summary.json
+          # This job aggregates every campaign, so it has no shard to name. The
+          # stack and CLI are the execution's, identical in each contract.
+          contract=$(find target/harness-e2e-contract/contracts -name '*.json' ! -name dispatch.json | sort | head -1)
           python3 scripts/report_execution.py summary \
             --execution-id '${{ inputs.execution_id }}' \
             --artifact-name 'e2e-observation-${{ inputs.execution_id }}-gh-${{ github.run_attempt }}' \
@@ -523,7 +526,7 @@ jobs:
             --summary target/harness-e2e-campaign/execution-summary.json \
             --plan target/harness-e2e-contract/plan.json \
             --profile-snapshot target/harness-e2e-contract/profile.json \
-            --resolution target/harness-e2e-contract/contracts/resolution.json \
+            --contract "$contract" \
             --runner-sha '${{ inputs.runner_sha }}' \
             --cli-version '${{ inputs.cli_version }}'
 

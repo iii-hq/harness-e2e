@@ -283,14 +283,13 @@ def main() -> int:
                 }
             )
 
+    # The shards this execution runs on. What each shard runs on top of is in
+    # its contract, which is the one place that states it.
     summary = {
         "matrix": {"include": include},
-        "stack_overrides": pinned,
-        "cli_version": cli["version"],
         "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
-        **({"template": template} if template else {}),
     }
-    (args.output_dir / "resolution.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (args.output_dir / "dispatch.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(canonical(summary))
     return 0
 

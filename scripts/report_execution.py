@@ -140,7 +140,10 @@ def collect_runs(artifacts: Path) -> tuple[list[dict[str, Any]], str]:
 
 def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, Any]:
     plan = obj(read_json(args.plan)) if args.plan else {}
-    resolution = obj(read_json(args.resolution)) if args.resolution else {}
+    # The contract states the stack and the CLI once. Reading them from there
+    # keeps the dispatch summary free of a second copy to keep in step.
+    contract = obj(read_json(args.contract)) if args.contract else {}
+    runtime = obj(contract.get("runtime"))
     results = obj(read_json(artifacts / "results.json")) if artifacts else {}
     snapshot = obj(read_json(args.profile_snapshot)) if args.profile_snapshot else {}
     return prune(
@@ -148,12 +151,12 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "plan_sha256": plan.get("sha256"),
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
-            "stack_overrides": resolution.get("stack_overrides"),
+            "stack_overrides": runtime.get("stack") or None,
             "stack_lock_sha256": args.contract_sha256,
             "runner_revision": args.runner_sha,
-            "cli_version": resolution.get("cli_version") or args.cli_version,
+            "cli_version": obj(runtime.get("cli")).get("version") or args.cli_version,
             "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
-            "template": resolution.get("template"),
+            "template": runtime.get("template"),
             "result_contract_sha256": results.get("result_contract_sha256"),
         }
     )
@@ -337,7 +340,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--outcome", help="what the group step concluded")
     parser.add_argument("--profile-snapshot", type=Path)
     parser.add_argument("--plan", type=Path)
-    parser.add_argument("--resolution", type=Path)
+    parser.add_argument("--contract", type=Path)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--contract-sha256")
     parser.add_argument("--runner-sha")
