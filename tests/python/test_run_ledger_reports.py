@@ -240,6 +240,17 @@ class ReportPayloadTests(unittest.TestCase):
 
 
 class StackResolutionTests(unittest.TestCase):
+    def test_runner_release_version_pins_the_runner_unless_the_stack_does(self):
+        plan = {"runner": {"version": "0.11.2-experimental"}}
+        self.assertEqual(resolve_stack_lock.runner_selector(plan, {}), "0.11.2-experimental")
+        self.assertEqual(
+            resolve_stack_lock.runner_selector(plan, {"harness-e2e": "0.11.1-experimental"}),
+            "0.11.1-experimental",
+        )
+        self.assertEqual(resolve_stack_lock.runner_selector({}, {}), "latest")
+        with self.assertRaises(resolve_stack_lock.ResolutionError):
+            resolve_stack_lock.runner_selector({"runner": {"version": "latest"}}, {})
+
     def test_main_freezes_template_for_all_groups_and_keeps_existing_worker_pins(self):
         template = {"id": "harness-kanban", "repository": "iii-hq/templates", "ref": "main", "revision": "e" * 40}
         snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
