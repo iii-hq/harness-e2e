@@ -12,6 +12,7 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 use crate::wire::{
     FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
+    E2E_SESSION_KIND,
 };
 
 use super::{
@@ -392,6 +393,7 @@ impl StepExecutor for HarnessStepExecutor {
                         context.run_id, context.attempt_id, context.node.id
                     )),
                     session: Some(SessionInit {
+                        kind: Some(E2E_SESSION_KIND.into()),
                         title: Some(format!("Harness E2E workflow: {}", context.node.id)),
                         metadata: Some(json!({
                             "e2e_workflow_id": context.workflow_id,
@@ -552,6 +554,7 @@ impl StepExecutor for BoundedHarnessStepExecutor {
                         context.run_id, context.attempt_id, context.node.id
                     )),
                     session: Some(SessionInit {
+                        kind: Some(E2E_SESSION_KIND.into()),
                         title: Some(format!("Harness E2E workflow: {}", context.node.id)),
                         metadata: Some(json!({
                             "e2e_workflow_id": context.workflow_id,

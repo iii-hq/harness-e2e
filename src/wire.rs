@@ -147,10 +147,20 @@ pub struct SendOptions {
     pub metadata: Option<Value>,
 }
 
+/// The session kind every suite-made session carries (`SessionMeta.kind`).
+/// The console lists `user` sessions by default, so stamping `e2e` keeps a
+/// run's sessions — and the sub-agents the harness spawns under them, which
+/// inherit it — out of a person's conversation list.
+pub const E2E_SESSION_KIND: &str = "e2e";
+
 #[derive(Debug, Clone, Default, Serialize, JsonSchema)]
 pub struct SessionInit {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Stored on creation only; every send site passes [`E2E_SESSION_KIND`].
+    /// A harness that predates the field ignores it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<Value>,
 }
@@ -1011,6 +1021,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("max_turns"));
+    }
+
+    #[test]
+    fn session_init_carries_the_e2e_kind_on_the_wire() {
+        let init = serde_json::to_value(SessionInit {
+            title: Some("Harness E2E: probe".into()),
+            kind: Some(E2E_SESSION_KIND.into()),
+            metadata: None,
+        })
+        .unwrap();
+        // The exact string session-manager's `SessionKind` accepts: `e2e`,
+        // never `e2_e` or `E2E`.
+        assert_eq!(init["kind"], "e2e");
+        assert!(init.get("metadata").is_none());
+        let bare = serde_json::to_value(SessionInit::default()).unwrap();
+        assert!(bare.get("kind").is_none());
     }
 
     #[test]

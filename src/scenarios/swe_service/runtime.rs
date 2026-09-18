@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use crate::context::E2eContext;
 use crate::wire::{
     FunctionPolicy, MessageInput, SendOptions, SendRequest, SendResponse, SessionInit,
-    SessionMetricsResponse, SessionTreeResponse,
+    SessionMetricsResponse, SessionTreeResponse, E2E_SESSION_KIND,
 };
 use crate::workflow::{
     CapturedWorkflowAsset, PortValueKind, StepCatalog, StepEvaluation, StepExecutor,
@@ -501,6 +501,7 @@ impl Shared {
                 provider: Some(self.provider.clone()),
                 idempotency_key: Some(format!("swe:{}:{}", execution.run_id, execution.attempt_id)),
                 session: Some(SessionInit {
+                    kind: Some(E2E_SESSION_KIND.into()),
                     title: Some(self.case.description().into()),
                     metadata: Some(
                         json!({"e2e_scenario":self.case.id,"e2e_attempt_id":execution.attempt_id}),
