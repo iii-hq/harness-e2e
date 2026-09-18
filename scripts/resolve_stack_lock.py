@@ -69,6 +69,19 @@ class ResolutionError(RuntimeError):
     """A stack the campaign cannot be assembled from."""
 
 
+def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
+    """An explicit stack pin wins; otherwise use Release Control's release."""
+    if RUNNER_ROOT in pinned:
+        return str(pinned[RUNNER_ROOT])
+    runner = plan.get("runner")
+    version = runner.get("version") if isinstance(runner, dict) else None
+    if version is None:
+        return "latest"
+    if not isinstance(version, str) or not EXACT_VERSION.fullmatch(version):
+        raise ResolutionError("plan runner version is not an exact version")
+    return version
+
+
 def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -356,7 +369,11 @@ def main() -> int:
     runtime = runtime_roots(snapshot)
     roles |= {worker: "runtime" for worker in runtime}
     graphs = [
-        resolve_graph(worker, str(pinned.get(worker, "latest")), CLI_TARGET)
+        resolve_graph(
+            worker,
+            runner_selector(plan, pinned) if worker == RUNNER_ROOT else str(pinned.get(worker, "latest")),
+            CLI_TARGET,
+        )
         for worker in (TARGET_ROOT, *runtime, RUNNER_ROOT)
     ]
     # Test-stack pins take precedence over a template's defaults. Resolve only
