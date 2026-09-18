@@ -265,17 +265,15 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         },
         "contract",
     )
-    if contract.get("schema") != CONTRACT_SCHEMA:
-        raise ValueError(f"contract.schema must be {CONTRACT_SCHEMA}")
-    require_uuid(contract.get("campaign_id"), "campaign_id")
-    require_uuid(contract.get("execution_id"), "execution_id")
+    # How a run is named and attributed is the dispatcher's business. These
+    # fields are carried and displayed, so the executor asks that they be
+    # present and legible, not that they match a particular spelling.
+    require_text(contract.get("schema"), "schema")
+    require_text(contract.get("campaign_id"), "campaign_id")
+    require_text(contract.get("execution_id"), "execution_id")
     require_positive_integer(contract.get("attempt"), "attempt")
-    key = require_text(contract.get("idempotency_key"), "idempotency_key")
-    if not re.fullmatch(r"rc:e2e:[0-9a-f]{64}", key):
-        raise ValueError("idempotency_key must be rc:e2e:<sha256>")
-    revision = require_text(contract.get("stack_revision"), "stack_revision")
-    if not GIT_SHA.fullmatch(revision):
-        raise ValueError("stack_revision must be a full lowercase git SHA")
+    require_text(contract.get("idempotency_key"), "idempotency_key")
+    require_text(contract.get("stack_revision"), "stack_revision")
 
     cli = require_keys(
         require_keys(contract.get("runtime"), {"cli"}, "runtime").get("cli"),

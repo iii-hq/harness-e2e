@@ -932,6 +932,41 @@ fail() {
             finally:
                 outside.unlink(missing_ok=True)
 
+    def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):
+        contract = campaign_contract()
+        contract.update({
+            "schema": "rc-e2e/v3-preview",
+            "campaign_id": "nightly-2026-09",
+            "execution_id": "run 41",
+            "idempotency_key": "whatever the dispatcher wants",
+            "stack_revision": "main",
+        })
+        validated = MODULE.validate_contract(contract)
+        self.assertEqual(validated["campaign_id"], "nightly-2026-09")
+        self.assertEqual(validated["stack_revision"], "main")
+
+    def test_values_the_executor_turns_into_requests_are_still_checked(self):
+        # A bad value in these reaches a URL or a token exchange rather than a
+        # column, so their shape is not the dispatcher's to choose.
+        cases = (
+            (("security", "oidc_audience"), "not an audience!", "unsupported characters"),
+            (("runtime", "cli", "version"), "latest", "exact version"),
+            (("runtime", "template", "id"), "../../etc/passwd", "iii template id"),
+        )
+        for path, value, expected in cases:
+            with self.subTest(field=".".join(path)):
+                contract = campaign_contract()
+                contract["runtime"]["template"] = {
+                    "id": "linkly-agentic", "repository": "iii-hq/templates",
+                    "ref": "main", "revision": "c" * 40,
+                }
+                target = contract
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                with self.assertRaisesRegex(ValueError, expected):
+                    MODULE.validate_contract(contract)
+
 
 if __name__ == "__main__":
     unittest.main()
