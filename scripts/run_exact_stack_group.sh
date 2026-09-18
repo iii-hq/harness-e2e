@@ -105,8 +105,7 @@ compose_trigger() {
   local function_id=$1
   shift
   "$iii_bin" trigger "$function_id" \
-    --address 127.0.0.1 \
-    --port "$engine_port" \
+    --engine "$engine_url" \
     --namespace "$namespace" \
     --timeout-ms 600000 \
     "$@"
@@ -117,8 +116,7 @@ project_trigger() {
   local payload=$2
   local timeout_ms=${3:-30000}
   "$iii_bin" trigger "$function_id" \
-    --address 127.0.0.1 \
-    --port "$engine_port" \
+    --engine "$engine_url" \
     --namespace "$namespace" \
     --timeout-ms "$timeout_ms" \
     --json "$payload"
@@ -285,7 +283,7 @@ wait_for_engine() {
   local response
   for ((attempt = 0; attempt < wait_seconds; attempt++)); do
     kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
-    response=$("$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' 2>/dev/null || true)
+    response=$("$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
   done
@@ -452,7 +450,7 @@ failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
-"$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
+"$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' \
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 

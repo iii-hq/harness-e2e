@@ -27,7 +27,7 @@ iii --no-update-check --config /runtime-state/config.json &
 sleep 1
 '''
 RUNTIME_REGISTER = '''
-iii trigger configuration::register --address 127.0.0.1 --port 50179 --namespace default --json '{"id":"kanban","name":"Kanban","description":"Evaluation data","schema":{"type":"object","properties":{"data_dir":{"type":"string"}},"required":["data_dir"]},"initial_value":{"data_dir":"/data","preserve_me":true}}'
+iii trigger configuration::register --engine ws://127.0.0.1:50179 --namespace default --json '{"id":"kanban","name":"Kanban","description":"Evaluation data","schema":{"type":"object","properties":{"data_dir":{"type":"string"}},"required":["data_dir"]},"initial_value":{"data_dir":"/data","preserve_me":true}}'
 '''
 RUNTIME_COMPOSE = '''
 exec iii compose --up --engine ws://127.0.0.1:50179 --file /workspace/worker-compose.yaml
@@ -373,7 +373,7 @@ def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
     root = '/workspace/kanban'
     backup = f'/tmp/kanban-hot-reload-{token}'
     logs = docker_exec(candidate, ['/runtime/iii', 'trigger', 'compose::logs',
-                       '--address', '127.0.0.1', '--port', '50179', '--namespace', 'default',
+                       '--engine', 'ws://127.0.0.1:50179', '--namespace', 'default',
                        '--json', json.dumps({'file': '/workspace/worker-compose.yaml', 'tail': 1000})])
     logs_path = evidence / 'hot-reload-compose.log'
     successful_log_queries = 0
