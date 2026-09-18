@@ -1,0 +1,44 @@
+# The stack a campaign measures.
+#
+# This file declares which workers run as containers. Everything else in the
+# graph — state, llm-router, iii-directory, session-manager and the rest — is a
+# dependency the engine resolves from the package, not something declared here.
+#
+# `latest` is the selector. Release Control overrides it per worker through
+# stack.json when an execution has to be pinned to a release.
+#
+# The executor stamps three things at run time, because they are per shard and
+# cannot be written down: the namespace, the runner's data_dir, and the private
+# env files that carry provider credentials.
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs, and which are therefore not under
+  # test. Providers resolve API keys for the router.
+  fp:
+    worker: package://fp
+    version: latest
+
+  browser:
+    worker: package://browser
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s

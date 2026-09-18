@@ -7,6 +7,7 @@ set -Eeuo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/exact_stack_campaign.py"
+base_compose=${HARNESS_E2E_BASE_COMPOSE:-"$repo_root/worker-compose.base.yaml"}
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
@@ -389,6 +390,10 @@ if [[ -n "$project_template" ]]; then
   if [[ "$template_project" != "$project_dir" ]]; then
     project_args+=(--fixture-compose "$compose_file")
   fi
+else
+  # Without a template the declared stack comes from the repository, so what
+  # runs is readable in a file instead of synthesized from the resolved roots.
+  project_args+=(--base-compose "$base_compose")
 fi
 if [[ "$profile_assets" == true ]]; then
   project_args+=(--profile-root "$project_dir")

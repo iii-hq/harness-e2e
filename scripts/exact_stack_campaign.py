@@ -570,6 +570,7 @@ def project_scaffold(
     template: dict[str, Any] | None = None,
     template_packages: dict[str, str] | None = None,
     profile_root: Path | None = None,
+    base: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
@@ -610,7 +611,8 @@ def project_scaffold(
         }
     )
 
-    manifest = copy.deepcopy(template or {})
+    declared = template if template is not None else base
+    manifest = copy.deepcopy(declared or {})
     containers = manifest.setdefault("containers", {})
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
@@ -620,16 +622,29 @@ def project_scaffold(
         if source.startswith("path://"):
             path = Path(source.removeprefix("path://"))
             if not path.is_absolute() and (not source.startswith("path://./") or ".." in path.parts):
-                raise ValueError(f"template worker {name} must stay inside its project")
+                raise ValueError(f"declared worker {name} must stay inside its project")
             continue
         package = source.removeprefix("package://")
         package = (template_packages or {}).get(package, package)
         if not source.startswith("package://") or package not in versions:
-            raise ValueError(f"template worker {name} is not in the exact stack")
+            raise ValueError(f"declared worker {name} is not in the exact stack")
         container["worker"] = f"package://{package}"
         container["version"] = versions[package]
         package_names.setdefault(package, []).append(name)
-    assembled = {node["worker"]: node["version"] for node in orchestration["nodes"] if node["kind"] == "binary"} if template is not None else roots
+    if template is not None:
+        # A template names roles; every binary node still gets a container.
+        assembled = {node["worker"]: node["version"]
+                     for node in orchestration["nodes"] if node["kind"] == "binary"}
+    elif base is not None:
+        # The base file is the declaration: it says what runs, so nothing is
+        # synthesized behind it.
+        assembled = {}
+    else:
+        assembled = roots
+    if template is None and base is not None:
+        for required, role in ((runner_worker(contract), "runner"), (APPLICATION, "application")):
+            if required not in package_names:
+                raise ValueError(f"the declared stack is missing its {role}: {required}")
     for worker in sorted(assembled):
         if worker not in package_names:
             if worker in containers:
@@ -879,6 +894,7 @@ def main() -> int:
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
+    project.add_argument("--base-compose", type=Path)
     project.add_argument("--fixture-compose", type=Path)
     project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
@@ -937,6 +953,11 @@ def main() -> int:
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
             template = yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None
+            base = None
+            if template is None and args.base_compose:
+                base = yaml.safe_load(args.base_compose.read_text())
+                if not isinstance(base, dict):
+                    raise ValueError("base compose must be an object")
             if args.fixture_compose:
                 if template is None:
                     raise ValueError("fixture-compose requires template-compose")
@@ -956,6 +977,7 @@ def main() -> int:
                 template,
                 assignments(args.template_package, "template-package"),
                 args.profile_root,
+                base,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
