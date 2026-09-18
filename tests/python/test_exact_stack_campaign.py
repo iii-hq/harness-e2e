@@ -242,7 +242,7 @@ project_trigger() {
 
     def test_runner_waits_for_an_existing_profile_and_fails_if_it_stays_missing(self):
         source = RUNNER_SCRIPT.read_text()
-        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=materialization")]
+        block = source[source.index("if jq -e '.suite.agent_profile != null'"):source.index("failure_phase=runner_readiness")]
         for available_after in [0, 1, 99]:
             with self.subTest(available_after=available_after), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
@@ -451,6 +451,15 @@ project_trigger() {
         self.assertIn("await_compose_add", runner)
         self.assertIn("compose::operation", runner)
         self.assertNotIn('e2e_data="$run_root/e2e-data"', runner)
+
+    def test_common_runner_waits_for_the_runner_function_after_compose_starts(self):
+        runner = RUNNER_SCRIPT.read_text()
+        self.assertIn("failure_phase=runner_readiness", runner)
+        self.assertIn("E2E runner did not register e2e::scenarios-list", runner)
+        self.assertLess(
+            runner.index("failure_phase=runner_readiness"),
+            runner.index("failure_phase=materialization"),
+        )
 
     def test_common_runner_reports_terminal_failure_and_keeps_partial_results(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -726,6 +735,16 @@ fail() {
         self.assertEqual(environment["HARNESS_E2E_STACK_MODE"], "registry")
         self.assertEqual(environment["HARNESS_E2E_WORKERS_REVISION"], "b" * 40)
         self.assertIn("harness", json.loads(environment["HARNESS_E2E_STACK_VERSIONS"]))
+        runner = scaffold["containers"]["harness-e2e"]
+        self.assertEqual(runner["config_name"], "project-one-harness-e2e")
+        self.assertEqual(
+            runner["config_override"],
+            {
+                "data_dir": str(data_dir),
+                "control_database": "primary",
+                "control_namespace": "project-one",
+            },
+        )
         self.assertNotIn("config_override", scaffold["containers"]["harness"])
         self.assertNotIn("config_name", scaffold["containers"]["harness"])
 
