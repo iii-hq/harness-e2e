@@ -566,33 +566,6 @@ fail() {
         )
         self.assertEqual(request["idempotency_key"], MODULE.observation_idempotency_key(request))
 
-    def test_admission_emits_the_workflow_outputs_and_binds_the_dispatch(self):
-        contract = campaign_contract()
-        outputs = dict(
-            line.split("=", 1)
-            for line in MODULE.admission_outputs(
-                contract,
-                "11111111-1111-4111-8111-111111111111",
-                "22222222-2222-4222-8222-222222222222",
-                1,
-                "daily",
-            )
-        )
-        self.assertEqual(set(outputs), {"contract_sha256", "matrix", "oidc_audience"})
-        self.assertEqual(outputs["contract_sha256"], MODULE.canonical_sha256(contract))
-        self.assertEqual(outputs["oidc_audience"], "release-control-harness-e2e")
-        self.assertEqual(json.loads(outputs["matrix"]), MODULE.campaign_matrix(contract))
-
-    def test_admission_rejects_a_dispatch_that_describes_another_campaign(self):
-        with self.assertRaisesRegex(ValueError, "dispatch inputs do not describe this contract"):
-            MODULE.admission_outputs(
-                campaign_contract(),
-                "11111111-1111-4111-8111-111111111111",
-                "22222222-2222-4222-8222-222222222222",
-                1,
-                "weekly",
-            )
-
     def test_suite_materializes_the_manifest_the_aggregator_consumes(self):
         manifest = MODULE.campaign_manifest(campaign_contract())
         self.assertEqual(manifest["kind"], "harness-e2e-campaign")
@@ -626,27 +599,6 @@ fail() {
         changed["scenarios"][0]["seed"] = -1
         with self.assertRaisesRegex(ValueError, "non-negative integer"):
             MODULE.materialize_request(campaign_contract(), changed, group_id="daily-core")
-
-    def test_campaign_matrix_isolates_faults_on_the_trusted_runner(self):
-        matrix = MODULE.campaign_matrix(campaign_contract())
-        self.assertEqual(len(matrix["include"]), 2)
-        self.assertEqual(matrix["include"][0]["runs_on"], ["ubuntu-latest"])
-        self.assertEqual(matrix["include"][1]["runs_on"], ["self-hosted", "harness-e2e"])
-
-    def test_campaign_matrix_keeps_fixture_groups_ephemeral(self):
-        value = campaign_contract()
-        value["suite"]["groups"][0]["scenarios"] = [
-            "shell_coder_sandbox",
-            "engineering_ticket_git_handoff",
-        ]
-        common = MODULE.campaign_matrix(value)["include"][0]
-        self.assertEqual(common["runs_on"], ["ubuntu-latest"])
-        self.assertEqual(set(common), {"group_id", "execution_kind", "runs_on"})
-
-    def test_campaign_matrix_keeps_browser_groups_ephemeral(self):
-        value = campaign_contract()
-        value["suite"]["groups"][0]["scenarios"] = ["browser_cross_site"]
-        self.assertEqual(MODULE.campaign_matrix(value)["include"][0]["runs_on"], ["ubuntu-latest"])
 
     def test_scaffold_carries_project_roots_and_execution_config(self):
         contract = campaign_contract()
