@@ -22,14 +22,13 @@ containers:
     worker: package://harness-e2e
     version: latest
 
-  # Workers the measurement itself needs, and which are therefore not under
-  # test. Providers resolve API keys for the router.
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
   fp:
     worker: package://fp
-    version: latest
-
-  browser:
-    worker: package://browser
     version: latest
 
   provider-deepseek:

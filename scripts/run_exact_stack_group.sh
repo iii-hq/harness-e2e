@@ -511,6 +511,8 @@ failure_phase=materialization
 python3 "$contract_tool" materialize \
   --contract "$contract_path" \
   --catalog "$artifact_dir/catalog.json" \
+  --workers "$artifact_dir/stack/workers.json" \
+  --namespace "$namespace" \
   --output "$artifact_dir/run-request.json" \
   --group-id "$campaign_group_id"
 

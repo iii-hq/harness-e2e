@@ -267,8 +267,22 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def observed_versions(workers_payload: dict[str, Any], namespace: str | None = None) -> dict[str, str]:
+    """What the engine reports it installed, by short worker name."""
+    rows = workers_payload.get("workers")
+    versions: dict[str, str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("namespace") not in (None, namespace):
+            continue
+        name, version = row.get("name"), row.get("version")
+        if isinstance(name, str) and isinstance(version, str):
+            versions[name.rsplit("/", 1)[-1]] = version
+    return dict(sorted(versions.items()))
+
+
 def materialize_request(
-    contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None
+    contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None,
+    installed: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     runner = require_keys(catalog.get("runner"), {"name", "version", "revision"}, "catalog.runner")
     catalog_sha256 = require_digest(catalog.get("catalog_sha256"), "catalog.catalog_sha256")
@@ -319,11 +333,16 @@ def materialize_request(
         "progress_interval_seconds": suite.get("progress_interval_seconds", 15),
         "run_contract": {
             "mode": {"environment": "demonstration", "decision": "observe_only"},
-            # Which versions actually ran is observed once the engine has
-            # installed them, and travels with the run's evidence.
+            # The declaration carries a selector, so the versions here are the
+            # ones the engine installed, read back before the run starts.
             "target": {
                 "application": APPLICATION,
-                "selector": declared_workers(BASE_COMPOSE).get(APPLICATION, DEFAULT_SELECTOR),
+                "version": (installed or {}).get(APPLICATION, DEFAULT_SELECTOR),
+                "stack": {
+                    "mode": "registry",
+                    "stack_versions": installed or {},
+                    "stack_lock_digest": canonical_sha256(installed or {}),
+                },
             },
             # The plan is this contract: what Release Control froze and sent.
             "plan": {
@@ -392,9 +411,10 @@ def declared_workers(compose_path: Path) -> dict[str, str]:
     for container in (project.get("containers") or {}).values():
         source = str(container.get("worker", ""))
         if source.startswith("package://"):
-            declared[source.removeprefix("package://")] = str(
-                container.get("version", DEFAULT_SELECTOR)
-            )
+            # Compose rewrites a declaration with the registry host it resolved
+            # against, so workers are compared by the name they are known by.
+            package = source.removeprefix("package://").rsplit("/", 1)[-1]
+            declared[package] = str(container.get("version", DEFAULT_SELECTOR))
     return dict(sorted(declared.items()))
 
 
@@ -609,14 +629,7 @@ def compose_evidence(
         raise ValueError("engine worker evidence must contain a workers array")
     # What the project was asked to run is the compose it was assembled from.
     requested = declared_workers(compose_path)
-    observed: dict[str, str] = {}
-    for row in worker_rows:
-        if not isinstance(row, dict) or row.get("namespace") not in (None, namespace):
-            continue
-        name = row.get("name")
-        version = row.get("version")
-        if isinstance(name, str) and isinstance(version, str):
-            observed[name] = version
+    observed = observed_versions(workers_payload, namespace)
     missing = [worker for worker in sorted(requested) if worker not in observed]
     if missing:
         raise ValueError("iii project is missing declared workers: " + ", ".join(missing))
@@ -724,6 +737,8 @@ def main() -> int:
     materialize = commands.add_parser("materialize")
     materialize.add_argument("--contract", type=Path, required=True)
     materialize.add_argument("--catalog", type=Path, required=True)
+    materialize.add_argument("--workers", type=Path)
+    materialize.add_argument("--namespace")
     materialize.add_argument("--output", type=Path, required=True)
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
@@ -767,6 +782,11 @@ def main() -> int:
         if args.command == "validate-layout":
             validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root)
             return 0
+        if args.command == "roots":
+            # The declaration answers this one; there is no contract to read.
+            for root in project_roots(args.compose):
+                print(root)
+            return 0
         contract = validate_contract(load_object(args.contract, "contract"))
         if args.command == "validate":
             print(canonical(contract))
@@ -778,13 +798,14 @@ def main() -> int:
         elif args.command == "manifest":
             args.output.write_text(json.dumps(campaign_manifest(contract), indent=2) + "\n")
         elif args.command == "materialize":
+            installed = observed_versions(
+                load_object(args.workers, "engine workers"), args.namespace
+            ) if args.workers else {}
             request = materialize_request(
-                contract, load_object(args.catalog, "scenario catalog"), group_id=args.group_id
+                contract, load_object(args.catalog, "scenario catalog"),
+                group_id=args.group_id, installed=installed,
             )
             args.output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
-        elif args.command == "roots":
-            for root in project_roots(args.compose):
-                print(root)
         elif args.command == "project":
             try:
                 import yaml
