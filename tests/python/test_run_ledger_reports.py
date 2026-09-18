@@ -8,6 +8,8 @@ agreement — Release Control reads exactly the fields asserted here.
 import importlib.util
 import base64
 import json
+import subprocess
+import os
 import pathlib
 import sys
 import tempfile
@@ -237,6 +239,41 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual(payload["runs"], [])
         self.assertEqual(payload["group"]["evidence"], "none")
         self.assertEqual(payload["group"]["failure"]["outcome"], "infra_failed")
+
+
+class LedgerDeliveryTests(unittest.TestCase):
+    """The artifact is the report; posting it only makes the ledger current."""
+
+    def test_a_report_that_cannot_be_delivered_stays_in_the_artifacts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            artifacts = pathlib.Path(directory)
+            script = pathlib.Path(report_execution.__file__)
+            result = subprocess.run(
+                [sys.executable, str(script), "shard",
+                 "--execution-id", "exec-41", "--campaign-id", "r01", "--group-id", "core",
+                 "--outcome", "success", "--artifacts", str(artifacts),
+                 "--oidc-audience", "rc"],
+                capture_output=True, text=True,
+                env={**os.environ,
+                     "RELEASE_CONTROL_API_URL": "http://127.0.0.1:9/unreachable",
+                     "ACTIONS_ID_TOKEN_REQUEST_URL": "http://127.0.0.1:9/token",
+                     "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "x",
+                     "GITHUB_RUN_ATTEMPT": "1"},
+            )
+            # Release Control being unreachable says nothing about the run.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("not delivered", result.stderr)
+            report = json.loads((artifacts / "ledger-shard.json").read_text())
+            self.assertEqual(report["kind"], "shard")
+            self.assertEqual(report["shard"], "r01/core")
+
+    def test_the_report_key_separates_a_retry_from_a_rerun(self):
+        first = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
+        with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}):
+            rerun = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
+        self.assertEqual(first, report_execution.report_key("shard", Args(campaign_id="r01", group_id="core")))
+        self.assertNotEqual(first, rerun)
+        self.assertTrue(rerun.endswith(":2"))
 
 
 class StackResolutionTests(unittest.TestCase):
