@@ -16,7 +16,6 @@ contract, because a campaign has to be able to say afterwards what it ran.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import json
 import os
@@ -75,47 +74,20 @@ def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def resolve_template(template_id: str | None, token: str | None) -> tuple[dict[str, str] | None, dict[str, str]]:
-    """Resolve main once; the same source and package set serve every shard."""
+def resolve_template(template_id: str | None, token: str | None) -> dict[str, str] | None:
+    """Pin the template to the commit every shard checks out.
+
+    Whether the template exists and what it declares, the executor learns from
+    `iii project init` on that commit, which fails loudly when it does not.
+    """
     if template_id is None:
-        return None, {}
+        return None
     if not isinstance(template_id, str) or not TEMPLATE_ID.fullmatch(template_id):
         raise ResolutionError("template must be an iii template id")
-    import yaml
-
     revision = get_json(f"{GITHUB_API_URL}/repos/{TEMPLATES_REPOSITORY}/commits/main", token=token).get("sha")
     if not isinstance(revision, str) or not GIT_SHA.fullmatch(revision):
         raise ResolutionError("templates main did not resolve to a commit")
-
-    def manifest(path: str) -> dict[str, Any]:
-        entry = get_json(f"{GITHUB_API_URL}/repos/{TEMPLATES_REPOSITORY}/contents/iii/{path}?ref={revision}", token=token)
-        value = yaml.safe_load(base64.b64decode(entry["content"]))
-        if not isinstance(value, dict):
-            raise ResolutionError(f"template manifest {path} must be an object")
-        return value
-
-    if template_id not in manifest("template.yaml").get("templates", []):
-        raise ResolutionError(f"template {template_id} is not in the iii catalog")
-    metadata = manifest(f"{template_id}/template.yaml")
-    if "worker-compose.yaml" not in metadata.get("files", []):
-        raise ResolutionError(f"template {template_id} does not provide a Compose project")
-    if metadata.get("optional"):
-        raise ResolutionError(f"template {template_id} requires interactive language selection")
-    compose = manifest(f"{template_id}/worker-compose.yaml")
-    packages = {}
-    for name, container in compose.get("containers", {}).items():
-        source = container.get("worker", "")
-        if source.startswith("package://"):
-            package = source.removeprefix("package://")
-            # These are historical package names in published project templates.
-            package = {"shell": "ide", "console": "ade"}.get(package, package)
-            selector = str(container.get("version", "latest"))
-            if package in packages and packages[package] != selector:
-                raise ResolutionError(f"template {template_id} declares conflicting versions of {package}")
-            packages[package] = selector
-        elif not source.startswith("path://./") or ".." in Path(source.removeprefix("path://")).parts:
-            raise ResolutionError(f"template worker {name} has an unsupported source: {source}")
-    return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": "main", "revision": revision}, packages
+    return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": "main", "revision": revision}
 
 
 def get_json(url: str, payload: dict[str, Any] | None = None, token: str | None = None) -> Any:
@@ -254,7 +226,7 @@ def main() -> int:
     # stack pin still wins. Either way it is a selector, so it travels with the
     # others and the scaffold lays it over the declaration.
     pinned[RUNNER_ROOT] = runner_selector(plan, pinned)
-    template, _ = resolve_template(plan.get("template"), token)
+    template = resolve_template(plan.get("template"), token)
     cli = resolve_cli(args.cli_version, token)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)

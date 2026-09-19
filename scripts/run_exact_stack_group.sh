@@ -65,15 +65,15 @@ if [[ -n "$project_template" ]]; then
 fi
 compose_state="$run_root/compose-state"
 tools_dir="$run_root/bin"
-secrets_dir="$run_root/secrets"
+env_file="$project_dir/.env"
 # The worker's native execution tree is evidence, not disposable runtime state.
 # Keep it below the uploaded artifact root so a failed results-get or process
 # cleanup cannot erase already committed runs and journal events.
 e2e_data="$artifact_dir/native"
 engine_url="ws://127.0.0.1:${engine_port}"
-mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$secrets_dir" "$e2e_data" \
+mkdir -p "$project_dir" "$compose_state" "$tools_dir" "$e2e_data" \
   "$evaluation_dir" "$artifact_dir/logs" "$artifact_dir/stack"
-chmod 700 "$secrets_dir" "$compose_state"
+chmod 700 "$compose_state"
 
 iii_bin="$tools_dir/iii"
 engine_pid=""
@@ -247,34 +247,6 @@ prepare_code_fixtures() {
   export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
 }
 
-# A provider the stack declares is expected to have its key, so its absence is
-# said out loud. It is not a gate: the group still runs, and whatever the
-# missing credential breaks is reported as the scenario failure it causes
-# rather than as a refusal to start.
-write_provider_secret() {
-  local worker=$1 variable=$2 value=${!2:-}
-  if [[ -z "$value" ]]; then
-    log "[WARN] $variable is not set; $worker starts without its credential"
-    return 0
-  fi
-  write_secret_file "$worker" "$variable" "$value"
-}
-
-# Repassada sem avaliação: o worker recebe a chave quando ela está no ambiente
-# e a execução segue sem ela quando não está. Diferente dos providers, que são
-# roots da orquestração, aqui o alvo é um node do grafo do target.
-forward_worker_secret() {
-  local worker=$1 variable=$2 value=${!2:-}
-  [[ -n "$value" ]] || return 0
-  write_secret_file "$worker" "$variable" "$value"
-}
-
-write_secret_file() {
-  local worker=$1 variable=$2 value=$3
-  printf '%s=%s\n' "$variable" "$value" >"$secrets_dir/$worker.env"
-  chmod 600 "$secrets_dir/$worker.env"
-}
-
 wait_for_engine() {
   local response
   for ((attempt = 0; attempt < wait_seconds; attempt++)); do
@@ -299,11 +271,6 @@ wait_for_compose() {
 
 failure_phase=fixture_setup
 prepare_code_fixtures
-write_provider_secret provider-deepseek DEEPSEEK_API_KEY
-write_provider_secret provider-zai ZAI_API_KEY
-forward_worker_secret iii-directory TYPESAFE_API_KEY
-forward_worker_secret harness TYPESAFE_API_KEY
-forward_worker_secret harness-e2e TYPESAFE_API_KEY
 
 capture_processes "$artifact_dir/stack/processes-before.json"
 
@@ -374,8 +341,25 @@ if [[ "$linkly_fixture" == true ]]; then
     '{repository:"iii-hq/templates",revision:$revision,template:$template}' >"$artifact_dir/stack/fixture-template.json"
 fi
 
+# One env file for the whole project, written after any template scaffold so
+# it replaces the placeholder the template ships. A provider without its key
+# is said out loud and the group still runs; TYPESAFE_API_KEY is optional.
+: >"$env_file"
+chmod 600 "$env_file"
+for variable in DEEPSEEK_API_KEY ZAI_API_KEY; do
+  if [[ -z "${!variable:-}" ]]; then
+    log "[WARN] $variable is not set; its provider starts without a credential"
+  fi
+done
+for variable in DEEPSEEK_API_KEY ZAI_API_KEY TYPESAFE_API_KEY; do
+  if [[ -n "${!variable:-}" ]]; then
+    printf '%s=%s\n' "$variable" "${!variable}" >>"$env_file"
+  fi
+done
+
 project_args=(
   --contract "$contract_path"
+  --env-file "$env_file"
   --base-compose "$base_compose"
   --namespace "$namespace"
   --data-dir "$e2e_data"
@@ -396,10 +380,6 @@ fi
 if [[ "$profile_assets" == true ]]; then
   project_args+=(--profile-root "$project_dir")
 fi
-for secret_file in "$secrets_dir"/*.env; do
-  [[ -f "$secret_file" ]] || continue
-  project_args+=(--env-file "$(basename "$secret_file" .env)=$secret_file")
-done
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
@@ -428,25 +408,21 @@ compose_started=true
 wait_for_compose
 
 failure_phase=project_assembly
+# Without a template every declared worker is asked for and the engine
+# expands each. With one, the template's roles must not be passed — renamed
+# ones would expand into duplicate packages — so only the runner is: it is
+# this repository's addition, and the engine installs what it needs with it.
+add_args=("file=$compose_file")
 if [[ -n "$project_template" ]]; then
-  # A template project is complete on its own terms and is brought up as it
-  # stands; passing its roles to compose::add would expand renamed ones into
-  # duplicate packages. The runner is this repository's addition to it, so it
-  # is the one worker asked for, and the engine installs what the runner needs
-  # along with it — exactly as it does without a template.
-  runner_selector=$(jq -r '.runtime.stack["harness-e2e"] // "latest"' "$contract_path")
-  compose_trigger compose::add "file=$compose_file" "worker=harness-e2e@$runner_selector" \
-    >"$artifact_dir/stack/add.json"
-  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
-  cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
+  add_args+=("worker=harness-e2e@$(jq -r '.runtime.stack["harness-e2e"] // "latest"' "$contract_path")")
 else
-  add_args=("file=$compose_file")
   while IFS= read -r root; do
     add_args+=("worker=$root")
   done < <(python3 "$contract_tool" roots --compose "$compose_file")
-  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 fi
+compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+[[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 
 python3 "$contract_tool" roots --compose "$compose_file" \
   | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
