@@ -802,6 +802,19 @@ fail() {
             finally:
                 outside.unlink(missing_ok=True)
 
+    def test_a_template_project_gets_the_runner_through_compose_add(self):
+        """A template is brought up as it stands and only the runner is asked
+        for, so the engine installs what the runner needs — nothing is declared
+        on its behalf, and no template role is passed to be expanded."""
+        source = RUNNER_SCRIPT.read_text()
+        start = source.index("failure_phase=project_assembly")
+        block = source[start:source.index("failure_phase=project_start", start)]
+        template_branch = block[:block.index("else")]
+        self.assertIn('compose_trigger compose::add "file=$compose_file" "worker=harness-e2e@', template_branch)
+        self.assertNotIn("exact-stack-scaffold", template_branch)
+        self.assertIn("await_compose_add", template_branch)
+        self.assertNotIn("runner_dependencies", MODULE.__dict__)
+
     def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):
         contract = campaign_contract()
         contract.update({

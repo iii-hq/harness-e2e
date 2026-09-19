@@ -429,9 +429,15 @@ wait_for_compose
 
 failure_phase=project_assembly
 if [[ -n "$project_template" ]]; then
-  # The template already contains every pinned binary and its dependency
-  # ordering. compose::add would expand renamed roles into duplicate packages.
-  jq -n '{status:"ok",source:"exact-stack-scaffold"}' >"$artifact_dir/stack/add.json"
+  # A template project is complete on its own terms and is brought up as it
+  # stands; passing its roles to compose::add would expand renamed ones into
+  # duplicate packages. The runner is this repository's addition to it, so it
+  # is the one worker asked for, and the engine installs what the runner needs
+  # along with it — exactly as it does without a template.
+  runner_selector=$(jq -r '.runtime.stack["harness-e2e"] // "latest"' "$contract_path")
+  compose_trigger compose::add "file=$compose_file" "worker=harness-e2e@$runner_selector" \
+    >"$artifact_dir/stack/add.json"
+  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
   cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 else
   add_args=("file=$compose_file")
