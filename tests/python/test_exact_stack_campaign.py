@@ -173,22 +173,31 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(set(merged["engine"]["workers"]), {"base", "iii-stream"})
         self.assertIn("ide", template["containers"])
 
-    def test_selected_assets_are_isolated_and_router_gets_the_provider_secret_files(self):
+    def test_one_env_file_reaches_every_container_including_those_born_later(self):
         contract = campaign_contract({
-            "harness": "1.9.0", "state": "0.22.1", "iii-directory": "1.2.0",
-            "llm-router": "1.4.0", "provider-deepseek": "0.1.0",
+            "harness": "1.9.0", "state": "0.22.1", "llm-router": "1.4.0", "provider-deepseek": "0.1.0",
         })
-        template = {"containers": {worker: {"worker": f"package://{worker}"}
-                    for worker in ("harness", "state", "iii-directory", "llm-router", "provider-deepseek")}}
+        # The template ships its own `./.env` reference; ours replaces it. It does
+        # not name iii-directory, so the agent profile has to create it.
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "state": {"worker": "package://state"},
+            "llm-router": {"worker": "package://llm-router", "env_file": ["./.env"]},
+            "provider-deepseek": {"worker": "package://provider-deepseek"},
+        }}
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"),
-            {"provider-deepseek": "/private/provider.env"}, {}, template, profile_root=Path("/isolated/project"))
-        directory = project["containers"]["iii-directory"]["config_override"]
+            "/private/.env", {}, template, profile_root=Path("/isolated/project"))
+        containers = project["containers"]
+        self.assertIn("harness-e2e", containers)  # the runner is added, never assumed
+        self.assertIn("iii-directory", containers)
+        for name, container in containers.items():
+            with self.subTest(container=name):
+                self.assertEqual(container["env_file"], ["/private/.env"])
+        directory = containers["iii-directory"]["config_override"]
         self.assertFalse(directory["auto_download"])
         self.assertEqual(directory["agents_folder"], "/isolated/project/agents")
-        self.assertEqual(directory["skills_folder"], "/isolated/project/.iii/registry-skills")
-        self.assertEqual(directory["local_skills_folder"], "/isolated/project/skills")
-        self.assertTrue(directory["global_agents_folder"].startswith("/isolated/project/"))
-        self.assertEqual(project["containers"]["llm-router"]["env_file"], ["/private/provider.env"])
+        with self.assertRaisesRegex(ValueError, "must be absolute"):
+            MODULE.project_scaffold(contract, "project-one", Path("/data"), "relative/.env", {}, template)
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
@@ -308,10 +317,15 @@ project_trigger() {
         self.assertNotIn("iii-" + "worker", runner)
         self.assertNotIn("iii." + "lock", runner)
 
-    def test_common_runner_restricts_secret_files(self):
+    def test_common_runner_keeps_the_one_env_file_private_and_out_of_the_evidence(self):
         runner = RUNNER_SCRIPT.read_text()
-        self.assertIn("chmod 600", runner)
-        self.assertLess(runner.index("validate-layout"), runner.index('secrets_dir="$run_root/secrets"'))
+        self.assertIn('env_file="$project_dir/.env"', runner)
+        self.assertIn('chmod 600 "$env_file"', runner)
+        # The runtime tree is checked before any credential is written into it.
+        self.assertLess(runner.index("validate-layout"), runner.index(': >"$env_file"'))
+        # And written after a template scaffold, so it replaces the placeholder.
+        self.assertLess(runner.index("project init"), runner.index(': >"$env_file"'))
+        self.assertNotIn("$artifact_dir/.env", runner)
 
     def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -809,10 +823,12 @@ fail() {
         source = RUNNER_SCRIPT.read_text()
         start = source.index("failure_phase=project_assembly")
         block = source[start:source.index("failure_phase=project_start", start)]
-        template_branch = block[:block.index("else")]
-        self.assertIn('compose_trigger compose::add "file=$compose_file" "worker=harness-e2e@', template_branch)
-        self.assertNotIn("exact-stack-scaffold", template_branch)
-        self.assertIn("await_compose_add", template_branch)
+        template_branch = block[block.index('if [[ -n "$project_template" ]]'):block.index("else")]
+        self.assertIn('add_args+=("worker=harness-e2e@', template_branch)
+        self.assertNotIn("roots --compose", template_branch)  # no template role is passed
+        self.assertEqual(block.count("compose_trigger compose::add"), 1)
+        self.assertNotIn("exact-stack-scaffold", block)
+        self.assertIn("await_compose_add", block)
         self.assertNotIn("runner_dependencies", MODULE.__dict__)
 
     def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):

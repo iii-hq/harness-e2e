@@ -6,7 +6,6 @@ agreement — Release Control reads exactly the fields asserted here.
 """
 
 import importlib.util
-import base64
 import json
 import subprocess
 import os
@@ -288,41 +287,25 @@ class StackResolutionTests(unittest.TestCase):
         with self.assertRaises(resolve_stack_lock.ResolutionError):
             resolve_stack_lock.runner_selector({"runner": {"version": "latest"}}, {})
 
-    def test_template_catalog_and_dependencies_are_read_at_one_main_commit(self):
-        files = {
-            "template.yaml": "templates: [harness, new-template]\n",
-            "new-template/template.yaml": "files: [worker-compose.yaml]\noptional: []\n",
-            "new-template/worker-compose.yaml": "containers:\n  board:\n    worker: package://kanban\n    version: latest\n  local:\n    worker: path://./local\n",
-        }
+    def test_a_template_is_pinned_to_one_main_commit_and_nothing_else_is_read(self):
+        """Whether the template exists and what it declares, the executor learns
+        from `iii project init` on that commit. Resolution only pins the commit."""
         urls = []
         def get(url, **kwargs):
             urls.append(url)
-            if url.endswith("/commits/main"):
-                return {"sha": "a" * 40}
-            path, ref = url.split("/contents/iii/", 1)[1].split("?ref=")
-            self.assertEqual(ref, "a" * 40)
-            return {"content": base64.b64encode(files[path].encode()).decode()}
+            self.assertTrue(url.endswith("/commits/main"), url)
+            return {"sha": "a" * 40}
         with patch.object(resolve_stack_lock, "get_json", side_effect=get):
-            identity, packages = resolve_stack_lock.resolve_template("new-template", None)
-        self.assertEqual(identity["revision"], "a" * 40)
-        self.assertEqual(identity["id"], "new-template")
-        self.assertEqual(packages, {"kanban": "latest"})
-        self.assertEqual(sum(url.endswith("/commits/main") for url in urls), 1)
+            identity = resolve_stack_lock.resolve_template("new-template", None)
+        self.assertEqual(identity, {
+            "id": "new-template", "repository": resolve_stack_lock.TEMPLATES_REPOSITORY,
+            "ref": "main", "revision": "a" * 40,
+        })
+        self.assertEqual(urls, [urls[0]])
         for invalid in ("../harness", {}, ""):
             with self.subTest(invalid=invalid), self.assertRaises(resolve_stack_lock.ResolutionError):
                 resolve_stack_lock.resolve_template(invalid, None)
-        self.assertEqual(resolve_stack_lock.resolve_template(None, None), (None, {}))
-
-    def test_unsupported_or_interactive_templates_fail_before_execution(self):
-        for metadata in ("files: [config.yaml]", "files: [worker-compose.yaml]\noptional: [python]"):
-            responses = [
-                {"sha": "a" * 40},
-                {"content": base64.b64encode(b"templates: [starter]").decode()},
-                {"content": base64.b64encode(metadata.encode()).decode()},
-            ]
-            with self.subTest(metadata=metadata), patch.object(resolve_stack_lock, "get_json", side_effect=responses):
-                with self.assertRaises(resolve_stack_lock.ResolutionError):
-                    resolve_stack_lock.resolve_template("starter", None)
+        self.assertIsNone(resolve_stack_lock.resolve_template(None, None))
 
     def graph(self, worker, version, nodes=(), edges=()):
         return {"root": {"worker": worker, "version": version}, "nodes": list(nodes), "edges": list(edges)}

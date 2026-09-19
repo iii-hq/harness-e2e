@@ -463,7 +463,7 @@ def project_scaffold(
     contract: dict[str, Any],
     namespace: str,
     data_dir: Path,
-    env_files: dict[str, str],
+    env_file: str | None,
     environment: dict[str, str],
     template: dict[str, Any] | None = None,
     template_packages: dict[str, str] | None = None,
@@ -495,25 +495,14 @@ def project_scaffold(
     if not isinstance(overrides, dict):
         raise ValueError("runtime.stack must be an object of worker selectors")
 
-    # The base is the floor: it names the runner, the application under test and
-    # the workers the measurement itself needs. A template is a project laid on
-    # top of it, and whatever role the template provides replaces the base's.
-    manifest = copy.deepcopy(declared_base() if base is None else base)
+    # The project is the template when there is one and the base otherwise.
+    # The runner is this repository's addition to either; it is named here so
+    # its config has a container to land on, and installed by compose::add.
+    if env_file and not Path(env_file).is_absolute():
+        raise ValueError("env file must be absolute")
+    manifest = copy.deepcopy(template if template is not None else (declared_base() if base is None else base))
     containers = manifest.setdefault("containers", {})
-    if template is not None:
-        overlay = copy.deepcopy(template)
-        provided = {
-            (template_packages or {}).get(package, package)
-            for container in (overlay.get("containers") or {}).values()
-            for package in [str(container.get("worker", "")).removeprefix("package://")]
-        }
-        for name in [
-            name for name, container in containers.items()
-            if str(container.get("worker", "")).removeprefix("package://") in provided
-        ]:
-            del containers[name]
-        containers.update(overlay.pop("containers", None) or {})
-        manifest.update(overlay)
+    containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}"})
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
         source = container.get("worker", "")
@@ -535,9 +524,6 @@ def project_scaffold(
             package, container.get("version", DEFAULT_SELECTOR)
         )
         package_names.setdefault(package, []).append(name)
-    for required, role in ((RUNNER, "runner"), (APPLICATION, "application")):
-        if required not in package_names:
-            raise ValueError(f"the declared stack is missing its {role}: {required}")
     if template is not None:
         # Compose expands dependencies by container name, so a template that
         # renamed a role has to point at the name its own project uses.
@@ -549,17 +535,8 @@ def project_scaffold(
                     )[0]
                     for dependency in container["start_after"]
                 ]
-    def attach_env_file(container: dict[str, Any], worker: str) -> None:
-        if worker not in env_files:
-            return
-        env_file = Path(env_files[worker])
-        if not env_file.is_absolute():
-            raise ValueError(f"env file for {worker} must be absolute")
-        container["env_file"] = [str(env_file)]
-
     for name, container in containers.items():
         worker = container["worker"].removeprefix("package://")
-        attach_env_file(container, worker)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
@@ -572,18 +549,6 @@ def project_scaffold(
         elif worker == APPLICATION and harness_override:
             container["config_name"] = f"{namespace}-harness"
             container.setdefault("config_override", {}).update(harness_override)
-    if template is not None and APPLICATION in package_names:
-        providers = [worker for worker in env_files if worker.startswith("provider-")]
-        after = containers[package_names[APPLICATION][0]].setdefault("start_after", [])
-        after.extend(package_names[provider][0] for provider in sorted(providers) if package_names[provider][0] not in after)
-        for provider in providers:
-            containers[package_names[provider][0]].setdefault("start_after", [
-                package_names[worker][0] for worker in ("state", "llm-router") if worker in package_names
-            ])
-        # API keys are resolved by llm-router, including when a provider is a
-        # transitive dependency rather than a root of the measurement stack.
-        for name in package_names.get("llm-router", []):
-            containers[name]["env_file"] = [env_files[worker] for worker in sorted(providers)]
     if profile_root is not None:
         if not profile_root.is_absolute():
             raise ValueError("profile root must be absolute")
@@ -593,9 +558,6 @@ def project_scaffold(
                 "version": DEFAULT_SELECTOR,
             }
             package_names["iii-directory"] = ["iii-directory"]
-            # This container is born after the pass above, so it still needs the
-            # executor's private env file when one was supplied for it.
-            attach_env_file(containers["iii-directory"], "iii-directory")
         for name in package_names["iii-directory"]:
             containers[name]["config_name"] = f"{namespace}-directory"
             containers[name].setdefault("config_override", {}).update({
@@ -607,6 +569,11 @@ def project_scaffold(
                 "agents_skills_folder": str(profile_root / ".agents/skills"),
                 "global_agents_skills_folder": str(profile_root / ".iii/empty/skills"),
             })
+    # One env file, every container. A worker reads the keys it knows and
+    # ignores the rest; the template's own `./.env` reference is replaced by it.
+    if env_file:
+        for container in containers.values():
+            container["env_file"] = [env_file]
     manifest.update({
         "namespace": namespace,
         "startup_timeout": "5m",
@@ -750,7 +717,7 @@ def main() -> int:
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--namespace", required=True)
     project.add_argument("--data-dir", type=Path, required=True)
-    project.add_argument("--env-file", action="append", default=[])
+    project.add_argument("--env-file", type=Path)
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
@@ -831,7 +798,7 @@ def main() -> int:
                 contract,
                 args.namespace,
                 args.data_dir,
-                assignments(args.env_file, "env-file"),
+                str(args.env_file) if args.env_file else None,
                 assignments(args.environment, "environment"),
                 template,
                 assignments(args.template_package, "template-package"),
