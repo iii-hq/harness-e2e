@@ -1,0 +1,4 @@
+# Configuration for Registry interface collection in an isolated engine.
+data_dir: target/interface-collection
+control_database: harness_e2e
+control_namespace: default
