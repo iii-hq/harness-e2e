@@ -71,9 +71,13 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         for selector in (".suite", ".plan.definition", ".security.", ".orchestration", ".runner."):
             self.assertNotIn(selector, workflow, f"workflow selects contract field {selector}")
-        self.assertIn("exact_stack_campaign.py digest", workflow)
         self.assertIn("exact_stack_campaign.py groups", workflow)
         self.assertIn("exact_stack_campaign.py validate", workflow)
+        # The contract's digest is one of those fields. The reporter derives it
+        # from the contract it already reads, using the executor's canonical
+        # implementation, so the workflow neither computes nor carries it.
+        self.assertNotIn("contract-sha256", workflow)
+        self.assertNotIn("py digest", workflow)
 
     def test_release_control_dispatches_a_profile_and_resolves_nothing(self):
         """The five inputs of the run ledger. Release Control names an
