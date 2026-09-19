@@ -38,22 +38,7 @@ CONTRACT_SCHEMA = "rc-e2e/v2"
 CLI_TARGET = "x86_64-unknown-linux-gnu"
 CLI_ASSET = f"iii-{CLI_TARGET}.tar.gz"
 
-#: The application under test. Its Registry graph is the stack a campaign measures.
-TARGET_ROOT = "harness"
-#: Workers the measurement itself needs, and which are therefore not under test.
-RUNTIME_ROOTS = ("browser", "fp", "provider-deepseek", "provider-zai")
-#: The runner executing the scenarios inside that stack.
-RUNNER_ROOT = "harness-e2e"
 
-
-def runtime_roots(snapshot: dict[str, Any]) -> tuple[str, ...]:
-    scenarios = {
-        scenario for campaign in snapshot["campaigns"] for group in campaign["groups"]
-        for scenario in group.get("scenarios", [])
-    }
-    # The HTTP baseline is not a Harness dependency, but needs an exact identity.
-    # The template's shell/console roles use the target graph's ide/ade packages.
-    return RUNTIME_ROOTS + (("http",) if "linkly_tutorial" in scenarios else ())
 
 EXACT_VERSION = re.compile(
     r"^[0-9]+\.[0-9]+\.[0-9]+"
@@ -67,6 +52,10 @@ TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 
 class ResolutionError(RuntimeError):
     """A stack the campaign cannot be assembled from."""
+
+
+#: The runner executing the scenarios inside the declared stack.
+RUNNER_ROOT = "harness-e2e"
 
 
 def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
@@ -84,10 +73,6 @@ def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
 
 def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
-
-
-def canonical_sha256(value: Any) -> str:
-    return f"sha256:{hashlib.sha256(canonical(value).encode()).hexdigest()}"
 
 
 def resolve_template(template_id: str | None, token: str | None) -> tuple[dict[str, str] | None, dict[str, str]]:
@@ -164,89 +149,6 @@ def normalize_sha256(value: Any, label: str) -> str:
     return value if value.startswith("sha256:") else f"sha256:{value}"
 
 
-def resolve_graph(worker: str, selector: str, target: str) -> dict[str, Any]:
-    """Resolve one root to its exact version and the complete graph Compose needs."""
-    payload = get_json(f"{REGISTRY_API_URL}/resolve", {"worker": worker, "version": selector, "target": target})
-    root = payload.get("root") if isinstance(payload, dict) else None
-    graph = payload.get("graph") if isinstance(payload, dict) else None
-    raw_edges = payload.get("edges") if isinstance(payload, dict) else None
-    if not isinstance(root, dict) or not isinstance(graph, list) or not isinstance(raw_edges, list):
-        raise ResolutionError(f"Registry answer for {worker}@{selector} is incomplete")
-    version = root.get("version")
-    if root.get("name") != worker or not isinstance(version, str) or not EXACT_VERSION.fullmatch(version):
-        raise ResolutionError(f"Registry did not resolve {worker}@{selector} to an exact version")
-
-    nodes = []
-    for entry in graph:
-        if not isinstance(entry, dict):
-            raise ResolutionError(f"Registry graph of {worker}@{version} has a malformed node")
-        name, node_version, kind = entry.get("name"), entry.get("version"), entry.get("type")
-        if not isinstance(name, str) or not isinstance(node_version, str) or not EXACT_VERSION.fullmatch(node_version):
-            raise ResolutionError(f"Registry graph of {worker}@{version} has an unpinned node")
-        if kind == "engine":
-            nodes.append({"worker": name, "version": node_version, "kind": kind})
-            continue
-        if kind != "binary":
-            raise ResolutionError(f"node {name}@{node_version} has unsupported artifact kind {kind}")
-        artifact = (entry.get("binaries") or {}).get(target)
-        if not isinstance(artifact, dict):
-            raise ResolutionError(f"node {name}@{node_version} has no {target} artifact")
-        url = artifact.get("url")
-        if not isinstance(url, str) or not url.startswith("https://"):
-            raise ResolutionError(f"node {name}@{node_version} artifact URL must use HTTPS")
-        nodes.append(
-            {
-                "worker": name,
-                "version": node_version,
-                "kind": kind,
-                "artifact": {
-                    "target": target,
-                    "url": url,
-                    "sha256": normalize_sha256(artifact.get("sha256"), f"node {name}@{node_version} checksum"),
-                },
-            }
-        )
-
-    edges = []
-    for entry in raw_edges:
-        if not isinstance(entry, dict) or not isinstance(entry.get("from"), str) or not isinstance(entry.get("to"), str):
-            raise ResolutionError(f"Registry graph of {worker}@{version} has a malformed edge")
-        edges.append({"from": entry["from"], "to": entry["to"]})
-    return {"root": {"worker": worker, "version": version}, "nodes": nodes, "edges": edges}
-
-
-def merge_graphs(roles: dict[str, str], graphs: list[dict[str, Any]]) -> dict[str, Any]:
-    """One graph for the whole project. Two versions of a worker cannot compose."""
-    nodes: dict[str, dict[str, Any]] = {}
-    edges: dict[tuple[str, str], dict[str, str]] = {}
-    for graph in graphs:
-        for node in graph["nodes"]:
-            previous = nodes.get(node["worker"])
-            if previous and previous["version"] != node["version"]:
-                raise ResolutionError(
-                    f"stack needs two versions of {node['worker']}: {previous['version']} and {node['version']}"
-                )
-            nodes.setdefault(node["worker"], node)
-        for edge in graph["edges"]:
-            if edge["from"] == edge["to"]:
-                continue
-            edges.setdefault((edge["from"], edge["to"]), edge)
-
-    roots = sorted(
-        (
-            {"worker": graph["root"]["worker"], "version": graph["root"]["version"], "role": roles[graph["root"]["worker"]]}
-            for graph in graphs
-        ),
-        key=lambda root: (root["role"], root["worker"], root["version"]),
-    )
-    graph = {
-        "roots": roots,
-        "nodes": [nodes[worker] for worker in sorted(nodes)],
-        "edges": [edges[key] for key in sorted(edges)],
-    }
-    return {**graph, "graph_sha256": canonical_sha256(graph)}
-
-
 def resolve_cli(version: str, token: str | None) -> dict[str, str]:
     """The digest of the exact `iii` archive the campaign installs."""
     if not EXACT_VERSION.fullmatch(version):
@@ -261,22 +163,6 @@ def resolve_cli(version: str, token: str | None) -> dict[str, str]:
                 "sha256": normalize_sha256(asset.get("digest"), f"iii/v{version} {CLI_ASSET} digest"),
             }
     raise ResolutionError(f"release iii/v{version} publishes no {CLI_ASSET}")
-
-
-def resolve_stack_revision(harness_version: str, token: str | None) -> str:
-    """The `iii-hq/workers` commit the stack under test was released from."""
-    ref = get_json(
-        f"{GITHUB_API_URL}/repos/{WORKERS_REPOSITORY}/git/ref/tags/harness/v{harness_version}", token=token
-    )
-    obj = ref.get("object") or {}
-    for _ in range(5):
-        sha, kind = obj.get("sha"), obj.get("type")
-        if kind == "commit" and isinstance(sha, str) and GIT_SHA.fullmatch(sha):
-            return sha
-        if kind != "tag":
-            raise ResolutionError(f"harness/v{harness_version} points at unsupported object {kind}")
-        obj = (get_json(f"{GITHUB_API_URL}/repos/{WORKERS_REPOSITORY}/git/tags/{sha}", token=token).get("object")) or {}
-    raise ResolutionError(f"harness/v{harness_version} nests too many annotated tags")
 
 
 def suite_groups(campaign: dict[str, Any]) -> list[dict[str, Any]]:
@@ -307,9 +193,8 @@ def build_contract(
     execution_id: str,
     snapshot: dict[str, Any],
     plan: dict[str, Any],
-    orchestration: dict[str, Any],
     cli: dict[str, str],
-    stack_revision: str,
+    stack: dict[str, str],
     oidc_audience: str,
     template: dict[str, str] | None = None,
 ) -> dict[str, Any]:
@@ -332,9 +217,10 @@ def build_contract(
         "campaign_id": execution_id,
         "execution_id": execution_id,
         "attempt": 1,
-        "stack_revision": stack_revision,
-        "orchestration": orchestration,
-        "runtime": {"cli": cli, **({"template": template} if template else {})},
+        # What the declared stack should resolve to, when Release Control wants
+        # an execution held to particular releases. Empty means the selectors in
+        # the declaration stand.
+        "runtime": {"cli": cli, "stack": stack, **({"template": template} if template else {})},
         "security": {"oidc_audience": oidc_audience},
         "suite": suite,
     }
@@ -363,33 +249,13 @@ def main() -> int:
     if not isinstance(stack, dict):
         raise ResolutionError("stack must be a JSON object")
     pinned = stack.get("versions") if isinstance(stack.get("versions"), dict) else {}
-    template, template_packages = resolve_template(plan.get("template"), token)
-
-    roles = {TARGET_ROOT: "target", RUNNER_ROOT: "runner"}
-    runtime = runtime_roots(snapshot)
-    roles |= {worker: "runtime" for worker in runtime}
-    graphs = [
-        resolve_graph(
-            worker,
-            runner_selector(plan, pinned) if worker == RUNNER_ROOT else str(pinned.get(worker, "latest")),
-            CLI_TARGET,
-        )
-        for worker in (TARGET_ROOT, *runtime, RUNNER_ROOT)
-    ]
-    # Test-stack pins take precedence over a template's defaults. Resolve only
-    # additional packages; re-resolving shared dependencies at latest could
-    # silently replace the release this execution is meant to measure.
-    resolved = {node["worker"] for graph in graphs for node in graph["nodes"]}
-    for worker, selector in sorted(template_packages.items()):
-        if worker not in resolved:
-            graph = resolve_graph(worker, str(pinned.get(worker, selector)), CLI_TARGET)
-            graphs.append(graph)
-            roles[worker] = "runtime"
-            resolved.update(node["worker"] for node in graph["nodes"])
-    orchestration = merge_graphs(roles, graphs)
-    harness_version = next(root["version"] for root in orchestration["roots"] if root["worker"] == TARGET_ROOT)
+    pinned = {str(worker): str(selector) for worker, selector in sorted(pinned.items())}
+    # Release Control names the runner release in the plan, and an explicit
+    # stack pin still wins. Either way it is a selector, so it travels with the
+    # others and the scaffold lays it over the declaration.
+    pinned[RUNNER_ROOT] = runner_selector(plan, pinned)
+    template, _ = resolve_template(plan.get("template"), token)
     cli = resolve_cli(args.cli_version, token)
-    stack_revision = resolve_stack_revision(harness_version, token)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     include = []
@@ -399,9 +265,8 @@ def main() -> int:
             execution_id=args.execution_id,
             snapshot=snapshot,
             plan=plan,
-            orchestration=orchestration,
             cli=cli,
-            stack_revision=stack_revision,
+            stack=pinned,
             oidc_audience=args.oidc_audience,
             template=template,
         )
@@ -418,16 +283,13 @@ def main() -> int:
                 }
             )
 
+    # The shards this execution runs on. What each shard runs on top of is in
+    # its contract, which is the one place that states it.
     summary = {
         "matrix": {"include": include},
-        "harness_version": harness_version,
-        "stack_versions": {node["worker"]: node["version"] for node in orchestration["nodes"]},
-        "stack_revision": stack_revision,
-        "cli_version": cli["version"],
         "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
-        **({"template": template} if template else {}),
     }
-    (args.output_dir / "resolution.json").write_text(json.dumps(summary, indent=2) + "\n")
+    (args.output_dir / "dispatch.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(canonical(summary))
     return 0
 

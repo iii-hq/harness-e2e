@@ -13,10 +13,17 @@ ROOT = Path(__file__).parents[2]
 SCRIPT = ROOT / "scripts" / "exact_stack_campaign.py"
 RUNNER_SCRIPT = ROOT / "scripts" / "run_exact_stack_group.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "exact-stack-e2e.yml"
+BASE_COMPOSE = ROOT / "worker-compose.base.yaml"
 SPEC = importlib.util.spec_from_file_location("exact_stack_campaign", SCRIPT)
 assert SPEC and SPEC.loader
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
+
+import yaml
+
+def declared_base():
+    """The stack this repository declares, as every execution starts from it."""
+    return yaml.safe_load(BASE_COMPOSE.read_text())
 
 
 def campaign_contract(versions: dict[str, str] | None = None):
@@ -147,7 +154,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         }}
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
         self.assertNotIn("harness", project["containers"])
-        self.assertEqual(project["containers"]["subject"]["version"], "1.9.0")
+        self.assertEqual(project["containers"]["subject"]["version"], "latest")
         self.assertEqual(project["containers"]["link"], template["containers"]["link"])
         template["containers"]["link"]["worker"] = "path://../elsewhere"
         with self.assertRaisesRegex(ValueError, "inside its project"):
@@ -193,14 +200,19 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                 (root / "project/agents").mkdir(parents=True)
                 (root / "template-assets/agents").mkdir(parents=True)
                 (root / "template-assets/agents/tech-lead.md").write_text("selected template")
-                (root / "contract.json").write_text(json.dumps({"orchestration": {"nodes": [
-                    {"worker": "harness", "version": "1.2.3", "kind": "binary"},
-                ]}}))
+                (root / "contract.json").write_text("{}")
+                # The declaration names the workers whose skills are pinned.
+                (root / "artifacts/stack").mkdir(parents=True)
+                (root / "artifacts/stack/declared-workers.json").write_text(
+                    json.dumps([{"worker": "harness", "version": "1.2.3"}])
+                )
                 shell = '''set -Eeuo pipefail
 run_root=$1
 artifact_dir=$1/artifacts
 project_dir=$1/project
 contract_path=$1/contract.json
+compose_file=$1/worker-compose.yaml
+contract_tool="$2"
 profile_assets=true
 fail() { printf '%s\\n' "$1" >&2; return 1; }
 project_trigger() {
@@ -212,7 +224,7 @@ project_trigger() {
   printf '{"source":{"version":"1.2.3"}}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
                     env={**os.environ, "MODE": mode}, capture_output=True, text=True)
                 if mode == "broken":
                     self.assertNotEqual(result.returncode, 0)
@@ -261,7 +273,7 @@ project_trigger() {
   printf '{"id":"console-ui"}\\n'
 }
 '''
-                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root)],
+                result = subprocess.run(["bash", "-c", shell + block, "runner", str(root), str(SCRIPT)],
                                         env={**os.environ, "AVAILABLE_AFTER": str(available_after)},
                                         capture_output=True, text=True)
                 calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()]
@@ -285,60 +297,6 @@ project_trigger() {
                 changed['suite']['groups'][0].update(overrides)
                 MODULE.group_template(changed, group['id'])
         self.assertEqual(MODULE.group_template(campaign_contract(), 'daily-core'), '')
-
-    def test_template_keeps_runtime_settings_but_uses_only_contract_versions(self):
-        contract = campaign_contract()
-        template = {'engine': {'workers': {'iii-stream': {}}}, 'containers': {
-            'state': {'worker': 'package://state', 'version': '0.1.0', 'config_override': {'adapter': {'name': 'kv'}}},
-            'harness': {'worker': 'package://harness', 'version': '0.1.0', 'working_dir': '.', 'start_after': ['state'], 'env_file': ['./.env']},
-        }}
-        original = json.loads(json.dumps(template))
-        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, template)
-        self.assertEqual(template, original)
-        self.assertEqual(project['containers']['state']['version'], '0.22.1')
-        self.assertEqual(project['containers']['state']['config_override'], {'adapter': {'name': 'kv'}})
-        self.assertEqual(project['containers']['harness']['version'], '1.9.0')
-        self.assertEqual(project['containers']['harness']['working_dir'], '.')
-        self.assertNotIn('env_file', project['containers']['harness'])
-        self.assertIn('harness-e2e', project['containers'])
-        self.assertEqual(project['engine'], template['engine'])
-        engine = MODULE.project_engine_config(project, 49999)
-        self.assertEqual(engine['workers'][0]['config']['port'], 49999)
-        self.assertIn({'name': 'iii-stream', 'config': {}}, engine['workers'])
-
-    def test_template_cannot_introduce_an_unresolved_worker(self):
-        with self.assertRaisesRegex(ValueError, 'not in the exact stack'):
-            MODULE.project_scaffold(campaign_contract(), 'project-one', Path('/data'), {}, {}, {
-                'containers': {'http': {'worker': 'package://http', 'version': 'latest'}}
-            })
-
-    def test_template_legacy_container_uses_the_targets_canonical_package_pin(self):
-        contract = campaign_contract({'harness': '1.9.0', 'state': '0.22.1', 'ide': '0.11.14'})
-        project = MODULE.project_scaffold(contract, 'project-one', Path('/data'), {}, {}, {
-            'containers': {'shell': {'worker': 'package://shell', 'version': '0.12.8', 'working_dir': '.'}}
-        }, {'shell': 'ide'})
-        self.assertEqual(project['containers']['shell'], {
-            'worker': 'package://ide', 'version': '0.11.14', 'working_dir': '.'
-        })
-        self.assertNotIn('ide', project['containers'])
-
-    def test_template_assembly_pins_transitive_nodes_once_under_their_existing_roles(self):
-        contract = campaign_contract({"harness": "1.9.0", "state": "0.22.1", "ide": "0.11.14", "ade": "1.0.0"})
-        template = {"containers": {
-            "subject": {"worker": "package://harness", "start_after": ["ide", "ade"]},
-            "shell": {"worker": "package://shell"},
-            "console": {"worker": "package://console"},
-        }}
-        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template,
-                                         {"shell": "ide", "console": "ade"})
-        workers = [container["worker"] for container in project["containers"].values()]
-        for node in contract["orchestration"]["nodes"]:
-            self.assertEqual(workers.count(f"package://{node['worker']}"), 1)
-        self.assertEqual(set(project["containers"]["subject"]["start_after"]), {"state", "shell", "console"})
-        block = RUNNER_SCRIPT.read_text().split("failure_phase=project_assembly", 1)[1].split("failure_phase=project_start", 1)[0]
-        template_branch, default_branch = block.split("else", 1)
-        self.assertNotIn("compose_trigger compose::add", template_branch)
-        self.assertIn("compose_trigger compose::add", default_branch)
 
     def test_common_runner_contains_only_the_compose_path(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -613,33 +571,6 @@ fail() {
         )
         self.assertEqual(request["idempotency_key"], MODULE.observation_idempotency_key(request))
 
-    def test_admission_emits_the_workflow_outputs_and_binds_the_dispatch(self):
-        contract = campaign_contract()
-        outputs = dict(
-            line.split("=", 1)
-            for line in MODULE.admission_outputs(
-                contract,
-                "11111111-1111-4111-8111-111111111111",
-                "22222222-2222-4222-8222-222222222222",
-                1,
-                "daily",
-            )
-        )
-        self.assertEqual(set(outputs), {"contract_sha256", "matrix", "oidc_audience"})
-        self.assertEqual(outputs["contract_sha256"], MODULE.canonical_sha256(contract))
-        self.assertEqual(outputs["oidc_audience"], "release-control-harness-e2e")
-        self.assertEqual(json.loads(outputs["matrix"]), MODULE.campaign_matrix(contract))
-
-    def test_admission_rejects_a_dispatch_that_describes_another_campaign(self):
-        with self.assertRaisesRegex(ValueError, "dispatch inputs do not describe this contract"):
-            MODULE.admission_outputs(
-                campaign_contract(),
-                "11111111-1111-4111-8111-111111111111",
-                "22222222-2222-4222-8222-222222222222",
-                1,
-                "weekly",
-            )
-
     def test_suite_materializes_the_manifest_the_aggregator_consumes(self):
         manifest = MODULE.campaign_manifest(campaign_contract())
         self.assertEqual(manifest["kind"], "harness-e2e-campaign")
@@ -674,67 +605,17 @@ fail() {
         with self.assertRaisesRegex(ValueError, "non-negative integer"):
             MODULE.materialize_request(campaign_contract(), changed, group_id="daily-core")
 
-    def test_accepts_exact_registry_prerelease_versions(self):
-        MODULE.validate_contract(campaign_contract({"harness": "1.9.0-next.5", "state": "0.22.1"}))
-
-    def test_campaign_matrix_isolates_faults_on_the_trusted_runner(self):
-        matrix = MODULE.campaign_matrix(campaign_contract())
-        self.assertEqual(len(matrix["include"]), 2)
-        self.assertEqual(matrix["include"][0]["runs_on"], ["ubuntu-latest"])
-        self.assertEqual(matrix["include"][1]["runs_on"], ["self-hosted", "harness-e2e"])
-
-    def test_campaign_matrix_keeps_fixture_groups_ephemeral(self):
-        value = campaign_contract()
-        value["suite"]["groups"][0]["scenarios"] = [
-            "shell_coder_sandbox",
-            "engineering_ticket_git_handoff",
-        ]
-        common = MODULE.campaign_matrix(value)["include"][0]
-        self.assertEqual(common["runs_on"], ["ubuntu-latest"])
-        self.assertEqual(set(common), {"group_id", "execution_kind", "runs_on"})
-
-    def test_campaign_matrix_keeps_browser_groups_ephemeral(self):
-        value = campaign_contract()
-        value["suite"]["groups"][0]["scenarios"] = ["browser_cross_site"]
-        self.assertEqual(MODULE.campaign_matrix(value)["include"][0]["runs_on"], ["ubuntu-latest"])
-
-    def test_requires_exactly_one_runner_and_the_application_under_test(self):
-        missing_runner = campaign_contract()
-        for root in missing_runner["orchestration"]["roots"]:
-            if root["role"] == "runner":
-                root["role"] = "runtime"
-        missing_runner["orchestration"]["roots"].sort(
-            key=lambda root: (root["role"], root["worker"], root["version"])
-        )
-        graph = {key: missing_runner["orchestration"][key] for key in ("roots", "nodes", "edges")}
-        missing_runner["orchestration"]["graph_sha256"] = MODULE.canonical_sha256(graph)
-        with self.assertRaisesRegex(ValueError, "exactly one runner root"):
-            MODULE.validate_contract(missing_runner)
-
-    def test_rejects_a_tampered_graph_digest(self):
-        changed = campaign_contract()
-        changed["orchestration"]["graph_sha256"] = f"sha256:{'0' * 64}"
-        with self.assertRaisesRegex(ValueError, "graph_sha256 does not match"):
-            MODULE.validate_contract(changed)
-
     def test_scaffold_carries_project_roots_and_execution_config(self):
         contract = campaign_contract()
         with tempfile.TemporaryDirectory() as directory:
             data_dir = Path(directory).resolve() / "runs"
             scaffold = MODULE.project_scaffold(contract, "project-one", data_dir, {}, {})
-        roots = {
-            root["worker"]: root["version"]
-            for root in contract["orchestration"]["roots"]
-        }
-        self.assertEqual(set(scaffold["containers"]), set(roots))
-        for worker, version in roots.items():
-            container = scaffold["containers"][worker]
-            self.assertEqual(container["worker"], f"package://{worker}")
-            self.assertEqual(container["version"], version)
-        environment = scaffold["containers"]["harness-e2e"]["environment"]
-        self.assertEqual(environment["HARNESS_E2E_STACK_MODE"], "registry")
-        self.assertEqual(environment["HARNESS_E2E_WORKERS_REVISION"], "b" * 40)
-        self.assertIn("harness", json.loads(environment["HARNESS_E2E_STACK_VERSIONS"]))
+        declared = declared_base()["containers"]
+        self.assertEqual(set(scaffold["containers"]), set(declared))
+        for worker, container in declared.items():
+            scaffolded = scaffold["containers"][worker]
+            self.assertEqual(scaffolded["worker"], f"package://{worker}")
+            self.assertEqual(scaffolded["version"], container.get("version", "latest"))
         runner = scaffold["containers"]["harness-e2e"]
         self.assertEqual(runner["config_name"], "project-one-harness-e2e")
         self.assertEqual(
@@ -764,30 +645,19 @@ fail() {
                 self.assertEqual(harness["config_override"], expected)
                 self.assertEqual(harness["config_name"], "project-one-harness")
 
-    def test_rejects_forbidden_artifacts_and_version_conflicts(self):
-        forbidden = campaign_contract()
-        forbidden["orchestration"]["nodes"][0]["kind"] = "bundle"
-        with self.assertRaisesRegex(ValueError, "forbidden kind bundle"):
-            MODULE.validate_contract(forbidden)
-
-        conflict = campaign_contract()
-        conflict["orchestration"]["nodes"].append(
-            {**conflict["orchestration"]["nodes"][0], "version": "9.9.9"}
-        )
-        conflict["orchestration"]["nodes"].sort(key=lambda node: node["worker"])
-        with self.assertRaisesRegex(ValueError, "more than one version"):
-            MODULE.validate_contract(conflict)
-
-    def test_compose_evidence_binds_graph_yaml_namespace_and_lifecycle(self):
+    def test_compose_evidence_binds_the_declaration_yaml_namespace_and_lifecycle(self):
         contract = campaign_contract()
-        expected = {
-            node["worker"]: node["version"]
-            for node in contract["orchestration"]["nodes"]
-            if node["kind"] == "binary"
-        }
+        expected = {"harness": "1.9.0", "harness-e2e": "0.6.0-experimental"}
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
-            compose_path.write_text("namespace: project-one\ncontainers: {}\n")
+            compose_path.write_text(yaml.safe_dump({
+                "namespace": "project-one",
+                "containers": {
+                    worker: {"worker": f"package://{worker}", "version": "latest"}
+                    for worker in expected
+                },
+            }))
+            declared = MODULE.declared_workers(compose_path)
             evidence = MODULE.compose_evidence(
                 contract,
                 compose_path,
@@ -801,24 +671,24 @@ fail() {
                 },
                 {"before": [], "during": [], "after": []},
             )
-        self.assertEqual(
-            evidence["orchestration_graph_sha256"], contract["orchestration"]["graph_sha256"]
-        )
         self.assertEqual(evidence["contract_sha256"], MODULE.canonical_sha256(contract))
         self.assertEqual(evidence["namespace"], "project-one")
         self.assertEqual(set(evidence["lifecycle"]), {"add", "up", "status", "down"})
         self.assertEqual(
             evidence["runtime"]["requested_roots"],
-            {"fp": "0.2.6", "harness": "1.9.0", "harness-e2e": "0.6.0-experimental"},
+            declared,
         )
-        self.assertEqual(evidence["runtime"]["observed_versions"]["state"], "0.22.1")
+        self.assertEqual(evidence["runtime"]["observed_versions"]["harness"], "1.9.0")
 
     def test_compose_evidence_reports_a_missing_container(self):
         contract = campaign_contract()
         with tempfile.TemporaryDirectory() as directory:
             compose_path = Path(directory) / "worker-compose.yaml"
-            compose_path.write_text("namespace: project-one\ncontainers: {}\n")
-            with self.assertRaisesRegex(ValueError, "missing requested roots: fp"):
+            compose_path.write_text(yaml.safe_dump({
+                "namespace": "project-one",
+                "containers": {"fp": {"worker": "package://fp", "version": "latest"}},
+            }))
+            with self.assertRaisesRegex(ValueError, "missing declared workers: fp"):
                 MODULE.compose_evidence(
                     contract,
                     compose_path,
@@ -931,6 +801,41 @@ fail() {
                     MODULE.package_bundle(root, campaign_contract(), {})
             finally:
                 outside.unlink(missing_ok=True)
+
+    def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):
+        contract = campaign_contract()
+        contract.update({
+            "schema": "rc-e2e/v3-preview",
+            "campaign_id": "nightly-2026-09",
+            "execution_id": "run 41",
+            "idempotency_key": "whatever the dispatcher wants",
+            "stack_revision": "main",
+        })
+        validated = MODULE.validate_contract(contract)
+        self.assertEqual(validated["campaign_id"], "nightly-2026-09")
+        self.assertEqual(validated["stack_revision"], "main")
+
+    def test_values_the_executor_turns_into_requests_are_still_checked(self):
+        # A bad value in these reaches a URL or a token exchange rather than a
+        # column, so their shape is not the dispatcher's to choose.
+        cases = (
+            (("security", "oidc_audience"), "not an audience!", "unsupported characters"),
+            (("runtime", "cli", "version"), "latest", "exact version"),
+            (("runtime", "template", "id"), "../../etc/passwd", "iii template id"),
+        )
+        for path, value, expected in cases:
+            with self.subTest(field=".".join(path)):
+                contract = campaign_contract()
+                contract["runtime"]["template"] = {
+                    "id": "linkly-agentic", "repository": "iii-hq/templates",
+                    "ref": "main", "revision": "c" * 40,
+                }
+                target = contract
+                for key in path[:-1]:
+                    target = target[key]
+                target[path[-1]] = value
+                with self.assertRaisesRegex(ValueError, expected):
+                    MODULE.validate_contract(contract)
 
 
 if __name__ == "__main__":

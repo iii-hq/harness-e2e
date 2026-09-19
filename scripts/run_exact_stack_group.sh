@@ -7,6 +7,7 @@ set -Eeuo pipefail
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/exact_stack_campaign.py"
+base_compose=${HARNESS_E2E_BASE_COMPOSE:-"$repo_root/worker-compose.base.yaml"}
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
@@ -104,8 +105,7 @@ compose_trigger() {
   local function_id=$1
   shift
   "$iii_bin" trigger "$function_id" \
-    --address 127.0.0.1 \
-    --port "$engine_port" \
+    --engine "$engine_url" \
     --namespace "$namespace" \
     --timeout-ms 600000 \
     "$@"
@@ -116,8 +116,7 @@ project_trigger() {
   local payload=$2
   local timeout_ms=${3:-30000}
   "$iii_bin" trigger "$function_id" \
-    --address 127.0.0.1 \
-    --port "$engine_port" \
+    --engine "$engine_url" \
     --namespace "$namespace" \
     --timeout-ms "$timeout_ms" \
     --json "$payload"
@@ -248,11 +247,16 @@ prepare_code_fixtures() {
   export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
 }
 
+# A provider the stack declares is expected to have its key, so its absence is
+# said out loud. It is not a gate: the group still runs, and whatever the
+# missing credential breaks is reported as the scenario failure it causes
+# rather than as a refusal to start.
 write_provider_secret() {
   local worker=$1 variable=$2 value=${!2:-}
-  jq -e --arg worker "$worker" \
-    '.orchestration.roots | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
-  [[ -n "$value" ]] || fail "$variable is required by orchestrated worker $worker"
+  if [[ -z "$value" ]]; then
+    log "[WARN] $variable is not set; $worker starts without its credential"
+    return 0
+  fi
   write_secret_file "$worker" "$variable" "$value"
 }
 
@@ -262,8 +266,6 @@ write_provider_secret() {
 forward_worker_secret() {
   local worker=$1 variable=$2 value=${!2:-}
   [[ -n "$value" ]] || return 0
-  jq -e --arg worker "$worker" \
-    '.orchestration.nodes | any(.worker == $worker)' "$contract_path" >/dev/null || return 0
   write_secret_file "$worker" "$variable" "$value"
 }
 
@@ -277,7 +279,7 @@ wait_for_engine() {
   local response
   for ((attempt = 0; attempt < wait_seconds; attempt++)); do
     kill -0 "$engine_pid" 2>/dev/null || fail "iii engine exited before becoming ready"
-    response=$("$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' 2>/dev/null || true)
+    response=$("$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' 2>/dev/null || true)
     jq -e '.workers != null' <<<"$response" >/dev/null 2>&1 && return 0
     sleep 1
   done
@@ -374,6 +376,7 @@ fi
 
 project_args=(
   --contract "$contract_path"
+  --base-compose "$base_compose"
   --namespace "$namespace"
   --data-dir "$e2e_data"
   --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir"
@@ -434,16 +437,20 @@ else
   add_args=("file=$compose_file")
   while IFS= read -r root; do
     add_args+=("worker=$root")
-  done < <(python3 "$contract_tool" roots --contract "$contract_path")
+  done < <(python3 "$contract_tool" roots --compose "$compose_file")
   compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
   await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
 fi
+
+python3 "$contract_tool" roots --compose "$compose_file" \
+  | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
+  | jq -sc '.' >"$artifact_dir/stack/declared-workers.json"
 
 failure_phase=project_start
 compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
-"$iii_bin" trigger engine::workers::list --address 127.0.0.1 --port "$engine_port" --json '{}' \
+"$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' \
   >"$artifact_dir/stack/workers.json"
 capture_processes "$artifact_dir/stack/processes-during.json"
 
@@ -462,7 +469,7 @@ if [[ "$profile_assets" == true ]]; then
       # not turn a requested profile into an execution with different assets.
       grep -q 'D310 not_found:.*has no published skills bundle' "$receipt" "$error_log" || fail "Could not load pinned skills for $worker"
     fi
-  done < <(jq -c '.orchestration.nodes[] | select(.kind == "binary") | {worker,version}' "$contract_path")
+  done < <(jq -c '.[]' "$artifact_dir/stack/declared-workers.json")
   # Registry bundles may also contain profiles. The explicitly selected
   # template owns collisions; restore its files after the versioned downloads.
   for folder in agents skills; do
@@ -504,6 +511,8 @@ failure_phase=materialization
 python3 "$contract_tool" materialize \
   --contract "$contract_path" \
   --catalog "$artifact_dir/catalog.json" \
+  --workers "$artifact_dir/stack/workers.json" \
+  --namespace "$namespace" \
   --output "$artifact_dir/run-request.json" \
   --group-id "$campaign_group_id"
 

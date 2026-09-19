@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -139,20 +140,29 @@ def collect_runs(artifacts: Path) -> tuple[list[dict[str, Any]], str]:
 
 def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, Any]:
     plan = obj(read_json(args.plan)) if args.plan else {}
-    resolution = obj(read_json(args.resolution)) if args.resolution else {}
+    # The contract states the stack and the CLI once. Reading them from there
+    # keeps the dispatch summary free of a second copy to keep in step.
+    contract = obj(read_json(args.contract)) if args.contract else {}
+    runtime = obj(contract.get("runtime"))
     results = obj(read_json(artifacts / "results.json")) if artifacts else {}
     snapshot = obj(read_json(args.profile_snapshot)) if args.profile_snapshot else {}
+    # The versions that ran are the ones the engine installed, which the group
+    # records once the project is up. A declaration carries selectors, so this
+    # is the only place an exact version exists.
+    evidence = obj(read_json(artifacts / "compose-evidence.json")) if artifacts else {}
+    observed = obj(obj(evidence.get("runtime")).get("observed_versions"))
     return prune(
         {
             "plan_sha256": plan.get("sha256"),
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
-            "stack_versions": resolution.get("stack_versions"),
+            "stack_versions": observed or None,
+            "stack_overrides": runtime.get("stack") or None,
             "stack_lock_sha256": args.contract_sha256,
             "runner_revision": args.runner_sha,
-            "cli_version": resolution.get("cli_version") or args.cli_version,
+            "cli_version": obj(runtime.get("cli")).get("version") or args.cli_version,
             "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
-            "template": resolution.get("template"),
+            "template": runtime.get("template"),
             "result_contract_sha256": results.get("result_contract_sha256"),
         }
     )
@@ -185,6 +195,21 @@ def materialized_payload(args: argparse.Namespace) -> dict[str, Any]:
         "budget": snapshot.get("budget"),
         "identity": identity_of(args, None),
     }
+
+
+def report_key(kind: str, args: argparse.Namespace) -> str:
+    """What this report is about, so redelivering it cannot double count.
+
+    A POST that timed out may still have arrived, and a re-run of the workflow
+    reports the same shard again. Both carry the same key, and the attempt is
+    part of it, so the ledger can tell a retry from a fresh run instead of
+    inferring either.
+    """
+    attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "1")
+    parts = [args.execution_id, kind]
+    if kind == "shard":
+        parts.append(f"{args.campaign_id}/{args.group_id}")
+    return ":".join([*parts, attempt])
 
 
 def bundle_reference(args: argparse.Namespace) -> dict[str, Any] | None:
@@ -294,6 +319,21 @@ def post(api_url: str, execution_id: str, payload: dict[str, Any], token: str) -
 BUILDERS = {"materialized": materialized_payload, "shard": shard_payload, "summary": summary_payload}
 
 
+def ledger_path(kind: str, args: argparse.Namespace) -> Path | None:
+    """Where the report lands, beside the evidence it describes.
+
+    Each of these directories is already uploaded, so a report that could not be
+    delivered is still in the execution's artifacts for Release Control to
+    reconcile from later.
+    """
+    anchor = {
+        "shard": args.artifacts,
+        "materialized": args.plan.parent if args.plan else None,
+        "summary": args.summary.parent if args.summary else None,
+    }[kind]
+    return anchor / f"ledger-{kind}.json" if anchor else None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("kind", choices=sorted(BUILDERS))
@@ -306,7 +346,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--outcome", help="what the group step concluded")
     parser.add_argument("--profile-snapshot", type=Path)
     parser.add_argument("--plan", type=Path)
-    parser.add_argument("--resolution", type=Path)
+    parser.add_argument("--contract", type=Path)
     parser.add_argument("--summary", type=Path)
     parser.add_argument("--contract-sha256")
     parser.add_argument("--runner-sha")
@@ -318,13 +358,34 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    payload = BUILDERS[args.kind](args)
+    payload = {**BUILDERS[args.kind](args), "report_key": report_key(args.kind, args)}
+    rendered = json.dumps(payload, indent=2) + "\n"
     if args.output:
-        args.output.write_text(json.dumps(payload, indent=2) + "\n")
+        args.output.write_text(rendered)
         return 0
-    if not args.api_url:
-        raise ReportError("RELEASE_CONTROL_API_URL is required")
-    accepted = post(args.api_url, args.execution_id, payload, oidc_token(args.oidc_audience))
+
+    # The artifact is the report. Writing it is the part that must not fail:
+    # Release Control reconciles an execution from its artifacts, so a report on
+    # disk is delivered late rather than lost.
+    destination = ledger_path(args.kind, args)
+    if destination:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(rendered)
+
+    # Posting it only makes the ledger current sooner. Whether Release Control
+    # is reachable says nothing about whether the execution went well, so a
+    # delivery that fails is said out loud and does not fail the job.
+    try:
+        if not args.api_url:
+            raise ReportError("RELEASE_CONTROL_API_URL is not set")
+        accepted = post(args.api_url, args.execution_id, payload, oidc_token(args.oidc_audience))
+    # OSError covers urllib's URLError and HTTPError, so a token endpoint that
+    # misbehaves is a delivery problem like any other, not a crash.
+    except (ReportError, OSError, ValueError) as error:
+        where = destination or "nowhere on disk"
+        print(f"[WARN] {args.kind} report not delivered: {error}", file=sys.stderr)
+        print(f"[WARN] it is in the execution's artifacts at {where}", file=sys.stderr)
+        return 0
     print(json.dumps(accepted))
     return 0
 

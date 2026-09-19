@@ -36,9 +36,23 @@ EXECUTION_KINDS = {
     "adaptive_flow",
     "fault_injection",
 }
-ORCHESTRATION_ROLES = {"target", "runtime", "runner"}
-ORCHESTRATION_KINDS = {"binary", "engine"}
+#: The application under test. Its package graph is the stack being measured.
 APPLICATION = "harness"
+#: The runner that executes the scenarios inside that stack.
+RUNNER = "harness-e2e"
+#: What a declaration means when it does not name a version.
+DEFAULT_SELECTOR = "latest"
+#: The stack this repository declares. Every execution starts from it.
+BASE_COMPOSE = Path(__file__).resolve().parents[1] / "worker-compose.base.yaml"
+
+
+def declared_base() -> dict[str, Any]:
+    import yaml
+
+    project = yaml.safe_load(BASE_COMPOSE.read_text())
+    if not isinstance(project, dict):
+        raise ValueError("base compose must be an object")
+    return project
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -170,84 +184,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
     return suite
 
 
-def validate_orchestration(contract: dict[str, Any]) -> dict[str, Any]:
-    orchestration = require_keys(
-        contract.get("orchestration"),
-        {"roots", "nodes", "edges", "graph_sha256"},
-        "orchestration",
-    )
-    roots = orchestration["roots"]
-    nodes = orchestration["nodes"]
-    edges = orchestration["edges"]
-    if not isinstance(roots, list) or not roots:
-        raise ValueError("orchestration.roots must be a non-empty array")
-    if not isinstance(nodes, list) or not nodes:
-        raise ValueError("orchestration.nodes must be a non-empty array")
-    if not isinstance(edges, list):
-        raise ValueError("orchestration.edges must be an array")
-
-    root_keys: list[tuple[str, str, str]] = []
-    for index, root in enumerate(roots):
-        root = require_keys(root, {"worker", "version", "role"}, f"orchestration.roots[{index}]")
-        worker = require_text(root["worker"], f"orchestration.roots[{index}].worker")
-        version = require_version(root["version"], f"orchestration.roots[{index}].version")
-        role = require_text(root["role"], f"orchestration.roots[{index}].role")
-        if role not in ORCHESTRATION_ROLES:
-            raise ValueError(f"orchestration.roots[{index}].role is unknown")
-        root_keys.append((role, worker, version))
-    if root_keys != sorted(root_keys) or len(set(root_keys)) != len(root_keys):
-        raise ValueError("orchestration.roots must be unique and ordered by role, worker, version")
-
-    node_versions: dict[str, str] = {}
-    for index, node in enumerate(nodes):
-        node = require_keys(node, {"worker", "version", "kind"}, f"orchestration.nodes[{index}]")
-        worker = require_text(node["worker"], f"orchestration.nodes[{index}].worker")
-        version = require_version(node["version"], f"orchestration.nodes[{index}].version")
-        kind = require_text(node["kind"], f"orchestration.nodes[{index}].kind")
-        if kind not in ORCHESTRATION_KINDS:
-            raise ValueError(f"orchestration node {worker} has forbidden kind {kind}")
-        if worker in node_versions:
-            raise ValueError(f"orchestration contains more than one version of {worker}")
-        node_versions[worker] = version
-        if kind == "binary":
-            artifact = require_keys(
-                node.get("artifact"), {"target", "url", "sha256"}, f"orchestration.nodes[{index}].artifact"
-            )
-            require_text(artifact["target"], f"orchestration.nodes[{index}].artifact.target")
-            url = require_text(artifact["url"], f"orchestration.nodes[{index}].artifact.url")
-            if not url.startswith("https://"):
-                raise ValueError(f"orchestration node {worker} artifact URL must use https")
-            require_digest(artifact["sha256"], f"orchestration.nodes[{index}].artifact.sha256")
-        elif "artifact" in node:
-            raise ValueError(f"engine node {worker} must not carry an artifact")
-    if [node["worker"] for node in nodes] != sorted(node_versions):
-        raise ValueError("orchestration.nodes must be ordered by worker")
-
-    normalized_edges: list[tuple[str, str]] = []
-    for index, edge in enumerate(edges):
-        edge = require_keys(edge, {"from", "to"}, f"orchestration.edges[{index}]")
-        source = require_text(edge["from"], f"orchestration.edges[{index}].from")
-        destination = require_text(edge["to"], f"orchestration.edges[{index}].to")
-        if source not in node_versions or destination not in node_versions or source == destination:
-            raise ValueError("orchestration edge must connect two distinct declared nodes")
-        normalized_edges.append((source, destination))
-    if normalized_edges != sorted(normalized_edges) or len(set(normalized_edges)) != len(normalized_edges):
-        raise ValueError("orchestration.edges must be unique and ordered by from, to")
-
-    for role, worker, version in root_keys:
-        if node_versions.get(worker) != version:
-            raise ValueError(f"orchestration root {role}:{worker}@{version} is absent from nodes")
-    if len([root for role, root, _ in root_keys if role == "runner"]) != 1:
-        raise ValueError("orchestration must declare exactly one runner root")
-    if APPLICATION not in node_versions:
-        raise ValueError(f"orchestration must include the {APPLICATION} node under test")
-
-    graph = {"roots": roots, "nodes": nodes, "edges": edges}
-    if require_digest(orchestration["graph_sha256"], "orchestration.graph_sha256") != canonical_sha256(graph):
-        raise ValueError("orchestration.graph_sha256 does not match the canonical graph")
-    return orchestration
-
-
 def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
     require_keys(
         contract,
@@ -257,25 +193,20 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
             "execution_id",
             "attempt",
             "idempotency_key",
-            "stack_revision",
-            "orchestration",
             "runtime",
             "security",
             "suite",
         },
         "contract",
     )
-    if contract.get("schema") != CONTRACT_SCHEMA:
-        raise ValueError(f"contract.schema must be {CONTRACT_SCHEMA}")
-    require_uuid(contract.get("campaign_id"), "campaign_id")
-    require_uuid(contract.get("execution_id"), "execution_id")
+    # How a run is named and attributed is the dispatcher's business. These
+    # fields are carried and displayed, so the executor asks that they be
+    # present and legible, not that they match a particular spelling.
+    require_text(contract.get("schema"), "schema")
+    require_text(contract.get("campaign_id"), "campaign_id")
+    require_text(contract.get("execution_id"), "execution_id")
     require_positive_integer(contract.get("attempt"), "attempt")
-    key = require_text(contract.get("idempotency_key"), "idempotency_key")
-    if not re.fullmatch(r"rc:e2e:[0-9a-f]{64}", key):
-        raise ValueError("idempotency_key must be rc:e2e:<sha256>")
-    revision = require_text(contract.get("stack_revision"), "stack_revision")
-    if not GIT_SHA.fullmatch(revision):
-        raise ValueError("stack_revision must be a full lowercase git SHA")
+    require_text(contract.get("idempotency_key"), "idempotency_key")
 
     cli = require_keys(
         require_keys(contract.get("runtime"), {"cli"}, "runtime").get("cli"),
@@ -304,73 +235,7 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("security.oidc_audience contains unsupported characters")
 
     validate_suite(contract.get("suite"))
-    validate_orchestration(contract)
     return contract
-
-
-def runner_worker(contract: dict[str, Any]) -> str:
-    return next(root["worker"] for root in contract["orchestration"]["roots"] if root["role"] == "runner")
-
-
-def role_versions(orchestration: dict[str, Any], role: str) -> dict[str, str]:
-    adjacency: dict[str, set[str]] = {}
-    for edge in orchestration["edges"]:
-        adjacency.setdefault(edge["from"], set()).add(edge["to"])
-    pending = [root["worker"] for root in orchestration["roots"] if root["role"] == role]
-    reachable: set[str] = set()
-    while pending:
-        worker = pending.pop()
-        if worker in reachable:
-            continue
-        reachable.add(worker)
-        pending.extend(sorted(adjacency.get(worker, set()), reverse=True))
-    versions = {node["worker"]: node["version"] for node in orchestration["nodes"] if node["worker"] in reachable}
-    return dict(sorted(versions.items()))
-
-
-def campaign_matrix(contract: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "include": [
-            {
-                "group_id": group["id"],
-                "execution_kind": group["execution_kind"],
-                "runs_on": (
-                    ["self-hosted", "harness-e2e"]
-                    if group["execution_kind"] == "fault_injection"
-                    else ["ubuntu-latest"]
-                ),
-            }
-            for group in contract["suite"]["groups"]
-        ]
-    }
-
-
-def admission_outputs(
-    contract: dict[str, Any],
-    campaign_id: str,
-    execution_id: str,
-    attempt: int,
-    test_plan_id: str,
-) -> list[str]:
-    """Everything the workflow needs, so the workflow needs to know nothing.
-
-    The dispatch inputs are checked against the contract here rather than in
-    YAML: this file is pinned per campaign by runner_sha, so the contract can
-    change shape without the workflow — which is read from the default branch —
-    ever having to change with it.
-    """
-    if (
-        contract["campaign_id"] != campaign_id
-        or contract["execution_id"] != execution_id
-        or contract["attempt"] != attempt
-        or contract["suite"]["id"] != test_plan_id
-    ):
-        raise ValueError("dispatch inputs do not describe this contract")
-    return [
-        f"contract_sha256={canonical_sha256(contract)}",
-        f"matrix={canonical(campaign_matrix(contract))}",
-        f"oidc_audience={contract['security']['oidc_audience']}",
-    ]
 
 
 def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
@@ -402,8 +267,22 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def observed_versions(workers_payload: dict[str, Any], namespace: str | None = None) -> dict[str, str]:
+    """What the engine reports it installed, by short worker name."""
+    rows = workers_payload.get("workers")
+    versions: dict[str, str] = {}
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or row.get("namespace") not in (None, namespace):
+            continue
+        name, version = row.get("name"), row.get("version")
+        if isinstance(name, str) and isinstance(version, str):
+            versions[name.rsplit("/", 1)[-1]] = version
+    return dict(sorted(versions.items()))
+
+
 def materialize_request(
-    contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None
+    contract: dict[str, Any], catalog: dict[str, Any], group_id: str | None = None,
+    installed: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     runner = require_keys(catalog.get("runner"), {"name", "version", "revision"}, "catalog.runner")
     catalog_sha256 = require_digest(catalog.get("catalog_sha256"), "catalog.catalog_sha256")
@@ -441,9 +320,8 @@ def materialize_request(
             }
         )
 
-    target_stack = role_versions(contract["orchestration"], "target")
     request = {
-        "label": f"{suite['label']} · {group['id']} · Harness {target_stack[APPLICATION]}",
+        "label": f"{suite['label']} · {group['id']}",
         "lane": suite["lane"],
         "model": suite["subject"]["model"],
         "provider": suite["subject"]["provider"],
@@ -455,13 +333,15 @@ def materialize_request(
         "progress_interval_seconds": suite.get("progress_interval_seconds", 15),
         "run_contract": {
             "mode": {"environment": "demonstration", "decision": "observe_only"},
+            # The declaration carries a selector, so the versions here are the
+            # ones the engine installed, read back before the run starts.
             "target": {
                 "application": APPLICATION,
-                "version": target_stack[APPLICATION],
+                "version": (installed or {}).get(APPLICATION, DEFAULT_SELECTOR),
                 "stack": {
                     "mode": "registry",
-                    "stack_versions": target_stack,
-                    "stack_lock_digest": canonical_sha256(target_stack),
+                    "stack_versions": installed or {},
+                    "stack_lock_digest": canonical_sha256(installed or {}),
                 },
             },
             # The plan is this contract: what Release Control froze and sent.
@@ -520,8 +400,26 @@ def assignments(values: list[str], label: str) -> dict[str, str]:
     return result
 
 
-def project_roots(contract: dict[str, Any]) -> list[str]:
-    return [f"{root['worker']}@{root['version']}" for root in contract["orchestration"]["roots"]]
+def declared_workers(compose_path: Path) -> dict[str, str]:
+    """The workers a compose project declares, with the selector each carries."""
+    import yaml
+
+    project = yaml.safe_load(compose_path.read_text())
+    if not isinstance(project, dict):
+        raise ValueError("compose project must be an object")
+    declared: dict[str, str] = {}
+    for container in (project.get("containers") or {}).values():
+        source = str(container.get("worker", ""))
+        if source.startswith("package://"):
+            # Compose rewrites a declaration with the registry host it resolved
+            # against, so workers are compared by the name they are known by.
+            package = source.removeprefix("package://").rsplit("/", 1)[-1]
+            declared[package] = str(container.get("version", DEFAULT_SELECTOR))
+    return dict(sorted(declared.items()))
+
+
+def project_roots(compose_path: Path) -> list[str]:
+    return [f"{worker}@{selector}" for worker, selector in declared_workers(compose_path).items()]
 
 
 def group_template(contract: dict[str, Any], group_id: str) -> str:
@@ -570,15 +468,13 @@ def project_scaffold(
     template: dict[str, Any] | None = None,
     template_packages: dict[str, str] | None = None,
     profile_root: Path | None = None,
+    base: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
     if not data_dir.is_absolute():
         raise ValueError("data directory must be absolute")
 
-    orchestration = contract["orchestration"]
-    roots = {root["worker"]: root["version"] for root in orchestration["roots"]}
-    versions = {node["worker"]: node["version"] for node in orchestration["nodes"]}
     scenarios = {
         scenario for group in contract["suite"]["groups"] for scenario in group.get("scenarios", [])
     }
@@ -587,31 +483,37 @@ def project_scaffold(
         harness_override["max_children"] = 16
     if "depth_ladder" in scenarios:
         harness_override["max_depth"] = 6
-    unknown_env_files = sorted(set(env_files) - set(versions))
-    if unknown_env_files:
-        raise ValueError(f"env files name unknown project roots: {', '.join(unknown_env_files)}")
 
     declared_environment: dict[str, dict[str, str]] = {}
     for key, value in environment.items():
         worker, separator, name = key.partition(".")
-        if not separator or worker not in versions or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
+        if not separator or not re.fullmatch(r"[A-Z][A-Z0-9_]*", name):
             raise ValueError(f"invalid container environment assignment: {key}")
         declared_environment.setdefault(worker, {})[name] = value
 
-    # The runner reads its own registry stack identity from the environment.
-    target_stack = role_versions(orchestration, "target")
-    declared_environment.setdefault(runner_worker(contract), {}).update(
-        {
-            "HARNESS_E2E_WORKERS_REPOSITORY": "iii-hq/workers",
-            "HARNESS_E2E_WORKERS_REVISION": contract["stack_revision"],
-            "HARNESS_E2E_STACK_MODE": "registry",
-            "HARNESS_E2E_STACK_VERSIONS": canonical(target_stack),
-            "HARNESS_E2E_STACK_DIGEST": canonical_sha256(target_stack),
-        }
-    )
+    overrides = contract.get("runtime", {}).get("stack") or {}
+    if not isinstance(overrides, dict):
+        raise ValueError("runtime.stack must be an object of worker selectors")
 
-    manifest = copy.deepcopy(template or {})
+    # The base is the floor: it names the runner, the application under test and
+    # the workers the measurement itself needs. A template is a project laid on
+    # top of it, and whatever role the template provides replaces the base's.
+    manifest = copy.deepcopy(declared_base() if base is None else base)
     containers = manifest.setdefault("containers", {})
+    if template is not None:
+        overlay = copy.deepcopy(template)
+        provided = {
+            (template_packages or {}).get(package, package)
+            for container in (overlay.get("containers") or {}).values()
+            for package in [str(container.get("worker", "")).removeprefix("package://")]
+        }
+        for name in [
+            name for name, container in containers.items()
+            if str(container.get("worker", "")).removeprefix("package://") in provided
+        ]:
+            del containers[name]
+        containers.update(overlay.pop("containers", None) or {})
+        manifest.update(overlay)
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
         source = container.get("worker", "")
@@ -620,25 +522,25 @@ def project_scaffold(
         if source.startswith("path://"):
             path = Path(source.removeprefix("path://"))
             if not path.is_absolute() and (not source.startswith("path://./") or ".." in path.parts):
-                raise ValueError(f"template worker {name} must stay inside its project")
+                raise ValueError(f"declared worker {name} must stay inside its project")
             continue
         package = source.removeprefix("package://")
         package = (template_packages or {}).get(package, package)
-        if not source.startswith("package://") or package not in versions:
-            raise ValueError(f"template worker {name} is not in the exact stack")
+        if not source.startswith("package://"):
+            raise ValueError(f"declared worker {name} has an unsupported source: {source}")
         container["worker"] = f"package://{package}"
-        container["version"] = versions[package]
+        # The declaration carries its own selector, and Release Control may hold
+        # a worker to a particular release. The engine resolves what is left.
+        container["version"] = overrides.get(
+            package, container.get("version", DEFAULT_SELECTOR)
+        )
         package_names.setdefault(package, []).append(name)
-    assembled = {node["worker"]: node["version"] for node in orchestration["nodes"] if node["kind"] == "binary"} if template is not None else roots
-    for worker in sorted(assembled):
-        if worker not in package_names:
-            if worker in containers:
-                raise ValueError(f"template container {worker} collides with an exact-stack root")
-            containers[worker] = {"worker": f"package://{worker}", "version": assembled[worker]}
-            package_names[worker] = [worker]
+    for required, role in ((RUNNER, "runner"), (APPLICATION, "application")):
+        if required not in package_names:
+            raise ValueError(f"the declared stack is missing its {role}: {required}")
     if template is not None:
-        # Compose expands dependencies by container name. Assemble the frozen
-        # graph here so renamed template roles cannot create duplicate workers.
+        # Compose expands dependencies by container name, so a template that
+        # renamed a role has to point at the name its own project uses.
         for container in containers.values():
             if "start_after" in container:
                 container["start_after"] = [
@@ -647,14 +549,6 @@ def project_scaffold(
                     )[0]
                     for dependency in container["start_after"]
                 ]
-        for edge in orchestration["edges"]:
-            if edge["from"] not in package_names or edge["to"] not in package_names:
-                continue
-            dependency = package_names[edge["to"]][0]
-            for name in package_names[edge["from"]]:
-                after = containers[name].setdefault("start_after", [])
-                if dependency != name and dependency not in after:
-                    after.append(dependency)
     def attach_env_file(container: dict[str, Any], worker: str) -> None:
         if worker not in env_files:
             return
@@ -668,7 +562,7 @@ def project_scaffold(
         attach_env_file(container, worker)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
-        if worker == runner_worker(contract):
+        if worker == RUNNER:
             container["config_name"] = f"{namespace}-harness-e2e"
             container["config_override"] = {
                 "data_dir": str(data_dir),
@@ -694,9 +588,10 @@ def project_scaffold(
         if not profile_root.is_absolute():
             raise ValueError("profile root must be absolute")
         if "iii-directory" not in package_names:
-            if "iii-directory" not in versions:
-                raise ValueError("template profiles require iii-directory in the exact stack")
-            containers["iii-directory"] = {"worker": "package://iii-directory", "version": versions["iii-directory"]}
+            containers["iii-directory"] = {
+                "worker": "package://iii-directory",
+                "version": DEFAULT_SELECTOR,
+            }
             package_names["iii-directory"] = ["iii-directory"]
             # This container is born after the pass above, so it still needs the
             # executor's private env file when one was supplied for it.
@@ -732,30 +627,15 @@ def compose_evidence(
     worker_rows = workers_payload.get("workers")
     if not isinstance(worker_rows, list):
         raise ValueError("engine worker evidence must contain a workers array")
-    requested = {
-        root["worker"]: root["version"]
-        for root in contract["orchestration"]["roots"]
-    }
-    observed: dict[str, str] = {}
-    for row in worker_rows:
-        if not isinstance(row, dict) or row.get("namespace") not in (None, namespace):
-            continue
-        name = row.get("name")
-        version = row.get("version")
-        if isinstance(name, str) and isinstance(version, str):
-            observed[name] = version
+    # What the project was asked to run is the compose it was assembled from.
+    requested = declared_workers(compose_path)
+    observed = observed_versions(workers_payload, namespace)
     missing = [worker for worker in sorted(requested) if worker not in observed]
     if missing:
-        raise ValueError("iii project is missing requested roots: " + ", ".join(missing))
-    # Artifact identity is enforced by the sha256-pinned lock at download time.
-    # A registered worker whose self-reported metadata version differs from the
-    # registry version is a fleet metadata defect, recorded as a warning rather
-    # than disproof of the stack.
-    version_report_warnings = [
-        f"{worker}: registry {version}, self-reported {observed[worker]}"
-        for worker, version in sorted(requested.items())
-        if observed[worker] != version
-    ]
+        raise ValueError("iii project is missing declared workers: " + ", ".join(missing))
+    # The declaration carries a selector, so the versions that matter are the
+    # ones the engine ended up installing. They are recorded, not compared.
+    version_report_warnings: list[str] = []
 
     forbidden = "iii" + "-worker"
     for phase, rows in processes.items():
@@ -771,7 +651,6 @@ def compose_evidence(
 
     return {
         "contract_sha256": canonical_sha256(contract),
-        "orchestration_graph_sha256": contract["orchestration"]["graph_sha256"],
         "compose_sha256": f"sha256:{hashlib.sha256(compose_path.read_bytes()).hexdigest()}",
         "namespace": namespace,
         "runtime": {
@@ -850,24 +729,20 @@ def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any
 def main() -> int:
     parser = argparse.ArgumentParser()
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("validate", "digest", "matrix", "manifest", "groups"):
+    for name in ("validate", "digest", "manifest", "groups"):
         command = commands.add_parser(name)
         command.add_argument("--contract", type=Path, required=True)
         if name == "manifest":
             command.add_argument("--output", type=Path, required=True)
-    admit = commands.add_parser("admit")
-    admit.add_argument("--contract", type=Path, required=True)
-    admit.add_argument("--campaign-id", required=True)
-    admit.add_argument("--execution-id", required=True)
-    admit.add_argument("--attempt", type=int, required=True)
-    admit.add_argument("--test-plan-id", required=True)
     materialize = commands.add_parser("materialize")
     materialize.add_argument("--contract", type=Path, required=True)
     materialize.add_argument("--catalog", type=Path, required=True)
+    materialize.add_argument("--workers", type=Path)
+    materialize.add_argument("--namespace")
     materialize.add_argument("--output", type=Path, required=True)
     materialize.add_argument("--group-id")
     roots = commands.add_parser("roots")
-    roots.add_argument("--contract", type=Path, required=True)
+    roots.add_argument("--compose", type=Path, required=True)
     template = commands.add_parser("group-template")
     template.add_argument("--contract", type=Path, required=True)
     template.add_argument("--group-id", required=True)
@@ -879,6 +754,7 @@ def main() -> int:
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
+    project.add_argument("--base-compose", type=Path)
     project.add_argument("--fixture-compose", type=Path)
     project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
@@ -906,37 +782,41 @@ def main() -> int:
         if args.command == "validate-layout":
             validate_runtime_layout(args.artifact_root, args.runtime_root, args.allowed_root)
             return 0
+        if args.command == "roots":
+            # The declaration answers this one; there is no contract to read.
+            for root in project_roots(args.compose):
+                print(root)
+            return 0
         contract = validate_contract(load_object(args.contract, "contract"))
         if args.command == "validate":
             print(canonical(contract))
         elif args.command == "digest":
             print(canonical_sha256(contract))
-        elif args.command == "matrix":
-            print(canonical(campaign_matrix(contract)))
         elif args.command == "groups":
             for group in contract["suite"]["groups"]:
                 print(group["id"])
-        elif args.command == "admit":
-            for line in admission_outputs(
-                contract, args.campaign_id, args.execution_id, args.attempt, args.test_plan_id
-            ):
-                print(line)
         elif args.command == "manifest":
             args.output.write_text(json.dumps(campaign_manifest(contract), indent=2) + "\n")
         elif args.command == "materialize":
+            installed = observed_versions(
+                load_object(args.workers, "engine workers"), args.namespace
+            ) if args.workers else {}
             request = materialize_request(
-                contract, load_object(args.catalog, "scenario catalog"), group_id=args.group_id
+                contract, load_object(args.catalog, "scenario catalog"),
+                group_id=args.group_id, installed=installed,
             )
             args.output.write_text(json.dumps(request, indent=2, sort_keys=True) + "\n")
-        elif args.command == "roots":
-            for root in project_roots(contract):
-                print(root)
         elif args.command == "project":
             try:
                 import yaml
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
             template = yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None
+            base = None
+            if args.base_compose:
+                base = yaml.safe_load(args.base_compose.read_text())
+                if not isinstance(base, dict):
+                    raise ValueError("base compose must be an object")
             if args.fixture_compose:
                 if template is None:
                     raise ValueError("fixture-compose requires template-compose")
@@ -956,6 +836,7 @@ def main() -> int:
                 template,
                 assignments(args.template_package, "template-package"),
                 args.profile_root,
+                base,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
