@@ -20,6 +20,7 @@ withholds one: an incomplete report is evidence, an absent report is a gap.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
@@ -29,6 +30,14 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+# The contract's digest has one canonical form, and it is defined where the
+# contract is. Recomputing it here would be a second definition to keep in step.
+_CAMPAIGN = importlib.util.spec_from_file_location(
+    "exact_stack_campaign", Path(__file__).with_name("exact_stack_campaign.py")
+)
+campaign = importlib.util.module_from_spec(_CAMPAIGN)
+_CAMPAIGN.loader.exec_module(campaign)
 
 
 class ReportError(RuntimeError):
@@ -158,7 +167,7 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "definition_sha256": snapshot.get("definition_sha256"),
             "stack_versions": observed or None,
             "stack_overrides": runtime.get("stack") or None,
-            "stack_lock_sha256": args.contract_sha256,
+            "stack_lock_sha256": campaign.canonical_sha256(contract) if contract else None,
             "runner_revision": args.runner_sha,
             "cli_version": obj(runtime.get("cli")).get("version") or args.cli_version,
             "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
@@ -348,7 +357,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--summary", type=Path)
-    parser.add_argument("--contract-sha256")
     parser.add_argument("--runner-sha")
     parser.add_argument("--cli-version")
     parser.add_argument("--artifact-name", help="exact name of this report's GitHub observation bundle")

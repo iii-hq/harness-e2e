@@ -85,7 +85,6 @@ class Args:
             "plan": None,
             "contract": None,
             "summary": None,
-            "contract_sha256": None,
             "runner_sha": None,
             "cli_version": None,
             "artifact_name": None,

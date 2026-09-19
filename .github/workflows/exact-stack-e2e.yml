@@ -259,10 +259,6 @@ jobs:
           mkdir -p target/harness-e2e-exact-stack
           contract=target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
           cp "$contract" target/harness-e2e-exact-stack/stack-lock.json
-          # The digest travels with every run as the instrument's identity, so
-          # it is the executor's canonical one, never a shell approximation.
-          printf 'sha256=%s\n' \
-            "$(python3 scripts/exact_stack_campaign.py digest --contract "$contract")" >>"$GITHUB_OUTPUT"
           printf 'stack_lock<<CONTRACT\n%s\nCONTRACT\n' "$(cat "$contract")" >>"$GITHUB_ENV"
 
       - name: Checkout Kanban fixture
@@ -378,7 +374,6 @@ jobs:
             --profile-snapshot target/harness-e2e-contract/profile.json \
             --plan target/harness-e2e-contract/plan.json \
             --contract target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json \
-            --contract-sha256 '${{ steps.contract.outputs.sha256 }}' \
             --runner-sha '${{ inputs.runner_sha }}' \
             --cli-version '${{ inputs.cli_version }}'
 
