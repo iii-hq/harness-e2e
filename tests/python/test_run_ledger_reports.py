@@ -83,7 +83,7 @@ class Args:
             "outcome": None,
             "profile_snapshot": None,
             "plan": None,
-            "contract": None,
+            "resolution": None,
             "summary": None,
             "contract_sha256": None,
             "runner_sha": None,
@@ -112,11 +112,11 @@ class ReportPayloadTests(unittest.TestCase):
         identity = report_execution.identity_of(Args(plan=self.plan), self.tmp)
         self.assertEqual(identity["subject"], subject)
 
-    def test_template_identity_comes_from_the_contract_not_the_requested_branch(self):
+    def test_template_identity_comes_from_resolution_not_the_requested_branch(self):
         template = {"id": "harness", "repository": "iii-hq/templates", "ref": "main", "revision": "f" * 40}
-        contract = self.tmp / "contract.json"
-        contract.write_text(json.dumps({"runtime": {"template": template}}))
-        self.assertEqual(report_execution.identity_of(Args(plan=self.plan, contract=contract), None)["template"], template)
+        resolution = self.tmp / "resolution.json"
+        resolution.write_text(json.dumps({"template": template}))
+        self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["template"], template)
         self.assertNotIn("template", report_execution.identity_of(Args(plan=self.plan), None))
 
     def test_materialized_states_the_shards_and_planned_runs(self):
