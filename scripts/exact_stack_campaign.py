@@ -594,15 +594,27 @@ def compose_evidence(
     worker_rows = workers_payload.get("workers")
     if not isinstance(worker_rows, list):
         raise ValueError("engine worker evidence must contain a workers array")
+    import yaml
+
     # What the project was asked to run is the compose it was assembled from.
     requested = declared_workers(compose_path)
     observed = observed_versions(workers_payload, namespace)
-    missing = [worker for worker in sorted(requested) if worker not in observed]
-    if missing:
-        raise ValueError("iii project is missing declared workers: " + ", ".join(missing))
+    # The engine lists a worker by its container name, which a template picks
+    # freely (Linkly runs `ade` as `console`). Compose already gated the start;
+    # a container the engine does not report is drift to show, never a reason
+    # to discard a finished run.
+    containers = (yaml.safe_load(compose_path.read_text()) or {}).get("containers") or {}
+    missing = sorted(
+        name for name, container in containers.items()
+        if str(container.get("worker", "")).startswith("package://") and name not in observed
+    )
     # The declaration carries a selector, so the versions that matter are the
     # ones the engine ended up installing. They are recorded, not compared.
     version_report_warnings: list[str] = []
+    if missing:
+        version_report_warnings.append(
+            "containers the engine did not report: " + ", ".join(missing)
+        )
 
     forbidden = "iii" + "-worker"
     for phase, rows in processes.items():

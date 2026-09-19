@@ -712,29 +712,32 @@ fail() {
         )
         self.assertEqual(evidence["runtime"]["observed_versions"]["harness"], "1.9.0")
 
-    def test_compose_evidence_reports_a_missing_container(self):
+    def test_compose_evidence_warns_about_a_container_the_engine_did_not_report(self):
+        """The engine lists workers by container name; a template may run a
+        package under another name (Linkly: `console` runs `ade`). Compose has
+        already gated the start, so what it does not report is shown, and a
+        finished run is never discarded over it."""
         contract = campaign_contract()
-        with tempfile.TemporaryDirectory() as directory:
-            compose_path = Path(directory) / "worker-compose.yaml"
-            compose_path.write_text(yaml.safe_dump({
-                "namespace": "project-one",
-                "containers": {"fp": {"worker": "package://fp", "version": "latest"}},
-            }))
-            with self.assertRaisesRegex(ValueError, "missing declared workers: fp"):
-                MODULE.compose_evidence(
-                    contract,
-                    compose_path,
-                    "project-one",
+        workers = {"workers": [
+            {"name": "console", "version": "1.9.35", "namespace": "project-one"},
+            {"name": "harness", "version": "1.9.0", "namespace": "project-one"},
+        ]}
+        cases = (
+            ({"console": {"worker": "package://ade"}, "harness": {"worker": "package://harness"}}, []),
+            ({"fp": {"worker": "package://fp"}, "harness": {"worker": "package://harness"}},
+             ["containers the engine did not report: fp"]),
+        )
+        for containers, warnings in cases:
+            with self.subTest(containers=sorted(containers)), tempfile.TemporaryDirectory() as directory:
+                compose_path = Path(directory) / "worker-compose.yaml"
+                compose_path.write_text(yaml.safe_dump({"namespace": "project-one", "containers": containers}))
+                evidence = MODULE.compose_evidence(
+                    contract, compose_path, "project-one",
                     {name: {} for name in ("add", "up", "status", "down")},
-                    {
-                        "workers": [
-                            {"name": node["worker"], "version": node["version"], "namespace": "project-one"}
-                            for node in contract["orchestration"]["nodes"]
-                            if node["worker"] != "fp"
-                        ]
-                    },
-                    {"before": [], "during": [], "after": []},
+                    workers, {"before": [], "during": [], "after": []},
                 )
+                self.assertEqual(evidence["runtime"]["version_report_warnings"], warnings)
+                self.assertEqual(evidence["runtime"]["observed_versions"]["harness"], "1.9.0")
 
     def test_compose_evidence_rejects_the_removed_lifecycle_executable(self):
         contract = campaign_contract()
