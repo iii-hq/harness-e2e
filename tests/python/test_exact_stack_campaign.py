@@ -199,6 +199,24 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be absolute"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), "relative/.env", {}, template)
 
+    def test_a_template_pin_never_holds_the_application_back(self):
+        """Release Control's pin wins, everything else runs latest. The Linkly
+        fixture is checked out at one commit whose compose pinned harness to
+        1.8.17; honouring it downgraded the application under test below the
+        runner's control-plane contract."""
+        contract = campaign_contract()
+        contract["runtime"]["stack"] = {"state": "0.22.1"}
+        template = {"containers": {
+            "harness": {"worker": "package://harness", "version": "1.8.17"},
+            "state": {"worker": "package://state", "version": "0.22.8"},
+            "http": {"worker": "package://http", "version": "0.21.9"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        versions = {name: container["version"] for name, container in project["containers"].items()}
+        self.assertEqual(versions, {
+            "harness": "latest", "state": "0.22.1", "http": "latest", "harness-e2e": "latest",
+        })
+
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
         start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))

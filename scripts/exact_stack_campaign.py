@@ -518,11 +518,11 @@ def project_scaffold(
         if not source.startswith("package://"):
             raise ValueError(f"declared worker {name} has an unsupported source: {source}")
         container["worker"] = f"package://{package}"
-        # The declaration carries its own selector, and Release Control may hold
-        # a worker to a particular release. The engine resolves what is left.
-        container["version"] = overrides.get(
-            package, container.get("version", DEFAULT_SELECTOR)
-        )
+        # Release Control may hold a worker to a particular release; everything
+        # else runs latest. A template's own pin is its author's, not ours: a
+        # fixture checked out at an old commit would otherwise downgrade the
+        # very application under test.
+        container["version"] = overrides.get(package, DEFAULT_SELECTOR)
         package_names.setdefault(package, []).append(name)
     if template is not None:
         # Compose expands dependencies by container name, so a template that
