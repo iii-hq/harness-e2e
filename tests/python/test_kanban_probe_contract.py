@@ -129,6 +129,7 @@ export const chromium = {
     contexts: () => [], close: async () => {},
     newContext: async () => ({
       newPage: async () => ({
+        setDefaultTimeout: () => {},
         goto: async url => {
           appendFileSync(process.env.CALLS_LOG, JSON.stringify({goto:url})+'\\n')
           throw new Error('browser deliberately interrupted')
@@ -147,13 +148,15 @@ export const chromium = {
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
             result = json.loads((output / "result.json").read_text())
-            deletion = next(check for check in result["checks"] if check["id"] == "ticket_flow_delete_failure_navigation_and_restart")
+            deletion = next(check for check in result["checks"] if check["id"] == "ticket_delete_navigation")
             self.assertEqual(deletion["detail"], "browser deliberately interrupted")
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             creates = [call["create"] for call in calls if "create" in call]
             navigations = [call["goto"] for call in calls if "goto" in call]
-            self.assertEqual(len(creates), 3)
-            self.assertEqual(navigations, ["http://127.0.0.1:1", f"http://127.0.0.1:1/#ticket/{creates[-1]['id']}"])
+            deletion_ticket = next(ticket for ticket in creates if ticket['title'] == 'Delete navigation probe')
+            self.assertIn(f"http://127.0.0.1:1/#ticket/{deletion_ticket['id']}", navigations)
+            self.assertTrue(any(ticket['title'] == 'Durable deletion probe' for ticket in creates))
+            self.assertTrue(any(ticket['title'] == 'Identifier probe' for ticket in creates))
 
     def test_run_34596086686_equivalent_controls_and_real_accessibility_failure(self):
         if not PLAYWRIGHT.exists():
@@ -484,7 +487,7 @@ export const chromium = {
             self.assertNotIn("error", result)
             self.assertFalse((output / "control-request.json").exists())
             corrupt = next(check for check in result["checks"] if check["id"] == "persistence_corrupt_and_duplicate_store_fail_closed")
-            self.assertEqual(corrupt["status"], "failed")
+            self.assertEqual(corrupt["status"], "unverified")
             self.assertIn("require working create/list/get", corrupt["detail"])
 
     def test_direct_configuration_waits_for_the_resolved_path(self):
@@ -623,11 +626,16 @@ export const chromium = {
                 for check in result["checks"] if check["id"].startswith("criterion_")
             }
             self.assertEqual(criteria, {
-                "criterion_1": "passed",
-                "criterion_2": "passed",
-                "criterion_3": "failed",
-                "criterion_4": "passed",
-                "criterion_5": "failed",
+                "criterion_startup": "passed",
+                "criterion_asset_paths": "passed",
+                "criterion_initial_config": "passed",
+                "criterion_preserve_config": "passed",
+                "criterion_direct_config": "passed",
+                "criterion_invalid_config": "passed",
+                "criterion_config_restart": "passed",
+                "criterion_settings_mobile": "failed",
+                "criterion_settings_desktop": "unverified",
+                "criterion_hot_reload": "passed",
             })
 
     def test_control_request_is_atomic_correlated_and_has_object_payload(self):

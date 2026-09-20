@@ -10,7 +10,7 @@ use anyhow::{bail, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use iii_sdk::{runtime::FunctionRef, RegisterFunction};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 
@@ -22,6 +22,8 @@ use super::{
 use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
+const RUBRIC: &str = include_str!("../../../scripts/kanban_eval/rubric.json");
+const RUBRIC_VERSION: u8 = 2;
 const CATALOG: &str = include_str!("catalog.json");
 const INSTRUCTIONS: &str = include_str!("../../../scripts/kanban_eval/instructions.md");
 const REPORT: &str = "kanban_evaluation";
@@ -99,7 +101,8 @@ impl Scenario for Kanban {
             IDS[self.0],
             super::stable_seed(IDS[self.0]),
             json!({"base_commit":item.base_commit,"reference_commit":item.reference_commit,
-                "prompt":item.prompt,"criteria":item.criteria,"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
+                "prompt":item.prompt,"criteria":item.criteria,"rubric_version":RUBRIC_VERSION,
+                "rubric":rubric(self.0),"rubric_sha256":format!("{:x}", Sha256::digest(RUBRIC.as_bytes())),"catalog_sha256":format!("{:x}", Sha256::digest(CATALOG.as_bytes())),
                 "runtime_instructions_sha256":format!("{:x}", Sha256::digest(INSTRUCTIONS.as_bytes())),
                 "isolation":"docker-none-nonroot-readonly", "max_cost_usd":5, "subject_deadline_seconds":1800}),
             vec![
@@ -129,7 +132,7 @@ impl Scenario for Kanban {
         ScenarioSpec {
             id: case.id.as_str(),
             prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
-                catalog().shared_prompt, case.prompt, case.criteria.iter().map(|c| format!("- {c}")).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
+                catalog().shared_prompt, case.prompt, rubric(self.0).iter().map(|c| format!("- {} ({} points)", c.description, c.weight)).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
             filesystem_root: None,
             execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
                 max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
@@ -173,23 +176,27 @@ impl Scenario for Kanban {
     }
 }
 
+#[derive(Deserialize, Serialize)]
+struct RubricCriterion {
+    id: String,
+    weight: u8,
+    description: String,
+    checks: Vec<String>,
+}
+
+fn rubric(index: usize) -> &'static [RubricCriterion] {
+    static VALUE: OnceLock<HashMap<String, Vec<RubricCriterion>>> = OnceLock::new();
+    &VALUE.get_or_init(|| serde_json::from_str(RUBRIC).expect("embedded Kanban rubric"))[IDS[index]]
+}
+
 fn criteria(index: usize) -> Vec<CriterionSpec> {
-    const NAMES: [&str; 5] = [
-        "criterion_1",
-        "criterion_2",
-        "criterion_3",
-        "criterion_4",
-        "criterion_5",
-    ];
-    let case = case(index);
-    case.criteria
+    rubric(index)
         .iter()
-        .enumerate()
-        .map(|(i, text)| {
+        .map(|criterion| {
             CriterionSpec::scored(
-                NAMES[i],
-                100 / case.criteria.len() as u8,
-                text,
+                criterion.id.as_str(),
+                criterion.weight,
+                criterion.description.as_str(),
                 EvaluationDimension::Deliverable,
             )
         })
@@ -212,6 +219,7 @@ async fn setup(context: &E2eContext, run_id: &str, index: usize) -> Result<()> {
     let scripts = path.join("controller");
     fs::create_dir(&scripts)?;
     for (name, source) in [
+        ("rubric.json", RUBRIC),
         (
             "run.py",
             include_str!("../../../scripts/kanban_eval/run.py"),
@@ -563,39 +571,23 @@ async fn evaluate(
         .iter()
         .position(|id| *id == observation.case.scenario_id)
         .context("unknown Kanban case")?;
-    let awards = criteria(index)
-        .into_iter()
-        .map(|criterion| {
-            let check = result["checks"]
-                .as_array()
-                .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
-            CriterionAward {
-                id: criterion.id.into(),
-                awarded: Some(if check.is_some_and(|c| c["status"] == "passed") {
-                    criterion.weight
-                } else {
-                    0
-                }),
-                reason: check
-                    .map(|c| c["detail"].to_string())
-                    .unwrap_or_else(|| "Required check missing".into()),
-            }
-        })
-        .collect();
+    validate_rubric(index, result)?;
+    let awards = criterion_awards(index, result);
     Ok(ObjectiveEvaluation {
         completion: if result["status"] == "passed" {
             CompletionState::Completed
-        } else {
+        } else if result["functional_status"] == "failed" {
             CompletionState::TaskIncomplete
+        } else {
+            CompletionState::Undetermined
         },
         awards,
         infrastructure_error: None,
     })
 }
 
-fn validate_evaluation(value: &Value) -> Result<()> {
-    let result = &value["result"];
-    let prerequisite_failed = result["status"] == "failed"
+fn prerequisite_failed(result: &Value) -> bool {
+    result["status"] == "failed"
         && result["functional_status"] == "failed"
         && result["checks"].as_array().is_some_and(|checks| {
             checks.iter().any(|check| {
@@ -611,9 +603,110 @@ fn validate_evaluation(value: &Value) -> Result<()> {
                         )
                     )
             })
+        })
+}
+
+fn criterion_awards(index: usize, result: &Value) -> Vec<CriterionAward> {
+    criteria(index)
+        .into_iter()
+        .map(|criterion| {
+            let check = result["checks"]
+                .as_array()
+                .and_then(|checks| checks.iter().find(|check| check["id"] == criterion.id));
+            CriterionAward {
+                id: criterion.id.into(),
+                awarded: match check.and_then(|check| check["status"].as_str()) {
+                    Some("passed") => Some(criterion.weight),
+                    Some("failed") => Some(0),
+                    _ => None,
+                },
+                reason: check
+                    .and_then(|check| check["detail"].as_str())
+                    .unwrap_or(if prerequisite_failed(result) {
+                        "Not verified: application prerequisite failed; see build/startup evidence"
+                    } else {
+                        "Not verified: prerequisite evidence unavailable"
+                    })
+                    .into(),
+            }
+        })
+        .collect()
+}
+
+fn validate_rubric(index: usize, result: &Value) -> Result<()> {
+    if prerequisite_failed(result) {
+        return Ok(());
+    }
+    if result["rubric_version"] != RUBRIC_VERSION || result["case_id"] != IDS[index] {
+        bail!("Kanban evidence does not match the scenario rubric revision");
+    }
+    let checks = result["checks"]
+        .as_array()
+        .context("missing Kanban checks")?;
+    let mut statuses = HashMap::new();
+    for check in checks {
+        let id = check["id"].as_str().context("missing check id")?;
+        let status = check["status"].as_str().context("missing check status")?;
+        if !matches!(status, "passed" | "failed" | "unverified")
+            || statuses.insert(id, status).is_some()
+        {
+            bail!("Invalid or duplicated Kanban check: {id}");
+        }
+    }
+    let rubric = rubric(index);
+    if statuses
+        .keys()
+        .filter(|id| id.starts_with("criterion_"))
+        .count()
+        != rubric.len()
+    {
+        bail!("Kanban evidence is missing required criteria or contains unknown criteria");
+    }
+    for criterion in rubric {
+        let expected = if criterion
+            .checks
+            .iter()
+            .any(|id| statuses.get(id.as_str()) == Some(&"failed"))
+        {
+            "failed"
+        } else if criterion
+            .checks
+            .iter()
+            .all(|id| statuses.get(id.as_str()) == Some(&"passed"))
+        {
+            "passed"
+        } else {
+            "unverified"
+        };
+        if statuses.get(criterion.id.as_str()) != Some(&expected) {
+            bail!(
+                "Kanban criterion disagrees with its evidence: {}",
+                criterion.id
+            );
+        }
+    }
+    Ok(())
+}
+
+fn validate_evaluation(value: &Value) -> Result<()> {
+    let result = &value["result"];
+    let prerequisite_failed = prerequisite_failed(result);
+    let partial_observations = matches!(result["status"].as_str(), Some("failed" | "incomplete"))
+        && matches!(
+            result["functional_status"].as_str(),
+            Some("failed" | "passed")
+        )
+        && result["checks"].as_array().is_some_and(|checks| {
+            checks.iter().any(|check| {
+                check["id"]
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("criterion_"))
+                    && check["status"] == "unverified"
+            })
         });
     if !prerequisite_failed
-        && (result["functional_status"].is_null() || value["coverage"]["complete"] != true)
+        && (result["functional_status"].is_null()
+            || (value["coverage"]["complete"] != true && !partial_observations))
     {
         bail!(
             "Kanban evaluator is unavailable or incomplete: {}; {}",
@@ -688,6 +781,98 @@ async fn cleanup(_context: &E2eContext, run_id: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rubric_changes_case_identity_and_exposes_independent_weighted_criteria() {
+        for (index, id) in IDS.iter().enumerate() {
+            let scenario: crate::scenarios::ScenarioId = id.parse().unwrap();
+            let materialized = scenario
+                .materialize("rubric-test", scenario.canonical_seed())
+                .unwrap();
+            materialized.validate().unwrap();
+            assert!(materialized.spec.criteria.len() > case(index).criteria.len());
+            assert_eq!(
+                materialized
+                    .spec
+                    .criteria
+                    .iter()
+                    .map(|c| u16::from(c.weight))
+                    .sum::<u16>(),
+                100
+            );
+            let case = Kanban(index).case(0).unwrap();
+            let serialized = serde_json::to_value(case).unwrap();
+            assert!(serialized.to_string().contains("rubric_sha256"));
+            assert!(materialized.spec.prompt.contains("points)"));
+        }
+    }
+
+    #[test]
+    fn partial_evaluation_preserves_pass_fail_and_unverified_awards() {
+        validate_evaluation(&json!({
+            "result": {"status":"failed","functional_status":"failed", "checks":[
+                {"id":"criterion_creation","status":"passed"},
+                {"id":"criterion_create_error","status":"failed"},
+                {"id":"criterion_details","status":"unverified"}
+            ]}, "coverage":{"complete":false}
+        }))
+        .unwrap();
+        let awards = criterion_awards(
+            3,
+            &json!({"checks":[
+                {"id":"criterion_cards","status":"passed","detail":"Keyboard and pointer opened details"},
+                {"id":"criterion_modal","status":"failed","detail":"Title did not receive focus"},
+                {"id":"criterion_create_error","status":"unverified","detail":"Fixture unavailable"}
+            ]}),
+        );
+        assert_eq!(awards[0].awarded, Some(10));
+        assert_eq!(awards[1].awarded, Some(0));
+        assert_eq!(awards[2].awarded, None);
+        assert_eq!(awards[3].awarded, None);
+        assert_eq!(awards[1].reason, "Title did not receive focus");
+    }
+
+    #[test]
+    fn startup_failure_does_not_fabricate_functional_criterion_failures() {
+        let result = json!({"status":"failed", "functional_status":"failed", "checks":[
+            {"id":"application_startup", "status":"failed", "detail":"Compose file is missing"}
+        ]});
+        validate_evaluation(&json!({"result":result})).unwrap();
+        let awards = criterion_awards(0, &result);
+        assert!(awards.iter().all(|award| award.awarded.is_none()));
+        assert!(awards
+            .iter()
+            .all(|award| award.reason.contains("prerequisite failed")));
+    }
+
+    #[test]
+    fn rubric_rejects_missing_duplicate_stale_and_contradictory_evidence() {
+        let mut checks: Vec<Value> = rubric(3)
+            .iter()
+            .map(|criterion| json!({"id":criterion.id,"status":"unverified"}))
+            .collect();
+        checks[0]["status"] = json!("passed");
+        checks.push(json!({"id":"ticket_cards","status":"passed"}));
+        let valid = json!({"rubric_version":2,"case_id":IDS[3],"checks":checks});
+        validate_rubric(3, &valid).unwrap();
+        let mut missing = valid.clone();
+        missing["checks"].as_array_mut().unwrap().remove(1);
+        assert!(validate_rubric(3, &missing).is_err());
+        let mut duplicate = valid.clone();
+        duplicate["checks"]
+            .as_array_mut()
+            .unwrap()
+            .push(checks[0].clone());
+        assert!(validate_rubric(3, &duplicate).is_err());
+        let mut contradictory = valid.clone();
+        contradictory["checks"][0]["status"] = json!("failed");
+        assert!(validate_rubric(3, &contradictory).is_err());
+        let mut stale = valid.clone();
+        stale["rubric_version"] = json!(1);
+        assert!(validate_rubric(3, &stale).is_err());
+        assert!(validate_rubric(2, &valid).is_err());
+    }
+
     #[test]
     fn integrity_diagnostics_keep_both_diffs_and_the_provisional_verdict() {
         let run_id = format!("kanban-integrity-test-{}", uuid::Uuid::new_v4());

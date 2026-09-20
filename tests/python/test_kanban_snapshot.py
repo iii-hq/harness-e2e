@@ -16,6 +16,15 @@ import snapshot
 
 
 class KanbanSnapshotTests(unittest.TestCase):
+    def test_standalone_prompt_uses_the_same_independent_rubric_as_native_runs(self):
+        prompt = snapshot._prompt({'shared_prompt': 'Implement the increment.'}, {
+            'id': 'kanban_c4_ticket_flow', 'prompt': 'Add tickets.',
+            'criteria': ['Legacy compound criterion.'],
+        })
+        self.assertIn('Non-JSON creation is rejected. (5 points)', prompt)
+        self.assertIn('HTTP and iii lookup accept UUID and readable key. (10 points)', prompt)
+        self.assertNotIn('Legacy compound criterion.', prompt)
+
     def test_prompt_explains_engine_metadata_and_requires_workspace_edits(self):
         prompt = snapshot._prompt({'shared_prompt': 'Implement the increment.'},
                                   {'prompt': 'Add tickets.', 'criteria': ['Persistence works.']})

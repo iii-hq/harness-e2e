@@ -111,7 +111,10 @@ def _select_case(catalog: dict[str, Any], case_id: str) -> dict[str, Any]:
 
 
 def _prompt(catalog: dict[str, Any], case: dict[str, Any]) -> str:
-    criteria = "\n".join(f"- {item}" for item in case["criteria"])
+    rubric = json.loads(Path(__file__).with_name('rubric.json').read_text())
+    weighted = rubric.get(case.get('id'))
+    criteria = ("\n".join(f'- {item["description"]} ({item["weight"]} points)' for item in weighted)
+                if weighted else "\n".join(f"- {item}" for item in case["criteria"]))
     instructions = Path(__file__).with_name('instructions.md').read_text().strip()
     return f'{catalog["shared_prompt"].strip()}\n\n{case["prompt"].strip()}\n\nAcceptance criteria:\n{criteria}\n\n{instructions}\n'
 
