@@ -2434,16 +2434,7 @@
         "performance_regression",
         "browser_cross_site",
         "release_train_recovery",
-        "cross_repo_contract_migration",
-        "swe_config_isolation",
-        "swe_cache_invalidation",
-        "swe_batch_replay",
-        "swe_replay_recovery",
-        "swe_contract_migration",
-        "swe_tenant_isolation",
-        "swe_replay_performance",
-        "swe_release_handoff",
-        "swe_service_journey"
+        "cross_repo_contract_migration"
       ]
     },
     "ScenarioMeasurement": {

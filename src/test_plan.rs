@@ -488,10 +488,10 @@ mod tests {
         for (id, cases, runs) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 55, 55),
-            ("evolution", 23, 69),
-            ("resilience", 4, 13),
-            ("endurance", 5, 5),
+            ("capability", 47, 47),
+            ("evolution", 19, 57),
+            ("resilience", 3, 12),
+            ("endurance", 4, 4),
             ("software-engineering", 13, 13),
         ] {
             let snapshot = plan.materialize(id).unwrap();
@@ -592,7 +592,7 @@ mod tests {
         let plan = embedded().unwrap();
         let snapshot = plan.materialize("evolution").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 22);
+        assert_eq!(groups.len(), 18);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -606,8 +606,8 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.cases.len(), 23);
-        assert_eq!(snapshot.budget["planned_runs"], 69);
+        assert_eq!(snapshot.cases.len(), 19);
+        assert_eq!(snapshot.budget["planned_runs"], 57);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

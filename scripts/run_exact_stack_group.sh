@@ -537,9 +537,9 @@ for native_name in results.json manifest.json observation.json; do
   test -f "$native_dir/$native_name"
   cp -- "$native_dir/$native_name" "$artifact_dir/$native_name"
 done
-python3 "$repo_root/scripts/extract_swe_reports.py" \
+python3 "$repo_root/scripts/extract_kanban_reports.py" \
   --native-dir "$native_dir" --output-dir "$artifact_dir/deliverables" \
-  >"$artifact_dir/swe-deliverables.json"
+  >"$artifact_dir/kanban-deliverables.json"
 expected_results_sha=$(jq -er '.observation.evidence.results_sha256' "$results_response")
 expected_manifest_sha=$(jq -er '.observation.evidence.manifest_sha256' "$results_response")
 observed_results_sha="sha256:$(sha256sum "$artifact_dir/results.json" | cut -d ' ' -f1)"

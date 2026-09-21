@@ -56,7 +56,6 @@ pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
-pub mod swe_service;
 pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
@@ -484,15 +483,6 @@ scenarios! {
     BrowserCrossSite = "browser_cross_site" => browser_cross_site::BrowserCrossSite,
     ReleaseTrainRecovery = "release_train_recovery" => release_train_recovery::ReleaseTrainRecovery,
     CrossRepoContractMigration = "cross_repo_contract_migration" => cross_repo_contract_migration::CrossRepoContractMigration,
-    SweConfigIsolation = "swe_config_isolation" => swe_service::SweService(ScenarioId::SweConfigIsolation),
-    SweCacheInvalidation = "swe_cache_invalidation" => swe_service::SweService(ScenarioId::SweCacheInvalidation),
-    SweBatchReplay = "swe_batch_replay" => swe_service::SweService(ScenarioId::SweBatchReplay),
-    SweReplayRecovery = "swe_replay_recovery" => swe_service::SweService(ScenarioId::SweReplayRecovery),
-    SweContractMigration = "swe_contract_migration" => swe_service::SweService(ScenarioId::SweContractMigration),
-    SweTenantIsolation = "swe_tenant_isolation" => swe_service::SweService(ScenarioId::SweTenantIsolation),
-    SweReplayPerformance = "swe_replay_performance" => swe_service::SweService(ScenarioId::SweReplayPerformance),
-    SweReleaseHandoff = "swe_release_handoff" => swe_service::SweService(ScenarioId::SweReleaseHandoff),
-    SweServiceJourney = "swe_service_journey" => swe_service::SweService(ScenarioId::SweServiceJourney),
 }
 
 impl ScenarioId {
@@ -656,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_sixty_eight_unique_valid_scenarios() {
+    fn registry_contains_fifty_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -665,7 +655,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 68);
+        assert_eq!(ids.len(), 59);
     }
 
     #[test]
@@ -815,12 +805,7 @@ mod tests {
                 scenario.execution_kind(),
                 ScenarioExecutionKind::CompositeFlow | ScenarioExecutionKind::AdaptiveFlow
             ) {
-                if swe_service::is_swe(scenario) {
-                    assert!(!first.case.deliverable_contract.artifacts.is_empty());
-                    assert!(first.case.deliverable_contract.capture_before_cleanup);
-                } else {
-                    assert!(first.case.deliverable_contract.artifacts.is_empty());
-                }
+                assert!(first.case.deliverable_contract.artifacts.is_empty());
                 continue;
             }
 

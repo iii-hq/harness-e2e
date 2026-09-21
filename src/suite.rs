@@ -1993,7 +1993,7 @@ async fn run_composite_once(
             return report;
         }
     };
-    let MaterializedScenario { spec, case, .. } = materialized;
+    let MaterializedScenario { spec, .. } = materialized;
     let mut report = E2eRunReport::new(
         run_id.to_string(),
         attempt_id.clone(),
@@ -2051,8 +2051,7 @@ async fn run_composite_once(
                     .definition
                     .nodes
                     .iter()
-                    .any(|node| crate::workflow::opens_harness_session(&node.step_type))
-                    || crate::scenarios::swe_service::is_swe(scenario_id);
+                    .any(|node| crate::workflow::opens_harness_session(&node.step_type));
                 let bind_result = if uses_harness {
                     context.bind_turn_completed().await
                 } else {
@@ -2092,17 +2091,7 @@ async fn run_composite_once(
                         }
                     }
                     match outcome {
-                        Ok(workflow) => {
-                            let terminal = crate::scenarios::swe_service::is_swe(scenario_id)
-                                .then(|| {
-                                    crate::scenarios::swe_service::execution_outcome(
-                                        output,
-                                        &attempt_id,
-                                    )
-                                })
-                                .flatten();
-                            populate_composite_report_with_terminal(&mut report, workflow, terminal)
-                        }
+                        Ok(workflow) => populate_composite_report(&mut report, workflow),
                         Err(error) => report.push_failure(
                             RunStatus::InfrastructureError,
                             FailurePhase::Execute,
@@ -2119,23 +2108,12 @@ async fn run_composite_once(
         }
     }
 
-    if crate::scenarios::swe_service::is_swe(scenario_id) {
-        if let Err(error) =
-            crate::scenarios::swe_service::attach_report(output, &attempt_id, &case, &mut report)
-        {
-            report.push_failure(
-                RunStatus::InfrastructureError,
-                FailurePhase::Collect,
-                format!("capture SWE evidence: {error:#}"),
-            );
-        }
-    }
     report.wall_time_ms = started.elapsed().as_millis().min(u64::MAX as u128) as u64;
     if report.assessment_results.is_empty() {
         ensure_assessment_results(&spec, &mut report);
     }
     report.update_efficiency();
-    report.refresh_dimensions(crate::scenarios::swe_service::is_swe(scenario_id));
+    report.refresh_dimensions(false);
     emit_attempt_phase(
         control,
         SuitePhase::Persisting,
@@ -2163,14 +2141,6 @@ async fn run_composite_once(
 fn populate_composite_report(
     report: &mut E2eRunReport,
     workflow: crate::workflow::WorkflowAttemptReport,
-) {
-    populate_composite_report_with_terminal(report, workflow, None)
-}
-
-pub(crate) fn populate_composite_report_with_terminal(
-    report: &mut E2eRunReport,
-    workflow: crate::workflow::WorkflowAttemptReport,
-    terminal: Option<RunStatus>,
 ) {
     report.session_id = workflow
         .steps
@@ -2201,13 +2171,7 @@ pub(crate) fn populate_composite_report_with_terminal(
     for step in &workflow.steps {
         for failure in &step.failures {
             report.push_failure(
-                if let Some(status) = terminal.filter(|_| {
-                    matches!(failure.phase, WorkflowFailurePhase::Cancel)
-                        || (failure.phase == WorkflowFailurePhase::Execute
-                            && step.step_type != crate::scenarios::swe_service::workflow::CAPTURE)
-                }) {
-                    status
-                } else if failure.technical {
+                if failure.technical {
                     RunStatus::InfrastructureError
                 } else {
                     RunStatus::SubjectError
@@ -2229,7 +2193,6 @@ pub(crate) fn populate_composite_report_with_terminal(
         );
     }
     if workflow.technical_failure
-        && terminal.is_none()
         && !report
             .failures
             .iter()

@@ -34,11 +34,6 @@ model to judge the first.
 
 ## Requirements
 
-SWE scenarios need Linux with `/usr/bin/bwrap` and unprivileged user
-namespaces enabled. CI installs the distribution AppArmor profile that
-Bubblewrap needs. Commands and file operations run inside the attempt
-workspace; controller files stay outside that boundary.
-
 `shell_coder_sandbox`, `chess_engine_build`, and `trend_blog` prepare their
 reviewed fixture from an embedded Git bundle. They need Git. They do not need
 a fixture checkout or `HARNESS_E2E_FIXTURE_PATH`. Each attempt uses a private
@@ -136,9 +131,6 @@ Featured suites:
 - [Trending topics](docs/blog-build-contract.md): an isolated per-attempt Git
   remote and an independent Playwright acceptance check against the delivered
   SHA. Design is free. Screenshots are evidence, not an aesthetic score.
-- SWE service: eight isolated engineering tasks and one continuous
-  eight-ticket journey over the same Python service, with optional delegation,
-  immutable checkpoints, isolated verification, and a trusted GitHub handoff.
 
 `config/test-plan.json` groups the catalog into modules (state, context,
 wakes, coordination, software engineering, integration, security, adaptive

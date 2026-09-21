@@ -11,7 +11,7 @@ Status: primeiro incremento implementado localmente; etapas restantes propostas.
 - A prontidão dos três cenários verifica Git sem preparar checkouts. O setup existente valida o conteúdo e prepara o workspace antes de chamar o modelo. Os requisitos dos demais cenários ainda seguem o comportamento anterior.
 - A remoção do campo obsoleto `fixture_path_env` altera o contrato materializado de `chess_engine_build` e, com ele, o `behavior_sha256` do cenário. Planos salvos com o digest anterior precisam ser editados e salvos para materializar o contrato atual antes de outra execução. Resultados históricos não são reescritos.
 
-Permanecem para os próximos incrementos: derivar todos os diretórios de scratch de uma configuração comum, eliminar os overrides opcionais de workspace, instalação portátil do banco via Compose, Kanban, incidente, segurança, isolamento SWE e proveniência da stack. Este incremento não instala dependências de sistema nem reinicia a stack.
+Permanecem para os próximos incrementos: derivar todos os diretórios de scratch de uma configuração comum, eliminar os overrides opcionais de workspace, instalação portátil do banco via Compose, Kanban, incidente, segurança e proveniência da stack. Este incremento não instala dependências de sistema nem reinicia a stack.
 
 Validação local: `cargo test --locked --all-targets` passou com 719 testes e 4 ignorados; `cargo clippy --locked --all-targets -- -D warnings` passou. A suíte Python passou com 265 testes, incluindo a execução da preparação do grupo compartilhado sem checkout ou launcher externo. Os testes das três fixtures também passaram a partir de um diretório vazio, com todas as variáveis `HARNESS_E2E_*` removidas do ambiente. Foram verificados baseline, manifests, independência das cópias e cleanup. Nenhuma execução completa com modelo ou instalação publicada em máquina limpa foi realizada.
 
@@ -38,7 +38,7 @@ Evidências: [fixture compartilhada](../src/scenarios/shell_coder_sandbox.rs), [
 
 No modo de integração externa, segurança também depende de estado remoto: o [template versionado](../tests/fixtures/security-scan-repository/README.md) exige alertas Dependabot e code scanning preparados no repositório privado. Automatizar o clone não prepara esses serviços. O executor oficial deve possuir uma fixture remota controlada e verificar seu acesso/estado antes da execução; esse provisionamento ainda precisa ser definido. A indisponibilidade dessa integração deve bloquear o modo externo, sem ativar o adapter local.
 
-O projeto já tem uma implementação adequada para reutilizar: [engineering_ticket/fixture.rs](../src/scenarios/engineering_ticket/fixture.rs) incorpora o bundle, cria um diretório temporário, materializa a revisão fixada e mantém a posse do diretório para cleanup. `HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH` é um override opcional; esse cenário já funciona sem um caminho fornecido pelo usuário. SWE também incorpora seus assets e deriva o diretório de trabalho quando o override está ausente.
+O projeto já tem uma implementação adequada para reutilizar: [engineering_ticket/fixture.rs](../src/scenarios/engineering_ticket/fixture.rs) incorpora o bundle, cria um diretório temporário, materializa a revisão fixada e mantém a posse do diretório para cleanup. `HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH` é um override opcional; esse cenário já funciona sem um caminho fornecido pelo usuário.
 
 ### Inicialização e persistência têm duas fontes de configuração
 
@@ -58,8 +58,6 @@ Proposta: aproveitar essa mesma verificação e a preparação existente dos cen
 
 ### Algumas opções não resolvem o que o nome sugere
 
-- SWE repassa `HARNESS_E2E_SWE_ISOLATION_BACKEND` e `HARNESS_E2E_SWE_DOCKER_IMAGE`, mas o isolador Python não os consulta. `DOCKER_HOST` também é repassado até o controlador, porém os subprocessos Docker do isolador usam um ambiente fixo que o exclui. Remover esse repasse ineficaz no caminho SWE; esta conclusão não se estende a outros usos de Docker. [Assets](../src/scenarios/swe_service/assets.rs), [isolador](../src/scenarios/swe_service/isolation.py).
-- O isolador SWE tenta Bubblewrap e depois imagens oficiais Python já presentes no Docker. Uma máquina com Docker, mas sem uma imagem utilizável em cache, continua bloqueada. Preparar uma imagem fixada no executor suportado elimina esse passo manual; executar código do candidato diretamente no host não é uma alternativa equivalente.
 - `HARNESS_E2E_RUN_DIR`, `HARNESS_E2E_RUNS_DIR`, `HARNESS_E2E_OUTPUT` e `data_dir` atendem camadas diferentes. Derivar os diretórios de uma configuração do projeto, mantendo scratch separado de evidências retidas e permitindo destino explícito de exportação na CLI.
 - `HARNESS_E2E_REGISTRY_IMPLEMENTATION` é uma entrada de experimento para verificação avulsa. No fluxo ordenado implementação → verificação, o contexto já compartilha a entrega. Substituir o caminho externo por referência explícita à entrega no plano; nunca selecionar arbitrariamente a última execução. [Fonte](../src/scenarios/registry.rs).
 
@@ -87,7 +85,7 @@ O suporte atual do iii para instalar/configurar automaticamente dependências em
 | --- | --- | --- |
 | 1. Configuração e prontidão | Unificar resolução de configuração; tornar o Compose portátil; verificar os requisitos reais do plano. Validar o contrato de instalação com iii/Workers. | Novo projeto sobe sem paths pessoais; migração usa o mesmo banco do worker; recurso ausente bloqueia antes do modelo. |
 | 2. Fixtures pequenas | Usar o padrão do engineering ticket para a fixture compartilhada; distribuir o incidente revisado; automatizar clones de segurança com backend explícito. | Remover a necessidade das três variáveis de checkout sem alterar o significado dos testes. |
-| 3. Runtime de cenários | Distribuir/preparar Kanban e a imagem SWE fixada na plataforma suportada. Reutilizar assets existentes e remover o repasse de opções SWE sem efeito. | Nenhum arquivo de runtime preparado pelo usuário; primeira execução prepara recursos e as seguintes reutilizam o cache verificado. |
+| 3. Runtime de cenários | Distribuir/preparar Kanban a partir dos assets existentes. | Nenhum arquivo de runtime preparado pelo usuário; primeira execução prepara recursos e as seguintes reutilizam o cache verificado. |
 | 4. Distribuição e limpeza | Validar o pacote publicado sem checkout; adequar o launcher exact-stack ao mesmo contrato; remover superfícies obsoletas e atualizar a documentação. | Mesmo cenário e mesma identidade reproduzíveis localmente e no executor oficial, respeitando os perfis protegidos. |
 
 As mudanças internas de preparação e UI pertencem ao E2E. Eventuais mudanças no contrato do Compose/instalação ou no despacho do Release Control devem continuar em branches de integração, conforme a separação já adotada no projeto. Não há evidência suficiente nesta auditoria para afirmar que RC precisa mudar.
@@ -164,9 +162,6 @@ Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma pr
 | `STORAGE_LONGITUDINAL_BUCKET` | Retenção longitudinal; default `e2e-longitudinal` | Configuração operacional de armazenamento |
 | `STORAGE_CANONICAL_BUCKET` | Retenção canônica; default `e2e-canonical` | Configuração operacional de armazenamento |
 | `SUITE_DEADLINE_SECONDS` | Limite global da suíte | Política do executor |
-| `SWE_DOCKER_IMAGE` | Repassada, sem consumo pelo isolador SWE | Remover repasse ineficaz; imagem fixada no runtime |
-| `SWE_ISOLATION_BACKEND` | Repassada, sem consumo pelo isolador SWE | Remover repasse ineficaz; verificar isolamento efetivo |
-| `SWE_WORKSPACE_ROOT` | Override opcional da raiz SWE | Derivada da tentativa |
 | `TECHNICAL_RETRIES` | Quantidade de retries técnicos | Configuração do plano/execução |
 | `TEST_DATABASE_URL` | Banco para testes automatizados do projeto | Exclusivo de testes/CI |
 | `UPDATE_SCHEMAS` | Atualização dos schemas em testes | Exclusivo de desenvolvimento |
@@ -183,7 +178,7 @@ Fontes principais por grupo: [CLI](../src/main.rs), [defaults da execução ráp
 | `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, `III_CONFIG` | Contrato de inicialização injetado pelo Compose. Manter; não são perguntas do onboarding. |
 | `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN` em `redaction.rs` | Leitura para ocultar valores sensíveis. Essa ocorrência não os torna credenciais obrigatórias do E2E. Credenciais dos workers e do CI seguem seus próprios contratos. |
 | `TARGET`, `CARGO_MANIFEST_DIR`, `SKIP_CONSOLE_UI_BUILD`, `PNPM` | Build a partir do código. O binário publicado incorpora os assets da Console; essas opções não devem aparecer na instalação de usuário. |
-| `UPDATE_HISTORY_SCHEMA`, `HISTORY_EXPORT_ARTIFACT`, `SWE_FIXTURE_ROOT`, `SWE_REQUIRE_OS_ISOLATION`, `SWE_REQUIRE_DOCKER_ISOLATION`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
+| `UPDATE_HISTORY_SCHEMA`, `HISTORY_EXPORT_ARTIFACT`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
 | `HOME`, `PATH`, `TMPDIR`, `RUST_LOG` e ambiente do sistema | Convenções de runtime e diagnóstico. A meta elimina configuração manual do E2E, não o uso de ambiente pelo sistema operacional. |
 
 ## Limites da auditoria
