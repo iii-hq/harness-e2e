@@ -466,13 +466,14 @@ deliverable, structural, and technical thresholds. Cost and wall-time are
 reported as observed metrics and compared only within a compatible
 baseline/candidate cohort.
 
-## Runtime-only package boundary
+## Package boundary
 
-This repository executes exact-stack Test Plans and never publishes itself as
-a Registry worker. Release Control supplies a stack policy and an immutable
-executor SHA to `exact-stack-e2e.yml`; the contract this repository assembles
-from them pins every Registry version to an exact one, including historical
-candidates, because a campaign has to be able to say afterwards what it ran.
+This repository executes exact-stack Test Plans and publishes immutable
+`harness-e2e` Registry releases through the manually dispatched `release.yml`
+workflow. Release Control supplies a stack policy and an immutable executor
+SHA to `exact-stack-e2e.yml`; the contract this repository assembles from them
+pins every Registry version to an exact one, including historical candidates,
+because a campaign has to be able to say afterwards what it ran.
 
 The root `iii.worker.yaml` remains the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` remains
