@@ -2460,9 +2460,9 @@ mod tests {
         for (profile, expected_slots, expected_submissions) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 55, 55),
-            ("evolution", 69, 66),
-            ("endurance", 5, 5),
+            ("capability", 45, 45),
+            ("evolution", 54, 51),
+            ("endurance", 4, 4),
             ("software-engineering", 13, 12),
         ] {
             let root = tempfile::tempdir().unwrap();
@@ -2675,7 +2675,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id, &[]).await.unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 69);
+            assert_eq!(reports.len(), 54);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);
@@ -2743,7 +2743,7 @@ mod tests {
         let manager = manager(root.path(), runner);
         let plan = manager.create_local(request("resilience")).await.unwrap();
         let saved = manager.read_plan(plan.id.as_str()).await.unwrap();
-        assert_eq!(saved.snapshot.budget["planned_runs"], 13);
+        assert_eq!(saved.snapshot.budget["planned_runs"], 12);
         let export = export(&saved).unwrap();
         let path = root.path().join("export.json");
         write_json(&path, &export).unwrap();

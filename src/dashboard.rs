@@ -258,7 +258,7 @@ pub(crate) mod tests {
     #[test]
     fn local_requests_allow_rust_defined_composite_scenarios() {
         let mut value = request();
-        value.scenarios = vec!["security_review".into(), "context_pressure".into()];
+        value.scenarios = vec!["incident_response".into(), "context_pressure".into()];
         value.technical_retries = 0;
         validate_request(&mut value).expect("local plans must start composite scenarios");
     }

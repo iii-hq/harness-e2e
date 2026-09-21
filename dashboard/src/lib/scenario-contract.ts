@@ -1,8 +1,7 @@
 /**
- * The browser mirror of the harness `contract_fingerprint`. The Rust presenter
- * and `scripts/publish_harness_e2e_dashboard.py` hash the same object — the
- * case identity and the execution policy, never the scenario definition digest
- * — so a fingerprint computed here is comparable with a projected one.
+ * The browser mirror of the harness `contract_fingerprint`. Rust and this
+ * module hash the case identity and the execution policy, so a fingerprint
+ * computed here matches a projected one.
  */
 
 function canonical(value: unknown): string {

@@ -18,7 +18,6 @@ import json
 import re
 from pathlib import Path
 from typing import Any
-from uuid import UUID
 
 
 CONTRACT_SCHEMA = "rc-e2e/v2"
@@ -77,15 +76,6 @@ def require_keys(value: Any, required: set[str], label: str) -> dict[str, Any]:
     if missing:
         raise ValueError(f"{label} is missing fields: {', '.join(missing)}")
     return value
-
-
-def require_uuid(value: Any, label: str) -> str:
-    if not isinstance(value, str):
-        raise ValueError(f"{label} must be a UUID")
-    parsed = UUID(value)
-    if str(parsed) != value.lower():
-        raise ValueError(f"{label} must use canonical UUID form")
-    return str(parsed)
 
 
 def require_text(value: Any, label: str) -> str:

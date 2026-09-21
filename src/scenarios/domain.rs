@@ -66,8 +66,6 @@ pub enum Capability {
     GitDeterministicFixtureV1,
     #[serde(rename = "git::offline-bundle")]
     GitOfflineBundle,
-    #[serde(rename = "github::security-read")]
-    GithubSecurityRead,
     #[serde(rename = "github::trusted-handoff")]
     GithubTrustedHandoff,
     #[serde(rename = "harness::independent_session")]
@@ -106,12 +104,6 @@ pub enum Capability {
     ReleaseShadowReadOnlyV1,
     #[serde(rename = "release_train_simulator::v1")]
     ReleaseTrainSimulatorV1,
-    #[serde(rename = "security_scan::on-demand")]
-    SecurityScanOnDemand,
-    #[serde(rename = "security_scan::v1")]
-    SecurityScanV1,
-    #[serde(rename = "swe::isolated-python-workspace")]
-    SweIsolatedPythonWorkspace,
 }
 
 impl Capability {
@@ -133,7 +125,6 @@ impl Capability {
             Self::Git => "git",
             Self::GitDeterministicFixtureV1 => "git::deterministic-fixture-v1",
             Self::GitOfflineBundle => "git::offline-bundle",
-            Self::GithubSecurityRead => "github::security-read",
             Self::GithubTrustedHandoff => "github::trusted-handoff",
             Self::HarnessIndependentSession => "harness::independent_session",
             Self::HarnessPostTurnValidation => "harness::post-turn-validation",
@@ -153,9 +144,6 @@ impl Capability {
             Self::Python3 => "python3",
             Self::ReleaseShadowReadOnlyV1 => "release_shadow::read-only-v1",
             Self::ReleaseTrainSimulatorV1 => "release_train_simulator::v1",
-            Self::SecurityScanOnDemand => "security_scan::on-demand",
-            Self::SecurityScanV1 => "security_scan::v1",
-            Self::SweIsolatedPythonWorkspace => "swe::isolated-python-workspace",
         }
     }
 }

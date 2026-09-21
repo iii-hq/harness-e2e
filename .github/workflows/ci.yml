@@ -15,8 +15,6 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - name: Prepare SWE execution isolation
-        run: scripts/install_bwrap.sh
       - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
         with:
           version: 11.13.1
@@ -60,11 +58,8 @@ jobs:
         run: |
           node --test tests/fixtures/trending-topics-build/evaluator.test.mjs
           python3 -m unittest -v tests/fixtures/trending-topics-build/test_lifecycle.py
-      - name: Prepare the isolated SWE verifier runtime
-        run: docker pull python@sha256:1042b61448fef4ba92d16a8c7eb4996d027568ce64792a7877fd88511e0af7c6
-      - name: Verify Python contracts and OS isolation
+      - name: Verify Python contracts
         env:
-          SWE_REQUIRE_OS_ISOLATION: "1"
           HARNESS_E2E_BIN: ${{ github.workspace }}/target/debug/harness-e2e
         run: |
           python3 -m pip install --quiet pyyaml

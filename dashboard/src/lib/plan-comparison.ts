@@ -124,28 +124,6 @@ function scenarioMetricTotal(
   return total
 }
 
-function derivedSecurityMetricTotal(
-  execution: DashboardExecutionSummary,
-  key: 'function_calls' | 'function_call_errors',
-): number | null {
-  let total = 0
-  let found = false
-  for (const metric of execution.scenario_metrics ?? []) {
-    if (
-      metric.scenario_id !== 'security_review' ||
-      finite(metric.averages?.[key]) !== null
-    ) {
-      continue
-    }
-    const average = scenarioAverage(metric, key)
-    const runCount = finite(metric.run_count)
-    if (average === null || runCount === null) continue
-    total += average * runCount
-    found = true
-  }
-  return found ? total : null
-}
-
 function comparisonMetric(
   id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
   label: string,
@@ -196,31 +174,20 @@ export function executionMetricValue(
     case 'cost':
       return finite(executionTotals.total_cost_usd)
     case 'function_calls':
-      return addDerivedSecurityMetric(
-        finite(executionTotals.function_calls),
-        derivedSecurityMetricTotal(execution, 'function_calls'),
-        scenarioMetricTotal(execution, 'function_calls'),
+      return (
+        finite(executionTotals.function_calls) ??
+        scenarioMetricTotal(execution, 'function_calls')
       )
     case 'function_errors':
-      return addDerivedSecurityMetric(
-        finite(executionTotals.function_call_errors),
-        derivedSecurityMetricTotal(execution, 'function_call_errors'),
-        scenarioMetricTotal(execution, 'function_call_errors'),
+      return (
+        finite(executionTotals.function_call_errors) ??
+        scenarioMetricTotal(execution, 'function_call_errors')
       )
     case 'turns':
       return (
         finite(executionTotals.turns) ?? scenarioMetricTotal(execution, 'turns')
       )
   }
-}
-
-function addDerivedSecurityMetric(
-  reported: number | null,
-  derivedSecurity: number | null,
-  fullyReportedFallback: number | null,
-): number | null {
-  if (reported !== null) return reported + (derivedSecurity ?? 0)
-  return fullyReportedFallback ?? derivedSecurity
 }
 
 function allMetrics(
@@ -281,31 +248,7 @@ function scenarioAverage(
     | 'function_call_errors'
     | 'turns',
 ) {
-  const explicit = finite(metric?.averages?.[key])
-  if (explicit !== null || metric?.scenario_id !== 'security_review') {
-    return explicit
-  }
-
-  const runCount = finite(metric.run_count)
-  if (!runCount) return null
-  if (key === 'function_call_errors') {
-    const failures = finite(metric.workflow?.failure_count)
-    return failures === null ? null : failures / runCount
-  }
-  if (key !== 'function_calls') return null
-
-  const workflow = metric.workflow?.numeric_metrics
-  const requests = finite(workflow?.request_count)
-  const polls = finite(workflow?.['poll.poll_count'])
-  const reconciliation = finite(workflow?.reconciliation_operations)
-  if (requests === null || polls === null || reconciliation === null) {
-    return null
-  }
-
-  // Security review persists operation counts instead of canonical Harness
-  // usage totals. Include its scan and history entrypoints once per run so a
-  // retained summary remains comparable before full execution detail is loaded.
-  return (requests + polls + reconciliation + 2 * runCount) / runCount
+  return finite(metric?.averages?.[key])
 }
 
 function primaryScenarioRun(

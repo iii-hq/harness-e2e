@@ -452,26 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn security_review_uses_the_common_run_command() {
-        let cli = Cli::try_parse_from([
-            "harness-e2e",
-            "run",
-            "--model",
-            "gpt-5-codex",
-            "--provider",
-            "openai-codex",
-            "--scenario",
-            "security_review",
-        ])
-        .unwrap();
-        let Some(Command::Run(args)) = cli.command else {
-            panic!("expected run command");
-        };
-        assert_eq!(args.scenario, [ScenarioId::SecurityReview]);
-        assert_eq!(args.technical_retries, None);
-    }
-
-    #[test]
     fn standalone_dashboard_commands_are_removed() {
         for command in ["dashboard", "serve"] {
             assert!(Cli::try_parse_from(["harness-e2e", command]).is_err());

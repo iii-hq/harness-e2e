@@ -557,7 +557,7 @@ class CampaignRunnerTests(unittest.TestCase):
         campaign = parse_campaign(manifest([{
             "id": "core", "execution_kind": "harness_turn", "runs": 1,
             "technical_retries": 0,
-            "scenarios": ["tool_contract_recovery", "engineering_ticket"],
+            "scenarios": ["tool_contract_recovery", "persistent_state"],
         }]))
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory)
@@ -567,7 +567,7 @@ class CampaignRunnerTests(unittest.TestCase):
             with self.assertRaisesRegex(CampaignError, "planned runs do not match campaign"):
                 score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
 
-            document["scenarios"].append(native_scenario("engineering_ticket", deferred=True))
+            document["scenarios"].append(native_scenario("persistent_state", deferred=True))
             results.write_text(json.dumps(document), encoding="utf-8")
             scoring = score_campaign(campaign, [{"group_id": "core", "output": str(output)}])
             self.assertEqual(scoring["harness_score"], 90)
@@ -653,13 +653,13 @@ class CampaignRunnerTests(unittest.TestCase):
         campaign = parse_campaign(manifest([{
             "id": "core", "execution_kind": "harness_turn", "runs": 1,
             "technical_retries": 0,
-            "scenarios": ["tool_contract_recovery", "engineering_ticket"],
+            "scenarios": ["tool_contract_recovery", "persistent_state"],
         }]))
         with tempfile.TemporaryDirectory() as directory:
             output = pathlib.Path(directory)
             scored = native_scenario("tool_contract_recovery")
             scored["aggregate"]["mean_score"] = 70.0
-            unscored = native_scenario("engineering_ticket")
+            unscored = native_scenario("persistent_state")
             unscored["aggregate"].update({"scored_runs": 0, "mean_score": None})
             (output / "results.json").write_text(
                 json.dumps(native_report([scored, unscored])), encoding="utf-8"

@@ -198,5 +198,5 @@ pnpm test:profiles
 ```
 
 This test uses a local fixture server and never calls a model. Rust coordination
-tests materialize every profile, including the 47 Capability and 90 Evolution
+tests materialize every profile, including the 46 Capability and 90 Evolution
 slots, and pass Resilience exports through the existing Python suite validator.

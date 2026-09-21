@@ -378,11 +378,9 @@ fn scenario_metrics(subject_id: &str, report: &E2eReport) -> Vec<Value> {
                 match name {
                     "tokens" => run_total_tokens(run),
                     "duration_seconds" => Some(run.wall_time_ms as f64 / 1000.0),
-                    "cost_usd" => run_total_cost(&scenario.scenario_id, run),
-                    "function_calls" => run_function_calls(&scenario.scenario_id, run),
-                    "function_call_errors" => {
-                        run_function_call_errors(&scenario.scenario_id, run)
-                    }
+                    "cost_usd" => run_total_cost(run),
+                    "function_calls" => run_function_calls(run),
+                    "function_call_errors" => run_function_call_errors(run),
                     "sessions" => run
                         .metrics
                         .as_ref()
@@ -658,8 +656,8 @@ fn efficiency_totals(report: &E2eReport) -> (Option<f64>, Option<f64>, Option<f6
     for scenario in &report.scenarios {
         for run in &scenario.runs {
             tokens.push(run_total_tokens(run));
-            calls.push(run_function_calls(&scenario.scenario_id, run));
-            errors.push(run_function_call_errors(&scenario.scenario_id, run));
+            calls.push(run_function_calls(run));
+            errors.push(run_function_call_errors(run));
             turns.push(
                 run.metrics
                     .as_ref()
@@ -685,54 +683,20 @@ fn run_total_tokens(run: &E2eRunReport) -> Option<f64> {
     })
 }
 
-fn run_function_calls(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+fn run_function_calls(run: &E2eRunReport) -> Option<f64> {
     run.metrics
         .as_ref()
         .map(|metrics| metrics.totals.function_calls as f64)
-        .or_else(|| {
-            (scenario_id == "security_review").then(|| {
-                run.semantic_tests
-                    .iter()
-                    .map(|test| {
-                        let metrics = test.metrics.as_ref();
-                        let operations = [
-                            metrics.and_then(|value| value.pointer("/request_count")),
-                            metrics.and_then(|value| value.pointer("/poll/poll_count")),
-                            metrics.and_then(|value| value.pointer("/reconciliation_operations")),
-                        ]
-                        .into_iter()
-                        .flatten()
-                        .filter_map(Value::as_u64)
-                        .sum::<u64>();
-                        operations
-                            + u64::from(matches!(
-                                test.node_id.as_str(),
-                                "scan_commit_a" | "list_run_history"
-                            ))
-                    })
-                    .sum::<u64>() as f64
-            })
-        })
 }
 
-fn run_function_call_errors(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
+fn run_function_call_errors(run: &E2eRunReport) -> Option<f64> {
     run.metrics
         .as_ref()
         .map(|metrics| metrics.totals.function_call_errors as f64)
-        .or_else(|| {
-            (scenario_id == "security_review").then(|| {
-                run.semantic_tests
-                    .iter()
-                    .map(|test| test.failures.len() as u64)
-                    .sum::<u64>() as f64
-            })
-        })
 }
 
-fn run_total_cost(scenario_id: &str, run: &E2eRunReport) -> Option<f64> {
-    run.cost
-        .total_usd
-        .or_else(|| (scenario_id == "security_review").then_some(0.0))
+fn run_total_cost(run: &E2eRunReport) -> Option<f64> {
+    run.cost.total_usd
 }
 
 fn first_failure(report: &E2eReport) -> Value {

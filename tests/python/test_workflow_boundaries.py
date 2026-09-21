@@ -118,7 +118,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
             ROOT / "scripts/run_exact_stack_group.sh",
             ROOT / "scripts/run_exact_stack_fault.sh",
             ROOT / "supervisor/run-weekly-stress",
-            ROOT / "supervisor/install.sh",
             ROOT / ".github/workflows/exact-stack-e2e.yml",
             ROOT / "src/worker.rs",
             ROOT / "src/main.rs",
@@ -151,10 +150,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text(
             encoding="utf-8"
         )
-        self.assertIn("engineering-ticket.bundle", launcher)
-        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
+        self.assertNotIn("engineering-ticket.bundle", launcher)
+        self.assertNotIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertNotIn("HARNESS_E2E_FIXTURE_PATH", launcher)
-        self.assertIn("cleanup --lease-id", launcher)
+        self.assertNotIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
@@ -324,15 +323,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
             (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
         )
         supervisor = (ROOT / "supervisor/run-weekly-stress").read_text()
-        installer = (ROOT / "supervisor/install.sh").read_text()
         for operation in ("validate", "up", "status", "down"):
             self.assertIn(f"compose::{operation}", supervisor)
         self.assertIn("III_COMPOSE_STATE_DIR", supervisor)
         self.assertIn("--namespace \"$project_namespace\"", supervisor)
-        self.assertIn("0.23.0-rc.4", installer)
-        self.assertIn("d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a", installer)
-        self.assertNotIn("iii " + "worker", supervisor + installer)
-        self.assertNotIn("iii-" + "worker", supervisor + installer)
+        self.assertNotIn("iii " + "worker", supervisor)
+        self.assertNotIn("iii-" + "worker", supervisor)
 
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
@@ -361,35 +357,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("compare/$E2E_REVISION...$default_sha", workflow)
         self.assertIn("/opt/iii-harness-e2e/resolve-cutover-evidence", workflow)
 
-    def test_compose_campaigns_use_disposable_code_fixtures(self):
+    def test_compose_campaigns_do_not_prepare_an_engineering_ticket_fixture(self):
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
-        self.assertIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
+        self.assertNotIn("HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH", launcher)
         self.assertNotIn("HARNESS_E2E_FIXTURE_PATH", launcher)
-        self.assertIn("engineering_fixture_revision=", launcher)
-        self.assertIn("prepare --execution-id", launcher)
-        self.assertIn("cleanup --lease-id", launcher)
+        self.assertNotIn("engineering_fixture_revision=", launcher)
+        self.assertNotIn("prepare --execution-id", launcher)
+        self.assertNotIn("cleanup --lease-id", launcher)
         self.assertNotIn("git commit", launcher)
-
-    def test_shared_fixture_group_needs_no_external_checkout_or_launcher(self):
-        source = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
-        function = "prepare_code_fixtures() {" + source.split(
-            "prepare_code_fixtures() {", 1
-        )[1].split("\n}\n", 1)[0] + "\n}\n"
-        with tempfile.TemporaryDirectory() as directory:
-            contract = pathlib.Path(directory) / "contract.json"
-            contract.write_text(json.dumps({"suite": {"groups": [{
-                "id": "shared",
-                "scenarios": ["shell_coder_sandbox", "chess_engine_build", "trend_blog"],
-            }]}}))
-            result = subprocess.run(
-                ["bash", "-c", "set -Eeuo pipefail\n" + function + "prepare_code_fixtures"],
-                cwd=directory,
-                env={**os.environ, "campaign_group_id": "shared", "contract_path": str(contract)},
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_registry_groups_prepare_private_sources_without_persisting_credentials(self):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()

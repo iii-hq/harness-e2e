@@ -71,15 +71,6 @@
         "performance_regression",
         "chess_engine_build",
         "git_regression_forensics",
-        "engineering_ticket_git_handoff",
-        "swe_config_isolation",
-        "swe_cache_invalidation",
-        "swe_batch_replay",
-        "swe_replay_recovery",
-        "swe_contract_migration",
-        "swe_tenant_isolation",
-        "swe_replay_performance",
-        "swe_release_handoff",
         "typescript_chat_service"
       ]
     },
@@ -98,7 +89,6 @@
       "scenarios": [
         "prompt_injection_resilience",
         "secret_hygiene",
-        "security_review",
         "policy_bound_action"
       ]
     },
@@ -115,13 +105,11 @@
       "id": "m9",
       "label": "Continuous engineering",
       "scenarios": [
-        "engineering_endurance_ladder",
-        "swe_service_journey"
+        "engineering_endurance_ladder"
       ]
     }
   ],
   "diagnostics": [
-    "engineering_ticket",
     "trend_blog",
     "trending_topics_build",
     "todo_worker_simple",
@@ -134,33 +122,6 @@
     "linkly_tutorial"
   ],
   "requirements": {
-    "swe_config_isolation": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_cache_invalidation": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_batch_replay": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_replay_recovery": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_contract_migration": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_tenant_isolation": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_replay_performance": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_release_handoff": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
-    "swe_service_journey": [
-      "Isolated service workspace and trusted SWE grader"
-    ],
     "shell_coder_sandbox": [
       "Pinned shared engineering fixture"
     ],
@@ -173,17 +134,8 @@
     "trending_topics_build": [
       "Linux amd64 with Docker, Git, Python 3, Node, and access to the pinned e2e-fixture repository"
     ],
-    "engineering_ticket_git_handoff": [
-      "Protected Git handoff fixture"
-    ],
-    "engineering_ticket": [
-      "Protected engineering ticket fixture"
-    ],
     "browser_cross_site": [
       "Browser and three isolated local origins"
-    ],
-    "security_review": [
-      "Security scanner worker and review fixture"
     ],
     "incident_response": [
       "Disposable incident repository"
@@ -319,11 +271,6 @@
         "quorum_fan_in",
         "shell_coder_sandbox",
         "performance_regression",
-        "swe_config_isolation",
-        "swe_cache_invalidation",
-        "swe_replay_recovery",
-        "swe_contract_migration",
-        "engineering_ticket_git_handoff",
         "cross_app_transaction",
         "prompt_injection_resilience",
         "incident_response",
@@ -356,8 +303,7 @@
       "scenarios": [
         "cleanup_under_failure",
         "poison_message",
-        "subagent_validation_failure",
-        "swe_replay_recovery"
+        "subagent_validation_failure"
       ],
       "repetitions": 1,
       "technical_retries": 0,
@@ -404,7 +350,6 @@
       "modules": [],
       "scenarios": [
         "engineering_endurance_ladder",
-        "swe_service_journey",
         "wake_chain_soak",
         "fanout_ladder",
         "depth_ladder"

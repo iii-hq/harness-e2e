@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Copy allowlisted native SWE and Kanban evidence before stack cleanup."""
+"""Copy allowlisted native Kanban evidence before stack cleanup."""
 import argparse
 import json
 from pathlib import Path
@@ -55,12 +55,7 @@ def extract(native_dir, output_dir):
         if deliverables.is_symlink():
             raise ValueError("Native deliverables cannot be a symbolic link")
         for run in sorted(deliverables.iterdir()):
-            if not valid(run.name):
-                continue
-            swe = run / "swe_service_report.json"
-            if swe.is_file():
-                selected.append((swe, destination / run.name / swe.name))
-            if not run.is_dir():
+            if not valid(run.name) or not run.is_dir():
                 continue
             for attempt in sorted(run.iterdir()):
                 if not valid(attempt.name):

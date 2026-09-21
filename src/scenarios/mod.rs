@@ -28,7 +28,6 @@ pub mod database_migration_recovery;
 pub mod depth_ladder;
 mod domain;
 pub mod engineering_endurance_ladder;
-pub mod engineering_ticket;
 pub mod fanout_ladder;
 pub(crate) mod fixture;
 pub mod git_regression_forensics;
@@ -51,12 +50,10 @@ mod registry_plan;
 pub mod release_train_recovery;
 pub mod research_pipeline;
 pub mod secret_hygiene;
-pub mod security_review;
 pub mod sequential_pipeline;
 pub mod shell_coder_sandbox;
 pub mod subagent_validation;
 pub mod subagent_validation_failure;
-pub mod swe_service;
 pub mod timer_wake;
 pub mod todo_worker;
 pub mod tool_contract_recovery;
@@ -446,12 +443,9 @@ scenarios! {
     ShellCoderSandbox = "shell_coder_sandbox" => shell_coder_sandbox::ShellCoderSandbox,
     ResearchPipeline = "research_pipeline" => research_pipeline::ResearchPipeline,
     FanoutLadder = "fanout_ladder" => fanout_ladder::FanoutLadder,
-    SecurityReview = "security_review" => security_review::SecurityReview,
     IncidentResponse = "incident_response" => incident_response::IncidentResponse,
     TodoWorkerSimple = "todo_worker_simple" => todo_worker::TodoWorkerSimple,
     TodoWorkerPlanned = "todo_worker_planned" => todo_worker::TodoWorkerPlanned,
-    EngineeringTicket = "engineering_ticket" => engineering_ticket::EngineeringTicket,
-    EngineeringTicketGitHandoff = "engineering_ticket_git_handoff" => engineering_ticket::EngineeringTicketGitHandoff,
     EngineeringEnduranceLadder = "engineering_endurance_ladder" => engineering_endurance_ladder::EngineeringEnduranceLadder,
     GitRegressionForensics = "git_regression_forensics" => git_regression_forensics::GitRegressionForensics,
     MechanicalReaction = "mechanical_reaction" => mechanical_reaction::MechanicalReaction,
@@ -484,15 +478,6 @@ scenarios! {
     BrowserCrossSite = "browser_cross_site" => browser_cross_site::BrowserCrossSite,
     ReleaseTrainRecovery = "release_train_recovery" => release_train_recovery::ReleaseTrainRecovery,
     CrossRepoContractMigration = "cross_repo_contract_migration" => cross_repo_contract_migration::CrossRepoContractMigration,
-    SweConfigIsolation = "swe_config_isolation" => swe_service::SweService(ScenarioId::SweConfigIsolation),
-    SweCacheInvalidation = "swe_cache_invalidation" => swe_service::SweService(ScenarioId::SweCacheInvalidation),
-    SweBatchReplay = "swe_batch_replay" => swe_service::SweService(ScenarioId::SweBatchReplay),
-    SweReplayRecovery = "swe_replay_recovery" => swe_service::SweService(ScenarioId::SweReplayRecovery),
-    SweContractMigration = "swe_contract_migration" => swe_service::SweService(ScenarioId::SweContractMigration),
-    SweTenantIsolation = "swe_tenant_isolation" => swe_service::SweService(ScenarioId::SweTenantIsolation),
-    SweReplayPerformance = "swe_replay_performance" => swe_service::SweService(ScenarioId::SweReplayPerformance),
-    SweReleaseHandoff = "swe_release_handoff" => swe_service::SweService(ScenarioId::SweReleaseHandoff),
-    SweServiceJourney = "swe_service_journey" => swe_service::SweService(ScenarioId::SweServiceJourney),
 }
 
 impl ScenarioId {
@@ -656,7 +641,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_sixty_eight_unique_valid_scenarios() {
+    fn registry_contains_fifty_six_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -665,7 +650,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 68);
+        assert_eq!(ids.len(), 56);
     }
 
     #[test]
@@ -683,10 +668,7 @@ mod tests {
     #[test]
     fn default_selection_includes_every_registered_scenario() {
         let selected = selected(&[]);
-        assert!(selected.contains(&ScenarioId::SecurityReview));
         assert!(selected.contains(&ScenarioId::IncidentResponse));
-        assert!(selected.contains(&ScenarioId::EngineeringTicket));
-        assert!(selected.contains(&ScenarioId::EngineeringTicketGitHandoff));
         assert!(selected.contains(&ScenarioId::EngineeringEnduranceLadder));
         assert!(selected.contains(&ScenarioId::GitRegressionForensics));
         assert!(selected.contains(&ScenarioId::TodoWorkerSimple));
@@ -815,12 +797,7 @@ mod tests {
                 scenario.execution_kind(),
                 ScenarioExecutionKind::CompositeFlow | ScenarioExecutionKind::AdaptiveFlow
             ) {
-                if swe_service::is_swe(scenario) {
-                    assert!(!first.case.deliverable_contract.artifacts.is_empty());
-                    assert!(first.case.deliverable_contract.capture_before_cleanup);
-                } else {
-                    assert!(first.case.deliverable_contract.artifacts.is_empty());
-                }
+                assert!(first.case.deliverable_contract.artifacts.is_empty());
                 continue;
             }
 

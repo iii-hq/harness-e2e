@@ -8,7 +8,6 @@ pub mod release_train_recovery;
 mod resume;
 mod run;
 mod scheduler;
-pub mod security_scan;
 pub mod todo_worker;
 
 use std::sync::Arc;
@@ -153,13 +152,7 @@ pub fn adaptive_runtime(
 /// sequential scenario requires registering it here and implementing its step
 /// catalog; no JSON definition is loaded or accepted by the runner.
 pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinition> {
-    if crate::scenarios::swe_service::is_swe(scenario) {
-        return Some(crate::scenarios::swe_service::workflow::definition(
-            scenario,
-        ));
-    }
     match scenario {
-        ScenarioId::SecurityReview => Some(security_scan::definition()),
         ScenarioId::IncidentResponse => Some(incident_response::definition()),
         ScenarioId::TodoWorkerPlanned => Some(todo_worker::definition()),
         _ => None,
@@ -175,13 +168,6 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
         let Some(definition) = composite_definition(*scenario) else {
             continue;
         };
-        if crate::scenarios::swe_service::is_swe(*scenario) {
-            for descriptor in crate::scenarios::swe_service::workflow::descriptors() {
-                if catalog.get(&descriptor.id).is_none() {
-                    catalog.register_descriptor(descriptor)?;
-                }
-            }
-        }
         if definition
             .nodes
             .iter()
@@ -197,13 +183,6 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
             && catalog.get(builtin::BOUNDED_HARNESS_STEP_ID).is_none()
         {
             catalog.register_descriptor(bounded_harness_descriptor()?)?;
-        }
-        if scenario == &ScenarioId::SecurityReview {
-            for descriptor in security_scan::descriptors_only() {
-                if catalog.get(&descriptor.id).is_none() {
-                    catalog.register_descriptor(descriptor)?;
-                }
-            }
         }
         if scenario == &ScenarioId::IncidentResponse {
             for descriptor in incident_response::descriptors_only()? {
@@ -235,22 +214,6 @@ pub fn composite_runtime(
     let definition = composite_definition(scenario)
         .with_context(|| format!("scenario '{}' is not composite", scenario.as_str()))?;
     let mut catalog = StepCatalog::new();
-    if crate::scenarios::swe_service::is_swe(scenario) {
-        let cleanup_hook = crate::scenarios::swe_service::workflow::register(
-            &mut catalog,
-            scenario,
-            context,
-            model,
-            provider,
-            agent,
-        )?;
-        definition.validate(&catalog)?;
-        return Ok(CompositeScenarioRuntime {
-            definition,
-            catalog: Arc::new(catalog),
-            cleanup_hook,
-        });
-    }
     if definition
         .nodes
         .iter()
@@ -281,9 +244,6 @@ pub fn composite_runtime(
         )?;
     }
     let cleanup_hook = match scenario {
-        ScenarioId::SecurityReview => {
-            security_scan::register_security_scan_steps(&mut catalog, context)?
-        }
         ScenarioId::IncidentResponse => {
             incident_response::register_incident_response_steps(&mut catalog, context)?
         }

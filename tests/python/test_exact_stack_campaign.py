@@ -553,7 +553,7 @@ fail() {
 
             fake_repo = root / "repo/scripts"
             fake_repo.mkdir(parents=True)
-            (fake_repo / "extract_swe_reports.py").write_text(
+            (fake_repo / "extract_kanban_reports.py").write_text(
                 "import pathlib, sys\n"
                 "pathlib.Path(sys.argv[sys.argv.index('--output-dir') + 1]).mkdir(parents=True, exist_ok=True)\n"
                 "print('{}')\n"

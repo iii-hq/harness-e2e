@@ -14,8 +14,8 @@ const PREPARATION_TIMEOUT: Duration = Duration::from_secs(30);
 #[derive(Debug)]
 pub(crate) struct PreparedFixture {
     pub root: PathBuf,
-    // External engineering fixtures remain owned by the protected launcher.
-    pub owned: Option<tempfile::TempDir>,
+    // Drop removes the isolated checkout.
+    _directory: tempfile::TempDir,
 }
 
 pub(crate) async fn prepare(bundle: &[u8], revision: &str) -> Result<PreparedFixture> {
@@ -26,7 +26,7 @@ pub(crate) async fn prepare(bundle: &[u8], revision: &str) -> Result<PreparedFix
     prepare_owned(bundle, revision, owned).await
 }
 
-pub(crate) async fn prepare_owned(
+async fn prepare_owned(
     bytes: &[u8],
     revision: &str,
     owned: tempfile::TempDir,
@@ -83,7 +83,7 @@ pub(crate) async fn prepare_owned(
 
     Ok(PreparedFixture {
         root,
-        owned: Some(owned),
+        _directory: owned,
     })
 }
 
