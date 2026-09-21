@@ -39,7 +39,7 @@ jq -e --arg group "$campaign_group_id" \
   "$contract_path" >/dev/null
 project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
 execution_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
-linkly_fixture=$(jq -r --arg id "$campaign_group_id" '.suite.groups[] | select(.id == $id) | (.scenarios // [] | index("linkly_tutorial")) != null' "$contract_path")
+linkly_fixture=$(jq -r --arg id "$campaign_group_id" '.suite.groups[] | select(.id == $id) | any(.scenarios[]?; . == "linkly_tutorial")' "$contract_path")
 profile_assets=$(jq -r '.runtime.template != null or .suite.agent_profile != null' "$contract_path")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
@@ -80,7 +80,7 @@ engine_pid=""
 compose_pid=""
 compose_started=false
 compose_down=false
-failure_phase=bootstrap
+failure_phase=fixture_setup
 failure_reason=""
 engineering_fixture_lease=""
 
@@ -269,7 +269,6 @@ wait_for_compose() {
   fail "iii compose did not become ready within ${wait_seconds}s"
 }
 
-failure_phase=fixture_setup
 prepare_code_fixtures
 
 capture_processes "$artifact_dir/stack/processes-before.json"
@@ -346,15 +345,14 @@ fi
 # is said out loud and the group still runs; TYPESAFE_API_KEY is optional.
 : >"$env_file"
 chmod 600 "$env_file"
-for variable in DEEPSEEK_API_KEY ZAI_API_KEY; do
-  if [[ -z "${!variable:-}" ]]; then
-    log "[WARN] $variable is not set; its provider starts without a credential"
-  fi
-done
 for variable in DEEPSEEK_API_KEY ZAI_API_KEY TYPESAFE_API_KEY; do
-  if [[ -n "${!variable:-}" ]]; then
-    printf '%s=%s\n' "$variable" "${!variable}" >>"$env_file"
+  if [[ -z "${!variable:-}" ]]; then
+    if [[ "$variable" != TYPESAFE_API_KEY ]]; then
+      log "[WARN] $variable is not set; its provider starts without a credential"
+    fi
+    continue
   fi
+  printf '%s=%s\n' "$variable" "${!variable}" >>"$env_file"
 done
 
 project_args=(
@@ -383,10 +381,6 @@ fi
 if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
   project_args+=(--environment \
     "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
-fi
-if [[ -n "${HARNESS_E2E_SWE_WORKSPACE_ROOT:-}" ]]; then
-  project_args+=(--environment \
-    "harness-e2e.HARNESS_E2E_SWE_WORKSPACE_ROOT=$HARNESS_E2E_SWE_WORKSPACE_ROOT")
 fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
   project_args+=(--environment "harness-e2e.HARNESS_E2E_KANBAN_RUNTIME=$HARNESS_E2E_KANBAN_RUNTIME")
@@ -565,5 +559,4 @@ fi
 failure_phase=compose_down
 compose_trigger compose::down "file=$compose_file" >"$artifact_dir/stack/down.json"
 compose_down=true
-capture_processes "$artifact_dir/stack/processes-after.json"
 failure_phase=complete

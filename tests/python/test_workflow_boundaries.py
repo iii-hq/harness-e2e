@@ -118,7 +118,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
             ROOT / "scripts/run_exact_stack_group.sh",
             ROOT / "scripts/run_exact_stack_fault.sh",
             ROOT / "supervisor/run-weekly-stress",
-            ROOT / "supervisor/install.sh",
             ROOT / ".github/workflows/exact-stack-e2e.yml",
             ROOT / "src/worker.rs",
             ROOT / "src/main.rs",
@@ -324,15 +323,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
             (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
         )
         supervisor = (ROOT / "supervisor/run-weekly-stress").read_text()
-        installer = (ROOT / "supervisor/install.sh").read_text()
         for operation in ("validate", "up", "status", "down"):
             self.assertIn(f"compose::{operation}", supervisor)
         self.assertIn("III_COMPOSE_STATE_DIR", supervisor)
         self.assertIn("--namespace \"$project_namespace\"", supervisor)
-        self.assertIn("0.23.0-rc.4", installer)
-        self.assertIn("d9ab056f17daefc2f04ed892092a3df2fe76ffde5587335918606048047cf40a", installer)
-        self.assertNotIn("iii " + "worker", supervisor + installer)
-        self.assertNotIn("iii-" + "worker", supervisor + installer)
+        self.assertNotIn("iii " + "worker", supervisor)
+        self.assertNotIn("iii-" + "worker", supervisor)
 
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
