@@ -215,7 +215,7 @@ files take precedence over downloaded profiles. Machine-global profiles/skills
 are not used when a template or agent override is selected.
 
 The runner also enables the campaign's selected provider when it is absent
-from the project, using the provider version pinned in the stack contract.
+from the project, honoring any provider version override in the stack contract.
 
 Scenarios, prompts, permissions, fixtures, seeds and repetitions are unchanged.
 The evaluated agent is applied to ordinary sessions and workflow/adaptive
