@@ -1,4 +1,40 @@
-# Kanban validation — 2026-09-11
+# Kanban validation — 2026-09-20
+
+## C3/C4 semantic validation and independent evidence
+
+The revision-2 rubric has 76 weighted criteria across the seven scenarios, with
+100 points per scenario. C3 and C4 execute 11 and 12 independent checks. Other
+ordered flows record checkpoints so completed observations survive later failures
+and unreached behavior stays unverified. Native and standalone prompts use the
+same rubric; the native case identity includes its revision and digest.
+
+Regressions derived from the 18–19 September deliveries cover `Total: 5 tickets`,
+visible empty-state text, span titles inside accessible cards, presentation labels
+such as `Urgent`, and repeated board/detail values. Detail scoping also covers a
+header containing the Delete action and a div panel inside a shared board section;
+wrong detail values cannot borrow matching text from a card. Browser creation
+still verifies every submitted field in the response and persisted GET.
+
+Local validation uses real Chromium and a controlled HTTP application to execute
+the complete C3/C4 probes. Positive presentation variants pass. Negative controls
+independently reject an incorrect total, missing modal focus and discarded creation
+fields. iii and restart are test boundaries in these local browser fixtures.
+
+The focused suite passed 73 tests. Rust all-target tests passed 725 tests with
+seven ignored; a subsequent focused native check passed all ten Kanban tests.
+The full Python suite passed 308 tests with six platform-dependent skips
+(314 discovered), using Python 3.12.9 with PyYAML installed.
+Clippy with warnings denied, rustfmt, JavaScript syntax and whitespace checks
+passed. Rust validation used the installed 1.97.1 toolchain; the default 1.94.1
+cannot build the existing locked shakmaty dependency. The full Rust suite also
+requires the repository's `target/` directory even with an external target cache.
+
+The historical Docker/iii reference and base controls below were not repeated
+for this revision. No model execution, release, deployment or historical rescore
+is included in this local validation. Those gates remain separate from the local
+contract and browser-flow results.
+
+# Historical validation — 2026-09-11
 
 ## Evaluation integrity and original-candidate replays
 

@@ -58,6 +58,62 @@ failures do not erase partial credit, and missing/unverified evidence stays
 unavailable instead of becoming a candidate zero. A model smoke is not a
 comparative benchmark.
 
+## Independent criterion evidence (rubric revision 2)
+
+`rubric.json` defines 76 weighted criteria across C1–C7, summing to 100 points
+per scenario. Native materialization and standalone prompts read the same rubric.
+Its revision, definitions and SHA-256 are included in native case inputs, so
+the changed evaluation contract has a distinct identity from historical runs.
+The private controller packages the rubric beside the probe and includes it in
+the recorded controller hashes. The fixture catalog and historical commits stay
+unchanged.
+
+C3 has 11 separate checks: loading, empty, error, retry, total, columns,
+metadata, refresh, settings, safe text and responsive layout. Each browser state
+has a fresh context; failure to locate a total cannot prevent checking cards or
+metadata. C4 has 12 separate checks for card navigation, modal accessibility,
+create recovery, successful creation, identifiers, persisted detail fields,
+mobile/direct links, delete recovery, late deletion, durable deletion, content
+type and UTF-8. Lookup and persistence fixtures do not depend on modal success.
+Successful browser creation must still persist every submitted field, independently
+of the detail rendering check.
+
+The other scenarios record checkpoints within ordered flows and use independent
+fixtures where possible. A reached failing checkpoint receives zero; previous
+passes retain their credit; later dependent checkpoints are `unverified` with
+`awarded: null`. An absent prerequisite is not a fabricated failure of every
+downstream behavior. A failed application build/startup still means an incomplete
+task, while unavailable functional criteria remain unscored. Infrastructure or
+control failures continue to invalidate the evaluation.
+
+Native evaluation rejects missing, duplicate, stale-version and contradictory
+criterion evidence. `coverage.complete` stays false when any required evidence is
+unverified. Completion requires the complete successful evaluation, not just a
+model's final response. Raw checks and criterion reasons retain the actual failure
+or the missing prerequisite. A changed rubric requires a new execution; this code
+does not rescore stored reports.
+
+Selectors accept accessible links/buttons with span titles, list-based lanes,
+`Total: 5 tickets`, visible empty-state text and presentation labels such as
+`Urgent`. Detail validation is scoped to the detail panel so identical text on
+a board card does not count as a missing field. Keyboard actions, the selected
+ticket, actual field values, counts, persisted state and focus are still checked.
+Browser contexts are closed after each flow, including failed flows, to avoid
+leaking intercepted requests or live connections into the next check.
+
+Run the local contracts with:
+
+```sh
+pnpm --dir dashboard install --frozen-lockfile
+pnpm --dir dashboard exec playwright install chromium
+python3 -m unittest discover -s tests/python -p 'test_kanban*.py'
+cargo test --locked --lib scenarios::kanban
+```
+
+The browser-flow tests use Chromium and a controlled HTTP application with real
+DOM interaction and request interception. iii and restart are test boundaries;
+these tests do not replace the isolated Docker/iii reference and base controls.
+
 Controls and model deliveries use the same source-integrity check. Compose state
 and logs live under `/runtime-state/compose`, outside the source workspace. A
 new `worker-compose.lock` containing only Compose's canonical empty local-project
