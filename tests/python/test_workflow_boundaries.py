@@ -6,11 +6,105 @@ import subprocess
 import tempfile
 import unittest
 
+import yaml
+
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class WorkflowBoundaryTests(unittest.TestCase):
+    def test_partial_reruns_download_the_contract_uploaded_by_preparation(self):
+        jobs = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())["jobs"]
+        upload = next(step for step in jobs["prepare"]["steps"]
+                      if step.get("uses", "").startswith("actions/upload-artifact@"))
+        self.assertIsNotNone(upload.get("id"), "preparation must expose the uploaded contract")
+        self.assertEqual(jobs["prepare"]["outputs"].get("contract_artifact_id"),
+                         "${{ steps." + upload["id"] + ".outputs.artifact-id }}")
+        self.assertEqual(jobs["prepare"]["outputs"].get("contract_attempt"), "${{ github.run_attempt }}")
+        self.assertEqual(upload["with"]["retention-days"], 90)
+        # On attempt 2, preparation's retained output is still artifact 71.
+        retained_outputs = {"needs.prepare.outputs.contract_artifact_id": "71"}
+        for name in ("groups", "finalize"):
+            download = next(step for step in jobs[name]["steps"]
+                            if step.get("with", {}).get("path") == "target/harness-e2e-contract")
+            expression = download["with"].get("artifact-ids", "").removeprefix("${{ ").removesuffix(" }}")
+            self.assertEqual(retained_outputs.get(expression), "71")
+            self.assertEqual(download["with"].get("github-token"), "${{ github.token }}")
+            self.assertEqual(download["with"].get("run-id"), "${{ github.run_id }}")
+
+    def test_rerun_artifacts_belong_to_the_jobs_actual_execution(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())
+        steps = workflow["jobs"]["finalize"]["steps"]
+        selection = next((step for step in steps if step.get("id") == "group_artifacts"), None)
+        self.assertIsNotNone(selection, "reruns must select evidence from each job's actual execution")
+        download = next(step for step in steps if step.get("id") == "group_download")
+        self.assertEqual(download["with"].get("artifact-ids"), "${{ steps.group_artifacts.outputs.artifact_ids }}")
+        self.assertEqual(download["with"].get("path"), "${{ steps.group_artifacts.outputs.download_path }}")
+        self.assertEqual(download["with"].get("github-token"), "${{ github.token }}")
+        self.assertEqual(download["with"].get("run-id"), "${{ github.run_id }}")
+
+        def job(group, start, end, conclusion="success"):
+            return {"name": f"smoke-r01 · {group}", "run_attempt": 3, "status": "completed",
+                    "started_at": f"2026-09-21T{start}Z", "completed_at": f"2026-09-21T{end}Z",
+                    "conclusion": conclusion}
+
+        def artifact(group, attempt, identifier, created, expired=False):
+            return {"id": identifier, "name": f"e2e-observation-execution-1-smoke-r01-{group}-gh-{attempt}",
+                    "created_at": f"2026-09-21T{created}Z", "expired": expired}
+
+        old_job = job("case-old", "05:00:00", "05:01:00")
+        new_job = job("case-new", "11:00:00", "11:01:00", "failure")
+        old = artifact("case-old", 1, 10, "05:00:50")
+        stale = artifact("case-new", 1, 11, "05:00:50")
+        diagnostic = artifact("case-new", 3, 30, "11:00:50")
+        cases = [
+            ("copied_success_and_new_failure", [old_job, new_job], [old, stale, diagnostic], 1, "10,30"),
+            ("missing_new_artifact", [new_job], [stale], 1, ""),
+            ("expired_new_artifact", [new_job], [stale, dict(diagnostic, expired=True)], 1, ""),
+            ("different_contract", [old_job], [old], 2, ""),
+            ("ambiguous_artifacts", [new_job], [diagnostic, dict(diagnostic, id=31)], 1, ""),
+            ("ambiguous_jobs", [new_job, new_job], [diagnostic], 1, ""),
+            ("malformed_job", [dict(new_job, completed_at=None)], [diagnostic], 1, ""),
+            ("single_artifact", [old_job], [old, stale], 1, "10"),
+            ("single_new_failure", [new_job], [diagnostic], 1, "30"),
+            ("future_attempt", [new_job], [artifact("case-new", 4, 40, "11:00:50")], 1, ""),
+        ]
+        for name, jobs, artifacts, contract_attempt, expected_ids in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = pathlib.Path(directory)
+                (root / "bin").mkdir()
+                (root / "jobs.json").write_text(json.dumps([{"jobs": jobs}]))
+                (root / "artifacts.json").write_text(json.dumps([{"artifacts": artifacts}]))
+                gh = root / "bin/gh"
+                gh.write_text('#!/bin/sh\ncase "$*" in\n'
+                              '  *"/attempts/3/jobs?per_page=100"*) cat "$FIXTURE_DIR/jobs.json" ;;\n'
+                              '  *"/artifacts?per_page=100"*) cat "$FIXTURE_DIR/artifacts.json" ;;\n'
+                              '  *) exit 2 ;;\nesac\n')
+                gh.chmod(0o755)
+                output = root / "github-output"
+                result = subprocess.run(["bash", "-c", selection["run"]], cwd=root, env={
+                    **os.environ, "PATH": f"{root / 'bin'}:{os.environ['PATH']}",
+                    "FIXTURE_DIR": str(root), "GITHUB_OUTPUT": str(output),
+                    "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77",
+                    "GITHUB_RUN_ATTEMPT": "3", "CONTRACT_ATTEMPT": str(contract_attempt),
+                    "EXECUTION_ID": "execution-1",
+                }, capture_output=True, text=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                self.assertEqual(values["artifact_ids"], expected_ids)
+                selected = json.loads((root / "target/selected-group-artifacts.json").read_text())
+                self.assertEqual(
+                    ",".join(str(item["id"]) for item in selected.values()), expected_ids,
+                )
+                if name == "single_artifact":
+                    # download-artifact v7 flattens a singleton even with merge-multiple:false.
+                    self.assertEqual(values["download_path"], "target/downloaded-groups/" + old["name"])
+                    self.assertEqual(selected["smoke-r01 · case-old"]["run_attempt"], 1)
+                elif name == "single_new_failure":
+                    self.assertEqual(values["download_path"], "target/downloaded-groups/" + diagnostic["name"])
+                else:
+                    self.assertEqual(values["download_path"], "target/downloaded-groups")
+
     def test_external_actions_are_pinned_to_immutable_commits(self):
         action_ref = re.compile(r"^\s*uses:\s*([^\s#]+)", re.MULTILINE)
         immutable = re.compile(r"^[^\s]+@[0-9a-f]{40}$")
@@ -171,9 +265,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
             scripts = root / "scripts"
             scripts.mkdir()
             (scripts / "exact_stack_campaign.py").write_text(
-                "import sys\nassert sys.argv[1] == 'groups'\nprint('case-minimal-path')\n"
+                "import sys\nassert sys.argv[1] == 'groups'\nprint('case-minimal-path\\ncase-missing')\n"
             )
             campaigns = ("smoke-r01", "capability-r01", "regression-r01")
+            selected = {}
             for campaign in campaigns:
                 (contracts / f"{campaign}.json").write_text(f'{{"campaign":"{campaign}"}}')
                 group = root / (
@@ -182,6 +277,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 )
                 group.mkdir(parents=True)
                 (group / "result.json").write_text("{}")
+                selected[f"{campaign} · case-minimal-path"] = {"name": group.name}
+                stale_group = root / f"target/downloaded-groups/e2e-observation-execution-1-{campaign}-case-missing-gh-1"
+                stale_group.mkdir()
+                (stale_group / "result.json").write_text('{"status":"old_success"}')
+            (root / "target/selected-group-artifacts.json").write_text(json.dumps(selected))
 
             subprocess.run(["bash", "-c", command], cwd=root, check=True)
 
@@ -203,6 +303,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
                         / "groups/case-minimal-path/result.json"
                     ).is_file()
                 )
+                missing = campaign_root / campaign / "groups/case-missing"
+                self.assertEqual(json.loads((missing / "failure.json").read_text())["outcome"], "infra_failed")
+                self.assertFalse((missing / "result.json").exists())
             self.assertFalse(
                 (campaign_root / "regression-r01/campaign-summary.json").exists()
             )
