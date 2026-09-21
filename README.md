@@ -165,6 +165,12 @@ Everything else is resolved here, from the commit pinned by `runner_sha`:
    protected runner; one root bundle is produced without rebuilding the native
    Harness artifacts.
 
+Partial GitHub reruns reuse the contract artifact produced by `prepare`, which
+is retained for 90 days. The finalizer matches group artifacts to the completed
+jobs' execution times, preserving successful groups from earlier attempts.
+A rerun that produces no artifact remains missing evidence; an older artifact
+does not replace it.
+
 ### Agent profiles from Release Control
 
 Release Control can select an existing Directory agent profile for an execution
@@ -207,6 +213,9 @@ selectors, additional packages enter the stack lock, and local workers remain
 local. Template skills override whole downloaded namespaces, and its agent
 files take precedence over downloaded profiles. Machine-global profiles/skills
 are not used when a template or agent override is selected.
+
+The runner also enables the campaign's selected provider when it is absent
+from the project, using the provider version pinned in the stack contract.
 
 Scenarios, prompts, permissions, fixtures, seeds and repetitions are unchanged.
 The evaluated agent is applied to ordinary sessions and workflow/adaptive
