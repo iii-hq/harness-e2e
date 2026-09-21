@@ -571,7 +571,6 @@
         "git",
         "git::deterministic-fixture-v1",
         "git::offline-bundle",
-        "github::security-read",
         "github::trusted-handoff",
         "harness::independent_session",
         "harness::post-turn-validation",
@@ -591,8 +590,6 @@
         "python3",
         "release_shadow::read-only-v1",
         "release_train_simulator::v1",
-        "security_scan::on-demand",
-        "security_scan::v1",
         "swe::isolated-python-workspace"
       ]
     },
@@ -2397,11 +2394,9 @@
         "shell_coder_sandbox",
         "research_pipeline",
         "fanout_ladder",
-        "security_review",
         "incident_response",
         "todo_worker_simple",
         "todo_worker_planned",
-        "engineering_ticket",
         "engineering_ticket_git_handoff",
         "engineering_endurance_ladder",
         "git_regression_forensics",

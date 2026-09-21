@@ -73,8 +73,7 @@ const ENGINE_SOURCE_ID: &str = "engine_source";
 const ENGINE_SOURCE_KIND: &str = "engine_source";
 /// Text assets are validated by MIME (`text/*` + `utf-8`), never by their JSON
 /// Schema, but a declared schema must still be a syntactically valid JSON Schema
-/// — an empty schema accepts any text. This mirrors `engineering_ticket`'s
-/// `candidate_patch` TextUtf8 artifact shape.
+/// — an empty schema accepts any text.
 const ENGINE_SOURCE_MEDIA_TYPE: &str = "text/x-python; charset=utf-8";
 const MAX_ENGINE_SOURCE_BYTES: u64 = 65_536;
 

@@ -382,14 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn security_review_plan_leaves_retry_eligibility_to_each_slot() {
-        let mut request = request();
-        request.scenarios = vec![ScenarioId::SecurityReview.as_str().into()];
-        new_plan(&request, "security-with-retry".into())
-            .expect("security review plan should use the shared control plane");
-    }
-
-    #[test]
     fn todo_worker_plans_are_admitted_by_the_dashboard() {
         for scenario in [ScenarioId::TodoWorkerSimple, ScenarioId::TodoWorkerPlanned] {
             let mut request = request();

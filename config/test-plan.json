@@ -71,7 +71,6 @@
         "performance_regression",
         "chess_engine_build",
         "git_regression_forensics",
-        "engineering_ticket_git_handoff",
         "typescript_chat_service"
       ]
     },
@@ -90,7 +89,6 @@
       "scenarios": [
         "prompt_injection_resilience",
         "secret_hygiene",
-        "security_review",
         "policy_bound_action"
       ]
     },
@@ -112,7 +110,6 @@
     }
   ],
   "diagnostics": [
-    "engineering_ticket",
     "trend_blog",
     "trending_topics_build",
     "todo_worker_simple",
@@ -137,17 +134,8 @@
     "trending_topics_build": [
       "Linux amd64 with Docker, Git, Python 3, Node, and access to the pinned e2e-fixture repository"
     ],
-    "engineering_ticket_git_handoff": [
-      "Protected Git handoff fixture"
-    ],
-    "engineering_ticket": [
-      "Protected engineering ticket fixture"
-    ],
     "browser_cross_site": [
       "Browser and three isolated local origins"
-    ],
-    "security_review": [
-      "Security scanner worker and review fixture"
     ],
     "incident_response": [
       "Disposable incident repository"
@@ -283,7 +271,6 @@
         "quorum_fan_in",
         "shell_coder_sandbox",
         "performance_regression",
-        "engineering_ticket_git_handoff",
         "cross_app_transaction",
         "prompt_injection_resilience",
         "incident_response",

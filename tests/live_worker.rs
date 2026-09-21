@@ -29,13 +29,11 @@ use harness_e2e::scenarios::ScenarioId;
 use serde_json::json;
 
 const LIVE_LABEL: &str = "live worker validation";
-const PROMPT_ENVIRONMENT: [&str; 6] = [
+const PROMPT_ENVIRONMENT: [&str; 4] = [
     "HARNESS_E2E_RUN_DIR",
     "TMPDIR",
     "HARNESS_E2E_FIXTURE_PATH",
-    "HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH",
     "HARNESS_E2E_INCIDENT_FIXTURE_PATH",
-    "HARNESS_E2E_SECURITY_FIXTURE_PATH",
 ];
 
 struct Live {

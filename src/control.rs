@@ -3299,19 +3299,6 @@ mod tests {
     }
 
     #[test]
-    fn security_review_is_admitted_and_ignores_ineligible_retries() {
-        let mut request = request();
-        request.lane = "local".into();
-        request.scenarios = vec![ScenarioId::SecurityReview];
-        request.technical_retries = 0;
-        validate_run_request(&request).expect("security review should use the control plane");
-
-        request.technical_retries = 1;
-        validate_run_request(&request)
-            .expect("per-slot scheduler decides whether a retry is replay-safe");
-    }
-
-    #[test]
     fn todo_worker_scenarios_are_admitted_by_the_control_plane() {
         let mut simple = request();
         simple.lane = "local".into();

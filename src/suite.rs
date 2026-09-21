@@ -275,11 +275,6 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
         .context("resolve subject model")?;
     config.subject.priced = Some(subject_model.pricing.is_some());
     let built_in_scenarios = config.scenarios.to_vec();
-    if built_in_scenarios.contains(&ScenarioId::SecurityReview) {
-        crate::workflow::security_scan::register_local_adapter_if_configured(context.as_ref())
-            .await
-            .context("register fixture-backed local security-scan adapter")?;
-    }
     let composite_definitions = built_in_scenarios
         .iter()
         .filter_map(|scenario| composite_definition(*scenario))
@@ -495,8 +490,6 @@ pub async fn run_suite(mut config: SuiteRunConfig) -> Result<SuiteRunOutcome> {
             .map(str::to_owned);
         }
     }
-
-    crate::scenarios::engineering_ticket::apply_handoff_efficiency(&mut scenario_reports);
 
     worker_contracts.sort_by(|left, right| left.function_id.cmp(&right.function_id));
 

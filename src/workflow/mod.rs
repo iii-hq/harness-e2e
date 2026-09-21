@@ -8,7 +8,6 @@ pub mod release_train_recovery;
 mod resume;
 mod run;
 mod scheduler;
-pub mod security_scan;
 pub mod todo_worker;
 
 use std::sync::Arc;
@@ -154,7 +153,6 @@ pub fn adaptive_runtime(
 /// catalog; no JSON definition is loaded or accepted by the runner.
 pub fn composite_definition(scenario: ScenarioId) -> Option<WorkflowDefinition> {
     match scenario {
-        ScenarioId::SecurityReview => Some(security_scan::definition()),
         ScenarioId::IncidentResponse => Some(incident_response::definition()),
         ScenarioId::TodoWorkerPlanned => Some(todo_worker::definition()),
         _ => None,
@@ -185,13 +183,6 @@ pub fn composite_descriptor_catalog(scenarios: &[ScenarioId]) -> Result<StepCata
             && catalog.get(builtin::BOUNDED_HARNESS_STEP_ID).is_none()
         {
             catalog.register_descriptor(bounded_harness_descriptor()?)?;
-        }
-        if scenario == &ScenarioId::SecurityReview {
-            for descriptor in security_scan::descriptors_only() {
-                if catalog.get(&descriptor.id).is_none() {
-                    catalog.register_descriptor(descriptor)?;
-                }
-            }
         }
         if scenario == &ScenarioId::IncidentResponse {
             for descriptor in incident_response::descriptors_only()? {
@@ -253,9 +244,6 @@ pub fn composite_runtime(
         )?;
     }
     let cleanup_hook = match scenario {
-        ScenarioId::SecurityReview => {
-            security_scan::register_security_scan_steps(&mut catalog, context)?
-        }
         ScenarioId::IncidentResponse => {
             incident_response::register_incident_response_steps(&mut catalog, context)?
         }

@@ -5,8 +5,7 @@
 //! depth 3. Earlier easier opponents were removed to keep one comparable
 //! cohort. Version over version, the win rate is the visible evolution curve.
 //!
-//! Per run the game lives in a `static` registry keyed by `run_id` (the same
-//! stateful pattern `engineering_ticket` uses): `setup` inserts a fresh
+//! Per run the game lives in a `static` registry keyed by `run_id`: `setup` inserts a fresh
 //! [`ChessGame`] at the start position and registers a run-scoped move channel
 //! `e2etest::chess_move_<suffix>` on the suite's own engine connection. The
 //! subject calls that channel with each of its moves; the handler validates

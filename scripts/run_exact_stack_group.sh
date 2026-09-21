@@ -14,10 +14,7 @@ wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
 admission_timeout_seconds=${HARNESS_E2E_ADMISSION_TIMEOUT_SECONDS:-180}
 compose_add_timeout_seconds=${HARNESS_E2E_COMPOSE_ADD_TIMEOUT_SECONDS:-600}
 run_timeout_seconds=${HARNESS_E2E_RUN_TIMEOUT_SECONDS:-10800}
-fixture_launcher=${HARNESS_E2E_FIXTURE_LAUNCHER:-"$repo_root/scripts/engineering_ticket_fixture.py"}
-fixture_source_root=${HARNESS_E2E_FIXTURE_SOURCE_ROOT:-"$repo_root/tests/fixtures/campaign"}
 kanban_bootstrap=${HARNESS_E2E_KANBAN_BOOTSTRAP:-"$repo_root/scripts/kanban_eval/bootstrap.py"}
-engineering_fixture_revision=7a6b25b3cd12d66af74a358ae86e0d2b846bd384
 
 case "$artifact_dir" in
   "$repo_root"/target/*) ;;
@@ -80,9 +77,8 @@ engine_pid=""
 compose_pid=""
 compose_started=false
 compose_down=false
-failure_phase=fixture_setup
+failure_phase=cli_install
 failure_reason=""
-engineering_fixture_lease=""
 
 log() {
   printf '\n[%s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2
@@ -162,7 +158,6 @@ await_compose_add() {
 
 cleanup() {
   local status=$?
-  local fixture_cleanup_failed=0
   trap - EXIT INT TERM ERR
   set +e
   if [[ "$compose_started" == true && "$compose_down" != true ]] && kill -0 "$compose_pid" 2>/dev/null; then
@@ -179,14 +174,6 @@ cleanup() {
   if [[ -n "$engine_pid" ]] && kill -0 "$engine_pid" 2>/dev/null; then
     kill -- "-$engine_pid" 2>/dev/null || kill "$engine_pid" 2>/dev/null || true
     wait "$engine_pid" 2>/dev/null || true
-  fi
-  if [[ -n "$engineering_fixture_lease" ]]; then
-    "$fixture_launcher" cleanup --lease-id "$engineering_fixture_lease" || fixture_cleanup_failed=1
-  fi
-  if ((status == 0 && fixture_cleanup_failed != 0)); then
-    status=1
-    failure_phase=fixture_cleanup
-    failure_reason="disposable code fixture cleanup failed"
   fi
   if ((status != 0)); then
     [[ -n "$failure_reason" ]] || failure_reason="Compose execution failed during $failure_phase (exit $status)"
@@ -228,25 +215,6 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-prepare_code_fixtures() {
-  local requires_engineering fixture_json execution_prefix
-  requires_engineering=$(jq -r --arg group "$campaign_group_id" '
-    .suite.groups[] | select(.id == $group) |
-    any(.scenarios[]?; . == "engineering_ticket_git_handoff")
-  ' "$contract_path")
-  [[ "$requires_engineering" == true ]] || return 0
-  [[ -x "$fixture_launcher" ]] || fail "fixture launcher is unavailable: $fixture_launcher"
-  export HARNESS_E2E_ENGINEERING_FIXTURE_ROOT="$run_root/fixture-leases"
-  execution_prefix="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-${campaign_group_id}"
-  export HARNESS_E2E_ENGINEERING_FIXTURE_REPOSITORY="$fixture_source_root/engineering-ticket.bundle"
-  fixture_json="$run_root/engineering-fixture.json"
-  "$fixture_launcher" prepare --execution-id "${execution_prefix}-engineering" \
-    --revision "$engineering_fixture_revision" >"$fixture_json"
-  engineering_fixture_lease=$(jq -er .lease_id "$fixture_json")
-  HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$(jq -er .path "$fixture_json")
-  export HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH
-}
-
 wait_for_engine() {
   local response
   for ((attempt = 0; attempt < wait_seconds; attempt++)); do
@@ -268,8 +236,6 @@ wait_for_compose() {
   done
   fail "iii compose did not become ready within ${wait_seconds}s"
 }
-
-prepare_code_fixtures
 
 capture_processes "$artifact_dir/stack/processes-before.json"
 
@@ -377,10 +343,6 @@ if [[ -n "$project_template" ]]; then
 fi
 if [[ "$profile_assets" == true ]]; then
   project_args+=(--profile-root "$project_dir")
-fi
-if [[ -n "${HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH:-}" ]]; then
-  project_args+=(--environment \
-    "harness-e2e.HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH=$HARNESS_E2E_ENGINEERING_TICKET_FIXTURE_PATH")
 fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
   project_args+=(--environment "harness-e2e.HARNESS_E2E_KANBAN_RUNTIME=$HARNESS_E2E_KANBAN_RUNTIME")
