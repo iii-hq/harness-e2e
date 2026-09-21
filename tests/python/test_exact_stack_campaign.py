@@ -215,6 +215,62 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         versions = {name: container["version"] for name, container in project["containers"].items()}
         self.assertEqual(versions, {
             "harness": "latest", "state": "0.22.1", "http": "latest", "harness-e2e": "latest",
+            "provider-deepseek": "latest",
+        })
+
+    def test_campaign_provider_is_added_to_templates_and_receives_its_pin_and_credentials(self):
+        template = {"containers": {
+            "subject": {"worker": "package://harness"},
+            "provider-openai": {"worker": "package://provider-openai"},
+        }}
+        for provider in ("deepseek", "zai", "anthropic"):
+            with self.subTest(provider=provider):
+                contract = campaign_contract()
+                contract["suite"]["subject"]["provider"] = provider
+                contract["runtime"]["stack"] = {f"provider-{provider}": "1.2.3"}
+                project = MODULE.project_scaffold(
+                    contract, "project-one", Path("/data"), "/private/.env", {}, template,
+                )
+                self.assertEqual(project["containers"].get(f"provider-{provider}"), {
+                    "worker": f"package://provider-{provider}",
+                    "version": "1.2.3",
+                    "env_file": ["/private/.env"],
+                })
+                self.assertNotIn("fp", project["containers"])
+                self.assertNotIn("harness", project["containers"])
+                self.assertEqual(set(template["containers"]), {"subject", "provider-openai"})
+
+    def test_existing_provider_instances_are_preserved_without_duplicates(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "selected-model": {
+                "worker": "package://provider-deepseek", "config_name": "custom",
+                "config_override": {"setting": "keep"},
+            },
+        }}
+        project = MODULE.project_scaffold(
+            campaign_contract(), "project-one", Path("/data"), "/private/.env", {}, template,
+        )
+        providers = {name: container for name, container in project["containers"].items()
+                     if container["worker"] == "package://provider-deepseek"}
+        self.assertEqual(list(providers), ["selected-model"])
+        self.assertEqual(providers["selected-model"]["config_override"], {"setting": "keep"})
+        self.assertEqual(providers["selected-model"]["env_file"], ["/private/.env"])
+
+    def test_campaign_provider_name_cannot_replace_an_unrelated_template_container(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "provider-deepseek": {"worker": "path://./link"},
+        }}
+        with self.assertRaisesRegex(ValueError, "provider-deepseek"):
+            MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template)
+
+    def test_base_projects_also_add_the_campaign_provider_when_it_is_not_declared(self):
+        contract = campaign_contract()
+        contract["suite"]["subject"]["provider"] = "anthropic"
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), "/private/.env", {})
+        self.assertEqual(project["containers"].get("provider-anthropic"), {
+            "worker": "package://provider-anthropic", "version": "latest", "env_file": ["/private/.env"],
         })
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):

@@ -496,13 +496,23 @@ def project_scaffold(
         raise ValueError("runtime.stack must be an object of worker selectors")
 
     # The project is the template when there is one and the base otherwise.
-    # The runner is this repository's addition to either; it is named here so
-    # its config has a container to land on, and installed by compose::add.
+    # Add the runner and the campaign's provider to either project. Templates
+    # only enable their own default providers; credentials alone cannot start
+    # the provider selected by the campaign.
     if env_file and not Path(env_file).is_absolute():
         raise ValueError("env file must be absolute")
     manifest = copy.deepcopy(template if template is not None else (declared_base() if base is None else base))
     containers = manifest.setdefault("containers", {})
     containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}"})
+    provider = contract["suite"]["subject"]["provider"]
+    if not re.fullmatch(r"[a-z][a-z0-9-]*", provider):
+        raise ValueError("suite.subject.provider must be a provider package name")
+    provider_package = f"provider-{provider}"
+    provider_source = f"package://{provider_package}"
+    if not any(container.get("worker") == provider_source for container in containers.values()):
+        if provider_package in containers:
+            raise ValueError(f"container {provider_package} is already used by another worker")
+        containers[provider_package] = {"worker": provider_source}
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
         source = container.get("worker", "")
