@@ -104,8 +104,6 @@ pub enum Capability {
     ReleaseShadowReadOnlyV1,
     #[serde(rename = "release_train_simulator::v1")]
     ReleaseTrainSimulatorV1,
-    #[serde(rename = "swe::isolated-python-workspace")]
-    SweIsolatedPythonWorkspace,
 }
 
 impl Capability {
@@ -146,7 +144,6 @@ impl Capability {
             Self::Python3 => "python3",
             Self::ReleaseShadowReadOnlyV1 => "release_shadow::read-only-v1",
             Self::ReleaseTrainSimulatorV1 => "release_train_simulator::v1",
-            Self::SweIsolatedPythonWorkspace => "swe::isolated-python-workspace",
         }
     }
 }

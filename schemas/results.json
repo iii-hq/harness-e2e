@@ -589,8 +589,7 @@
         "playwright",
         "python3",
         "release_shadow::read-only-v1",
-        "release_train_simulator::v1",
-        "swe::isolated-python-workspace"
+        "release_train_simulator::v1"
       ]
     },
     "CapturedInvariant": {
@@ -2397,7 +2396,6 @@
         "incident_response",
         "todo_worker_simple",
         "todo_worker_planned",
-        "engineering_ticket_git_handoff",
         "engineering_endurance_ladder",
         "git_regression_forensics",
         "mechanical_reaction",

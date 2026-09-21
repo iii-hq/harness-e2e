@@ -23,7 +23,7 @@ A meta inicial considera uma stack iii com Harness e acesso aos modelos configur
 
 ## Diagnóstico inicial
 
-O levantamento encontrou **60 nomes `HARNESS_E2E_*` referenciados** nos arquivos versionados de implementação, scripts e workflows examinados. Isso inclui build, CI, testes, opções com default e variáveis apenas repassadas. **Não são 60 entradas obrigatórias para iniciar o worker.** O inventário completo e o método estão no fim deste documento.
+O levantamento encontrou **53 nomes `HARNESS_E2E_*` listados** no inventário abaixo. Isso inclui build, CI, testes, opções com default e variáveis apenas repassadas. **Não são 53 entradas obrigatórias para iniciar o worker.** O inventário completo e o método estão no fim deste documento.
 
 Há três configurações de recursos que bloqueiam cenários específicos:
 
@@ -98,7 +98,7 @@ As mudanças internas de preparação e UI pertencem ao E2E. Eventuais mudanças
 
 ## Inventário completo
 
-Método: busca lexical de `HARNESS_E2E_[A-Z0-9_]+` nos arquivos versionados `.rs`, `.py`, `.mjs`, `.sh`, `.yaml` e `.yml` de `src/`, `scripts/`, `.github/`, mais `build.rs`, `iii.worker.yaml` e os dois arquivos Compose. Foram encontrados 56 nomes completos e o prefixo dinâmico `HARNESS_E2E_STORAGE_`; expandir as quatro classes de retenção produz os 60 nomes abaixo. Uma referência pode ser definição, leitura, emissão ou repasse, não necessariamente uma opção funcional. Arquivos locais ignorados, valores de segredos e configurações efetivas de processos não fazem parte da contagem.
+Método: busca lexical de `HARNESS_E2E_[A-Z0-9_]+` nos arquivos versionados `.rs`, `.py`, `.mjs`, `.sh`, `.yaml` e `.yml` de `src/`, `scripts/`, `.github/`, mais `build.rs`, `iii.worker.yaml` e os dois arquivos Compose. A tabela lista 53 sufixos. Uma referência pode ser definição, leitura, emissão ou repasse, não necessariamente uma opção funcional. Arquivos locais ignorados, valores de segredos e configurações efetivas de processos não fazem parte da contagem.
 
 Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma proposta, não comportamento já implementado.
 

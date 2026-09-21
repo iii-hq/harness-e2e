@@ -394,7 +394,6 @@
         "incident_response",
         "todo_worker_simple",
         "todo_worker_planned",
-        "engineering_ticket_git_handoff",
         "engineering_endurance_ladder",
         "git_regression_forensics",
         "mechanical_reaction",
