@@ -282,6 +282,20 @@ async function pageFor(browser, baseUrl, viewport = { width: 1280, height: 900 }
   return { context, page }
 }
 
+// Subjects choose their own ticket route, so reach details through the board
+// card and let the app produce the link instead of assuming a hash format.
+async function openTicket(browser, baseUrl, ticket, viewport) {
+  const { context, page } = await pageFor(browser, baseUrl, viewport)
+  await openTicketFromBoard(page, ticket)
+  return { context, page }
+}
+
+async function openTicketFromBoard(page, ticket) {
+  if (await ticketCard(page, ticket).count() === 0) await boardNavigation(page).first().click()
+  await ticketCard(page, ticket).click()
+  await ticketDetail(page, ticket)
+}
+
 async function screenshot(page, output, name) {
   await page.screenshot({ path: join(output, `${name}.png`), fullPage: true })
 }
@@ -650,7 +664,7 @@ export const PROBES = {
             expect(await boardTicketTotal(page, 0).count() === 0, 'loading fabricated a zero total')
             expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'loading fabricated zero lane counts')
           } else if (state === 'error') {
-            await expectText(page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: /unable|error|failed/i }), /unable|error|failed/i)
+            await expectText(page.getByRole('alert').or(page.getByRole('status')).filter({ hasText: /unable|error|fail/i }), /unable|error|fail/i)
             expect(await boardTicketTotal(page, 0).count() === 0, 'failed first read fabricated a zero total')
             expect(await page.getByText(/^0$/).filter({ visible: true }).count() === 0, 'failed first read fabricated zero lane counts')
           } else {
@@ -841,7 +855,7 @@ export const PROBES = {
     })
     await check('ticket_details', async () => {
       const ticket = await create(trigger, { title: 'Persisted details probe', ...fields })
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`)
+      const { context, page } = await openTicket(browser, baseUrl, ticket)
       await assertTicketDetails(page, ticket)
       await context.close()
     })
@@ -862,7 +876,7 @@ export const PROBES = {
     })
     await check('ticket_delete_error', async () => {
       const ticket = await create(trigger, { title: 'Delete failure probe' })
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`)
+      const { context, page } = await openTicket(browser, baseUrl, ticket)
       const detail = await ticketDetail(page, ticket)
       await page.route('**/api/tickets/**', (route) => route.request().method() === 'DELETE'
         ? route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"probe failure"}' }) : route.continue())
@@ -875,7 +889,7 @@ export const PROBES = {
     await check('ticket_delete_navigation', async () => {
       const remaining = await create(trigger, { title: 'Remaining card probe' })
       const ticket = await create(trigger, { title: 'Delete navigation probe' })
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`)
+      const { context, page } = await openTicket(browser, baseUrl, ticket)
       const detail = await ticketDetail(page, ticket)
       const delayed = await holdResponse(page, '**/api/tickets/**', 'DELETE')
       try {
@@ -931,7 +945,7 @@ export const PROBES = {
       const partial = await trigger('kanban::tickets::update', { id: ticket.key, changes: { priority: 'high' } })
       expect(partial.description === 'Keep me' && partial.title === ticket.title, 'partial update erased unrelated fields')
       stage('edit_cancel')
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
+      const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Editable probe/)
       let edit = await ticketEditor(page)
       await edit.getByLabel('Title').fill('Discard this')
@@ -1078,7 +1092,7 @@ export const PROBES = {
       }, 'edited ticket was unavailable after restart', 15_000)
       expect(sameJson(persisted, expected), 'restart lost an edited field')
       stage('edit_mobile')
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
+      const { context, page } = await openTicket(browser, baseUrl, persisted, { width: 390, height: 844 })
       const edit = await ticketEditor(page)
       expect(await edit.getByLabel('Status').inputValue() === 'todo', 'mobile status selector did not reflect the persisted edit')
       await edit.getByLabel('Status').selectOption('done')
@@ -1100,11 +1114,11 @@ export const PROBES = {
     await check('discussion_comments_replies_timeline', async () => {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
       stage('discussion_comments')
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.key}`, { width: 390, height: 844 })
+      const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.getByLabel('Your name').fill('Alice')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('<img src=x onerror=alert(1)> first')
-      await page.getByRole('button', { name: 'Post comment' }).click()
+      await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       const safeComment = page.getByText('<img src=x onerror=alert(1)> first', { exact: true })
       await expectText(safeComment, /first/)
       expect(await safeComment.isVisible() && await page.locator('img[src="x"]').count() === 0, 'comment body did not render markup as visible literal text')
@@ -1112,7 +1126,7 @@ export const PROBES = {
       await entry('<img src=x onerror=alert(1)> first').getByRole('button', { name: /^reply/i }).click()
       await page.getByLabel('Your name').fill('Bob')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('second')
-      await page.getByRole('button', { name: 'Post comment' }).click()
+      await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await expectText(page.getByText('second', { exact: true }), /second/)
       let stored = (await json(await api(`/api/tickets/${ticket.id}`))).ticket
       expect(stored.comments.length === 2 && stored.comments[1].parent_id === stored.comments[0].id, 'browser reply did not persist its parent')
@@ -1185,7 +1199,7 @@ export const PROBES = {
     })
     await check('discussion_failure_and_overlap_preserve_drafts', async () => {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`, { width: 390, height: 844 })
+      const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       stage('discussion_draft_failure')
       const author = page.getByLabel('Your name')
       const body = page.getByRole('textbox', { name: 'Comment', exact: true })
@@ -1203,18 +1217,18 @@ export const PROBES = {
         }
         await route.continue()
       })
-      await page.getByRole('button', { name: 'Post comment' }).click()
+      await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await eventually(async () => await mutationFailureFeedback(page).count() > 0, 'failed comment has no accessible error feedback')
       expect(await body.inputValue() === 'Draft during edit', 'failed post erased the comment draft')
-      await page.getByRole('button', { name: 'Post comment' }).click()
+      await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await expectText(page.getByRole('status').filter({ hasText: /Comment posted/ }), /Comment posted/)
 
       stage('discussion_draft_navigation')
-      await page.evaluate((id) => { location.hash = `#ticket/${id}` }, other.id)
+      await openTicketFromBoard(page, other)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
       await page.getByLabel('Your name').fill('Other author')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
-      await page.evaluate((id) => { location.hash = `#ticket/${id}` }, ticket.id)
+      await openTicketFromBoard(page, ticket)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.unroute('**/api/tickets/*/comments')
       let release
@@ -1232,9 +1246,9 @@ export const PROBES = {
       })
       await author.fill('Late author')
       await body.fill('Late activity')
-      await page.getByRole('button', { name: 'Post comment' }).click()
+      await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await reached
-      await page.evaluate((id) => { location.hash = `#ticket/${id}` }, other.id)
+      await openTicketFromBoard(page, other)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
       expect(await page.getByRole('textbox', { name: 'Comment', exact: true }).inputValue() === 'Other ticket draft', 'navigation erased another ticket draft')
       await trigger('kanban::tickets::comment', { id: ticket.id, comment: { author: 'Concurrent', body: 'Newer activity' } })
@@ -1347,7 +1361,7 @@ export const PROBES = {
       await sessions[1].page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Live comment')
       const [posted] = await Promise.all([
         sessions[1].page.waitForResponse((response) => response.url().endsWith('/comments') && response.request().method() === 'POST'),
-        sessions[1].page.getByRole('button', { name: 'Post comment' }).click(),
+        sessions[1].page.getByRole('button', { name: /^post (comment|reply)$/i }).click(),
       ])
       expect(posted.status() === 201, `browser comment failed with HTTP ${posted.status()}`)
       await eventually(async () => await sessions[2].page.getByText('Live comment', { exact: true }).count(), 'third session missed browser comment')
@@ -1419,7 +1433,7 @@ export const PROBES = {
     await check('live_late_responses_disconnect_and_shutdown', async () => {
       stage('live_late_get')
       const ticket = await create(trigger, { title: 'Response ordering probe' })
-      const { context, page } = await pageFor(browser, `${baseUrl}/#ticket/${ticket.id}`)
+      const { context, page } = await openTicket(browser, baseUrl, ticket)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Response ordering probe/)
       let release
       let intercepted

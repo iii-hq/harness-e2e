@@ -510,7 +510,9 @@ def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
             if not isinstance(payload, dict):
                 raise ValueError('control payload must be an object')
             if operation == 'read_store' and not payload:
-                script = "import pathlib,sys;p=pathlib.Path('/data/tickets.json');b=p.read_bytes();assert len(b)<=1048576;sys.stdout.buffer.write(b)"
+                script = ("import pathlib,sys;p=pathlib.Path('/data/tickets.json')\n"
+                          "if not p.is_file(): sys.exit('no ticket store at /data/tickets.json: the application is not persisting to the configured data_dir')\n"
+                          "b=p.read_bytes();assert len(b)<=1048576;sys.stdout.buffer.write(b)")
                 completed = subprocess.run(docker_exec(candidate, ['/usr/bin/python3', '-I', '-c', script]),
                                            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                            stderr=subprocess.PIPE, check=False, timeout=90)
