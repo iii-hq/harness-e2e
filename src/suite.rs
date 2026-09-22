@@ -3316,7 +3316,7 @@ mod tests {
             prompt: String::new(),
             filesystem_root: None,
             execution: crate::scenarios::ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: None,
                 max_total_tokens: None,
                 stuck_timeout_seconds: 1,
