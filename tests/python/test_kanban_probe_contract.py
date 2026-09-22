@@ -128,11 +128,22 @@ export const chromium = {
   launch: async () => ({
     contexts: () => [], close: async () => {},
     newContext: async () => ({
+      close: async () => {},
       newPage: async () => ({
         setDefaultTimeout: () => {},
-        goto: async url => {
-          appendFileSync(process.env.CALLS_LOG, JSON.stringify({goto:url})+'\\n')
-          throw new Error('browser deliberately interrupted')
+        goto: async url => { appendFileSync(process.env.CALLS_LOG, JSON.stringify({goto:url})+'\\n') },
+        // Details open through the board card: the first click is the interruption.
+        getByRole: (role, options = {}) => {
+          const name = options.name instanceof RegExp ? options.name.source : String(options.name ?? role)
+          const locator = {
+            or: () => locator, filter: () => locator, first: () => locator,
+            count: async () => 1,
+            click: async () => {
+              appendFileSync(process.env.CALLS_LOG, JSON.stringify({click:name})+'\\n')
+              throw new Error('browser deliberately interrupted')
+            },
+          }
+          return locator
         },
       }),
     }),
@@ -153,8 +164,11 @@ export const chromium = {
             calls = [json.loads(line) for line in log.read_text().splitlines()]
             creates = [call["create"] for call in calls if "create" in call]
             navigations = [call["goto"] for call in calls if "goto" in call]
+            clicks = [call["click"] for call in calls if "click" in call]
             deletion_ticket = next(ticket for ticket in creates if ticket['title'] == 'Delete navigation probe')
-            self.assertIn(f"http://127.0.0.1:1/#ticket/{deletion_ticket['id']}", navigations)
+            # The route is the app's: the probe reaches the board and clicks the card of its own fixture.
+            self.assertIn("http://127.0.0.1:1", navigations)
+            self.assertIn(deletion_ticket['title'], clicks)
             self.assertTrue(any(ticket['title'] == 'Durable deletion probe' for ticket in creates))
             self.assertTrue(any(ticket['title'] == 'Identifier probe' for ticket in creates))
 
