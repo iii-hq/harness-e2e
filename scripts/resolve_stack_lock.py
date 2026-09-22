@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -68,6 +69,33 @@ def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
     if not isinstance(version, str) or not EXACT_VERSION.fullmatch(version):
         raise ResolutionError("plan runner version is not an exact version")
     return version
+
+
+#: How long preparation waits for a tagged runner release to reach the Registry.
+#: Release Control freezes the newest tag at dispatch while release.yml is still
+#: building and publishing it; a campaign dispatched in that window waits here
+#: instead of failing every group at compose::add.
+RUNNER_PUBLICATION_WAIT_SECONDS = int(os.environ.get("HARNESS_E2E_RUNNER_PUBLICATION_WAIT_SECONDS", "1500"))
+
+
+def await_runner_publication(selector: str, wait_seconds: int = RUNNER_PUBLICATION_WAIT_SECONDS) -> None:
+    """Return once the Registry resolves the exact runner version, or fail clearly."""
+    if not EXACT_VERSION.fullmatch(selector):
+        return
+    deadline = time.monotonic() + wait_seconds
+    payload = {"worker": RUNNER_ROOT, "version": selector}
+    while True:
+        try:
+            get_json(f"{REGISTRY_API_URL}/resolve", payload)
+            return
+        except ResolutionError as error:
+            if time.monotonic() >= deadline:
+                raise ResolutionError(
+                    f"{RUNNER_ROOT}@{selector} is tagged but not published in the Registry after "
+                    f"{wait_seconds}s; is release.yml for that tag still running? ({error})"
+                ) from error
+        print(f"waiting for {RUNNER_ROOT}@{selector} to be published in the Registry", file=sys.stderr)
+        time.sleep(30)
 
 
 def canonical(value: Any) -> str:
@@ -219,6 +247,7 @@ def main() -> int:
     # stack pin still wins. Either way it is a selector, so it travels with the
     # others and the scaffold lays it over the declaration.
     pinned[RUNNER_ROOT] = runner_selector(plan, pinned)
+    await_runner_publication(pinned[RUNNER_ROOT])
     template = resolve_template(plan.get("template"), token)
     cli = resolve_cli(args.cli_version, token)
 
