@@ -307,7 +307,9 @@ try {
   assert.equal(active.role, 'baseline')
   assert.equal(active.slots.length, 5)
   assert.equal(await page.locator('progress').getAttribute('max'), '5')
-  await page.goto(`${server.url}#/ext/harness-e2e/plans/new/profile/after-release`)
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/plans/new/profile/after-release`,
+  )
   await page
     .getByRole('button', { name: 'Execution model', exact: true })
     .waitFor()
