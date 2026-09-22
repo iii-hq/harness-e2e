@@ -3789,6 +3789,7 @@ mod tests {
             invariants: vec![],
             provenance: vec![],
             preview: json!({}),
+            screenshots: Vec::new(),
             artifact: None,
             content: CapturedDeliverableContent::Json(json!({
                 "evidence": "retained output", "api_key": "private-secret",

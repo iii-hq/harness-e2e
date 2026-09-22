@@ -781,6 +781,14 @@
         },
         "schema_valid": {
           "type": "boolean"
+        },
+        "screenshots": {
+          "description": "The screenshots embedded in the content, so a reader can list them without opening the artifact. Empty when there are none.",
+          "default": [],
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ScreenshotReference"
+          }
         }
       }
     },
@@ -2473,6 +2481,37 @@
               "$ref": "#/definitions/ShadowMode"
             }
           ]
+        }
+      }
+    },
+    "ScreenshotReference": {
+      "type": "object",
+      "required": [
+        "caption",
+        "media_type",
+        "pointer",
+        "sha256",
+        "size_bytes"
+      ],
+      "properties": {
+        "caption": {
+          "description": "The capture's caption from its `captures.json`, else the file's path without the attempt folder it was packed under.",
+          "type": "string"
+        },
+        "media_type": {
+          "type": "string"
+        },
+        "pointer": {
+          "description": "JSON Pointer to the embedded file inside the deliverable: `/attachments/board-desktop.png`.",
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0.0
         }
       }
     },
