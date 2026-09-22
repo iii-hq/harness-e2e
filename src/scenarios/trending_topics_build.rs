@@ -36,6 +36,10 @@ const CRITERIA: [(&str, u8, &str); 10] = [
     ("B10", 5, "Do desktop and mobile layouts avoid horizontal overflow and keep required links unobstructed?"),
 ];
 
+/// The deliverable itself: a pushed build that installs, shows the six topics on
+/// the home page and renders every article. The other criteria only move the score.
+const GATES: [&str; 4] = ["B01", "B02", "B03", "B05"];
+
 const RUNTIME_ASSETS: [(&str, &[u8]); 7] = [
     (
         "lifecycle.py",
@@ -710,15 +714,25 @@ fn awards(result: &Value) -> Result<Vec<CriterionAward>> {
         .collect()
 }
 
+fn gates_passed(result: &Value) -> bool {
+    let criteria = result["criteria"].as_array();
+    GATES.iter().all(|gate| {
+        criteria.is_some_and(|criteria| {
+            criteria
+                .iter()
+                .any(|criterion| criterion["id"] == *gate && criterion["status"] == "passed")
+        })
+    })
+}
+
 fn objective_evaluation(subject_complete: bool, result: &Value) -> Result<ObjectiveEvaluation> {
-    let result_complete = result["complete"].as_bool().context("complete missing")?;
     let errors = result["infrastructure_errors"]
         .as_array()
         .context("infrastructure_errors missing")?;
     Ok(ObjectiveEvaluation {
         completion: if !errors.is_empty() {
             CompletionState::Undetermined
-        } else if subject_complete && result_complete {
+        } else if subject_complete && gates_passed(result) {
             CompletionState::Completed
         } else {
             CompletionState::TaskIncomplete
@@ -880,8 +894,30 @@ mod tests {
             objective_evaluation(false, &passed).unwrap().completion,
             CompletionState::TaskIncomplete
         );
+        let with = |id: &str, status: &str| {
+            let mut value = passed.clone();
+            for criterion in value["criteria"].as_array_mut().unwrap() {
+                if criterion["id"] == id {
+                    criterion["status"] = status.into();
+                }
+            }
+            value
+        };
+        // A failed label or navigation criterion costs points but the site was delivered.
         assert_eq!(
-            objective_evaluation(true, &result("passed", false))
+            objective_evaluation(true, &with("B06", "failed"))
+                .unwrap()
+                .completion,
+            CompletionState::Completed
+        );
+        assert_eq!(
+            objective_evaluation(true, &with("B03", "failed"))
+                .unwrap()
+                .completion,
+            CompletionState::TaskIncomplete
+        );
+        assert_eq!(
+            objective_evaluation(true, &with("B05", "unverified"))
                 .unwrap()
                 .completion,
             CompletionState::TaskIncomplete
