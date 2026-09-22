@@ -473,11 +473,12 @@ are parity fixtures, not a linked product API.
 
 ## Package boundary
 
-This repository executes exact-stack test plans and does not publish itself as
-a Registry worker. Release Control supplies a stack policy and an immutable
-executor SHA to `exact-stack-e2e.yml`. The contract assembled from those inputs
-pins every Registry version, including historical candidates, so a campaign can
-state afterwards exactly what it ran.
+This repository executes exact-stack Test Plans and publishes immutable
+`harness-e2e` Registry releases through the manually dispatched `release.yml`
+workflow. Release Control supplies a stack policy and an immutable executor
+SHA to `exact-stack-e2e.yml`; the contract this repository assembles from them
+pins every Registry version to an exact one, including historical candidates,
+because a campaign has to be able to say afterwards what it ran.
 
 The root `iii.worker.yaml` is the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` is a
