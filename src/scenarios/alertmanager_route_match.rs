@@ -255,9 +255,11 @@ and process started from this workspace."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: 48,
+                // No token budget. 500 turns is the Harness default ceiling;
+                // lane admission sums declared turns, so it cannot be unbounded.
+                max_turns: 500,
                 max_output_tokens: Some(16_384),
-                max_total_tokens: Some(800_000),
+                max_total_tokens: None,
                 stuck_timeout_seconds: 1_800,
                 max_validation_retries: None,
             },
