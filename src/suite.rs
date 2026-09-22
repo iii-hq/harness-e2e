@@ -2485,9 +2485,12 @@ async fn execute(
                 Ok(metrics) => metrics,
                 Err(error) => {
                     let failure = subject_failure(FailurePhase::Execute, error.to_string());
+                    if failure.status == RunStatus::ResourceLimit {
+                        wait_for_stopped_turn(context, session_id).await;
+                    }
                     capture_partial_observation(context, session_id, report).await;
                     capture_failed_subject_assets(
-                        context, module, case, session_id, output, control, report,
+                        context, module, spec, case, session_id, output, control, report,
                     )
                     .await;
                     return Err(failure);
@@ -2891,9 +2894,39 @@ async fn capture_partial_observation(
     }
 }
 
+/// A resource limit stops the session tree before failing the attempt; the
+/// stop lands asynchronously. Wait for the root turn to leave `Running` so the
+/// failed subject is captured from a quiescent session.
+async fn wait_for_stopped_turn(context: &E2eContext, session_id: &str) {
+    let deadline = tokio::time::Instant::now() + STOPPED_TURN_GRACE;
+    while tokio::time::Instant::now() < deadline {
+        match context
+            .trigger::<_, Option<StatusReport>>(
+                "harness::status",
+                json!({ "session_id": session_id }),
+            )
+            .await
+        {
+            Ok(Some(status))
+                if matches!(
+                    status.status,
+                    TurnStatus::Running | TurnStatus::AwaitingFunctions
+                ) =>
+            {
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            _ => return,
+        }
+    }
+}
+
+const STOPPED_TURN_GRACE: Duration = Duration::from_secs(60);
+
+#[allow(clippy::too_many_arguments)]
 async fn capture_failed_subject_assets(
     context: &E2eContext,
     module: &'static dyn Scenario,
+    spec: &ScenarioSpec,
     case: &ScenarioCase,
     session_id: &str,
     output: &Path,
@@ -2924,6 +2957,7 @@ async fn capture_failed_subject_assets(
     capture_confirmed_failed_subject_assets(
         context,
         module,
+        spec,
         case,
         &status,
         control.is_some_and(|control| *control.cancellation.borrow()),
@@ -2933,16 +2967,18 @@ async fn capture_failed_subject_assets(
     .await;
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn capture_confirmed_failed_subject_assets(
     context: &E2eContext,
     module: &'static dyn Scenario,
+    spec: &ScenarioSpec,
     case: &ScenarioCase,
     status: &StatusReport,
     cancelled: bool,
     output: &Path,
     report: &mut E2eRunReport,
 ) {
-    let Some(observation) = failed_subject_observation(case, report, status, cancelled) else {
+    let Some(mut observation) = failed_subject_observation(case, report, status, cancelled) else {
         return;
     };
     report.terminal_status = Some(status.clone());
@@ -2951,7 +2987,7 @@ async fn capture_confirmed_failed_subject_assets(
     }
     let attempt_id = report.attempt_id.clone();
     let captured = module.capture(context, &observation, &attempt_id).await;
-    if let Err(error) = capture_assets_before_cleanup(
+    let captured = match capture_assets_before_cleanup(
         captured,
         &observation,
         case.scenario_id.as_str(),
@@ -2960,11 +2996,38 @@ async fn capture_confirmed_failed_subject_assets(
     )
     .await
     {
+        Ok(captured) => captured,
+        Err(error) => {
+            tracing::warn!(
+                scenario = case.scenario_id,
+                session_id = report.session_id,
+                error = %error.message,
+                "could not preserve assets from failed E2E subject"
+            );
+            return;
+        }
+    };
+    if !module.evaluates_failed_subjects() {
+        return;
+    }
+    observation.deliverables = captured;
+    // The subject failure stays the primary outcome; an evaluation that cannot
+    // be trusted is dropped rather than reported next to it.
+    let rejected = match module.evaluate(context, &observation, &attempt_id).await {
+        Ok(objective) if objective.infrastructure_error.is_none() => {
+            apply_objective_evaluation(spec, report, objective)
+                .err()
+                .map(|failure| failure.message)
+        }
+        Ok(objective) => objective.infrastructure_error,
+        Err(error) => Some(format!("{error:#}")),
+    };
+    if let Some(error) = rejected {
         tracing::warn!(
             scenario = case.scenario_id,
             session_id = report.session_id,
-            error = %error.message,
-            "could not preserve assets from failed E2E subject"
+            %error,
+            "could not evaluate failed E2E subject"
         );
     }
 }
@@ -2980,7 +3043,7 @@ fn failed_subject_observation(
     if cancelled
         || !case.deliverable_contract.capture_before_cleanup
         || !metrics.complete
-        || status.status != TurnStatus::Failed
+        || !matches!(status.status, TurnStatus::Failed | TurnStatus::Cancelled)
         || !status.pending_function_calls.is_empty()
     {
         return None;
@@ -3245,6 +3308,95 @@ mod tests {
         .sealed_for_tests()
     }
 
+    fn failed_capture_spec() -> crate::scenarios::ScenarioSpec {
+        crate::scenarios::ScenarioSpec {
+            id: "failed_capture",
+            prompt: String::new(),
+            filesystem_root: None,
+            execution: crate::scenarios::ExecutionPolicy {
+                max_turns: 1,
+                max_output_tokens: None,
+                max_total_tokens: None,
+                stuck_timeout_seconds: 1,
+                max_validation_retries: None,
+            },
+            denied_functions: &[],
+            criteria: vec![
+                crate::scenarios::CriterionSpec::scored(
+                    "delivered",
+                    60,
+                    "The early chapters were delivered.",
+                    crate::report::EvaluationDimension::Deliverable,
+                ),
+                crate::scenarios::CriterionSpec::scored(
+                    "unreached",
+                    40,
+                    "The last chapter was delivered.",
+                    crate::report::EvaluationDimension::Deliverable,
+                ),
+            ],
+        }
+    }
+
+    /// A scenario that opts into evaluating what a failed subject left behind.
+    struct EvaluatedFailedCapture;
+
+    #[async_trait]
+    impl Scenario for EvaluatedFailedCapture {
+        fn id(&self) -> &'static str {
+            "failed_capture"
+        }
+
+        fn case(&self, _seed: u64) -> anyhow::Result<ScenarioCase> {
+            unreachable!("the capture tests never materialize the case")
+        }
+
+        fn spec(&self, _run_id: &str) -> crate::scenarios::ScenarioSpec {
+            unreachable!("the capture tests pass the spec explicitly")
+        }
+
+        fn evaluates_failed_subjects(&self) -> bool {
+            true
+        }
+
+        async fn capture(
+            &self,
+            context: &E2eContext,
+            observation: &ScenarioObservation,
+            attempt_id: &str,
+        ) -> anyhow::Result<Vec<CapturedDeliverable>> {
+            PartialAssetCapture
+                .capture(context, observation, attempt_id)
+                .await
+        }
+
+        async fn evaluate(
+            &self,
+            _context: &E2eContext,
+            observation: &ScenarioObservation,
+            _run_id: &str,
+        ) -> anyhow::Result<ObjectiveEvaluation> {
+            assert!(!observation.metrics.complete);
+            assert_eq!(observation.deliverables.len(), 1);
+            Ok(ObjectiveEvaluation {
+                completion: crate::report::CompletionState::TaskIncomplete,
+                awards: vec![
+                    CriterionAward {
+                        id: "delivered".into(),
+                        awarded: Some(60),
+                        reason: "observed in the partial project".into(),
+                    },
+                    CriterionAward {
+                        id: "unreached".into(),
+                        awarded: Some(0),
+                        reason: "the subject stopped first".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            })
+        }
+    }
+
     /// A scenario that preserves one partial deliverable from a failed subject.
     struct PartialAssetCapture;
 
@@ -3356,6 +3508,7 @@ mod tests {
         capture_confirmed_failed_subject_assets(
             &context,
             &PartialAssetCapture,
+            &failed_capture_spec(),
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3383,6 +3536,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn opted_in_resource_failure_is_scored_from_the_partial_delivery() {
+        let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
+        let output = tempfile::tempdir().unwrap();
+        let mut report = resource_limited_report();
+        report.score = None;
+
+        capture_confirmed_failed_subject_assets(
+            &context,
+            &EvaluatedFailedCapture,
+            &failed_capture_spec(),
+            &failed_capture_case(),
+            &terminal_status(TurnStatus::Cancelled, Vec::new()),
+            false,
+            output.path(),
+            &mut report,
+        )
+        .await;
+
+        assert_eq!(report.status, RunStatus::ResourceLimit);
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(
+            report.completion,
+            crate::report::CompletionState::TaskIncomplete
+        );
+        assert_eq!(report.score, Some(60));
+        assert_eq!(report.criteria.len(), 2);
+        assert_eq!(report.deliverables.len(), 1);
+    }
+
+    #[tokio::test]
     async fn capture_failure_remains_secondary_to_resource_failure() {
         let context = E2eContext::from_client(iii_sdk::IIIClient::new("ws://127.0.0.1:1"));
         let output = tempfile::tempdir().unwrap();
@@ -3391,6 +3574,7 @@ mod tests {
         capture_confirmed_failed_subject_assets(
             &context,
             &FailedAssetCapture,
+            &failed_capture_spec(),
             &failed_capture_case(),
             &terminal_status(TurnStatus::Failed, Vec::new()),
             false,
@@ -3549,6 +3733,14 @@ mod tests {
             false,
         )
         .is_none());
+        // A tree the harness stopped after a resource limit settles as cancelled.
+        assert!(failed_subject_observation(
+            &case,
+            &report,
+            &terminal_status(TurnStatus::Cancelled, Vec::new()),
+            false,
+        )
+        .is_some());
         assert!(failed_subject_observation(
             &case,
             &report,
