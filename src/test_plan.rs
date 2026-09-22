@@ -437,7 +437,7 @@ mod tests {
         for (id, cases, runs) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 45, 45),
+            ("capability", 46, 46),
             ("evolution", 18, 54),
             ("endurance", 4, 4),
             ("software-engineering", 13, 13),

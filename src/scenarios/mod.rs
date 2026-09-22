@@ -13,6 +13,7 @@ use crate::context::E2eContext;
 use crate::report::CompletionState;
 use crate::wire::SessionMetricsResponse;
 
+pub mod alertmanager_route_match;
 mod assessment;
 pub mod browser_cross_site;
 pub mod chess_engine;
@@ -448,6 +449,7 @@ scenarios! {
     TodoWorkerPlanned = "todo_worker_planned" => todo_worker::TodoWorkerPlanned,
     EngineeringEnduranceLadder = "engineering_endurance_ladder" => engineering_endurance_ladder::EngineeringEnduranceLadder,
     GitRegressionForensics = "git_regression_forensics" => git_regression_forensics::GitRegressionForensics,
+    AlertmanagerRouteMatch = "alertmanager_route_match" => alertmanager_route_match::AlertmanagerRouteMatch,
     MechanicalReaction = "mechanical_reaction" => mechanical_reaction::MechanicalReaction,
     TimerWake = "timer_wake" => timer_wake::TimerWake,
     ReceivingOperation = "receiving_operation" => receiving_operation::ReceivingOperation,
@@ -641,7 +643,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_six_unique_valid_scenarios() {
+    fn registry_contains_fifty_seven_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -650,7 +652,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 56);
+        assert_eq!(ids.len(), 57);
     }
 
     #[test]

@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "case_id": "prometheus-alertmanager-v0.34.1-route-match",
+  "upstream": {
+    "repository": "prometheus/alertmanager",
+    "url": "https://github.com/prometheus/alertmanager",
+    "tag": "v0.34.1"
+  },
+  "bundle": {
+    "path": "input/repository.bundle",
+    "sha256": "sha256:7da8744d4bfe1651e44a67c8cfdf46c669e4b8bbef935aa68fa96ddf1c1702ad",
+    "size_bytes": 1021611
+  },
+  "history": {
+    "revision": "73c6bfe7393929211294c1954f30d8ed78e4d0ad",
+    "tree": "285e2549c75984bd4b0a6fddebf8a045dd6a76b6"
+  },
+  "outputs": {
+    "checkout": "checkout"
+  }
+}
