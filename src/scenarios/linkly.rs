@@ -320,6 +320,12 @@ impl Scenario for LinklyTutorial {
         Ok(())
     }
 
+    /// Eight chapters take ~40 minutes; a stall in the last one must not
+    /// discard what the first seven delivered.
+    fn evaluates_failed_subjects(&self) -> bool {
+        true
+    }
+
     async fn capture(
         &self,
         context: &E2eContext,
@@ -1027,11 +1033,7 @@ impl Probe<'_> {
         timeout: Duration,
     ) -> Result<(i32, String, String)> {
         let started = Instant::now();
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .current_dir(&self.project)
-            .kill_on_drop(true);
+        let mut command = probe_command(program, args, &self.project);
         let result = tokio::time::timeout(timeout, command.output()).await;
         let outcome = match result {
             Ok(Ok(output)) => Ok((
@@ -1650,6 +1652,20 @@ impl Probe<'_> {
 }
 
 /// Whether an outcome is the project-wide restart the guard exchange asks for:
+/// A project command run by the probe. It keeps `III_URL` and `III_NAMESPACE`
+/// so a client reaches the project's functions, but not `III_WORKER_NAME`: the
+/// iii SDK would register the channel client as the `harness-e2e` worker that
+/// already owns the namespace, and the engine rejects it.
+fn probe_command(program: &str, args: &[&str], project: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .args(args)
+        .current_dir(project)
+        .env_remove("III_WORKER_NAME")
+        .kill_on_drop(true);
+    command
+}
+
 /// `compose::restart` naming no container takes down the stack the Harness
 /// itself runs in. Naming one container is ordinary chapter work.
 fn restarts_the_project(outcome: &super::common::ObservedFunctionOutcome) -> bool {
@@ -1663,6 +1679,27 @@ fn restarts_the_project(outcome: &super::common::ObservedFunctionOutcome) -> boo
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn probe_commands_drop_the_harness_worker_identity_but_keep_the_namespace() {
+        let command = probe_command(
+            "node",
+            &["channel-client/import-links.js"],
+            Path::new("/tmp"),
+        );
+        let removed: Vec<_> = command
+            .as_std()
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(key, _)| key.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(removed, ["III_WORKER_NAME"]);
+    }
+
+    #[test]
+    fn linkly_evaluates_what_a_failed_subject_left_behind() {
+        assert!(LinklyTutorial.evaluates_failed_subjects());
+    }
+
     use super::*;
 
     #[test]
