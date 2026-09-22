@@ -926,6 +926,17 @@ mod tests {
             ),
             CompletionState::Undetermined
         );
+        // C6: posting is the gate; the stricter comment assertions only move the score.
+        assert_eq!(
+            completion(
+                5,
+                &checks(&[
+                    ("criterion_post", "passed"),
+                    ("criterion_comments", "failed")
+                ])
+            ),
+            CompletionState::Completed
+        );
         // Drag is not a gate: a failed move still leaves the edit flow delivered.
         assert_eq!(
             completion(

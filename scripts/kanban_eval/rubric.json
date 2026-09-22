@@ -427,13 +427,21 @@
   ],
   "kanban_c6_discussion": [
     {
+      "id": "criterion_post",
+      "weight": 5,
+      "description": "A comment posted from the browser is stored and rendered as literal text.",
+      "checks": [
+        "discussion_post"
+      ],
+      "gate": true
+    },
+    {
       "id": "criterion_comments",
-      "weight": 20,
+      "weight": 15,
       "description": "Comments and same-ticket nested replies persist in posting order with valid identities.",
       "checks": [
         "discussion_comments"
-      ],
-      "gate": true
+      ]
     },
     {
       "id": "criterion_timeline",

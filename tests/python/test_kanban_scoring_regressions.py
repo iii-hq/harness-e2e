@@ -98,6 +98,18 @@ console.log(JSON.stringify([
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
 
+    def test_live_session_waits_for_the_event_stream_before_counting(self):
+        result = self.node("""
+const html=(delay)=>`<h1>Board</h1><script>setTimeout(()=>new EventSource('/api/events'),${delay})</script>`;
+await page.route('http://kanban.test/api/events',route=>route.fulfill({status:200,headers:{'content-type':'text/event-stream'},body:'event: change\\ndata: {}\\n\\n'}));
+await page.route('http://kanban.test/',route=>route.fulfill({contentType:'text/html',body:html(300)}));
+const late=await probe.openLiveSession(page,'http://kanban.test/').then(()=>'subscribed',error=>error.message);
+await page.route('http://kanban.test/',route=>route.fulfill({contentType:'text/html',body:'<h1>Board without a stream</h1>'}));
+const never=await probe.openLiveSession(page,'http://kanban.test/',500).then(()=>'subscribed',error=>error.message);
+console.log(JSON.stringify({late,never}));
+""", browser=True)
+        self.assertEqual(result, {'late': 'subscribed', 'never': 'session did not open the live event stream'})
+
     def test_list_lanes_are_accepted_without_selecting_outer_board(self):
         result = self.node("""
 await page.setContent('<section id="board"><ol><li id="backlog"><h2>Backlog <span>1</span></h2><ul><li>Card</li></ul></li><li><h2>Done <span>1</span></h2></li></ol></section>')
