@@ -1040,16 +1040,32 @@ fn case_seeds_for_key(scenario: &ScenarioId, fixed: Option<u64>, rotating: &[u64
 }
 
 async fn resolve_model(context: &E2eContext, model: &str, provider: &str) -> Result<Model> {
-    let response = context
-        .trigger_value(
-            "router::models::get",
-            json!({ "id": model, "provider": provider }),
-        )
-        .await
-        .with_context(|| format!("query catalog for {provider}/{model}"))?;
-    if response.is_null() {
-        bail!("model {provider}/{model} is not registered in the router catalog");
-    }
+    // Providers register their models only after llm-router announces
+    // router::ready, and some list them from the vendor first, so the catalog
+    // can still be filling when the run starts. Wait for it, within a bound.
+    const CATALOG_WAIT: Duration = Duration::from_secs(120);
+    const CATALOG_POLL: Duration = Duration::from_secs(2);
+    let deadline = tokio::time::Instant::now() + CATALOG_WAIT;
+    let response = loop {
+        let attempt = context
+            .trigger_value(
+                "router::models::get",
+                json!({ "id": model, "provider": provider }),
+            )
+            .await
+            .with_context(|| format!("query catalog for {provider}/{model}"));
+        match attempt {
+            Ok(response) if !response.is_null() => break response,
+            Ok(_) if tokio::time::Instant::now() < deadline => {}
+            Err(_) if tokio::time::Instant::now() < deadline => {}
+            Ok(_) => bail!(
+                "model {provider}/{model} is not registered in the router catalog after {}s",
+                CATALOG_WAIT.as_secs()
+            ),
+            Err(error) => return Err(error),
+        }
+        tokio::time::sleep(CATALOG_POLL).await;
+    };
     let resolved: Model = serde_json::from_value(
         response
             .get("model")

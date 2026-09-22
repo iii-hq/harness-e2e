@@ -41,7 +41,15 @@ profile_assets=$(jq -r '.runtime.template != null or .suite.agent_profile != nul
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
 short_execution=${execution_id%%-*}
-namespace="e2e-${short_execution}-${campaign_group_id}"
+# Compose derives every configuration id it creates itself (dependency
+# containers it adds) as `<namespace>-<container>` and refuses anything over
+# 64 characters, as does the engine. The longest worker name it adds today is
+# 21 characters (`provider-openai-codex`), so the namespace stays within 40:
+# the bare group id when it fits, else a stable prefix plus a digest.
+namespace="e2e-${short_execution}-${campaign_group_id#case-}"
+if (( ${#namespace} > 40 )); then
+  namespace="${namespace:0:33}-$(printf '%s' "$campaign_group_id" | sha256sum | cut -c1-6)"
+fi
 
 run_root=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-compose.XXXXXX")
 # TMPDIR is configurable; reject an uploaded runtime/secret tree before any
