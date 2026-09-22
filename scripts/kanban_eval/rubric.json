@@ -6,7 +6,8 @@
       "description": "Compose starts the standalone application and serves HTML.",
       "checks": [
         "foundation_startup"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_asset_paths",
@@ -22,7 +23,8 @@
       "description": "Missing configuration initializes the default data directory.",
       "checks": [
         "foundation_initial_config"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_preserve_config",
@@ -88,7 +90,8 @@
       "description": "Creation normalizes the title and uses the requested default field values.",
       "checks": [
         "persistence_defaults"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_identity",
@@ -104,7 +107,8 @@
       "description": "Real iii list/get preserve creation order and accept UUID and readable key.",
       "checks": [
         "persistence_lookup"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_invalid",
@@ -186,7 +190,8 @@
       "description": "Five columns show the correct cards and lane counts.",
       "checks": [
         "board_columns"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_metadata",
@@ -236,7 +241,8 @@
       "description": "Cards open same-tab details by keyboard and pointer, with working browser history.",
       "checks": [
         "ticket_cards"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_modal",
@@ -260,7 +266,8 @@
       "description": "Successful creation closes the modal and opens same-tab non-modal details.",
       "checks": [
         "ticket_creation"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_lookup",
@@ -358,7 +365,8 @@
       "description": "Retry saves supported fields and preserves immutable metadata.",
       "checks": [
         "edit_success"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_save_navigation",
@@ -424,7 +432,8 @@
       "description": "Comments and same-ticket nested replies persist in posting order with valid identities.",
       "checks": [
         "discussion_comments"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_timeline",
@@ -514,7 +523,8 @@
       "description": "Three sessions observe direct iii creation without reload.",
       "checks": [
         "live_sessions"
-      ]
+      ],
+      "gate": true
     },
     {
       "id": "criterion_focus",

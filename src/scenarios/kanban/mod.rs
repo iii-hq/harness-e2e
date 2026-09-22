@@ -182,6 +182,10 @@ struct RubricCriterion {
     weight: u8,
     description: String,
     checks: Vec<String>,
+    /// Marks the case's primary flow: the task counts as completed only when
+    /// every gate passed. Everything else only moves the score.
+    #[serde(default)]
+    gate: bool,
 }
 
 fn rubric(index: usize) -> &'static [RubricCriterion] {
@@ -574,16 +578,45 @@ async fn evaluate(
     validate_rubric(index, result)?;
     let awards = criterion_awards(index, result);
     Ok(ObjectiveEvaluation {
-        completion: if result["status"] == "passed" {
-            CompletionState::Completed
-        } else if result["functional_status"] == "failed" {
-            CompletionState::TaskIncomplete
-        } else {
-            CompletionState::Undetermined
-        },
+        completion: completion(index, result),
         awards,
         infrastructure_error: None,
     })
+}
+
+/// Completed means the subject delivered the case's primary flow: the
+/// application builds and starts, and every gate criterion passed. Other
+/// criteria only move the score. A gate the probe never reached is incomplete
+/// when an earlier check failed, and undetermined when nothing failed at all.
+fn completion(index: usize, result: &Value) -> CompletionState {
+    let functional_failed = match result["functional_status"].as_str() {
+        Some("failed") => true,
+        Some("passed") => false,
+        _ => return CompletionState::Undetermined,
+    };
+    if prerequisite_failed(result) {
+        return CompletionState::TaskIncomplete;
+    }
+    let gates = rubric(index).iter().filter(|criterion| criterion.gate);
+    let mut unreached = false;
+    for gate in gates {
+        let status = result["checks"]
+            .as_array()
+            .and_then(|checks| checks.iter().find(|check| check["id"] == gate.id))
+            .and_then(|check| check["status"].as_str());
+        match status {
+            Some("passed") => {}
+            Some("failed") => return CompletionState::TaskIncomplete,
+            _ => unreached = true,
+        }
+    }
+    if !unreached {
+        CompletionState::Completed
+    } else if functional_failed {
+        CompletionState::TaskIncomplete
+    } else {
+        CompletionState::Undetermined
+    }
 }
 
 fn prerequisite_failed(result: &Value) -> bool {
@@ -843,6 +876,79 @@ mod tests {
         assert!(awards
             .iter()
             .all(|award| award.reason.contains("prerequisite failed")));
+    }
+
+    #[test]
+    fn completion_follows_the_gate_criteria_not_the_whole_rubric() {
+        let checks = |entries: &[(&str, &str)]| {
+            json!({"status":"failed","functional_status":"failed","checks":entries
+                .iter().map(|(id, status)| json!({"id":id,"status":status})).collect::<Vec<_>>()})
+        };
+        // C4: gates are cards + creation; a failed details check only costs points.
+        assert_eq!(
+            completion(
+                3,
+                &checks(&[
+                    ("criterion_cards", "passed"),
+                    ("criterion_creation", "passed"),
+                    ("criterion_details", "failed")
+                ])
+            ),
+            CompletionState::Completed
+        );
+        assert_eq!(
+            completion(
+                3,
+                &checks(&[
+                    ("criterion_cards", "passed"),
+                    ("criterion_creation", "failed")
+                ])
+            ),
+            CompletionState::TaskIncomplete
+        );
+        // A gate blocked by an earlier failure is incomplete; one the probe simply never reached is not measured.
+        assert_eq!(
+            completion(
+                4,
+                &checks(&[
+                    ("criterion_cancel", "failed"),
+                    ("criterion_save", "unverified"),
+                    ("criterion_drag", "passed")
+                ])
+            ),
+            CompletionState::TaskIncomplete
+        );
+        assert_eq!(
+            completion(
+                4,
+                &json!({"status":"incomplete","functional_status":"passed","checks":[
+                    {"id":"criterion_save","status":"unverified"},{"id":"criterion_drag","status":"passed"}]})
+            ),
+            CompletionState::Undetermined
+        );
+        // Drag is not a gate: a failed move still leaves the edit flow delivered.
+        assert_eq!(
+            completion(
+                4,
+                &checks(&[("criterion_save", "passed"), ("criterion_drag", "failed")])
+            ),
+            CompletionState::Completed
+        );
+        assert_eq!(
+            completion(0, &checks(&[("application_startup", "failed")])),
+            CompletionState::TaskIncomplete
+        );
+        assert_eq!(
+            completion(
+                0,
+                &json!({"status":"evaluation_failed","functional_status":null,"checks":[]})
+            ),
+            CompletionState::Undetermined
+        );
+        assert!(IDS
+            .iter()
+            .enumerate()
+            .all(|(index, _)| rubric(index).iter().any(|criterion| criterion.gate)));
     }
 
     #[test]

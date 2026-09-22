@@ -88,8 +88,13 @@ control failures continue to invalidate the evaluation.
 
 Native evaluation rejects missing, duplicate, stale-version and contradictory
 criterion evidence. `coverage.complete` stays false when any required evidence is
-unverified. Completion requires the complete successful evaluation, not just a
-model's final response. Raw checks and criterion reasons retain the actual failure
+unverified. Completion is decided by the criteria marked `"gate": true` in
+`rubric.json`, one or two per case naming its primary flow (C4: cards open
+details and creation persists; C6: comments post): the task is completed when
+the application builds and starts and every gate passed, incomplete when a gate
+failed or was blocked by an earlier failure, and undetermined when the probe
+never reached a gate without anything failing. Other criteria only move the
+score, so a run can be completed with defects and a low score. Raw checks and criterion reasons retain the actual failure
 or the missing prerequisite. A changed rubric requires a new execution; this code
 does not rescore stored reports.
 

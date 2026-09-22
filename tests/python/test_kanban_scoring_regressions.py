@@ -173,6 +173,8 @@ console.log(JSON.stringify(records.map(({id,status})=>({id,status}))));
                 self.assertEqual(len({c['id'] for c in criteria}), len(criteria))
                 checks = [check for c in criteria for check in c['checks']]
                 self.assertEqual(len(checks), len(set(checks)))
+                gates = [c['id'] for c in criteria if c.get('gate')]
+                self.assertTrue(0 < len(gates) <= 2, gates)
 
     def test_discussion_preservation_does_not_require_earlier_browser_flows(self):
         result = self.node("""
