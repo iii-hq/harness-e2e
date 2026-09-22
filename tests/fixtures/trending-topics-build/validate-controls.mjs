@@ -142,7 +142,16 @@ const cases = [
     main: replaceOnce(referenceMain, 'if (text !== undefined) node.textContent = text;',
       "if (text !== undefined) node.replaceChildren(...String(text).split('\\n').flatMap((line, index) => index ? [document.createElement('br'), document.createTextNode(line)] : [document.createTextNode(line)]));"),
   },
+  {
+    name: 'reference-edition-header', dataset: 'varied', css: referenceCss,
+    main: replaceOnce(replaceOnce(referenceMain, "    element('p', `Edition ${feed.edition}`, { class: 'eyebrow' }),\n", ''),
+      'app.replaceChildren(main);', "app.replaceChildren(element('header', `Edition ${feed.edition}`), main);"),
+  },
   { name: 'placeholder', dataset: 'original', main: await readFile(join(fixtureApp, 'src/main.js'), 'utf8'), css: await readFile(join(fixtureApp, 'src/style.css'), 'utf8'), grep: 'B03' },
+  {
+    name: 'missing-edition', dataset: 'original', grep: 'B03', css: referenceCss,
+    main: replaceOnce(referenceMain, "    element('p', `Edition ${feed.edition}`, { class: 'eyebrow' }),\n", ''),
+  },
   {
     name: 'hardcoded-original', dataset: 'varied', grep: 'B03', css: referenceCss,
     main: replaceOnce(referenceMain, "import feed from '../content/feed.json';", `const feed = ${JSON.stringify(originalFeed)};`),

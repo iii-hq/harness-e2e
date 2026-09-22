@@ -108,7 +108,8 @@ test.beforeEach(async ({ context }) => {
 test('B03 home contains the edition and exactly six associated titles and ranks', async ({ page }) => {
   await page.goto('/');
   await visibleLabel(page.getByRole('heading', { level: 1, name: 'Trending topics', exact: true }), 'Trending topics');
-  await expect.poll(async () => normalize(await page.getByRole('main').evaluate(renderedText))).toContain(feed.edition);
+  // The task asks the home page to display the edition, not in which landmark; a header counts.
+  await expect.poll(async () => normalize(await page.locator('body').evaluate(renderedText))).toContain(feed.edition);
   const paths = await page.getByRole('link').evaluateAll(nodes => nodes.map(node => new URL(node.href).pathname)
     .filter(path => path.startsWith('/posts/')));
   expect(paths.sort()).toEqual(topics.map(topic => `/posts/${topic.id}`).sort());
