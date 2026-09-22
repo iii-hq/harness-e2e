@@ -14,7 +14,6 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 from run_e2e_campaign import (
     CampaignError,
-    FAULT_PROFILES,
     RESULT_CONTRACT_SHA256,
     RESULT_AGGREGATE_COUNT_FIELDS,
     RESULT_AGGREGATE_RATE_FIELDS,
@@ -190,22 +189,6 @@ class CampaignValidationTests(unittest.TestCase):
         profiled["scoring_profile"] = "difficulty-weighted"
         with self.assertRaisesRegex(CampaignError, "scoring_profile"):
             parse_campaign(profiled)
-
-    def test_only_canonical_fault_profiles_are_accepted(self):
-        fault = {
-            "id": "fault",
-            "execution_kind": "fault_injection",
-            "runs": 3,
-            "technical_retries": 0,
-            "fault_profile": "weekly-l9-recovery",
-            "fault_scenario": "stateful.2",
-            "soak_minutes": 60,
-        }
-        with self.assertRaisesRegex(CampaignError, "fault_profile is not canonical"):
-            parse_campaign(manifest([fault]))
-        fault["fault_profile"] = sorted(FAULT_PROFILES)[0]
-        campaign = parse_campaign(manifest([fault]))
-        self.assertEqual(campaign.groups[0].fault_profile, fault["fault_profile"])
 
 
 class CampaignRunnerTests(unittest.TestCase):
@@ -717,40 +700,6 @@ class CampaignRunnerTests(unittest.TestCase):
         self.assertEqual(scoring["harness_score"], 90)
         self.assertEqual(scoring["scored_groups"], 1)
         self.assertEqual(scoring["expected_groups"], 2)
-        self.assertEqual(scoring["score_availability"], "partial")
-
-    def test_fault_infrastructure_is_null_not_zero_and_reduces_coverage(self):
-        campaign = parse_campaign(
-            manifest(
-                [
-                    {
-                        "id": "fault",
-                        "execution_kind": "fault_injection",
-                        "runs": 3,
-                        "technical_retries": 0,
-                        "fault_profile": "weekly-l2-recovery",
-                        "fault_scenario": "stateful.2",
-                        "soak_minutes": 60,
-                    }
-                ]
-            )
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            output = pathlib.Path(directory) / "fault"
-            for index, classification in enumerate(
-                ["correct_recovery", "infrastructure_failure"], start=1
-            ):
-                run = output / f"run-{index}"
-                run.mkdir(parents=True)
-                (run / "fault-evaluation.json").write_text(
-                    json.dumps({"classification": classification}), encoding="utf-8"
-                )
-            scoring = score_campaign(
-                campaign, [{"group_id": "fault", "output": str(output)}]
-            )
-        self.assertEqual(scoring["harness_score"], 100.0)
-        self.assertAlmostEqual(scoring["score_coverage"], 1 / 3)
-        self.assertFalse(scoring["infrastructure_valid"])
         self.assertEqual(scoring["score_availability"], "partial")
 
     def test_aggregate_existing_campaign_keeps_missing_group_as_infrastructure(self):

@@ -5,7 +5,6 @@ use schemars::JsonSchema;
 use crate::asset::AssetCaptureManifest;
 use crate::control::ScenariosListResponse;
 use crate::durable::{DurableArchiveManifest, HistoryRecord};
-use crate::fault::{FaultEvaluation, FaultJournal, FaultPlan, FaultProfile};
 use crate::report::{E2eManifest, E2eObservationEnvelope, E2eReport};
 use crate::workflow::WorkflowCheckpoint;
 
@@ -66,22 +65,6 @@ pub fn history_record() -> RootSchema {
     root_schema_for::<HistoryRecord>()
 }
 
-pub fn fault_profile() -> RootSchema {
-    root_schema_for::<FaultProfile>()
-}
-
-pub fn fault_plan() -> RootSchema {
-    root_schema_for::<FaultPlan>()
-}
-
-pub fn fault_journal() -> RootSchema {
-    root_schema_for::<FaultJournal>()
-}
-
-pub fn fault_evaluation() -> RootSchema {
-    root_schema_for::<FaultEvaluation>()
-}
-
 fn root_schema_for<T: JsonSchema>() -> RootSchema {
     SchemaSettings::draft07()
         .into_generator()
@@ -131,18 +114,6 @@ mod tests {
     #[test]
     fn history_record_schema_matches_snapshot() {
         assert_snapshot("history-record.json", &history_record());
-    }
-
-    #[test]
-    fn fault_schemas_match_snapshots() {
-        for (name, schema) in [
-            ("fault-profile.json", fault_profile()),
-            ("fault-plan.json", fault_plan()),
-            ("fault-journal.json", fault_journal()),
-            ("fault-evaluation.json", fault_evaluation()),
-        ] {
-            assert_snapshot(name, &schema);
-        }
     }
 
     fn assert_snapshot(name: &str, schema: &impl Serialize) {

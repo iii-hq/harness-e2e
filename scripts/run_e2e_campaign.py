@@ -46,18 +46,12 @@ COMMON_GROUP_FIELDS = {
 SCENARIO_GROUP_FIELDS = COMMON_GROUP_FIELDS | {
     "scenarios",
 }
-FAULT_GROUP_FIELDS = COMMON_GROUP_FIELDS | {
-    "fault_profile",
-    "fault_scenario",
-    "soak_minutes",
-}
 FAILURE_POLICIES = {"advisory", "enforcing"}
 EXECUTION_KINDS = {
     "harness_turn",
     "scripted_dialogue",
     "composite_flow",
     "adaptive_flow",
-    "fault_injection",
 }
 SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 SAFE_LANE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
@@ -102,13 +96,6 @@ def scenario_catalog(binary: pathlib.Path = DEFAULT_E2E_BIN) -> dict:
         raise CampaignError(f"cannot read native campaign catalog from {binary}: {error}") from error
 
 
-FAULT_PROFILES = {
-    "weekly-l2-recovery",
-    "weekly-l3-recovery",
-    "weekly-l4-recovery",
-}
-
-
 def _warn(message: str) -> None:
     """Contract drift is reported on stderr and in the summary, never enforced."""
     print(f"warning: {message}", file=sys.stderr)
@@ -125,9 +112,6 @@ class CampaignGroup:
     runs: int
     technical_retries: int
     scenarios: tuple[str, ...]
-    fault_profile: str | None = None
-    fault_scenario: str | None = None
-    soak_minutes: int = 0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -213,13 +197,7 @@ def parse_campaign(
     for index, raw_group in enumerate(raw_groups):
         label = f"{source}.groups[{index}]"
         group = _expect_object(raw_group, label)
-        execution_kind = group.get("execution_kind")
-        fields = (
-            FAULT_GROUP_FIELDS
-            if execution_kind == "fault_injection"
-            else SCENARIO_GROUP_FIELDS
-        )
-        _reject_unknown_fields(group, fields, label)
+        _reject_unknown_fields(group, SCENARIO_GROUP_FIELDS, label)
         group_id = group["id"]
         if not isinstance(group_id, str) or not SAFE_ID.fullmatch(group_id):
             raise CampaignError(f"{label}.id is not a safe group id")
@@ -244,36 +222,6 @@ def parse_campaign(
             raise CampaignError(
                 f"{label} is {execution_kind} and must set technical_retries=0"
             )
-
-        if execution_kind == "fault_injection":
-            if retries != 0:
-                raise CampaignError(
-                    f"{label} is fault_injection and must set technical_retries=0"
-                )
-            profile = group["fault_profile"]
-            scenario = group["fault_scenario"]
-            if profile not in FAULT_PROFILES:
-                raise CampaignError(f"{label}.fault_profile is not canonical")
-            if not isinstance(scenario, str) or not scenario:
-                raise CampaignError(f"{label}.fault_scenario must be a non-empty string")
-            soak_minutes = _expect_bounded_int(
-                group["soak_minutes"], f"{label}.soak_minutes", 0, 180
-            )
-            if runs < 3:
-                raise CampaignError(f"{label}.runs must be at least 3")
-            groups.append(
-                CampaignGroup(
-                    id=group_id,
-                    execution_kind=execution_kind,
-                    runs=runs,
-                    technical_retries=retries,
-                    scenarios=(),
-                    fault_profile=profile,
-                    fault_scenario=scenario,
-                    soak_minutes=soak_minutes,
-                )
-            )
-            continue
 
         raw_scenarios = group["scenarios"]
         if not isinstance(raw_scenarios, list) or not raw_scenarios:
@@ -343,8 +291,6 @@ def build_group_command(
     url: str | None = None,
     progress_interval_seconds: int | None = None,
 ) -> list[str]:
-    if group.execution_kind == "fault_injection":
-        raise CampaignError("fault_injection groups require the protected supervisor")
     command = [
         str(e2e_bin),
         "run",
@@ -620,66 +566,6 @@ def _regular_group_measurement(
     }
 
 
-def _fault_group_measurement(
-    group: CampaignGroup, output: pathlib.Path
-) -> dict[str, Any]:
-    evaluations = sorted(output.glob("run-*/fault-evaluation.json"))
-    if not evaluations:
-        return {
-            "score": None,
-            "score_availability": "unavailable",
-            "execution_reliability": 0.0,
-            "completion_evidence_coverage": 0.0,
-            "completion_rate": None,
-            "score_coverage": 0.0,
-            "infrastructure_valid": False,
-            "report_state": "partial",
-            "objective_outcome": "inconclusive",
-            "result_contract_sha256": None,
-        }
-    scores: list[float] = []
-    infrastructure_valid = True
-    for path in evaluations:
-        evaluation = _load_json(path)
-        classification = evaluation.get("classification")
-        if classification == "infrastructure_failure":
-            infrastructure_valid = False
-            continue
-        score = 100.0 if classification == "correct_recovery" else 0.0
-        scores.append(score)
-    coverage = min(1.0, len(scores) / group.runs)
-    group_score = sum(scores) / len(scores) if scores else None
-    availability = (
-        "complete"
-        if group_score is not None
-        and coverage >= 1.0
-        and infrastructure_valid
-        else "partial"
-        if group_score is not None
-        else "unavailable"
-    )
-    return {
-        "score": group_score,
-        "score_availability": availability,
-        "execution_reliability": coverage,
-        "completion_evidence_coverage": coverage,
-        "completion_rate": (
-            sum(score == 100.0 for score in scores) / len(scores) if scores else None
-        ),
-        "score_coverage": coverage,
-        "infrastructure_valid": infrastructure_valid,
-        "report_state": "complete" if len(evaluations) == group.runs else "partial",
-        "objective_outcome": (
-            "passed"
-            if len(scores) == group.runs and all(score == 100.0 for score in scores)
-            else "failed"
-            if any(score < 100.0 for score in scores)
-            else "inconclusive"
-        ),
-        "result_contract_sha256": None,
-    }
-
-
 def score_campaign(
     campaign: Campaign, group_results: Sequence[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -699,11 +585,7 @@ def score_campaign(
     for group in campaign.groups:
         result = by_id[group.id]
         output = pathlib.Path(result["output"])
-        measurement = (
-            _fault_group_measurement(group, output)
-            if group.execution_kind == "fault_injection"
-            else _regular_group_measurement(group, output)
-        )
+        measurement = _regular_group_measurement(group, output)
         result.update(measurement)
         score = measurement["score"]
         if isinstance(score, (int, float)):
@@ -803,12 +685,6 @@ def execute_campaign(
     if not SAFE_EXECUTION_ID.fullmatch(execution_id):
         raise CampaignError("execution_id contains unsafe characters")
     base_environment = dict(os.environ if environ is None else environ)
-    if not dry_run and any(
-        group.execution_kind == "fault_injection" for group in campaign.groups
-    ):
-        raise CampaignError(
-            "fault injection execution requires Release Control Compose dispatch"
-        )
     if not dry_run:
         if not model and not base_environment.get("HARNESS_E2E_MODEL"):
             raise CampaignError(
@@ -824,19 +700,15 @@ def execute_campaign(
     group_results: list[dict[str, Any]] = []
     for group in campaign.groups:
         group_output = execution_root / group.id
-        command = (
-            ["release-control-compose-dispatch", group.id]
-            if group.execution_kind == "fault_injection"
-            else build_group_command(
-                campaign,
-                group,
-                e2e_bin=e2e_bin,
-                output=group_output,
-                model=model,
-                provider=provider,
-                url=url,
-                progress_interval_seconds=progress_interval_seconds,
-            )
+        command = build_group_command(
+            campaign,
+            group,
+            e2e_bin=e2e_bin,
+            output=group_output,
+            model=model,
+            provider=provider,
+            url=url,
+            progress_interval_seconds=progress_interval_seconds,
         )
         print(f"[{campaign.campaign_id}/{group.id}] {shlex.join(command)}", flush=True)
         result: dict[str, Any] = {
@@ -939,11 +811,7 @@ def aggregate_existing_campaign(
     for group in campaign.groups:
         output = group_root / group.id
         failure = output / "failure.json"
-        has_native_result = (
-            any(output.glob("run-*/fault-evaluation.json"))
-            if group.execution_kind == "fault_injection"
-            else (output / "results.json").is_file()
-        )
+        has_native_result = (output / "results.json").is_file()
         group_results.append(
             {
                 "group_id": group.id,

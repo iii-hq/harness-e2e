@@ -56,13 +56,7 @@ export function MasterTestProfiles({ plan }: { plan: MasterTestPlan }) {
               </span>
               <span className="block">
                 {profile.budget.planned_runs} planned slots
-                {profile.budget.fault_runs > 0
-                  ? ` · ${profile.budget.fault_runs} fault runs`
-                  : ''}
               </span>
-              {profile.protected_supervisor_required ? (
-                <span className="block">Protected fault executor</span>
-              ) : null}
             </div>
             <div className="flex flex-wrap gap-2">
               <a

@@ -116,8 +116,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         paths = [
             ROOT / "scripts/exact_stack_campaign.py",
             ROOT / "scripts/run_exact_stack_group.sh",
-            ROOT / "scripts/run_exact_stack_fault.sh",
-            ROOT / "supervisor/run-weekly-stress",
             ROOT / ".github/workflows/exact-stack-e2e.yml",
             ROOT / "src/worker.rs",
             ROOT / "src/main.rs",
@@ -141,7 +139,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("strategy:\n      fail-fast: false", workflow)
         self.assertIn("scripts/run_exact_stack_group.sh", workflow)
-        self.assertIn("scripts/run_exact_stack_fault.sh", workflow)
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
@@ -314,21 +311,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("exact-stack-e2e.yml", workflows)
         self.assertNotIn("shadow.yml", workflows)
         self.assertNotIn("release.yml", workflows)
-
-    def test_weekly_stress_delegates_privileged_actions_to_protected_launchers(self):
-        self.assertFalse(
-            (ROOT / "config/profiles/weekly-l5-recovery.json").exists()
-        )
-        self.assertFalse(
-            (ROOT / "config/profiles/weekly-l5-cancellation.json").exists()
-        )
-        supervisor = (ROOT / "supervisor/run-weekly-stress").read_text()
-        for operation in ("validate", "up", "status", "down"):
-            self.assertIn(f"compose::{operation}", supervisor)
-        self.assertIn("III_COMPOSE_STATE_DIR", supervisor)
-        self.assertIn("--namespace \"$project_namespace\"", supervisor)
-        self.assertNotIn("iii " + "worker", supervisor)
-        self.assertNotIn("iii-" + "worker", supervisor)
 
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (

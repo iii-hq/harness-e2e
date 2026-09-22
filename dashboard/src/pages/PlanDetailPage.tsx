@@ -402,11 +402,7 @@ export function PlanRunDialog({
             <button
               type="button"
               className={buttonClassName({ variant: 'primary' })}
-              disabled={
-                starting !== null ||
-                plan?.protected_executor_required ||
-                plan?.compatible === false
-              }
+              disabled={starting !== null || plan?.compatible === false}
               aria-busy={starting !== null}
               onClick={() => onStart(role)}
             >
@@ -2879,7 +2875,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                                 !frozen.scenarios.every((scenario) =>
                                   frozen.seeds.has(scenario),
                                 ))) ||
-                            plan?.protected_executor_required ||
                             plan?.compatible === false
                           }
                           onClick={() => {
@@ -3004,12 +2999,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               baselineSummary={baselineSummary}
               lastRunSummary={lastRunSummary}
             />
-            {plan?.protected_executor_required ? (
-              <Callout tone="warning" title="Protected executor required">
-                Export this plan for Release Control. Its fault-injection work
-                requires the protected executor.
-              </Callout>
-            ) : plan?.compatible === false ? (
+            {plan?.compatible === false ? (
               <Callout tone="warning" title="Saved scope unavailable">
                 A saved scenario contract is unavailable in this runner. The
                 plan and its evidence remain available.

@@ -477,7 +477,6 @@ impl PlanStore {
         }
         plan.locked = plan.locked || !history.is_empty();
         plan.compatible = verify_snapshot(saved).is_ok();
-        plan.protected_executor_required = saved.snapshot.protected_supervisor_required;
         Ok(plan)
     }
     pub(crate) async fn create_local(
@@ -568,10 +567,6 @@ impl PlanStore {
             let mut campaign_scope = BTreeSet::new();
             let mut group_ids = BTreeSet::new();
             for group in groups {
-                ensure!(
-                    group["execution_kind"] != "fault_injection",
-                    "This reference requires the protected executor and cannot run in the local dashboard."
-                );
                 let group_id = group["id"]
                     .as_str()
                     .context("Release Control group is missing its id")?;
@@ -704,7 +699,6 @@ impl PlanStore {
                 .as_str()
                 .context("Release Control campaign is missing its lane")?
                 .to_owned(),
-            fault_groups: Vec::new(),
         };
         let cases = plan
             .scenarios
@@ -735,7 +729,6 @@ impl PlanStore {
                 .cloned()
                 .context("Release Control materialization is missing its budget")?,
             interpretation: "descriptive_only".into(),
-            protected_supervisor_required: false,
         };
         let prepared = prepared_plan(plan, Some(snapshot))?;
         validate_config(&prepared.plan, &self.url)?;
@@ -883,7 +876,6 @@ impl PlanStore {
                     .unwrap_or_else(|| "Saved cases and contracts match this runner.".into()),
             ));
         }
-        checks.push(check("executor", !snapshot.protected_supervisor_required, if snapshot.protected_supervisor_required { "Export this plan for the protected Release Control executor. Dashboard execution is unavailable." } else { "Native Harness executor." }));
         let active = if let Some(runner) = &self.runner {
             match runner.requirements(config).await {
                 Ok(runtime) => checks.extend(runtime),
@@ -1299,9 +1291,6 @@ fn snapshot_for_plan(plan: &super::LocalPlan) -> Result<ProfileSnapshot> {
     profile.repetitions = plan.runs;
     profile.technical_retries = plan.technical_retries;
     profile.lane = "local".into();
-    if plan.template_id.is_none() {
-        profile.fault_groups.clear();
-    }
     master.materialize_scope(profile, plan.seed)
 }
 
@@ -1349,10 +1338,6 @@ fn verify_snapshot(plan: &SavedPlan) -> Result<()> {
     Ok(())
 }
 fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
-    ensure!(
-        !plan.snapshot.protected_supervisor_required,
-        "Protected executor required"
-    );
     let mut slots = Vec::new();
     for (round, campaign) in plan.snapshot.campaigns.iter().enumerate() {
         for group in campaign["groups"]
@@ -2132,19 +2117,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn rejects_references_that_need_the_protected_executor() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner);
-        let error = manager
-            .handle(serde_json::from_value(reference_import("fault_injection")).unwrap())
-            .await
-            .unwrap_err();
-        assert!(format!("{error:#}").contains("protected executor"));
-        assert!(manager.list_local().await.unwrap().is_empty());
-    }
-
     #[test]
     fn native_measurements_count_retry_consumption_once_and_reject_reused_attempts() {
         let root = tempfile::tempdir().unwrap();
@@ -2735,25 +2707,5 @@ mod tests {
             .unwrap()
             .baseline_execution_id
             .is_none());
-    }
-    #[tokio::test]
-    async fn resilience_export_is_accepted_by_the_existing_protected_suite_validator() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner);
-        let plan = manager.create_local(request("resilience")).await.unwrap();
-        let saved = manager.read_plan(plan.id.as_str()).await.unwrap();
-        assert_eq!(saved.snapshot.budget["planned_runs"], 12);
-        let export = export(&saved).unwrap();
-        let path = root.path().join("export.json");
-        write_json(&path, &export).unwrap();
-        let result = std::process::Command::new("python3").args(["-c", "import json,sys; sys.path.insert(0,'scripts'); from exact_stack_campaign import validate_suite; v=json.load(open(sys.argv[1])); [validate_suite(s) for s in v['release_control_suites']]", path.to_str().unwrap()]).output().unwrap();
-        assert!(
-            result.status.success(),
-            "{}",
-            String::from_utf8_lossy(&result.stderr)
-        );
-        assert!(materialize_slots(&saved, "protected").is_err());
-        assert_eq!(manager.requirements(&saved).await.unwrap()["ready"], false);
     }
 }

@@ -312,27 +312,11 @@ jobs:
         with:
           version: 11.13.1
 
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # 1.97.1
-        if: matrix.execution_kind == 'fault_injection'
-        with:
-          toolchain: 1.97.1
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-        if: matrix.execution_kind == 'fault_injection'
-        with:
-          workspaces: .
-          key: harness-e2e-fault-${{ needs.prepare.outputs.runner_revision }}
-
-      - name: Build exact fault evaluator
-        if: matrix.execution_kind == 'fault_injection'
-        run: cargo build --locked --release --bin harness-e2e
-
       - name: Install iii project scaffold tooling
         run: python3 -m pip install --quiet pyyaml
 
       - name: Execute common campaign group
         id: common
-        if: matrix.execution_kind != 'fault_injection'
         continue-on-error: true
         env:
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
@@ -340,15 +324,6 @@ jobs:
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           HARNESS_E2E_STACK_LOCK: ${{ env.stack_lock }}
         run: scripts/run_exact_stack_group.sh
-
-      - name: Execute protected fault campaign group
-        id: fault
-        if: matrix.execution_kind == 'fault_injection'
-        continue-on-error: true
-        env:
-          HARNESS_E2E_STACK_LOCK: ${{ env.stack_lock }}
-          HARNESS_E2E_HARNESS_ROOT: ${{ github.workspace }}
-        run: scripts/run_exact_stack_fault.sh
 
       # Whatever the group did, its runs reach the ledger: from results.json
       # when the group finished, from the journal checkpoints when it did not,
@@ -365,7 +340,7 @@ jobs:
             --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
             --campaign-id '${{ matrix.campaign_id }}' \
             --group-id '${{ matrix.group_id }}' \
-            --outcome '${{ steps.common.outcome || steps.fault.outcome }}' \
+            --outcome '${{ steps.common.outcome }}' \
             --artifacts target/harness-e2e-exact-stack \
             --profile-snapshot target/harness-e2e-contract/profile.json \
             --plan target/harness-e2e-contract/plan.json \
@@ -408,7 +383,7 @@ jobs:
           if-no-files-found: error
 
       - name: Preserve factual group conclusion
-        if: always() && (steps.common.outcome == 'failure' || steps.fault.outcome == 'failure' || steps.group_package.outcome == 'failure')
+        if: always() && (steps.common.outcome == 'failure' || steps.group_package.outcome == 'failure')
         run: exit 1
 
   finalize:

@@ -87,15 +87,6 @@ def campaign_contract(versions: dict[str, str] | None = None):
                     "runs": 1,
                     "technical_retries": 1,
                 },
-                {
-                    "id": "weekly-fault-l2",
-                    "execution_kind": "fault_injection",
-                    "runs": 3,
-                    "technical_retries": 0,
-                    "fault_profile": "weekly-l2-recovery",
-                    "fault_scenario": "stateful.2",
-                    "soak_minutes": 60,
-                },
             ],
         },
     }
@@ -315,12 +306,6 @@ project_trigger() {
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual((root / "project/agents/tech-lead.md").read_text(), "selected template")
-
-    def test_protected_faults_reject_overrides_instead_of_ignoring_them(self):
-        source = (ROOT / "scripts/run_exact_stack_fault.sh").read_text()
-        guard = source.index(".runtime.template != null or .suite.agent_profile != null")
-        self.assertLess(guard, source.index('test -x "$supervisor"'))
-        self.assertIn("does not support execution template or agent profile overrides", source)
 
     def test_agent_profile_is_validated_and_reaches_native_admission(self):
         contract = campaign_contract()
@@ -664,7 +649,7 @@ fail() {
         self.assertEqual(manifest["kind"], "harness-e2e-campaign")
         self.assertEqual(manifest["campaign_id"], "daily")
         self.assertEqual(manifest["lane"], "daily")
-        self.assertEqual([group["id"] for group in manifest["groups"]], ["daily-core", "weekly-fault-l2"])
+        self.assertEqual([group["id"] for group in manifest["groups"]], ["daily-core"])
         # Every case counts the same: no weight and no profile travel.
         self.assertEqual(
             sorted(manifest),
@@ -675,8 +660,6 @@ fail() {
             ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
         )
         self.assertEqual(manifest["groups"][0]["scenarios"], ["direct_answer"])
-        self.assertEqual(manifest["groups"][1]["fault_profile"], "weekly-l2-recovery")
-        self.assertNotIn("scenarios", manifest["groups"][1])
 
     def test_preserves_catalog_owned_canonical_seed(self):
         changed = catalog()

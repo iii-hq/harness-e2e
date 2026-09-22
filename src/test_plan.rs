@@ -2,7 +2,7 @@
 //! Materialization is pure: it never contacts iii or calls a model.
 use std::collections::{BTreeMap, BTreeSet};
 
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{ensure, Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -46,19 +46,6 @@ pub struct Profile {
     pub repetitions: u32,
     pub technical_retries: u8,
     pub lane: String,
-    pub fault_groups: Vec<FaultGroup>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct FaultGroup {
-    pub id: String,
-    pub execution_kind: String,
-    pub runs: u32,
-    pub technical_retries: u8,
-    pub fault_profile: String,
-    pub fault_scenario: String,
-    pub soak_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -73,7 +60,6 @@ pub struct ProfileSnapshot {
     pub campaigns: Vec<Value>,
     pub budget: Value,
     pub interpretation: String,
-    pub protected_supervisor_required: bool,
 }
 
 pub fn embedded() -> Result<MasterPlan> {
@@ -175,28 +161,6 @@ impl MasterPlan {
                 selected.iter().all(|id| native.contains(id)),
                 "profile selects an unknown scenario"
             );
-            let mut fault_ids = BTreeSet::new();
-            for group in &profile.fault_groups {
-                ensure!(
-                    safe_id(&group.id) && fault_ids.insert(group.id.as_str()),
-                    "invalid fault group id"
-                );
-                let expected = match group.fault_profile.as_str() {
-                    "weekly-l2-recovery" => "stateful.2",
-                    "weekly-l3-recovery" => "coordination.3",
-                    "weekly-l4-recovery" => "coordination.4",
-                    _ => bail!("unsupported fault profile"),
-                };
-                ensure!(
-                    group.execution_kind == "fault_injection"
-                        && group.technical_retries == 0
-                        && (3..=20).contains(&group.runs)
-                        && (60..=180).contains(&group.soak_minutes)
-                        && group.fault_scenario == expected,
-                    "invalid recovery policy for {}",
-                    group.id
-                );
-            }
         }
         ensure!(
             !profiles.is_empty(),
@@ -335,26 +299,12 @@ impl MasterPlan {
         )?;
         let mut campaigns = Vec::new();
         for repetition in 1..=profile.repetitions {
-            let mut groups = ordinary_groups.clone();
-            groups.extend(
-                profile
-                    .fault_groups
-                    .iter()
-                    .map(serde_json::to_value)
-                    .collect::<std::result::Result<Vec<_>, _>>()?,
-            );
             let campaign = json!({
                 "kind": "harness-e2e-campaign", "campaign_id": format!("{}-r{repetition:02}", profile.id),
-                "lane": profile.lane, "failure_policy": "advisory", "groups": groups,
+                "lane": profile.lane, "failure_policy": "advisory", "groups": ordinary_groups,
             });
             campaigns.push(campaign);
         }
-        let fault_runs: u64 = profile
-            .fault_groups
-            .iter()
-            .map(|g| u64::from(g.runs))
-            .sum::<u64>()
-            * u64::from(profile.repetitions);
         Ok(ProfileSnapshot {
             schema: "harness-e2e-profile-snapshot".into(),
             plan_id: self.plan_id.clone(),
@@ -364,13 +314,12 @@ impl MasterPlan {
             scenario_ids: scenario_ids.clone(),
             cases,
             campaigns,
-            budget: json!({"scenario_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions), "fault_runs": fault_runs,
-                "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions) + fault_runs,
+            budget: json!({"scenario_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions),
+                "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions),
                 "session_turn_limit_sum": subject_turns, "subject_token_limit": subject_token_limit,
-                "unbounded_token_cases": unbounded_token_cases, "fault_budget_separate": fault_runs > 0,
+                "unbounded_token_cases": unbounded_token_cases,
                 "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
-            protected_supervisor_required: !profile.fault_groups.is_empty(),
         })
     }
 
@@ -381,7 +330,7 @@ impl MasterPlan {
             profiles.push(json!({"id": profile.id, "label": profile.label, "purpose": profile.purpose, "metrics": profile.metrics,
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
                 "technical_retries": profile.technical_retries, "budget": snapshot.budget,
-                "profile_sha256": snapshot.profile_sha256, "protected_supervisor_required": snapshot.protected_supervisor_required,
+                "profile_sha256": snapshot.profile_sha256,
                 "cases": snapshot.cases}));
         }
         Ok(
@@ -490,7 +439,6 @@ mod tests {
             ("regression", 9, 9),
             ("capability", 45, 45),
             ("evolution", 18, 54),
-            ("resilience", 3, 12),
             ("endurance", 4, 4),
             ("software-engineering", 13, 13),
         ] {
@@ -503,22 +451,17 @@ mod tests {
                 let groups = campaign["groups"].as_array().unwrap();
                 let mut selected = BTreeSet::new();
                 for group in groups {
-                    if group["execution_kind"] == "fault_injection" {
-                        assert_eq!(group["technical_retries"], 0);
-                        assert_eq!(group["soak_minutes"], 60);
-                    } else {
-                        assert_eq!(group["runs"], 1);
-                        for id in group["scenarios"].as_array().unwrap() {
-                            let id = id.as_str().unwrap();
-                            assert!(selected.insert(id));
-                            if !id
-                                .parse::<ScenarioId>()
-                                .unwrap()
-                                .execution_kind()
-                                .replay_safe()
-                            {
-                                assert_eq!(group["technical_retries"], 0);
-                            }
+                    assert_eq!(group["runs"], 1);
+                    for id in group["scenarios"].as_array().unwrap() {
+                        let id = id.as_str().unwrap();
+                        assert!(selected.insert(id));
+                        if !id
+                            .parse::<ScenarioId>()
+                            .unwrap()
+                            .execution_kind()
+                            .replay_safe()
+                        {
+                            assert_eq!(group["technical_retries"], 0);
                         }
                     }
                 }
@@ -615,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn source_rejects_lost_coverage_overlap_invalid_samples_and_fault_policy() {
+    fn source_rejects_lost_coverage_overlap_and_invalid_samples() {
         let plan = embedded().unwrap();
         let mut changed = plan.clone();
         changed.modules[0].scenarios.pop();
@@ -625,9 +568,6 @@ mod tests {
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
         changed.profiles[3].repetitions = 21;
-        assert!(changed.validate().is_err());
-        let mut changed = plan.clone();
-        changed.profiles[4].fault_groups[0].technical_retries = 1;
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();

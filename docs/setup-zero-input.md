@@ -23,7 +23,7 @@ A meta inicial considera uma stack iii com Harness e acesso aos modelos configur
 
 ## Diagnóstico inicial
 
-O levantamento encontrou **53 nomes `HARNESS_E2E_*` listados** no inventário abaixo. Isso inclui build, CI, testes, opções com default e variáveis apenas repassadas. **Não são 53 entradas obrigatórias para iniciar o worker.** O inventário completo e o método estão no fim deste documento.
+O levantamento encontrou **52 nomes `HARNESS_E2E_*` listados** no inventário abaixo. Isso inclui build, CI, testes, opções com default e variáveis apenas repassadas. **Não são 52 entradas obrigatórias para iniciar o worker.** O inventário completo e o método estão no fim deste documento.
 
 Há três configurações de recursos que bloqueiam cenários específicos:
 
@@ -93,12 +93,11 @@ As mudanças internas de preparação e UI pertencem ao E2E. Eventuais mudanças
 - Cache aquecido permite repetir a preparação sem rede; acessos de rede inerentes ao cenário continuam sujeitos ao seu contrato.
 - Tentativas em execuções independentes não compartilham checkout gravável; cancelamento libera processos e recursos temporários sem apagar transcripts e artefatos retidos.
 - Falta de provider, ferramenta ou isolamento aparece como impedimento de infraestrutura antes da chamada ao modelo.
-- Cenários que exigem supervisor protegido continuam no executor apropriado; a instalação local não amplia sua admissibilidade.
 - Validação positiva e negativa das fixtures demonstra que a automação preservou o contrato de avaliação.
 
 ## Inventário completo
 
-Método: busca lexical de `HARNESS_E2E_[A-Z0-9_]+` nos arquivos versionados `.rs`, `.py`, `.mjs`, `.sh`, `.yaml` e `.yml` de `src/`, `scripts/`, `.github/`, mais `build.rs`, `iii.worker.yaml` e os dois arquivos Compose. A tabela lista 53 sufixos. Uma referência pode ser definição, leitura, emissão ou repasse, não necessariamente uma opção funcional. Arquivos locais ignorados, valores de segredos e configurações efetivas de processos não fazem parte da contagem.
+Método: busca lexical de `HARNESS_E2E_[A-Z0-9_]+` nos arquivos versionados `.rs`, `.py`, `.mjs`, `.sh`, `.yaml` e `.yml` de `src/`, `scripts/`, `.github/`, mais `build.rs`, `iii.worker.yaml` e os dois arquivos Compose. A tabela lista 52 sufixos. Uma referência pode ser definição, leitura, emissão ou repasse, não necessariamente uma opção funcional. Arquivos locais ignorados, valores de segredos e configurações efetivas de processos não fazem parte da contagem.
 
 Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma proposta, não comportamento já implementado.
 
@@ -119,7 +118,6 @@ Na tabela, todos os nomes têm o prefixo **`HARNESS_E2E_`**. O destino é uma pr
 | `DURABLE_TIMEOUT_MS` | Timeout do arquivo durável; default 120000 ms | Default/configuração operacional |
 | `ENGINE_PORT` | Porta escolhida pelo launcher | Interno do executor |
 | `ENGINE_REVISION` | Revisão opcional de proveniência | Identidade efetiva da stack |
-| `FAULT_SUPERVISOR` | Programa supervisor de falhas | Interno do executor protegido |
 | `FIXTURE_PATH` | Checkout obrigatório dos três cenários compartilhados | Clone privado preparado automaticamente |
 | `HARNESS_ROOT` | Checkout do runner usado pelos scripts oficiais | Interno de build/CI; pacote independente de checkout |
 | `HISTORY_DATABASE` | Histórico durável; default `primary` | Configuração operacional coerente com o serviço de histórico |

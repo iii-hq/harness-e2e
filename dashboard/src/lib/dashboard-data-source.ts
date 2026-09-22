@@ -64,7 +64,6 @@ export type LocalPlan = {
   incomplete_execution_ids: string[]
   last_attempt_id: string | null
   template_id?: string | null
-  protected_executor_required?: boolean
   compatible?: boolean
 }
 
@@ -108,11 +107,9 @@ export type MasterTestProfile = {
   repetitions: number
   technical_retries: number
   profile_sha256: string
-  protected_supervisor_required: boolean
   budget: {
     planned_runs: number
     scenario_runs: number
-    fault_runs: number
     session_turn_limit_sum: number
     subject_token_limit: number | null
     unbounded_token_cases: string[]
