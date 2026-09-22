@@ -71,7 +71,8 @@
         "performance_regression",
         "chess_engine_build",
         "git_regression_forensics",
-        "typescript_chat_service"
+        "typescript_chat_service",
+        "alertmanager_route_match"
       ]
     },
     {
@@ -155,6 +156,9 @@
     "typescript_chat_service": [
       "Node 22.6+ on the runner host for direct TypeScript execution"
     ],
+    "alertmanager_route_match": [
+      "Pinned Alertmanager Git bundle"
+    ],
     "registry_planning": [
       "Linux amd64 with Docker and access to the pinned Registry source",
       "Explicit auxiliary model for plan assessment"
@@ -203,7 +207,7 @@
     {
       "id": "software-engineering",
       "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build and the Linkly agentic tutorial.",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, the Linkly agentic tutorial and Alertmanager route migration.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -216,7 +220,8 @@
         "registry_implementation",
         "registry_verification",
         "trending_topics_build",
-        "linkly_tutorial"
+        "linkly_tutorial",
+        "alertmanager_route_match"
       ],
       "repetitions": 1,
       "technical_retries": 0,

@@ -344,7 +344,7 @@ binding armed."#,
         ),
         filesystem_root: None,
         execution: ExecutionPolicy {
-            max_turns: 20,
+            max_turns: Some(20),
             max_output_tokens: Some(8_192),
             max_total_tokens: Some(250_000),
             stuck_timeout_seconds: 180,

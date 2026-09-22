@@ -439,7 +439,7 @@ report containing the scheduling receipt exactly as returned."#,
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 12,
+                max_turns: Some(12),
                 max_output_tokens: Some(12_288),
                 max_total_tokens: Some(200_000),
                 stuck_timeout_seconds: 360,

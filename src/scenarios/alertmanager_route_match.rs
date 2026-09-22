@@ -1,0 +1,1485 @@
+//! Refactor Alertmanager route matching onto an iii function.
+//!
+//! The subject clones a pinned `prometheus/alertmanager` bundle and moves
+//! `dispatch.Route.Match` onto `route::match`. The runner scores that function
+//! by calling it on the iii stack with the frozen route trees and label sets
+//! from `TestRouteMatch` and `conf.good.yml`.
+
+use std::collections::BTreeMap;
+use std::ffi::OsStr;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+use serde_json::{json, Value};
+use tokio::process::Command;
+
+use crate::artifact::sha256_bytes;
+use crate::context::E2eContext;
+use crate::report::EvaluationDimension;
+
+use super::assessment::{self, AssessmentSpec};
+use super::{
+    async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedInvariant,
+    DeliverableContract, ExecutionPolicy, ExecutionRealism, HumanHorizon, InvariantSpec,
+    ObjectiveEvaluation, ProvenanceEvidence, Scenario, ScenarioCase, ScenarioCharacterization,
+    ScenarioObservation, ScenarioSpec, ShadowMode,
+};
+
+pub const ID: &str = "alertmanager_route_match";
+pub const CANONICAL_SEED: u64 = 0x616c_7274_0001;
+pub const SUMMARY: &str = "Clone the pinned prometheus/alertmanager revision and refactor \
+route matching so the iii function route::match decides receivers and group-by labels. \
+The runner calls that function on the iii stack and scores the receivers it returns \
+against a frozen oracle from TestRouteMatch and conf.good.yml.";
+
+const UPSTREAM_REPOSITORY: &str = "prometheus/alertmanager";
+const UPSTREAM_URL: &str = "https://github.com/prometheus/alertmanager";
+const UPSTREAM_TAG: &str = "v0.34.1";
+const PINNED_REVISION: &str = "73c6bfe7393929211294c1954f30d8ed78e4d0ad";
+const PINNED_TREE: &str = "285e2549c75984bd4b0a6fddebf8a045dd6a76b6";
+const FUNCTION_ID: &str = "route::match";
+const DELIVERABLE_ID: &str = "route_match_audit";
+const BUNDLE_RELATIVE_PATH: &str = "input/repository.bundle";
+const MANIFEST_RELATIVE_PATH: &str = "input/case.json";
+const CHECKOUT_RELATIVE_PATH: &str = "checkout";
+const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Covers a cold module download and build of the dispatch package.
+const GO_TEST_TIMEOUT: Duration = Duration::from_secs(600);
+const CLOSED_ENGINE_URL: &str = "ws://127.0.0.1:9";
+const PROTECTED_PATHS: &[&str] = &["notify", "api", "config/testdata"];
+
+const PUBLIC_MANIFEST: &str =
+    include_str!("../../tests/fixtures/alertmanager-route-match/manifest.json");
+const ORACLE_JSON: &str = include_str!("../../tests/fixtures/alertmanager-route-match/oracle.json");
+const BUNDLE_BYTES: &[u8] =
+    include_bytes!("../../tests/fixtures/alertmanager-route-match/repository.bundle");
+
+const REVISION_PINNED: AssessmentSpec = AssessmentSpec::scored(
+    "revision_pinned",
+    10,
+    "The checkout is the pinned bundle revision or a descendant of it.",
+);
+const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
+    "match_equivalent",
+    70,
+    "Each live call to route::match returns the frozen receivers and group-by labels.",
+    EvaluationDimension::Deliverable,
+);
+const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
+    "delegation_wired",
+    10,
+    "Upstream TestRouteMatch passes through route::match and fails without the engine.",
+);
+const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
+    "scope_exact",
+    10,
+    "notify/, api/, and config/testdata/ stay identical to the pinned tree.",
+);
+const ASSESSMENTS: &[AssessmentSpec] = &[
+    REVISION_PINNED,
+    MATCH_EQUIVALENT,
+    DELEGATION_WIRED,
+    SCOPE_EXACT,
+];
+
+#[derive(Debug, Deserialize)]
+struct Oracle {
+    trees: OracleTrees,
+    cases: Vec<OracleCase>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OracleTrees {
+    route_test: String,
+    conf_good: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct OracleCase {
+    id: String,
+    tree: String,
+    labels: BTreeMap<String, String>,
+    receivers: Vec<String>,
+    group_by: Vec<Vec<String>>,
+    group_by_all: Vec<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MatchResult {
+    receivers: Vec<String>,
+    group_by: Vec<Vec<String>>,
+    group_by_all: Vec<bool>,
+}
+
+#[derive(Debug, Clone)]
+struct Snapshot {
+    checkout_is_repository: bool,
+    head: Option<String>,
+    pinned_reachable: bool,
+    protected_unchanged: bool,
+    delegation_wired: bool,
+    delegation_detail: String,
+    function_registered: bool,
+    match_cases: Vec<(String, bool, String)>,
+}
+
+impl Snapshot {
+    fn revision_pinned(&self) -> bool {
+        self.checkout_is_repository && self.pinned_reachable
+    }
+
+    fn match_equivalent(&self) -> bool {
+        self.function_registered
+            && !self.match_cases.is_empty()
+            && self.match_cases.iter().all(|(_, passed, _)| *passed)
+    }
+
+    /// The task is done once `route::match` answers with a match payload and
+    /// the Go router calls it. Exact agreement with the oracle stays in the
+    /// score.
+    fn task_completed(&self) -> bool {
+        self.delegation_wired
+            && self.function_registered
+            && self
+                .match_cases
+                .iter()
+                .any(|(_, passed, reason)| call_answered(*passed, reason))
+    }
+
+    fn match_awarded(&self) -> u8 {
+        let total = self.match_cases.len();
+        if !self.function_registered || total == 0 {
+            return 0;
+        }
+        let passed = self
+            .match_cases
+            .iter()
+            .filter(|(_, passed, _)| *passed)
+            .count();
+        u8::try_from(passed * usize::from(MATCH_EQUIVALENT.weight()) / total).unwrap_or(0)
+    }
+
+    fn scope_exact(&self) -> bool {
+        self.checkout_is_repository && self.protected_unchanged
+    }
+}
+
+pub struct AlertmanagerRouteMatch;
+
+#[async_trait]
+impl Scenario for AlertmanagerRouteMatch {
+    fn id(&self) -> &'static str {
+        ID
+    }
+
+    fn summary(&self) -> Option<&'static str> {
+        Some(SUMMARY)
+    }
+
+    fn canonical_seed(&self) -> u64 {
+        CANONICAL_SEED
+    }
+
+    fn canonical_seed_only(&self) -> bool {
+        true
+    }
+
+    fn characterization(&self) -> Result<ScenarioCharacterization> {
+        ScenarioCharacterization::new(
+            HumanHorizon::author_estimate(180, 360)?,
+            ExecutionRealism::FrozenRealArtifact,
+            ShadowMode::None,
+        )
+    }
+
+    fn case(&self, _seed: u64) -> Result<ScenarioCase> {
+        let oracle = oracle()?;
+        ScenarioCase::new(
+            ID,
+            CANONICAL_SEED,
+            json!({
+                "fixture_repository": UPSTREAM_REPOSITORY,
+                "fixture_url": UPSTREAM_URL,
+                "fixture_tag": UPSTREAM_TAG,
+                "fixture_revision": PINNED_REVISION,
+                "fixture_tree": PINNED_TREE,
+                "bundle_sha256": sha256_bytes(BUNDLE_BYTES),
+                "bundle_size_bytes": BUNDLE_BYTES.len() as u64,
+                "oracle_sha256": sha256_bytes(ORACLE_JSON.as_bytes()),
+                "oracle_cases": oracle.cases.len(),
+                "function_id": FUNCTION_ID,
+            }),
+            vec![
+                Capability::E2eControlPlaneV1,
+                Capability::IiiFunctions,
+                Capability::IiiShell,
+                Capability::GitOfflineBundle,
+                Capability::Go,
+            ],
+            deliverable_contract(),
+        )
+    }
+
+    fn spec(&self, run_id: &str) -> ScenarioSpec {
+        let root = workspace_root(run_id);
+        let bundle = root.join(BUNDLE_RELATIVE_PATH);
+        let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+        ScenarioSpec {
+            id: ID,
+            prompt: format!(
+                r#"Download prometheus/alertmanager at the pinned revision by cloning the local
+bundle `{bundle}` into `{checkout}`. The upstream URL {url} is provenance; do not fetch another
+remote or another commit.
+
+Refactor route matching so the iii function `{function}` decides, for one
+alert label set and the existing YAML route tree, the receivers and the
+group-by labels. Call that function from `dispatch.Route.Match`. Keep the YAML
+schema and the Go method signatures.
+
+`{function}` must accept JSON `{{"route": "<yaml>", "labels": {{"<name>": "<value>"}}}}`
+and return JSON `{{"receivers": ["<name>"], "group_by": [["<label>"]], "group_by_all": [false]}}`
+in match order, including every route that `continue` keeps.
+
+Leave grouping timers, silences, notification, webhook payloads, and the HTTP
+API unchanged. Do not edit `config/testdata/`, `notify/`, or `api/`.
+
+The runner scores this by calling `{function}` on the iii stack. For each
+case it sends the route YAML and one label set, then compares the receivers
+and group-by labels in the JSON you return. Label sets may carry labels the route tree never
+mentions. It does not start Alertmanager.
+
+Go 1.25 is on PATH. Your Go code must reach the engine at the URL in the `III_URL` environment
+variable and the namespace in `III_NAMESPACE`. The runner copies your checkout, restores upstream
+`dispatch/route_test.go`, and runs `go test -run '^TestRouteMatch$' ./dispatch/` twice: with the
+live engine it must pass, and with `III_URL` pointing at a closed port it must fail. When the run ends, the runner stops every worker
+and process started from this workspace."#,
+                bundle = bundle.display(),
+                checkout = checkout.display(),
+                url = UPSTREAM_URL,
+                function = FUNCTION_ID,
+            ),
+            filesystem_root: Some(root),
+            execution: ExecutionPolicy {
+                // No turn or token ceiling: only a stalled session stops it.
+                max_turns: None,
+                max_output_tokens: Some(16_384),
+                max_total_tokens: None,
+                stuck_timeout_seconds: 1_800,
+                max_validation_retries: None,
+            },
+            denied_functions: &["web::*", "scrapling::*", "http::*"],
+            criteria: assessment::criteria(ASSESSMENTS),
+        }
+    }
+
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        require_go_toolchain().await?;
+        prepare_workspace(&workspace_root(run_id)).await
+    }
+
+    async fn capture(
+        &self,
+        context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<Vec<CapturedDeliverable>> {
+        let snapshot = collect_snapshot(context, &workspace_root(run_id)).await?;
+        Ok(vec![CapturedDeliverable {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "alertmanager_route_match_audit".to_string(),
+            content: audit_content(&snapshot).into(),
+            invariants: vec![
+                CapturedInvariant {
+                    id: "revision_pinned".to_string(),
+                    passed: snapshot.revision_pinned(),
+                    reason: revision_reason(&snapshot),
+                },
+                CapturedInvariant {
+                    id: "match_equivalent".to_string(),
+                    passed: snapshot.match_equivalent(),
+                    reason: match_reason(&snapshot),
+                },
+                CapturedInvariant {
+                    id: "delegation_wired".to_string(),
+                    passed: snapshot.delegation_wired,
+                    reason: delegation_reason(&snapshot),
+                },
+                CapturedInvariant {
+                    id: "scope_exact".to_string(),
+                    passed: snapshot.scope_exact(),
+                    reason: scope_reason(&snapshot),
+                },
+            ],
+            provenance: vec![ProvenanceEvidence {
+                kind: "git_repository".to_string(),
+                source_id: format!("{UPSTREAM_REPOSITORY}@{PINNED_REVISION}"),
+                relation: "materialized_from_verified_bundle".to_string(),
+            }],
+        }])
+    }
+
+    async fn evaluate(
+        &self,
+        context: &E2eContext,
+        _observation: &ScenarioObservation,
+        run_id: &str,
+    ) -> Result<ObjectiveEvaluation> {
+        let snapshot = collect_snapshot(context, &workspace_root(run_id)).await?;
+        Ok(assessment::build_evaluation(
+            if snapshot.task_completed() {
+                crate::report::CompletionState::Completed
+            } else {
+                crate::report::CompletionState::TaskIncomplete
+            },
+            [
+                REVISION_PINNED
+                    .full_or_zero(snapshot.revision_pinned(), revision_reason(&snapshot)),
+                MATCH_EQUIVALENT.award(snapshot.match_awarded(), match_reason(&snapshot))?,
+                DELEGATION_WIRED
+                    .full_or_zero(snapshot.delegation_wired, delegation_reason(&snapshot)),
+                SCOPE_EXACT.full_or_zero(snapshot.scope_exact(), scope_reason(&snapshot)),
+            ],
+        ))
+    }
+
+    async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
+        let root = workspace_root(run_id);
+        let stopped = stop_workspace_workers(context, &root).await;
+        let removed = remove_directory(&root);
+        stopped.and(removed)
+    }
+}
+
+fn oracle() -> Result<Oracle> {
+    serde_json::from_str(ORACLE_JSON).context("decode embedded Alertmanager route-match oracle")
+}
+
+#[cfg(test)]
+fn oracle_answer(payload: &Value) -> Option<Value> {
+    let oracle = oracle().ok()?;
+    let route = payload.get("route")?.as_str()?;
+    let tree = if route == oracle.trees.route_test {
+        "route_test"
+    } else if route == oracle.trees.conf_good {
+        "conf_good"
+    } else {
+        return None;
+    };
+    let incoming: BTreeMap<String, String> =
+        serde_json::from_value(payload.get("labels").cloned().unwrap_or_else(|| json!({}))).ok()?;
+    let case = oracle
+        .cases
+        .iter()
+        .filter(|case| {
+            case.tree == tree
+                && case
+                    .labels
+                    .iter()
+                    .all(|(name, value)| incoming.get(name) == Some(value))
+        })
+        .max_by_key(|case| case.labels.len())?;
+    Some(json!({
+        "receivers": case.receivers,
+        "group_by": case.group_by,
+        "group_by_all": case.group_by_all,
+    }))
+}
+
+fn deliverable_contract() -> DeliverableContract {
+    DeliverableContract {
+        artifacts: vec![ArtifactExpectation {
+            id: DELIVERABLE_ID.to_string(),
+            kind: "alertmanager_route_match_audit".to_string(),
+            media_type: "application/json".to_string(),
+            schema: json!({
+                "type": "object",
+                "required": [
+                    "revision",
+                    "match",
+                    "delegation",
+                    "scope"
+                ],
+                "properties": {
+                    "revision": {"type": "object"},
+                    "match": {"type": "object"},
+                    "delegation": {"type": "object"},
+                    "scope": {"type": "object"}
+                },
+                "additionalProperties": false
+            }),
+            max_size_bytes: 64 * 1024,
+        }],
+        invariants: vec![
+            InvariantSpec {
+                id: "revision_pinned".to_string(),
+                description: "The checkout stays on the pinned Alertmanager revision.".to_string(),
+            },
+            InvariantSpec {
+                id: "match_equivalent".to_string(),
+                description: "Live route::match calls agree with the frozen oracle.".to_string(),
+            },
+            InvariantSpec {
+                id: "delegation_wired".to_string(),
+                description: "dispatch.Route.Match delegates to route::match.".to_string(),
+            },
+            InvariantSpec {
+                id: "scope_exact".to_string(),
+                description: "Protected Alertmanager trees stay exact.".to_string(),
+            },
+        ],
+        provenance_required: true,
+        capture_before_cleanup: true,
+    }
+}
+
+async fn prepare_workspace(root: &Path) -> Result<()> {
+    validate_public_manifest()?;
+    let input = root.join("input");
+    fs::create_dir_all(&input).with_context(|| format!("create {}", input.display()))?;
+    write_exact(&root.join(BUNDLE_RELATIVE_PATH), BUNDLE_BYTES)?;
+    write_exact(
+        &root.join(MANIFEST_RELATIVE_PATH),
+        PUBLIC_MANIFEST.as_bytes(),
+    )?;
+    let preflight = root.join(".fixture-preflight");
+    remove_directory(&preflight)?;
+    let validation = validate_bundle(&root.join(BUNDLE_RELATIVE_PATH), &preflight).await;
+    let cleanup = remove_directory(&preflight);
+    match (validation, cleanup) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(()), Err(error)) => Err(error).context("remove fixture preflight workspace"),
+        (Err(error), Err(cleanup_error)) => {
+            Err(error.context(format!("also failed to remove preflight: {cleanup_error}")))
+        }
+    }
+}
+
+fn validate_public_manifest() -> Result<()> {
+    let manifest: Value =
+        serde_json::from_str(PUBLIC_MANIFEST).context("decode embedded public case manifest")?;
+    if manifest
+        .pointer("/history/revision")
+        .and_then(Value::as_str)
+        != Some(PINNED_REVISION)
+    {
+        bail!("public manifest revision does not match the pinned commit");
+    }
+    if manifest.pointer("/bundle/sha256").and_then(Value::as_str)
+        != Some(&sha256_bytes(BUNDLE_BYTES))
+    {
+        bail!("embedded Git bundle SHA-256 differs from public manifest");
+    }
+    let size = manifest
+        .pointer("/bundle/size_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or_default();
+    if size != BUNDLE_BYTES.len() as u64 {
+        bail!("embedded Git bundle size differs from public manifest");
+    }
+    Ok(())
+}
+
+async fn validate_bundle(bundle: &Path, checkout: &Path) -> Result<()> {
+    let bundle_arg = bundle.display().to_string();
+    let checkout_arg = checkout.display().to_string();
+    git(
+        bundle.parent().unwrap_or(Path::new(".")),
+        &["clone", "--no-hardlinks", &bundle_arg, &checkout_arg],
+    )
+    .await?;
+    let head = git(checkout, &["rev-parse", "HEAD"]).await?;
+    if head != PINNED_REVISION {
+        bail!("bundle HEAD {head} is not the pinned revision {PINNED_REVISION}");
+    }
+    let tree = git(checkout, &["rev-parse", "HEAD^{tree}"]).await?;
+    if tree != PINNED_TREE {
+        bail!("bundle tree {tree} is not the pinned tree {PINNED_TREE}");
+    }
+    Ok(())
+}
+
+async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot> {
+    let checkout = root.join(CHECKOUT_RELATIVE_PATH);
+    let checkout_is_repository = checkout.join(".git").exists();
+    let head = if checkout_is_repository {
+        git_optional(&checkout, &["rev-parse", "HEAD"]).await
+    } else {
+        None
+    };
+    let pinned_reachable =
+        checkout_is_repository && revision_is_pinned(&checkout, head.as_deref()).await;
+    let protected_unchanged = checkout_is_repository && {
+        let mut args = vec!["--"];
+        args.extend(PROTECTED_PATHS.iter().copied());
+        git_diff_empty(&checkout, PINNED_REVISION, &args).await
+    };
+    let (delegation_wired, delegation_detail) = if checkout_is_repository {
+        delegation_probe(context, &checkout).await
+    } else {
+        (false, "checkout is not a Git repository".into())
+    };
+    let function_registered = context.function_exists(FUNCTION_ID).await.unwrap_or(false);
+    let match_cases = if function_registered {
+        probe_match_cases(context).await
+    } else {
+        Vec::new()
+    };
+    Ok(Snapshot {
+        checkout_is_repository,
+        head,
+        pinned_reachable,
+        protected_unchanged,
+        delegation_wired,
+        delegation_detail,
+        function_registered,
+        match_cases,
+    })
+}
+
+async fn probe_match_cases(context: &E2eContext) -> Vec<(String, bool, String)> {
+    let Ok(oracle) = oracle() else {
+        return vec![("oracle".into(), false, "embedded oracle is invalid".into())];
+    };
+    let (noise_name, noise_value) = noise_label(&oracle);
+    let mut results = Vec::new();
+    for case in oracle.cases {
+        let route = match case.tree.as_str() {
+            "route_test" => oracle.trees.route_test.as_str(),
+            "conf_good" => oracle.trees.conf_good.as_str(),
+            other => {
+                results.push((case.id, false, format!("unknown oracle tree {other}")));
+                continue;
+            }
+        };
+        let mut labels = case.labels.clone();
+        labels.insert(noise_name.clone(), noise_value.clone());
+        let payload = json!({
+            "route": route,
+            "labels": labels,
+        });
+        match context.trigger_value(FUNCTION_ID, payload).await {
+            Ok(value) => match parse_match_result(&value) {
+                Some(observed) if equivalent(&expected_result(&case), &observed) => {
+                    results.push((case.id, true, "oracle match".into()));
+                }
+                Some(observed) => results.push((
+                    case.id,
+                    false,
+                    format!(
+                        "receivers {:?} group_by {:?} group_by_all {:?}",
+                        observed.receivers, observed.group_by, observed.group_by_all
+                    ),
+                )),
+                None => results.push((case.id, false, format!("unrecognized payload {value}"))),
+            },
+            Err(error) => results.push((case.id, false, format!("{error:#}"))),
+        }
+    }
+    results
+}
+
+/// A label no route tree mentions, drawn fresh for every probe. Matching
+/// ignores it, so a real matcher answers as before while a table keyed on the
+/// frozen label sets misses.
+// ponytail: a table that drops unknown labels still passes; held-out trees
+// would close that, at the cost of a reference matcher in the runner.
+fn noise_label(oracle: &Oracle) -> (String, String) {
+    loop {
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let name = format!("x{}", &id[..12]);
+        if !oracle.trees.route_test.contains(&name) && !oracle.trees.conf_good.contains(&name) {
+            return (name, id[12..24].to_string());
+        }
+    }
+}
+
+fn expected_result(case: &OracleCase) -> MatchResult {
+    MatchResult {
+        receivers: case.receivers.clone(),
+        group_by: normalized_groups(&case.group_by),
+        group_by_all: case.group_by_all.clone(),
+    }
+}
+
+fn equivalent(expected: &MatchResult, observed: &MatchResult) -> bool {
+    expected.receivers == observed.receivers
+        && normalized_groups(&expected.group_by) == normalized_groups(&observed.group_by)
+        && expected.group_by_all == observed.group_by_all
+}
+
+fn normalized_groups(groups: &[Vec<String>]) -> Vec<Vec<String>> {
+    groups
+        .iter()
+        .map(|group| {
+            let mut labels = group.clone();
+            labels.sort();
+            labels
+        })
+        .collect()
+}
+
+fn parse_match_result(value: &Value) -> Option<MatchResult> {
+    let value = value
+        .get("result")
+        .or_else(|| value.get("output"))
+        .or_else(|| value.get("data"))
+        .unwrap_or(value);
+    if let Some(matches) = value.get("matches").and_then(Value::as_array) {
+        let mut receivers = Vec::new();
+        let mut group_by = Vec::new();
+        let mut group_by_all = Vec::new();
+        for entry in matches {
+            receivers.push(entry.get("receiver")?.as_str()?.to_string());
+            group_by.push(string_list(entry.get("group_by")?));
+            group_by_all.push(
+                entry
+                    .get("group_by_all")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            );
+        }
+        return Some(MatchResult {
+            receivers,
+            group_by: normalized_groups(&group_by),
+            group_by_all,
+        });
+    }
+    let receivers = value
+        .get("receivers")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })?;
+    let group_by = value.get("group_by").map(group_by_lists)?;
+    let group_by_all = value
+        .get("group_by_all")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_bool).collect::<Vec<_>>())
+        .unwrap_or_else(|| vec![false; receivers.len()]);
+    Some(MatchResult {
+        receivers,
+        group_by: normalized_groups(&group_by),
+        group_by_all,
+    })
+}
+
+fn group_by_lists(value: &Value) -> Vec<Vec<String>> {
+    match value {
+        Value::Array(items) if items.first().is_some_and(Value::is_array) => {
+            items.iter().map(string_list_ref).collect()
+        }
+        Value::Array(_) => vec![string_list(value)],
+        _ => Vec::new(),
+    }
+}
+
+fn string_list(value: &Value) -> Vec<String> {
+    string_list_ref(value)
+}
+
+fn string_list_ref(value: &Value) -> Vec<String> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect()
+}
+
+fn audit_content(snapshot: &Snapshot) -> Value {
+    json!({
+        "revision": {
+            "head": snapshot.head,
+            "pinned": PINNED_REVISION,
+            "reachable": snapshot.pinned_reachable,
+        },
+        "match": {
+            "registered": snapshot.function_registered,
+            "awarded": snapshot.match_awarded(),
+            "cases": snapshot.match_cases.iter().map(|(id, passed, reason)| {
+                json!({"id": id, "passed": passed, "reason": reason})
+            }).collect::<Vec<_>>(),
+        },
+        "delegation": {
+            "wired": snapshot.delegation_wired,
+            "detail": snapshot.delegation_detail,
+        },
+        "scope": {
+            "protected_unchanged": snapshot.protected_unchanged,
+        }
+    })
+}
+
+fn revision_reason(snapshot: &Snapshot) -> String {
+    if snapshot.head.as_deref() == Some(PINNED_REVISION) {
+        format!("checkout HEAD is {PINNED_REVISION}")
+    } else if snapshot.revision_pinned() {
+        format!(
+            "checkout HEAD {:?} descends from {PINNED_REVISION}",
+            snapshot.head
+        )
+    } else if !snapshot.checkout_is_repository {
+        "checkout is not a Git repository".into()
+    } else {
+        format!(
+            "pinned revision {PINNED_REVISION} is not an ancestor of HEAD {:?}",
+            snapshot.head
+        )
+    }
+}
+
+fn call_answered(passed: bool, reason: &str) -> bool {
+    passed || reason.starts_with("receivers ")
+}
+
+fn match_reason(snapshot: &Snapshot) -> String {
+    let passed = snapshot
+        .match_cases
+        .iter()
+        .filter(|(_, passed, _)| *passed)
+        .count();
+    if snapshot.match_equivalent() {
+        format!("route::match agreed on {passed} live calls")
+    } else if !snapshot.function_registered {
+        "route::match is not registered".into()
+    } else if snapshot.match_cases.is_empty() {
+        "route::match returned no cases".into()
+    } else {
+        let failures = snapshot
+            .match_cases
+            .iter()
+            .filter(|(_, passed, _)| !*passed)
+            .map(|(id, _, reason)| format!("{id}: {reason}"))
+            .collect::<Vec<_>>()
+            .join("; ");
+        format!(
+            "route::match agreed on {passed} of {} live calls; {failures}",
+            snapshot.match_cases.len()
+        )
+    }
+}
+
+fn delegation_reason(snapshot: &Snapshot) -> String {
+    snapshot.delegation_detail.clone()
+}
+
+fn scope_reason(snapshot: &Snapshot) -> String {
+    if snapshot.scope_exact() {
+        "notify/, api/, and config/testdata/ match the pinned tree".into()
+    } else {
+        "protected Alertmanager paths changed".into()
+    }
+}
+
+/// The pinned bundle is depth 1, so `merge-base --is-ancestor` cannot read the
+/// missing parent even when HEAD is that commit. Equality is pinned, and a
+/// later commit is pinned when `rev-list --ancestry-path` can see it.
+async fn revision_is_pinned(checkout: &Path, head: Option<&str>) -> bool {
+    if head == Some(PINNED_REVISION) {
+        return true;
+    }
+    git(
+        checkout,
+        &[
+            "rev-list",
+            "--ancestry-path",
+            &format!("{PINNED_REVISION}..HEAD"),
+        ],
+    )
+    .await
+    .is_ok_and(|output| output.lines().any(|line| !line.is_empty()))
+}
+
+/// Runs upstream `TestRouteMatch` against a copy of the checkout, with the
+/// test file restored to the pinned revision. Delegation is proven when the
+/// test passes with the live engine and fails when `III_URL` points at a
+/// closed port: the Go router then depends on `route::match`.
+async fn delegation_probe(context: &E2eContext, checkout: &Path) -> (bool, String) {
+    let namespace = context
+        .client()
+        .namespace()
+        .unwrap_or_else(|| "default".into());
+    delegation_probe_at(context.client().address(), &namespace, checkout).await
+}
+
+async fn delegation_probe_at(url: &str, namespace: &str, checkout: &Path) -> (bool, String) {
+    let probe = checkout.with_file_name(".delegation-probe");
+    let outcome = run_delegation_probe(url, namespace, checkout, &probe).await;
+    let _ = remove_directory(&probe);
+    match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => (false, format!("delegation probe failed: {error:#}")),
+    }
+}
+
+async fn run_delegation_probe(
+    url: &str,
+    namespace: &str,
+    checkout: &Path,
+    probe: &Path,
+) -> Result<(bool, String)> {
+    remove_directory(probe)?;
+    let copied = Command::new("cp")
+        .arg("-a")
+        .arg(checkout)
+        .arg(probe)
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .context("copy the checkout for the delegation probe")?;
+    if !copied.status.success() {
+        bail!(
+            "cp -a failed: {}",
+            String::from_utf8_lossy(&copied.stderr).trim()
+        );
+    }
+    git(
+        probe,
+        &["checkout", PINNED_REVISION, "--", "dispatch/route_test.go"],
+    )
+    .await?;
+    let live = go_route_test(probe, url, namespace).await?;
+    if !live.0 {
+        return Ok((
+            false,
+            format!("TestRouteMatch fails with the live engine: {}", live.1),
+        ));
+    }
+    let dead = go_route_test(probe, CLOSED_ENGINE_URL, namespace).await?;
+    if dead.0 {
+        return Ok((
+            false,
+            "TestRouteMatch passes without the engine, so Route.Match does not call route::match"
+                .into(),
+        ));
+    }
+    Ok((
+        true,
+        "TestRouteMatch passes with the engine and fails without it".into(),
+    ))
+}
+
+/// `go test` for upstream `TestRouteMatch`; `Ok((passed, output tail))`.
+async fn go_route_test(checkout: &Path, url: &str, namespace: &str) -> Result<(bool, String)> {
+    let output = Command::new("go")
+        .args([
+            "test",
+            "-count=1",
+            "-timeout",
+            "120s",
+            "-run",
+            "^TestRouteMatch$",
+            "./dispatch/",
+        ])
+        .current_dir(checkout)
+        .env("III_URL", url)
+        .env("III_NAMESPACE", namespace)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(GO_TEST_TIMEOUT, output)
+        .await
+        .context("go test timed out")?
+        .context("run go test")?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tail = text.lines().rev().take(5).collect::<Vec<_>>();
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+    Ok((output.status.success(), tail))
+}
+
+/// The runner needs Go to prove delegation, and the subject needs it to build
+/// Alertmanager. Refuse to start without Go 1.25, which the pinned go.mod asks
+/// for, instead of scoring the subject for a missing toolchain.
+async fn require_go_toolchain() -> Result<()> {
+    let output = Command::new("go")
+        .args(["env", "GOVERSION"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .context("Go toolchain is not on PATH; Alertmanager needs Go 1.25+")?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let minor = version
+        .strip_prefix("go1.")
+        .and_then(|rest| rest.split(['.', '-', ' ']).next())
+        .and_then(|minor| minor.parse::<u32>().ok());
+    if !output.status.success() || minor.is_none_or(|minor| minor < 25) {
+        bail!("Alertmanager needs Go 1.25+, found {version:?}");
+    }
+    Ok(())
+}
+
+/// Stop what the subject left serving: Compose containers declared from the
+/// workspace, then any process still running inside it. Only a
+/// `route::match` that outlives this is an error, so an unrelated broken
+/// Compose file does not fail the run.
+async fn stop_workspace_workers(context: &E2eContext, root: &Path) -> Result<()> {
+    let root_text = root.display().to_string();
+    for (file, container) in workspace_containers(context, &root_text).await {
+        for (function, payload) in [
+            (
+                "compose::down",
+                json!({"file": file, "container": container}),
+            ),
+            (
+                "compose::remove",
+                json!({"file": file, "worker": container}),
+            ),
+        ] {
+            let failure = match context.trigger_value(function, payload).await {
+                Ok(accepted) => compose_operation_failure(context, &accepted).await,
+                Err(error) => Some(format!("{error:#}")),
+            };
+            if let Some(failure) = failure {
+                tracing::warn!(%container, %file, "{function} during cleanup failed: {failure}");
+            }
+        }
+    }
+    kill_processes_under(root).await;
+    for _ in 0..40 {
+        if !context.function_exists(FUNCTION_ID).await.unwrap_or(true) {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    bail!("{FUNCTION_ID} is still registered after stopping the workspace workers")
+}
+
+/// `compose::remove` only accepts the operation; its outcome lands later.
+async fn compose_operation_failure(context: &E2eContext, accepted: &Value) -> Option<String> {
+    let operation_id = accepted["operation_id"].as_str()?;
+    for _ in 0..40 {
+        let Ok(operation) = context
+            .trigger_value("compose::operation", json!({"operation_id": operation_id}))
+            .await
+        else {
+            return None;
+        };
+        match operation["status"].as_str() {
+            Some("failed") => {
+                return Some(
+                    operation["last_event"]["detail"]
+                        .as_str()
+                        .unwrap_or("operation failed")
+                        .to_string(),
+                )
+            }
+            Some("accepted" | "running") => tokio::time::sleep(Duration::from_millis(250)).await,
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// Compose containers whose declaration points into the workspace.
+async fn workspace_containers(context: &E2eContext, root: &str) -> Vec<(String, String)> {
+    let Ok(listed) = context.trigger_value("compose::list", json!({})).await else {
+        return Vec::new();
+    };
+    let files = listed["projects"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|project| project["file"].as_str());
+    let mut found = Vec::new();
+    for file in files {
+        let Ok(text) = fs::read_to_string(file) else {
+            continue;
+        };
+        let Ok(compose) = serde_yaml::from_str::<serde_yaml::Value>(&text) else {
+            continue;
+        };
+        let Some(containers) = compose.get("containers").and_then(|c| c.as_mapping()) else {
+            continue;
+        };
+        for (name, declaration) in containers {
+            let points_inside = serde_yaml::to_string(declaration)
+                .is_ok_and(|declaration| declaration.contains(root));
+            if let (true, Some(name)) = (points_inside, name.as_str()) {
+                found.push((file.to_string(), name.to_string()));
+            }
+        }
+    }
+    found
+}
+
+/// SIGTERM every process whose working directory is inside the workspace.
+async fn kill_processes_under(root: &Path) {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return;
+    };
+    let pids = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|pid| pid.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|pid| {
+            fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd.starts_with(root))
+        })
+        .collect::<Vec<_>>();
+    if pids.is_empty() {
+        return;
+    }
+    let _ = Command::new("kill")
+        .arg("-TERM")
+        .args(&pids)
+        .stdin(Stdio::null())
+        .output()
+        .await;
+}
+
+async fn git_diff_empty(cwd: &Path, revision: &str, extra: &[&str]) -> bool {
+    let mut args = vec!["diff", "--quiet", revision];
+    args.extend(extra.iter().copied());
+    git_succeeds(cwd, &args).await
+}
+
+async fn git_optional(cwd: &Path, args: &[&str]) -> Option<String> {
+    git(cwd, args).await.ok()
+}
+
+async fn git_succeeds(cwd: &Path, args: &[&str]) -> bool {
+    git(cwd, args).await.is_ok()
+}
+
+async fn git(cwd: &Path, args: &[&str]) -> Result<String> {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .env("GIT_CONFIG_GLOBAL", OsStr::new("/dev/null"))
+        .env("GIT_CONFIG_SYSTEM", OsStr::new("/dev/null"))
+        .env("GIT_TERMINAL_PROMPT", OsStr::new("0"))
+        .stdin(Stdio::null())
+        .output();
+    let output = tokio::time::timeout(GIT_TIMEOUT, output)
+        .await
+        .with_context(|| format!("git {} timed out", args.join(" ")))?
+        .with_context(|| format!("run git {} in {}", args.join(" "), cwd.display()))?;
+    if !output.status.success() {
+        bail!(
+            "git {} failed in {}: {}",
+            args.join(" "),
+            cwd.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8(output.stdout)?.trim().to_string())
+}
+
+fn write_exact(path: &Path, bytes: &[u8]) -> Result<()> {
+    if path.exists() {
+        let existing = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+        if existing != bytes {
+            bail!(
+                "refuse to replace unexpected fixture file {}",
+                path.display()
+            );
+        }
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    }
+    fs::write(path, bytes).with_context(|| format!("write {}", path.display()))
+}
+
+fn remove_directory(path: &Path) -> Result<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error).with_context(|| format!("remove {}", path.display())),
+    }
+}
+
+fn workspace_root(run_id: &str) -> PathBuf {
+    let base = std::env::var_os("HARNESS_E2E_RUN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    let base = fs::canonicalize(&base).unwrap_or(base);
+    base.join("scenario-workspaces")
+        .join(format!("{ID}-{run_id}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::scenarios::{ScenarioId, ScenarioObservation};
+
+    fn valid_snapshot() -> Snapshot {
+        Snapshot {
+            checkout_is_repository: true,
+            head: Some(PINNED_REVISION.to_string()),
+            pinned_reachable: true,
+            protected_unchanged: true,
+            delegation_wired: true,
+            delegation_detail: "probe passed".into(),
+            function_registered: true,
+            match_cases: vec![(
+                "route_test_owner-team-A".into(),
+                true,
+                "oracle match".into(),
+            )],
+        }
+    }
+
+    #[test]
+    fn scenario_and_materialization_validate() {
+        AlertmanagerRouteMatch
+            .spec("alertmanager-route-test")
+            .validate()
+            .unwrap();
+        ScenarioId::AlertmanagerRouteMatch
+            .materialize("alertmanager-route-test", CANONICAL_SEED)
+            .unwrap()
+            .validate()
+            .unwrap();
+    }
+
+    #[test]
+    fn prompt_states_pinned_clone_and_route_match_contract() {
+        let spec = AlertmanagerRouteMatch.spec("attempt");
+        assert!(spec.prompt.contains("prometheus/alertmanager"));
+        assert!(spec.prompt.contains(FUNCTION_ID));
+        assert!(spec.prompt.contains("dispatch.Route.Match"));
+        assert!(spec
+            .prompt
+            .contains("calling `route::match` on the iii stack"));
+        assert!(spec.prompt.contains("does not start Alertmanager"));
+        assert!(spec
+            .prompt
+            .contains("go test -run '^TestRouteMatch$' ./dispatch/"));
+        assert!(spec.prompt.contains("`III_URL`"));
+        assert!(spec.prompt.contains("`III_NAMESPACE`"));
+        assert!(spec.prompt.contains("do not fetch another"));
+        assert!(spec.prompt.contains("input/repository.bundle"));
+        assert_eq!(spec.criteria.iter().map(|c| c.weight).sum::<u8>(), 100);
+        assert_eq!(
+            spec.criteria.iter().map(|c| c.id).collect::<Vec<_>>(),
+            vec![
+                "revision_pinned",
+                "match_equivalent",
+                "delegation_wired",
+                "scope_exact"
+            ]
+        );
+    }
+
+    #[test]
+    fn public_manifest_matches_embedded_bundle() {
+        validate_public_manifest().unwrap();
+        let case = ScenarioId::AlertmanagerRouteMatch
+            .materialize("alertmanager-route-test", CANONICAL_SEED)
+            .unwrap()
+            .case;
+        assert_eq!(case.inputs["fixture_revision"], json!(PINNED_REVISION));
+        assert_eq!(
+            case.inputs["bundle_sha256"],
+            json!(sha256_bytes(BUNDLE_BYTES))
+        );
+        assert_eq!(case.inputs["oracle_cases"], json!(18));
+        assert_eq!(
+            case.characterization.realism.execution,
+            ExecutionRealism::FrozenRealArtifact
+        );
+        assert_eq!(case.characterization.human_horizon.min_minutes, Some(180));
+    }
+
+    #[test]
+    fn oracle_covers_route_test_and_conf_good() {
+        let oracle = oracle().unwrap();
+        assert!(oracle.trees.route_test.contains("notify-productionA"));
+        assert!(oracle.trees.conf_good.contains("team-DB-pager"));
+        let production = oracle
+            .cases
+            .iter()
+            .find(|case| case.id == "route_test_owner-team-A_env-production")
+            .unwrap();
+        assert_eq!(
+            production.receivers,
+            vec!["notify-productionA", "notify-productionB"]
+        );
+        let continued = oracle
+            .cases
+            .iter()
+            .find(|case| case.id == "service_database_continue")
+            .unwrap();
+        assert_eq!(continued.receivers, vec!["team-X-pager", "team-Y-pager"]);
+        assert_eq!(oracle.cases.len(), 18);
+    }
+
+    #[test]
+    fn match_parser_accepts_matches_array_and_sorted_group_by() {
+        let parsed = parse_match_result(&json!({
+            "matches": [
+                {"receiver": "notify-BC", "group_by": ["bar", "foo"], "group_by_all": false}
+            ]
+        }))
+        .unwrap();
+        assert!(equivalent(
+            &MatchResult {
+                receivers: vec!["notify-BC".into()],
+                group_by: vec![vec!["foo".into(), "bar".into()]],
+                group_by_all: vec![false],
+            },
+            &parsed
+        ));
+    }
+
+    #[test]
+    fn live_calls_score_partially_and_scope_stays_separate() {
+        let mut snapshot = valid_snapshot();
+        assert!(snapshot.match_equivalent());
+        assert_eq!(snapshot.match_awarded(), MATCH_EQUIVALENT.weight());
+        assert!(snapshot.scope_exact());
+        snapshot.match_cases.push((
+            "service_database_continue".into(),
+            false,
+            "receivers [\"team-X-pager\"]".into(),
+        ));
+        assert!(!snapshot.match_equivalent());
+        assert!(snapshot.task_completed());
+        assert_eq!(snapshot.match_awarded(), 35);
+        assert!(match_reason(&snapshot).contains("1 of 2 live calls"));
+        snapshot.match_cases = vec![(
+            "service_database_continue".into(),
+            false,
+            "receivers [\"team-X-pager\"]".into(),
+        )];
+        assert!(snapshot.task_completed());
+        snapshot.delegation_wired = false;
+        assert!(!snapshot.task_completed());
+        snapshot.delegation_wired = true;
+        assert_eq!(snapshot.match_awarded(), 0);
+        snapshot.match_cases = vec![(
+            "route_test_owner-team-A".into(),
+            false,
+            "trigger failed".into(),
+        )];
+        assert!(!snapshot.task_completed());
+        snapshot.function_registered = false;
+        assert_eq!(snapshot.match_awarded(), 0);
+        assert!(match_reason(&snapshot).contains("not registered"));
+        snapshot.function_registered = true;
+        snapshot.protected_unchanged = false;
+        assert!(!snapshot.scope_exact());
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the local iii engine at ws://127.0.0.1:49134 in namespace my-project"]
+    async fn live_oracle_function_scores_on_the_running_engine() {
+        std::env::set_var("III_NAMESPACE", "my-project");
+        let context = E2eContext::connect("ws://127.0.0.1:49134")
+            .await
+            .expect("connect to the local iii engine");
+        let run_id = "live-alertmanager-probe";
+        let root = workspace_root(run_id);
+        let _ = remove_directory(&root);
+        AlertmanagerRouteMatch
+            .setup(&context, run_id)
+            .await
+            .expect("prepare the bundle workspace");
+        validate_bundle(
+            &root.join(BUNDLE_RELATIVE_PATH),
+            &root.join(CHECKOUT_RELATIVE_PATH),
+        )
+        .await
+        .expect("clone the pinned bundle into checkout");
+        require_engine_in_route_match(&root.join(CHECKOUT_RELATIVE_PATH));
+        context.client().register_function(
+            FUNCTION_ID,
+            iii_sdk::RegisterFunction::new_async(|payload: Value| async move {
+                Ok::<Value, iii_sdk::errors::Error>(
+                    oracle_answer(&payload).unwrap_or_else(|| json!({ "error": "no oracle case" })),
+                )
+            })
+            .description("Live probe: route::match answers from the frozen oracle."),
+        );
+        let ready = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if context.function_exists(FUNCTION_ID).await.unwrap_or(false) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        assert!(ready.is_ok(), "route::match did not register on the engine");
+        let snapshot = collect_snapshot(&context, &root)
+            .await
+            .expect("score the live calls");
+        let evaluation = AlertmanagerRouteMatch
+            .evaluate(
+                &context,
+                &ScenarioObservation {
+                    case: ScenarioId::AlertmanagerRouteMatch
+                        .materialize(run_id, CANONICAL_SEED)
+                        .unwrap()
+                        .case,
+                    metrics: crate::wire::SessionMetricsResponse::from_normalized(
+                        crate::wire::SessionMetricsPayload {
+                            root_session_id: run_id.into(),
+                            complete: true,
+                            totals: Default::default(),
+                            by_session: Vec::new(),
+                            traces: None,
+                        },
+                    ),
+                    transcript: Value::Null,
+                    response: String::new(),
+                    deliverables: Vec::new(),
+                },
+                run_id,
+            )
+            .await
+            .expect("evaluate");
+        let _ = remove_directory(&root);
+        context.shutdown().await;
+        assert!(
+            snapshot.task_completed(),
+            "task incomplete: {}",
+            match_reason(&snapshot)
+        );
+        assert_eq!(
+            snapshot.match_awarded(),
+            MATCH_EQUIVALENT.weight(),
+            "{}",
+            match_reason(&snapshot)
+        );
+        assert!(snapshot.revision_pinned(), "{}", revision_reason(&snapshot));
+        assert!(snapshot.scope_exact(), "{}", scope_reason(&snapshot));
+        assert!(
+            snapshot.delegation_wired,
+            "{}",
+            delegation_reason(&snapshot)
+        );
+        assert_eq!(
+            evaluation.completion,
+            crate::report::CompletionState::Completed
+        );
+        let match_award = evaluation
+            .awards
+            .iter()
+            .find(|award| award.id == "match_equivalent")
+            .expect("match award");
+        assert_eq!(match_award.awarded, Some(MATCH_EQUIVALENT.weight()));
+    }
+
+    #[test]
+    fn noise_label_is_fresh_and_absent_from_the_trees() {
+        let oracle = oracle().unwrap();
+        let (name, value) = noise_label(&oracle);
+        assert!(!oracle.trees.route_test.contains(&name));
+        assert!(!oracle.trees.conf_good.contains(&name));
+        assert_eq!(value.len(), 12);
+        assert_ne!(noise_label(&oracle).0, name);
+        let mut labels = oracle.cases[4].labels.clone();
+        labels.insert(name, value);
+        let answer = oracle_answer(&json!({
+            "route": oracle.trees.route_test,
+            "labels": labels,
+        }))
+        .unwrap();
+        assert_eq!(answer["receivers"], json!(oracle.cases[4].receivers));
+    }
+
+    /// Makes `Route.Match` refuse to run unless `III_URL` accepts a TCP
+    /// connection: the smallest router that depends on the engine.
+    fn require_engine_in_route_match(checkout: &Path) {
+        fs::write(
+            checkout.join("dispatch/zz_e2e_engine.go"),
+            "package dispatch\n\nimport (\n\t\"net\"\n\t\"os\"\n\t\"strings\"\n)\n\n\
+             func e2eRequireEngine() {\n\tc, err := net.Dial(\"tcp\", \
+             strings.TrimPrefix(os.Getenv(\"III_URL\"), \"ws://\"))\n\
+             \tif err != nil {\n\t\tpanic(err)\n\t}\n\tc.Close()\n}\n",
+        )
+        .unwrap();
+        let route_go = checkout.join("dispatch/route.go");
+        let signature = "func (r *Route) Match(lset model.LabelSet) []*Route {";
+        let source = fs::read_to_string(&route_go).unwrap();
+        assert!(source.contains(signature));
+        fs::write(
+            &route_go,
+            source.replace(signature, &format!("{signature}\n\te2eRequireEngine()")),
+        )
+        .unwrap();
+    }
+
+    /// Needs Go 1.25+ on PATH, as CI and the exact-stack runners provide.
+    #[tokio::test]
+    async fn delegation_probe_tells_a_wired_router_from_the_pinned_one() {
+        require_go_toolchain().await.unwrap();
+        let engine = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", engine.local_addr().unwrap());
+        let temporary = tempfile::tempdir().unwrap();
+        let bundle = temporary.path().join("repository.bundle");
+        fs::write(&bundle, BUNDLE_BYTES).unwrap();
+        let checkout = temporary.path().join("checkout");
+        validate_bundle(&bundle, &checkout).await.unwrap();
+        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
+        assert!(!wired, "the pinned router must not count: {detail}");
+        assert!(detail.contains("passes without the engine"), "{detail}");
+        require_engine_in_route_match(&checkout);
+        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
+        assert!(wired, "{detail}");
+        assert!(!temporary.path().join(".delegation-probe").exists());
+    }
+
+    #[tokio::test]
+    async fn cleanup_stops_processes_inside_the_workspace() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .current_dir(temporary.path())
+            .spawn()
+            .unwrap();
+        kill_processes_under(temporary.path()).await;
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("the workspace process stopped")
+            .unwrap();
+        assert!(!status.success());
+    }
+
+    #[tokio::test]
+    async fn embedded_bundle_head_is_the_pinned_revision() {
+        let temporary = tempfile::tempdir().unwrap();
+        let bundle = temporary.path().join("repository.bundle");
+        fs::write(&bundle, BUNDLE_BYTES).unwrap();
+        let checkout = temporary.path().join("checkout");
+        validate_bundle(&bundle, &checkout).await.unwrap();
+        let head = git(&checkout, &["rev-parse", "HEAD"]).await.unwrap();
+        assert_eq!(head, PINNED_REVISION);
+        assert!(revision_is_pinned(&checkout, Some(&head)).await);
+        git(
+            &checkout,
+            &[
+                "-c",
+                "user.email=probe@example.com",
+                "-c",
+                "user.name=probe",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "descendant",
+            ],
+        )
+        .await
+        .unwrap();
+        let descendant = git(&checkout, &["rev-parse", "HEAD"]).await.unwrap();
+        assert_ne!(descendant, PINNED_REVISION);
+        assert!(revision_is_pinned(&checkout, Some(&descendant)).await);
+    }
+}

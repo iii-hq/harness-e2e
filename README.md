@@ -138,7 +138,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Profile | Purpose |
 | --- | --- |
 | `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
-| `software-engineering` | Kanban, Registry delivery, the trending-topics blog and Linkly. |
+| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Linkly and Alertmanager route migration. |
 | `pr` | Four essential checks of a candidate stack before merging a change. |
 | `after-release` | Five essential checks of the published stack. |
 
@@ -156,13 +156,15 @@ cargo run --locked -- test-plan materialize --profile software-engineering
 
 The `software-engineering` profile runs each selected case once, with no
 technical retries: the seven Kanban cases, Registry implementation and verification,
-the trending-topics build, and the Linkly tutorial. That is 11 cases and 11
-planned runs, in 10 execution groups. Registry implementation and verification
-share a group, in that order, so verification receives the implementation
-delivery. Trending topics runs in `case-trending-topics-build`. Linkly runs
-its eight exchanges in `case-linkly-tutorial`. The executor creates a fresh
-pinned `linkly-agentic` scaffold as that group's Compose project, with
-baseline worker versions taken from the resolved stack contract.
+the trending-topics build, the Linkly tutorial, and Alertmanager route migration.
+That is 12 cases and 12 planned runs, in 11 execution groups. Registry
+implementation and verification share a group, in that order, so verification
+receives the implementation delivery. Trending topics runs in
+`case-trending-topics-build`. Linkly runs its eight exchanges in
+`case-linkly-tutorial`, using a fresh pinned `linkly-agentic` scaffold as its
+Compose project. Baseline worker versions come from the resolved stack contract.
+Alertmanager runs in its own group, needs Go 1.25+, and has no turn or token
+ceiling.
 
 ## Release Control
 
