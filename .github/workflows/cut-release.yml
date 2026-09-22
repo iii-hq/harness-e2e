@@ -1,13 +1,11 @@
 name: Cut a harness-e2e release
 
-run-name: Cut ${{ inputs.bump }} release (${{ inputs.channel }})
+run-name: Cut ${{ inputs.bump }} release
 
-# Cutting a release is three things: a version, a branch carrying the release
-# machinery main deliberately does not keep, and a tag. This workflow does all
-# three and then stops: the tag's push runs `release.yml`, which builds the
-# binaries, creates the prerelease and publishes the Registry candidate to
-# `next`. Moving `latest` stays a separate, human-dispatched decision in
-# `promote-latest.yml`.
+# A release is a version and a tag on main. This workflow writes the next
+# version into Cargo.toml and Cargo.lock, commits that on main, tags the commit
+# and pushes the tag last: the tag push runs release.yml, which builds, publishes
+# the Registry candidate to `next` and promotes it to `latest`.
 on:
   workflow_dispatch:
     inputs:
@@ -19,16 +17,8 @@ on:
           - patch
           - minor
           - major
-      channel:
-        description: Release channel for the new version
-        required: true
-        default: experimental
-        type: choice
-        options:
-          - experimental
-          - stable
       expected_current_version:
-        description: Newest release today, e.g. 0.11.12-experimental (blank to skip the check)
+        description: Newest release today, e.g. 0.11.19-experimental (blank to skip the check)
         required: false
         default: ''
         type: string
@@ -44,14 +34,13 @@ concurrency:
 
 jobs:
   cut:
-    name: Resolve the version and tag the release tree
+    name: Stamp the version and tag main
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     environment: harness-e2e-trusted
     steps:
       # A token the default GITHUB_TOKEN cannot replace: a tag pushed with
-      # GITHUB_TOKEN starts no workflow run, so `release.yml` would never see
-      # it and the cut would publish nothing.
+      # GITHUB_TOKEN starts no workflow run, so release.yml would never see it.
       - name: Mint the release-tagging token
         id: tagger
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
@@ -73,55 +62,20 @@ jobs:
         id: version
         env:
           BUMP: ${{ inputs.bump }}
-          CHANNEL: ${{ inputs.channel }}
           EXPECTED_CURRENT: ${{ inputs.expected_current_version }}
         run: |
           set -euo pipefail
           python3 scripts/cut_release.py resolve \
             --bump "$BUMP" \
-            --channel "$CHANNEL" \
             --expected-current "$EXPECTED_CURRENT" \
             --github-output "$GITHUB_OUTPUT"
 
-      - name: Replay the previous release commit
-        env:
-          SOURCE_COMMIT: ${{ steps.version.outputs.source_commit }}
-        run: |
-          set -euo pipefail
-          test -n "$SOURCE_COMMIT" || {
-            echo "::error::No previous release to take the machinery from; cut the first one by hand"
-            exit 1
-          }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git switch -c "${{ steps.version.outputs.branch }}"
-          # The machinery evolves on release branches, so the previous release
-          # is its only source. A conflict means main moved under it: stop and
-          # let a human reconcile rather than tagging a tree nobody reviewed.
-          git cherry-pick -n "$SOURCE_COMMIT" || {
-            echo "::error::Replaying $SOURCE_COMMIT conflicts with main; reconcile the release machinery by hand"
-            exit 1
-          }
-          # `-n` leaves sequencer state behind only on some paths; clear it so
-          # the later commit is an ordinary one.
-          git cherry-pick --quit 2>/dev/null || true
-
-      - name: Stamp the new version over the replayed one
+      - name: Stamp the version into the manifest and the lock
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           python3 scripts/cut_release.py set-version --version "$VERSION"
-
-      - name: Verify the release tree before tagging
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          test -f .github/workflows/release.yml || {
-            echo "::error::The replayed commit carried no release.yml; nothing would run on the tag"
-            exit 1
-          }
           python3 -m py_compile scripts/release_worker.py
           # The tag, the manifest and the lock must agree: release.yml refuses
           # a tag whose Cargo.toml disagrees, and `cargo build --locked` there
@@ -147,13 +101,14 @@ jobs:
         env:
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
-          BRANCH: ${{ steps.version.outputs.branch }}
         run: |
           set -euo pipefail
-          git add -A
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add Cargo.toml Cargo.lock
           git commit -m "Release harness-e2e $VERSION"
           git tag -a "$TAG" -m "harness-e2e $VERSION"
-          git push origin "$BRANCH"
+          git push origin HEAD:main
           # Pushed last and on its own: this is what starts release.yml.
           git push origin "refs/tags/$TAG"
 
@@ -162,7 +117,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           CURRENT: ${{ steps.version.outputs.current_version }}
           TAG: ${{ steps.version.outputs.tag }}
-          BRANCH: ${{ steps.version.outputs.branch }}
         run: |
           {
             echo "### Cut \`$VERSION\`"
@@ -172,13 +126,7 @@ jobs:
             echo "| previous release | \`$CURRENT\` |"
             echo "| new version | \`$VERSION\` |"
             echo "| tag | \`$TAG\` |"
-            echo "| branch | \`$BRANCH\` |"
             echo
-            echo "\`release.yml\` is now building this tag: binaries for five targets, the"
-            echo "GitHub prerelease, and the Registry candidate on \`next\`."
-            echo
-            echo "Registry \`latest\` has **not** moved. To promote, dispatch"
-            echo "\`promote-latest.yml\` with \`version=$VERSION\`,"
-            echo "\`expected_next_version=$VERSION\`, \`expected_latest_version=$CURRENT\`,"
-            echo "and the run id and attempt of the \`release.yml\` run this tag started."
+            echo "\`release.yml\` is now building this tag: binaries, the GitHub release,"
+            echo "the Registry candidate on \`next\` and its promotion to \`latest\`."
           } >>"$GITHUB_STEP_SUMMARY"

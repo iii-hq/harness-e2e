@@ -572,7 +572,12 @@ fn inspection_routing(
     } else if matches!(
         function_id,
         "engine::health::check" | "engine::workers::list" | "engine::triggers::list"
-    ) {
+    ) || function_id.starts_with("engine::traces::")
+        || function_id.starts_with("stream::")
+    {
+        // iii-observability and iii-stream register only in `default`, and stream
+        // items are not scoped by the caller's namespace, so this reads what a
+        // worker in the case namespace wrote.
         ("default".into(), payload)
     } else {
         (namespace, payload)
@@ -821,6 +826,9 @@ mod tests {
             "engine::health::check",
             "engine::workers::list",
             "engine::triggers::list",
+            "engine::traces::list",
+            "engine::traces::tree",
+            "stream::list",
         ] {
             assert_eq!(
                 inspection_routing(function, Some("isolated-test".into()), json!({})),
@@ -839,6 +847,14 @@ mod tests {
         }
         assert_eq!(
             inspection_routing("harness::send", Some("isolated-test".into()), json!({})),
+            ("isolated-test".into(), json!({}))
+        );
+        assert_eq!(
+            inspection_routing(
+                "engine::queue::list_topics",
+                Some("isolated-test".into()),
+                json!({})
+            ),
             ("isolated-test".into(), json!({}))
         );
         assert_eq!(

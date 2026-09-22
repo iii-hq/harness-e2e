@@ -157,6 +157,12 @@ pub trait Scenario: Send + Sync {
     async fn cleanup(&self, _context: &E2eContext, _run_id: &str) -> Result<()> {
         Ok(())
     }
+    /// Whether a subject that failed or was stopped by a resource limit is still
+    /// evaluated from what it left behind, instead of reporting no criteria.
+    /// The evaluator sees `metrics.complete == false`.
+    fn evaluates_failed_subjects(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Clone)]

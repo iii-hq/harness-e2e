@@ -433,6 +433,19 @@ def with_fixture(template: dict[str, Any], fixture: dict[str, Any]) -> dict[str,
     return result
 
 
+def scoped_config_name(namespace: str, name: str) -> str:
+    """A configuration id both Compose and the engine accept.
+
+    `<namespace>-<name>` when it fits their 64-character limit; otherwise the
+    readable prefix with a stable digest, because Compose refuses to generate
+    a truncated name and the engine refuses a longer id.
+    """
+    candidate = f"{namespace}-{name}"
+    if len(candidate) <= 64:
+        return candidate
+    digest = hashlib.sha256(candidate.encode()).hexdigest()[:8]
+    return f"{candidate[:55].rstrip('-')}-{digest}"
+
 def project_scaffold(
     contract: dict[str, Any],
     namespace: str,
@@ -524,15 +537,20 @@ def project_scaffold(
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
-            container["config_name"] = f"{namespace}-harness-e2e"
+            container["config_name"] = scoped_config_name(namespace, "harness-e2e")
             container["config_override"] = {
                 "data_dir": str(data_dir),
                 "control_database": "primary",
                 "control_namespace": namespace,
             }
         elif worker == APPLICATION and harness_override:
-            container["config_name"] = f"{namespace}-harness"
+            container["config_name"] = scoped_config_name(namespace, "harness")
             container.setdefault("config_override", {}).update(harness_override)
+        # Compose 0.24.2 derives `<namespace>-<container>` for the rest and
+        # refuses to start when that exceeds 64 characters, which a long group
+        # id reaches: only then name the container ourselves.
+        if "config_name" not in container and len(f"{namespace}-{name}") > 64:
+            container["config_name"] = scoped_config_name(namespace, name)
     if profile_root is not None:
         if not profile_root.is_absolute():
             raise ValueError("profile root must be absolute")
@@ -543,7 +561,7 @@ def project_scaffold(
             }
             package_names["iii-directory"] = ["iii-directory"]
         for name in package_names["iii-directory"]:
-            containers[name]["config_name"] = f"{namespace}-directory"
+            containers[name]["config_name"] = scoped_config_name(namespace, "directory")
             containers[name].setdefault("config_override", {}).update({
                 "auto_download": False,
                 "skills_folder": str(profile_root / ".iii/registry-skills"),

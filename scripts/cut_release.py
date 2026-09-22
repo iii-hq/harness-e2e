@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
 """Choose the next release version and stamp it into the release tree.
 
-Cutting a release in this repository means three things: a version, a branch
-that carries the release machinery main deliberately does not keep, and a tag
-whose push runs `release.yml`.  This script owns the first and the third, and
-the caller replays the previous release commit for the second — the machinery
-evolves on release branches, so the previous release is its only source.
+Cutting a release is a version and a tag: this script picks the version from
+the release tags and writes it into `Cargo.toml` and `Cargo.lock`; the caller
+commits that on main and pushes the tag whose push runs `release.yml`.
 
-The version is derived from the tags, never from `Cargo.toml`: main's manifest
-tracks no release (it sat at 0.8.1-experimental while 0.11.x shipped), so the
-tags are the only record of what has been published.
+The version is derived from the tags, never from `Cargo.toml`: the tags are
+the record of what has been published, and the manifest only catches up when
+a release is cut. Versions are plain semver. Older tags carry an
+`-experimental` suffix and still order correctly, but no new one gets it.
 """
 
 from __future__ import annotations
@@ -25,14 +24,13 @@ from typing import Iterable, NamedTuple
 WORKER_NAME = "harness-e2e"
 TAG_PREFIX = f"{WORKER_NAME}/v"
 EXPERIMENTAL = "experimental"
-#: Mirrors release_worker.TAG_RE: a release is MAJOR.MINOR.PATCH, optionally
-#: on the experimental channel.
+#: Mirrors release_worker.TAG_RE: MAJOR.MINOR.PATCH, with the legacy suffix
+#: accepted so the existing tags keep parsing.
 VERSION_RE = re.compile(
     r"^(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
     rf"(?P<channel>-{EXPERIMENTAL})?$"
 )
 BUMPS = ("patch", "minor", "major")
-CHANNELS = (EXPERIMENTAL, "stable")
 
 
 class Version(NamedTuple):
@@ -49,22 +47,16 @@ class Version(NamedTuple):
     def tag(self) -> str:
         return f"{TAG_PREFIX}{self}"
 
-    @property
-    def branch(self) -> str:
-        return f"release/{WORKER_NAME}-v{self}"
-
     def order(self) -> tuple[int, int, int, int]:
         # Semver orders a prerelease below the release that carries the same
-        # core, so a stable 0.11.11 outranks 0.11.11-experimental.
+        # core, so a stable 0.11.19 outranks 0.11.19-experimental.
         return (self.major, self.minor, self.patch, 0 if self.experimental else 1)
 
 
 def parse_version(value: str) -> Version:
-    match = VERSION_RE.fullmatch(value.strip())
-    if not match:
-        raise ValueError(
-            f"{value!r} is not MAJOR.MINOR.PATCH with an optional -{EXPERIMENTAL} suffix"
-        )
+    match = VERSION_RE.fullmatch(value)
+    if match is None:
+        raise ValueError(f"not a release version: {value!r}")
     return Version(
         int(match.group("major")),
         int(match.group("minor")),
@@ -88,24 +80,21 @@ def latest_version(tags: Iterable[str]) -> Version | None:
     return max(versions, key=Version.order) if versions else None
 
 
-def next_version(current: Version | None, bump: str, channel: str) -> Version:
+def next_version(current: Version | None, bump: str) -> Version:
     if bump not in BUMPS:
         raise ValueError(f"bump must be one of {', '.join(BUMPS)}")
-    if channel not in CHANNELS:
-        raise ValueError(f"channel must be one of {', '.join(CHANNELS)}")
-    experimental = channel == EXPERIMENTAL
     if current is None:
         # No release has ever been tagged; a first cut starts the line rather
         # than failing, and the bump still says where.
         first = {"patch": (0, 0, 1), "minor": (0, 1, 0), "major": (1, 0, 0)}[bump]
-        return Version(*first, experimental)
+        return Version(*first, False)
     if bump == "patch":
         core = (current.major, current.minor, current.patch + 1)
     elif bump == "minor":
         core = (current.major, current.minor + 1, 0)
     else:
         core = (current.major + 1, 0, 0)
-    return Version(*core, experimental)
+    return Version(*core, False)
 
 
 def set_cargo_toml_version(text: str, version: str) -> str:
@@ -136,7 +125,7 @@ def set_cargo_lock_version(text: str, version: str) -> str:
 
 def git(*args: str, root: pathlib.Path) -> str:
     return subprocess.run(
-        ["git", "-C", str(root), *args], check=True, capture_output=True, text=True
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True
     ).stdout.strip()
 
 
@@ -156,17 +145,13 @@ def command_resolve(args: argparse.Namespace) -> int:
                 f"expected current release {expected}, but the tags say "
                 f"{current if current else 'none'}"
             )
-    upcoming = next_version(current, args.bump, args.channel)
+    upcoming = next_version(current, args.bump)
     if upcoming.tag in tags:
         raise SystemExit(f"{upcoming.tag} already exists")
-    source_tag = current.tag if current else ""
     payload = {
         "current_version": str(current) if current else "",
         "version": str(upcoming),
         "tag": upcoming.tag,
-        "branch": upcoming.branch,
-        "source_tag": source_tag,
-        "source_commit": git("rev-list", "-n", "1", source_tag, root=root) if source_tag else "",
     }
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as handle:
@@ -178,17 +163,19 @@ def command_resolve(args: argparse.Namespace) -> int:
 
 
 def command_set_version(args: argparse.Namespace) -> int:
-    version = str(parse_version(args.version))
-    manifest = args.root / "Cargo.toml"
-    lock = args.root / "Cargo.lock"
+    parse_version(args.version)
+    root = args.root
+    manifest = root / "Cargo.toml"
+    lock = root / "Cargo.lock"
     manifest.write_text(
-        set_cargo_toml_version(manifest.read_text(encoding="utf-8"), version),
+        set_cargo_toml_version(manifest.read_text(encoding="utf-8"), args.version),
         encoding="utf-8",
     )
     lock.write_text(
-        set_cargo_lock_version(lock.read_text(encoding="utf-8"), version), encoding="utf-8"
+        set_cargo_lock_version(lock.read_text(encoding="utf-8"), args.version),
+        encoding="utf-8",
     )
-    print(f"stamped {version} into Cargo.toml and Cargo.lock")
+    print(f"stamped {args.version} into Cargo.toml and Cargo.lock")
     return 0
 
 
@@ -199,7 +186,6 @@ def main(argv: list[str] | None = None) -> int:
 
     resolve = sub.add_parser("resolve", help="choose the next version from the tags")
     resolve.add_argument("--bump", required=True, choices=BUMPS)
-    resolve.add_argument("--channel", default=EXPERIMENTAL, choices=CHANNELS)
     resolve.add_argument(
         "--expected-current",
         default="",

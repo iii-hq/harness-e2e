@@ -274,12 +274,28 @@ async function json(response) {
   return body
 }
 
-async function pageFor(browser, baseUrl, viewport = { width: 1280, height: 900 }) {
+async function newPage(browser, viewport = { width: 1280, height: 900 }) {
   const context = await browser.newContext({ viewport })
   const page = await context.newPage()
   page.setDefaultTimeout(8_000)
-  await page.goto(baseUrl)
   return { context, page }
+}
+
+async function pageFor(browser, baseUrl, viewport) {
+  const session = await newPage(browser, viewport)
+  await session.page.goto(baseUrl)
+  return session
+}
+
+// A live session counts only once its event stream is open: a subject that
+// subscribes after the first board fetch must not lose the race against the
+// direct iii mutation the probe fires right after opening the sessions.
+export async function openLiveSession(page, baseUrl, timeout = 8_000) {
+  const stream = page.waitForResponse((response) => new URL(response.url()).pathname === '/api/events', { timeout })
+    .catch(() => { throw new Error('session did not open the live event stream') })
+  await page.goto(baseUrl)
+  await stream
+  return page
 }
 
 // Subjects choose their own ticket route, so reach details through the board
@@ -342,15 +358,24 @@ export function ticketCard(page, ticket) {
 export async function ticketDetail(page, ticket) {
   const action = page.getByRole('button', { name: /^delete ticket$/i }).filter({ visible: true })
   await action.waitFor({ state: 'visible', timeout: 8_000 })
-  // Start at the detail action, never at a title that may also exist on a card.
-  const heading = './/*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 or @role="heading"]'
-  // Skip the action header, but never jump to an outer landmark shared with cards.
-  const detail = action.locator(`xpath=ancestor::*[not(self::header or self::nav or self::footer) and ${heading}][1]`)
   const name = new RegExp(`^(?:${literalPattern(ticket.key)}\\s*[·:—–-]\\s*)?${literalPattern(ticket.title)}$`)
+  const title = page.getByRole('heading', { name }).filter({ visible: true })
+  // Start at the detail action, never at a title that may also exist on a card, and
+  // take the innermost ancestor that also holds the title: the title may sit above
+  // the block carrying the action, but never in a landmark shared with cards.
+  const detail = action
+    .locator('xpath=ancestor::*[not(self::header or self::nav or self::footer or self::body or self::html)]')
+    .filter({ has: title }).last()
   await eventually(async () => await action.count() === 1 && await detail.count() === 1
     && await detail.getByRole('heading', { name }).count() === 1,
   'ticket details are unavailable or show the wrong ticket')
-  return detail
+  // Pin the resolved region structurally so a later title edit cannot detach it.
+  const depth = await action.evaluate((button, scope) => {
+    let levels = 1
+    for (let node = button.parentElement; node !== scope; node = node.parentElement) levels++
+    return levels
+  }, await detail.elementHandle())
+  return action.locator(`xpath=ancestor::*[${depth}]`)
 }
 
 export async function holdResponse(page, pattern, method) {
@@ -1113,7 +1138,7 @@ export const PROBES = {
     })
     await check('discussion_comments_replies_timeline', async () => {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
-      stage('discussion_comments')
+      stage('discussion_post')
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
       await page.getByLabel('Your name').fill('Alice')
@@ -1121,6 +1146,7 @@ export const PROBES = {
       await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       const safeComment = page.getByText('<img src=x onerror=alert(1)> first', { exact: true })
       await expectText(safeComment, /first/)
+      stage('discussion_comments')
       expect(await safeComment.isVisible() && await page.locator('img[src="x"]').count() === 0, 'comment body did not render markup as visible literal text')
       const entry = (body) => page.getByText(body, { exact: true }).locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]')
       await entry('<img src=x onerror=alert(1)> first').getByRole('button', { name: /^reply/i }).click()
@@ -1326,7 +1352,8 @@ export const PROBES = {
     })
     await check('live_three_sessions_and_direct_iii', async () => {
       stage('live_sessions')
-      const sessions = await Promise.all([0, 1, 2].map(() => pageFor(browser, baseUrl)))
+      const sessions = await Promise.all([0, 1, 2].map(() => newPage(browser)))
+      await Promise.all(sessions.map(({ page }) => openLiveSession(page, baseUrl)))
       const configuration = await trigger('configuration::get', { id: 'kanban', raw: true })
       const ticket = await create(trigger, { title: 'Live probe', priority: 'low' })
       await Promise.all(sessions.map(({ page }) => eventually(async () => await page.getByRole('heading', { name: 'Live probe' }).count(), 'session missed direct iii creation')))

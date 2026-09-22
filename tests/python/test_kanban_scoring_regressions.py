@@ -40,6 +40,17 @@ console.log(JSON.stringify(await (await probe.ticketDetail(page,ticket)).getAttr
 """, browser=True)
         self.assertEqual(result, 'detail')
 
+    def test_detail_title_outside_the_action_block_still_scopes_to_the_detail_region(self):
+        # Reference fixture layout: the title heading sits above a content block that
+        # carries its own heading ("Description") together with the Delete action.
+        result = self.node("""
+const ticket={key:'KAN-1',title:'Editable probe',description:'Keep me',status:'todo',priority:'high',assignee:'Initial'};
+await page.setContent('<main><section id="ticket-view"><p>KAN-1</p><h1>Editable probe</h1><div id="detail-content"><dl><dt>Status</dt><dd>To do</dd><dt>Priority</dt><dd>high</dd><dt>Assignee</dt><dd>Initial</dd></dl><h2>Description</h2><p>Keep me</p><div><p>Deleting removes this ticket.</p><button>Delete ticket</button></div></div></section></main>');
+await probe.assertTicketDetails(page,ticket);
+console.log(JSON.stringify(await (await probe.ticketDetail(page,ticket)).getAttribute('id')));
+""", browser=True)
+        self.assertEqual(result, 'ticket-view')
+
     def test_detail_validation_never_borrows_matching_fields_from_the_board(self):
         result = self.node("""
 const ticket={key:'KAN-1',title:'Ticket',description:'Details',status:'in_review',priority:'urgent',assignee:'Lin'};
@@ -97,6 +108,18 @@ console.log(JSON.stringify([
                                 capture_output=True, text=True, cwd=ROOT, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
         return json.loads(result.stdout)
+
+    def test_live_session_waits_for_the_event_stream_before_counting(self):
+        result = self.node("""
+const html=(delay)=>`<h1>Board</h1><script>setTimeout(()=>new EventSource('/api/events'),${delay})</script>`;
+await page.route('http://kanban.test/api/events',route=>route.fulfill({status:200,headers:{'content-type':'text/event-stream'},body:'event: change\\ndata: {}\\n\\n'}));
+await page.route('http://kanban.test/',route=>route.fulfill({contentType:'text/html',body:html(300)}));
+const late=await probe.openLiveSession(page,'http://kanban.test/').then(()=>'subscribed',error=>error.message);
+await page.route('http://kanban.test/',route=>route.fulfill({contentType:'text/html',body:'<h1>Board without a stream</h1>'}));
+const never=await probe.openLiveSession(page,'http://kanban.test/',500).then(()=>'subscribed',error=>error.message);
+console.log(JSON.stringify({late,never}));
+""", browser=True)
+        self.assertEqual(result, {'late': 'subscribed', 'never': 'session did not open the live event stream'})
 
     def test_list_lanes_are_accepted_without_selecting_outer_board(self):
         result = self.node("""
@@ -173,6 +196,8 @@ console.log(JSON.stringify(records.map(({id,status})=>({id,status}))));
                 self.assertEqual(len({c['id'] for c in criteria}), len(criteria))
                 checks = [check for c in criteria for check in c['checks']]
                 self.assertEqual(len(checks), len(set(checks)))
+                gates = [c['id'] for c in criteria if c.get('gate')]
+                self.assertTrue(0 < len(gates) <= 2, gates)
 
     def test_discussion_preservation_does_not_require_earlier_browser_flows(self):
         result = self.node("""
