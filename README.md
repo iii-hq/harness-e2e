@@ -102,13 +102,6 @@ cargo run --locked --bin harness-e2e -- run \
   --scenario todo_worker_simple
 ```
 
-Validate a checked-in campaign without executing it:
-
-```bash
-python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json --e2e-bin target/debug/harness-e2e --validate-only
-python3 scripts/run_e2e_campaign.py config/campaigns/endurance.json --e2e-bin target/debug/harness-e2e --dry-run
-```
-
 ## Scenarios
 
 Every scenario is a built-in module under `src/scenarios/`. The module owns
@@ -144,12 +137,10 @@ native scenario contracts. There is no generated catalog to keep in sync.
 
 | Profile | Purpose |
 | --- | --- |
-| `smoke` | Essential behavior on the published stack. |
-| `regression` | Representative capabilities, with one technical retry. |
-| `capability` | Coverage, repeatability, and difficulty across domains. |
-| `evolution` | Quality and resource use across fixed Harness versions. Three repetitions. |
-| `endurance` | Sustained correct work and the accepted capability boundary. |
-| `software-engineering` | Incremental Kanban, Registry, the trending-topics blog, and the Linkly tutorial. |
+| `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
+| `software-engineering` | Kanban, Registry delivery, the trending-topics blog and Linkly. |
+| `pr` | Four essential checks of a candidate stack before merging a change. |
+| `after-release` | Five essential checks of the published stack. |
 
 In the Console these profiles are starting templates for the same plan form
 and the same baseline/candidate view used by saved plans. Choose **New plan**,
@@ -164,9 +155,9 @@ cargo run --locked -- test-plan materialize --profile software-engineering
 ```
 
 The `software-engineering` profile runs each selected case once, with no
-technical retries: the seven Kanban cases, four Registry cases, the
-trending-topics build, and the Linkly tutorial. That is 13 cases and 13
-planned runs, in 12 execution groups. Registry implementation and verification
+technical retries: the seven Kanban cases, Registry implementation and verification,
+the trending-topics build, and the Linkly tutorial. That is 11 cases and 11
+planned runs, in 10 execution groups. Registry implementation and verification
 share a group, in that order, so verification receives the implementation
 delivery. Trending topics runs in `case-trending-topics-build`. Linkly runs
 its eight exchanges in `case-linkly-tutorial`. The executor creates a fresh

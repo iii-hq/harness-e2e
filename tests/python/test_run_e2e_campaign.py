@@ -24,15 +24,11 @@ from run_e2e_campaign import (
     build_group_command,
     compact_aggregate_artifacts,
     execute_campaign,
-    load_campaign,
     main,
     parse_campaign,
     score_campaign,
     validate_campaign_bundle,
 )
-
-
-CAMPAIGN_DIR = ROOT / "config" / "campaigns"
 
 
 def native_scenario(scenario_id, *, deferred=False):
@@ -97,18 +93,6 @@ def contains_seed_field(value):
     if isinstance(value, list):
         return any(contains_seed_field(child) for child in value)
     return False
-
-
-class CanonicalManifestTests(unittest.TestCase):
-    def test_endurance_retains_its_scheduled_scope_and_policy(self):
-        campaign = load_campaign(CAMPAIGN_DIR / "endurance.json")
-        self.assertEqual(campaign.failure_policy, "advisory")
-        self.assertEqual(len(campaign.groups), 1)
-        group = campaign.groups[0]
-        self.assertEqual(group.id, "engineering-endurance")
-        self.assertEqual(group.scenarios, ("engineering_endurance_ladder",))
-        self.assertEqual(group.runs, 1)
-        self.assertEqual(group.technical_retries, 0)
 
 
 class CampaignValidationTests(unittest.TestCase):
@@ -337,13 +321,6 @@ class CampaignRunnerTests(unittest.TestCase):
             [group["status"] for group in summary["groups"]],
             ["dry_run", "dry_run"],
         )
-
-    def test_validate_only_cli_uses_native_catalog_without_models(self):
-        with contextlib.redirect_stdout(io.StringIO()):
-            self.assertEqual(
-                main([str(CAMPAIGN_DIR / "endurance.json"), "--validate-only"]),
-                0,
-            )
 
     def test_advisory_cli_persists_the_complete_summary(self):
         with tempfile.TemporaryDirectory() as directory:

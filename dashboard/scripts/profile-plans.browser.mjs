@@ -201,7 +201,7 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/plans`)
   await page.getByRole('tab', { name: 'My plans', exact: true }).waitFor()
   assert.equal(
-    await page.getByRole('link', { name: 'Create Smoke plan' }).count(),
+    await page.getByRole('link', { name: 'Create After release plan' }).count(),
     0,
   )
   await page
@@ -210,7 +210,7 @@ try {
     .click()
   await page
     .getByRole('combobox', { name: 'Start from a template' })
-    .selectOption('smoke')
+    .selectOption('after-release')
   await page.getByRole('button', { name: 'Save and run', exact: true }).click()
   await page
     .getByText('Choose an execution model.', { exact: true })
@@ -285,7 +285,7 @@ try {
   assert.equal(active, null)
   // Template and manual plans use the same table, detail and lifecycle.
   await page.goto(`${server.url}#/ext/harness-e2e/plans`)
-  await page.getByText('Smoke', { exact: true }).first().waitFor()
+  await page.getByText('After release', { exact: true }).first().waitFor()
   assert.equal(await page.getByRole('table').count(), 1)
   await page.getByText('Existing manual plan', { exact: true }).first().click()
   await page.locator('[data-plan-scope]').waitFor()
@@ -307,7 +307,7 @@ try {
   assert.equal(active.role, 'baseline')
   assert.equal(active.slots.length, 5)
   assert.equal(await page.locator('progress').getAttribute('max'), '5')
-  await page.goto(`${server.url}#/ext/harness-e2e/plans/new/profile/smoke`)
+  await page.goto(`${server.url}#/ext/harness-e2e/plans/new/profile/after-release`)
   await page
     .getByRole('button', { name: 'Execution model', exact: true })
     .waitFor()

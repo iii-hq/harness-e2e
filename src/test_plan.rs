@@ -434,13 +434,12 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
+        assert_eq!(plan.profiles.len(), 4);
         for (id, cases, runs) in [
-            ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 45, 45),
-            ("evolution", 18, 54),
-            ("endurance", 4, 4),
-            ("software-engineering", 13, 13),
+            ("software-engineering", 11, 11),
+            ("pr", 4, 4),
+            ("after-release", 5, 5),
         ] {
             let snapshot = plan.materialize(id).unwrap();
             assert_eq!(snapshot.scenario_ids.len(), cases);
@@ -479,9 +478,7 @@ mod tests {
         let expected = crate::scenarios::kanban::IDS
             .into_iter()
             .chain([
-                "registry_planning",
                 "registry_implementation",
-                "registry_environment",
                 "registry_verification",
                 "trending_topics_build",
                 "linkly_tutorial",
@@ -489,7 +486,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 12);
+        assert_eq!(groups.len(), 10);
         let linkly = groups
             .iter()
             .find(|g| g["id"] == "case-linkly-tutorial")
@@ -505,19 +502,6 @@ mod tests {
         assert_eq!(build["scenarios"], json!(["trending_topics_build"]));
         assert_eq!(build["runs"], 1);
         assert_eq!(build["technical_retries"], 0);
-        assert_eq!(
-            snapshot
-                .cases
-                .iter()
-                .find(|case| case["scenario_id"] == "trending_topics_build"),
-            embedded()
-                .unwrap()
-                .materialize("evolution")
-                .unwrap()
-                .cases
-                .iter()
-                .find(|case| case["scenario_id"] == "trending_topics_build")
-        );
         let delivery = groups
             .iter()
             .find(|g| g["id"] == "case-registry-implementation")
@@ -531,11 +515,11 @@ mod tests {
     }
 
     #[test]
-    fn evolution_profile_orders_registry_delivery_and_verification_in_one_group() {
+    fn software_engineering_orders_registry_delivery_and_verification_in_one_group() {
         let plan = embedded().unwrap();
-        let snapshot = plan.materialize("evolution").unwrap();
+        let snapshot = plan.materialize("software-engineering").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 17);
+        assert_eq!(groups.len(), 10);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -549,8 +533,8 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.cases.len(), 18);
-        assert_eq!(snapshot.budget["planned_runs"], 54);
+        assert_eq!(snapshot.cases.len(), 11);
+        assert_eq!(snapshot.budget["planned_runs"], 11);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());
@@ -564,10 +548,12 @@ mod tests {
         changed.modules[0].scenarios.pop();
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
-        changed.profiles[0].scenarios.push("minimal_path".into());
+        changed.profiles[0]
+            .scenarios
+            .push("persistent_state".into());
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
-        changed.profiles[3].repetitions = 21;
+        changed.profiles[0].repetitions = 21;
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
         changed.profiles[0].scenarios[0] = "local_invented".into();
@@ -577,16 +563,16 @@ mod tests {
     #[test]
     fn materialized_scope_changes_identity_and_never_invents_budget() {
         let plan = embedded().unwrap();
-        let first = plan.materialize("evolution").unwrap();
+        let first = plan.materialize("regression").unwrap();
         assert_eq!(
             first.profile_sha256,
-            plan.materialize("evolution").unwrap().profile_sha256
+            plan.materialize("regression").unwrap().profile_sha256
         );
         let mut changed = plan;
-        changed.profiles[3].repetitions = 6;
+        changed.profiles[0].repetitions = 6;
         assert_ne!(
             first.profile_sha256,
-            changed.materialize("evolution").unwrap().profile_sha256
+            changed.materialize("regression").unwrap().profile_sha256
         );
         assert!(first.budget["subject_token_limit"].is_null());
         assert!(!first.budget["unbounded_token_cases"]
