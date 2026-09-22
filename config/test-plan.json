@@ -71,7 +71,8 @@
         "performance_regression",
         "chess_engine_build",
         "git_regression_forensics",
-        "typescript_chat_service"
+        "typescript_chat_service",
+        "alertmanager_route_match"
       ]
     },
     {
@@ -155,6 +156,10 @@
     "typescript_chat_service": [
       "Node 22.6+ on the runner host for direct TypeScript execution"
     ],
+    "alertmanager_route_match": [
+      "Pinned Alertmanager Git bundle",
+      "Go toolchain on the runner host"
+    ],
     "registry_planning": [
       "Linux amd64 with Docker and access to the pinned Registry source",
       "Explicit auxiliary model for plan assessment"
@@ -194,8 +199,7 @@
       ],
       "repetitions": 1,
       "technical_retries": 0,
-      "lane": "local-smoke",
-      "fault_groups": []
+      "lane": "local-smoke"
     },
     {
       "id": "regression",
@@ -220,8 +224,7 @@
       ],
       "repetitions": 1,
       "technical_retries": 1,
-      "lane": "local-regression",
-      "fault_groups": []
+      "lane": "local-regression"
     },
     {
       "id": "capability",
@@ -246,8 +249,7 @@
       "scenarios": [],
       "repetitions": 1,
       "technical_retries": 0,
-      "lane": "local-capability",
-      "fault_groups": []
+      "lane": "local-capability"
     },
     {
       "id": "evolution",
@@ -283,59 +285,11 @@
       "repetitions": 3,
       "technical_retries": 0,
       "lane": "local-evolution",
-      "fault_groups": [],
       "scenario_groups": [
         [
           "registry_implementation",
           "registry_verification"
         ]
-      ]
-    },
-    {
-      "id": "resilience",
-      "label": "Resilience",
-      "purpose": "Measure recovery without duplicate effects or leaked resources.",
-      "metrics": [
-        "deliverable_success",
-        "structural_integrity"
-      ],
-      "modules": [],
-      "scenarios": [
-        "cleanup_under_failure",
-        "poison_message",
-        "subagent_validation_failure"
-      ],
-      "repetitions": 1,
-      "technical_retries": 0,
-      "lane": "local-resilience",
-      "fault_groups": [
-        {
-          "execution_kind": "fault_injection",
-          "runs": 3,
-          "technical_retries": 0,
-          "fault_profile": "weekly-l2-recovery",
-          "fault_scenario": "stateful.2",
-          "soak_minutes": 60,
-          "id": "fault-l2"
-        },
-        {
-          "execution_kind": "fault_injection",
-          "runs": 3,
-          "technical_retries": 0,
-          "fault_profile": "weekly-l3-recovery",
-          "fault_scenario": "coordination.3",
-          "soak_minutes": 60,
-          "id": "fault-l3"
-        },
-        {
-          "execution_kind": "fault_injection",
-          "runs": 3,
-          "technical_retries": 0,
-          "fault_profile": "weekly-l4-recovery",
-          "fault_scenario": "coordination.4",
-          "soak_minutes": 60,
-          "id": "fault-l4"
-        }
       ]
     },
     {
@@ -356,8 +310,7 @@
       ],
       "repetitions": 1,
       "technical_retries": 0,
-      "lane": "local-endurance",
-      "fault_groups": []
+      "lane": "local-endurance"
     },
     {
       "id": "software-engineering",
@@ -382,7 +335,6 @@
       "repetitions": 1,
       "technical_retries": 0,
       "lane": "local-software-engineering",
-      "fault_groups": [],
       "scenario_groups": [
         [
           "registry_implementation",

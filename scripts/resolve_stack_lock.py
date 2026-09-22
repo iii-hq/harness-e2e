@@ -147,14 +147,7 @@ def suite_groups(campaign: dict[str, Any]) -> list[dict[str, Any]]:
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
         }
-        if group["execution_kind"] == "fault_injection":
-            materialized |= {
-                "fault_profile": group["fault_profile"],
-                "fault_scenario": group["fault_scenario"],
-                "soak_minutes": group["soak_minutes"],
-            }
-        else:
-            materialized["scenarios"] = list(group["scenarios"])
+        materialized["scenarios"] = list(group["scenarios"])
         groups.append(materialized)
     return groups
 
@@ -244,13 +237,12 @@ def main() -> int:
         )
         (args.output_dir / f"{campaign['campaign_id']}.json").write_text(json.dumps(contract, indent=2) + "\n")
         for group in contract["suite"]["groups"]:
-            fault = group["execution_kind"] == "fault_injection"
             include.append(
                 {
                     "campaign_id": campaign["campaign_id"],
                     "group_id": group["id"],
                     "execution_kind": group["execution_kind"],
-                    "runs_on": ["self-hosted", "harness-e2e"] if fault else ["ubuntu-latest"],
+                    "runs_on": ["ubuntu-latest"],
                     **({"template_revision": template["revision"]} if template else {}),
                 }
             )

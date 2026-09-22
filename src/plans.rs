@@ -67,7 +67,6 @@ pub(crate) struct LocalPlan {
     pub reference_execution_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reference_differences: Vec<String>,
-    pub protected_executor_required: bool,
     pub compatible: bool,
 }
 
@@ -167,7 +166,6 @@ pub(crate) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         template_id: request.template_id.clone(),
         reference_execution_id: None,
         reference_differences: Vec::new(),
-        protected_executor_required: false,
         compatible: true,
     })
 }

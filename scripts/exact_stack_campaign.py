@@ -33,7 +33,6 @@ EXECUTION_KINDS = {
     "scripted_dialogue",
     "composite_flow",
     "adaptive_flow",
-    "fault_injection",
 }
 #: The application under test. Its package graph is the stack being measured.
 APPLICATION = "harness"
@@ -161,11 +160,6 @@ def validate_suite(suite: Any) -> dict[str, Any]:
             raise ValueError(f"{label}.execution_kind is unsupported")
         require_positive_integer(group.get("runs"), f"{label}.runs")
         require_nonnegative_integer(group.get("technical_retries"), f"{label}.technical_retries")
-        if kind == "fault_injection":
-            require_text(group.get("fault_profile"), f"{label}.fault_profile")
-            require_text(group.get("fault_scenario"), f"{label}.fault_scenario")
-            require_nonnegative_integer(group.get("soak_minutes"), f"{label}.soak_minutes")
-            continue
         scenarios = group.get("scenarios")
         if not isinstance(scenarios, list) or not scenarios or len(set(scenarios)) != len(scenarios):
             raise ValueError(f"{label}.scenarios must be a non-empty unique array")
@@ -239,14 +233,7 @@ def campaign_manifest(contract: dict[str, Any]) -> dict[str, Any]:
             "runs": group["runs"],
             "technical_retries": group["technical_retries"],
         }
-        if group["execution_kind"] == "fault_injection":
-            materialized |= {
-                "fault_profile": group["fault_profile"],
-                "fault_scenario": group["fault_scenario"],
-                "soak_minutes": group["soak_minutes"],
-            }
-        else:
-            materialized["scenarios"] = group["scenarios"]
+        materialized["scenarios"] = group["scenarios"]
         groups.append(materialized)
     return {
         "kind": "harness-e2e-campaign",
@@ -289,9 +276,6 @@ def materialize_request(
     group = next((item for item in suite["groups"] if item["id"] == group_id), None)
     if group is None:
         raise ValueError("a valid campaign group id is required")
-    if group["execution_kind"] == "fault_injection":
-        raise ValueError("fault injection groups are executed by the protected supervisor")
-
     selected_cases: list[dict[str, Any]] = []
     for scenario_id in group["scenarios"]:
         descriptor = by_id.get(scenario_id)

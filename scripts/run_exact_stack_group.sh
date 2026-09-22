@@ -32,7 +32,7 @@ python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
 jq -e --arg group "$campaign_group_id" \
-  '.suite.groups | any(.id == $group and .execution_kind != "fault_injection")' \
+  '.suite.groups | any(.id == $group)' \
   "$contract_path" >/dev/null
 project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
 execution_template=$(jq -r '.runtime.template.id // empty' "$contract_path")

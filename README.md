@@ -90,7 +90,6 @@ cargo run --locked --bin harness-e2e -- catalog
 | `models` | List models registered in the running stack. |
 | `test-plan list` | List profile templates and their coverage. |
 | `test-plan materialize` | Expand one profile into campaigns, groups, and cases. |
-| `fault-plan` / `fault-evaluate` | Materialize and classify protected fault drills. |
 | `--manifest` | Print the Registry worker manifest as JSON. |
 
 Run one scenario against an existing stack:
@@ -149,7 +148,6 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | `regression` | Representative capabilities, with one technical retry. |
 | `capability` | Coverage, repeatability, and difficulty across domains. |
 | `evolution` | Quality and resource use across fixed Harness versions. Three repetitions. |
-| `resilience` | Recovery without duplicate effects or leaked resources, plus protected fault groups. |
 | `endurance` | Sustained correct work and the accepted capability boundary. |
 | `software-engineering` | Incremental Kanban, Registry, the trending-topics blog, and the Linkly tutorial. |
 
@@ -157,7 +155,7 @@ In the Console these profiles are starting templates for the same plan form
 and the same baseline/candidate view used by saved plans. Choose **New plan**,
 optionally pick a template, edit the scope, and select the model. **Save
 draft**, **Save and run**, and **Duplicate plan** share one lifecycle and keep
-native evidence. Fault-injection plans export to the protected executor. See
+native evidence. See
 [executable profile plans](dashboard/README.md#executable-profile-plans).
 
 ```bash
@@ -269,8 +267,7 @@ stack (or the required fixture).
 To measure a profile, compare the same plan, template commit, model, and stack
 with and without `agent_profile`. Changing the template as well measures the
 combined effect. Non-Compose templates and templates that ask for an
-interactive language choice are rejected before boot. Protected fault groups
-use an external supervisor and reject both overrides.
+interactive language choice are rejected before boot.
 
 ## Console
 
@@ -360,7 +357,6 @@ The worker exposes:
 - `e2e::scenarios-list`
 - `e2e::archive`, `e2e::archive-head`, `e2e::archive-restore`
 - `e2e::history-list`, `e2e::retention-sweep`
-- `e2e::fault-plan`, `e2e::fault-evaluate`
 
 Subject policies deny `e2e::*`.
 

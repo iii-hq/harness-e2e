@@ -1,57 +1,9 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "definitions": {
-    "FaultGroup": {
-      "additionalProperties": false,
-      "properties": {
-        "execution_kind": {
-          "type": "string"
-        },
-        "fault_profile": {
-          "type": "string"
-        },
-        "fault_scenario": {
-          "type": "string"
-        },
-        "id": {
-          "type": "string"
-        },
-        "runs": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "soak_minutes": {
-          "format": "uint32",
-          "minimum": 0.0,
-          "type": "integer"
-        },
-        "technical_retries": {
-          "format": "uint8",
-          "minimum": 0.0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "execution_kind",
-        "fault_profile",
-        "fault_scenario",
-        "id",
-        "runs",
-        "soak_minutes",
-        "technical_retries"
-      ],
-      "type": "object"
-    },
     "Profile": {
       "additionalProperties": false,
       "properties": {
-        "fault_groups": {
-          "items": {
-            "$ref": "#/definitions/FaultGroup"
-          },
-          "type": "array"
-        },
         "id": {
           "type": "string"
         },
@@ -103,7 +55,6 @@
         }
       },
       "required": [
-        "fault_groups",
         "id",
         "label",
         "lane",
@@ -142,9 +93,6 @@
     "profile_sha256": {
       "type": "string"
     },
-    "protected_supervisor_required": {
-      "type": "boolean"
-    },
     "scenario_ids": {
       "items": {
         "type": "string"
@@ -164,7 +112,6 @@
     "plan_id",
     "profile",
     "profile_sha256",
-    "protected_supervisor_required",
     "scenario_ids",
     "schema"
   ],
