@@ -44,7 +44,7 @@ impl Scenario for TodoWorkerSimple {
             ),
             filesystem_root: Some(PathBuf::from(&contract.workspace_root)),
             execution: ExecutionPolicy {
-                max_turns: 48,
+                max_turns: Some(48),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(600_000),
                 stuck_timeout_seconds: 600,
@@ -122,7 +122,7 @@ impl Scenario for TodoWorkerPlanned {
             prompt: "Plan the creation of a Todo Worker, then execute the compiled plan in a separate Harness session and validate it independently.".into(),
             filesystem_root: Some(PathBuf::from(contract.workspace_root)),
             execution: ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: None,
                 max_total_tokens: Some(720_000),
                 stuck_timeout_seconds: 600,

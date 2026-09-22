@@ -312,6 +312,13 @@ jobs:
         with:
           version: 11.13.1
 
+      # Workers run on this runner, so the subject's shell and the scenario
+      # runner share its PATH. alertmanager_route_match builds Go 1.25 code.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+          cache: false
+
       - name: Install iii project scaffold tooling
         run: python3 -m pip install --quiet pyyaml
 

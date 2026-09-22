@@ -101,7 +101,7 @@ impl Scenario for ReceivingOperation {
             prompt: prompt(&names),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 48,
+                max_turns: Some(48),
                 max_output_tokens: None,
                 max_total_tokens: Some(1_200_000),
                 stuck_timeout_seconds: 360,

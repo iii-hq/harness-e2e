@@ -215,7 +215,7 @@ impl Scenario for PoisonMessage {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 12,
+                max_turns: Some(12),
                 max_output_tokens: Some(8_192),
                 max_total_tokens: Some(200_000),
                 stuck_timeout_seconds: 300,

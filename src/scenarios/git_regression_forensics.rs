@@ -314,7 +314,7 @@ clean at the known-bad revision."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: 30,
+                max_turns: Some(30),
                 max_output_tokens: Some(12_288),
                 max_total_tokens: Some(600_000),
                 stuck_timeout_seconds: 600,

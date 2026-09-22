@@ -199,7 +199,7 @@ export type TestSpec = {
   prompt: string
   criteria: TestCriterion[]
   execution: {
-    max_turns: number
+    max_turns: number | null
     max_output_tokens?: number
     max_total_tokens?: number
     stuck_timeout_seconds: number

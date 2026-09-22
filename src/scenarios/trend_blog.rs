@@ -264,7 +264,7 @@ impl Scenario for TrendBlog {
             prompt: prompt(),
             filesystem_root: Some(workspace_root(run_id)),
             execution: ExecutionPolicy {
-                max_turns: 40,
+                max_turns: Some(40),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(800_000),
                 stuck_timeout_seconds: 600,

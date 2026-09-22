@@ -2442,7 +2442,9 @@ async fn execute(
                         // New sessions only: the Harness refuses a profile on
                         // an existing session, and a dialogue reuses one.
                         agent: (exchange == 0).then(|| subject.agent.clone()).flatten(),
-                        max_turns: Some(spec.execution.max_turns),
+                        // The Harness has no "unbounded" value and falls back to
+                        // its own default when the field is absent.
+                        max_turns: Some(spec.execution.max_turns.unwrap_or(u32::MAX)),
                         max_cost_usd: subject_cost_cap(subject, spec.id),
                         max_output_tokens: spec.execution.max_output_tokens,
                         max_total_tokens: spec.execution.max_total_tokens,
@@ -3314,7 +3316,7 @@ mod tests {
             prompt: String::new(),
             filesystem_root: None,
             execution: crate::scenarios::ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: None,
                 max_total_tokens: None,
                 stuck_timeout_seconds: 1,
@@ -4257,7 +4259,7 @@ mod tests {
             prompt: "prompt".into(),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: Some(1),
                 max_total_tokens: Some(1),
                 stuck_timeout_seconds: 1,

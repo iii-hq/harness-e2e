@@ -140,7 +140,7 @@ impl Scenario for FanoutLadder {
             prompt: prompt(&names, run_id, RUNG.fan_out),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 16 + 2 * u32::from(RUNG.fan_out),
+                max_turns: Some(16 + 2 * u32::from(RUNG.fan_out)),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(400_000 + 100_000 * u64::from(RUNG.fan_out)),
                 stuck_timeout_seconds: 360,

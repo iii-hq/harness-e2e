@@ -229,7 +229,7 @@ the engine is implemented."#,
             // no call, leaving the stubs untouched. The budget has to hold a full
             // planning turn; the total-token and stuck bounds still cap the run.
             execution: ExecutionPolicy {
-                max_turns: 48,
+                max_turns: Some(48),
                 max_output_tokens: Some(65_536),
                 max_total_tokens: Some(1_000_000),
                 stuck_timeout_seconds: 900,

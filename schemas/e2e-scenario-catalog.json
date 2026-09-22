@@ -74,6 +74,7 @@
         "git::deterministic-fixture-v1",
         "git::offline-bundle",
         "github::trusted-handoff",
+        "go",
         "harness::independent_session",
         "harness::post-turn-validation",
         "harness::scripted-dialogue-v1",
@@ -126,7 +127,6 @@
     "ExecutionPolicy": {
       "type": "object",
       "required": [
-        "max_turns",
         "stuck_timeout_seconds"
       ],
       "properties": {
@@ -148,7 +148,11 @@
           "minimum": 0.0
         },
         "max_turns": {
-          "type": "integer",
+          "description": "Subject turn ceiling. `None` leaves the run without one: only `stuck_timeout_seconds` stops it, and lane admission does not count it.",
+          "type": [
+            "integer",
+            "null"
+          ],
           "format": "uint32",
           "minimum": 0.0
         },
@@ -356,6 +360,7 @@
         "todo_worker_planned",
         "engineering_endurance_ladder",
         "git_regression_forensics",
+        "alertmanager_route_match",
         "mechanical_reaction",
         "timer_wake",
         "receiving_operation",

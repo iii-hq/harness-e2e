@@ -1,0 +1,374 @@
+{
+  "schema": "alertmanager-route-match-oracle/v1",
+  "source": {
+    "repository": "prometheus/alertmanager",
+    "tag": "v0.34.1",
+    "revision": "73c6bfe7393929211294c1954f30d8ed78e4d0ad"
+  },
+  "trees": {
+    "route_test": "receiver: 'notify-def'\n\nroutes:\n- match:\n    owner: 'team-A'\n\n  receiver: 'notify-A'\n\n  routes:\n  - match:\n      env: 'testing'\n\n    receiver: 'notify-testing'\n    group_by: [...]\n\n  - match:\n      env: \"production\"\n\n    receiver: 'notify-productionA'\n    group_wait: 1m\n\n    continue: true\n\n  - match_re:\n      env: \"produ.*\"\n      job: \".*\"\n\n    receiver: 'notify-productionB'\n    group_wait: 30s\n    group_interval: 5m\n    repeat_interval: 1h\n    group_by: ['job']\n\n- match_re:\n    owner: 'team-(B|C)'\n\n  group_by: ['foo', 'bar']\n  group_wait: 2m\n  receiver: 'notify-BC'\n\n- match:\n    group_by: 'role'\n  group_by: ['role']\n\n  routes:\n  - match:\n      env: 'testing'\n    receiver: 'notify-testing'\n    routes:\n    - match:\n        wait: 'long'\n      group_wait: 2m\n",
+    "conf_good_path": "config/testdata/conf.good.yml",
+    "conf_good": "# The labels by which incoming alerts are grouped together. For example,\n# multiple alerts coming in for cluster=A and alertname=LatencyHigh would\n# be batched into a single group.\ngroup_by: ['alertname', 'cluster', 'service']\n# When a new group of alerts is created by an incoming alert, wait at\n# least 'group_wait' to send the initial notification.\n# This way ensures that you get multiple alerts for the same group that start\n# firing shortly after another are batched together on the first\n# notification.\ngroup_wait: 30s\n# When the first notification was sent, wait 'group_interval' to send a batch\n# of new alerts that started firing for that group.\ngroup_interval: 5m\n# If an alert has successfully been sent, wait 'repeat_interval' to\n# resend them.\nrepeat_interval: 3h\n# A default receiver\nreceiver: team-X-mails\n# All the above attributes are inherited by all child routes and can\n# overwritten on each.\n\n# The child route trees.\nroutes:\n  # This routes performs a regular expression match on alert labels to\n  # catch alerts that are related to a list of services.\n  - match_re:\n      service: ^(foo1|foo2|baz)$\n    receiver: team-X-mails\n    # The service has a sub-route for critical alerts, any alerts\n    # that do not match, i.e. severity != critical, fall-back to the\n    # parent node and are sent to 'team-X-mails'\n    routes:\n      - match:\n          severity: critical\n        receiver: team-X-pager\n  - match:\n      service: files\n    receiver: team-Y-mails\n    routes:\n      - match:\n          severity: critical\n        receiver: team-Y-pager\n  # This route handles all alerts coming from a database service. If there's\n  # no team to handle it, it defaults to the DB team.\n  - match:\n      service: database\n    receiver: team-DB-pager\n    # Also group alerts by affected database.\n    group_by: [alertname, cluster, database]\n    routes:\n      - match:\n          owner2: team-X\n        receiver: team-X-pager\n        continue: true\n      - match:\n          owner: team-Y\n        receiver: team-Y-pager\n        # continue: true\n# Inhibition rules allow to mute a set of alerts given that another alert is\n# firing.\n# We use this to mute any warning-level notifications if the same alert is\n# already critical.\n"
+  },
+  "cases": [
+    {
+      "id": "route_test_owner-team-A",
+      "tree": "route_test",
+      "labels": {
+        "owner": "team-A"
+      },
+      "receivers": [
+        "notify-A"
+      ],
+      "group_by": [
+        []
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "route_test_owner-team-A_env-unset",
+      "tree": "route_test",
+      "labels": {
+        "owner": "team-A",
+        "env": "unset"
+      },
+      "receivers": [
+        "notify-A"
+      ],
+      "group_by": [
+        []
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "route_test_owner-team-C",
+      "tree": "route_test",
+      "labels": {
+        "owner": "team-C"
+      },
+      "receivers": [
+        "notify-BC"
+      ],
+      "group_by": [
+        [
+          "foo",
+          "bar"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "route_test_owner-team-A_env-testing",
+      "tree": "route_test",
+      "labels": {
+        "owner": "team-A",
+        "env": "testing"
+      },
+      "receivers": [
+        "notify-testing"
+      ],
+      "group_by": [
+        []
+      ],
+      "group_by_all": [
+        true
+      ]
+    },
+    {
+      "id": "route_test_owner-team-A_env-production",
+      "tree": "route_test",
+      "labels": {
+        "owner": "team-A",
+        "env": "production"
+      },
+      "receivers": [
+        "notify-productionA",
+        "notify-productionB"
+      ],
+      "group_by": [
+        [],
+        [
+          "job"
+        ]
+      ],
+      "group_by_all": [
+        false,
+        false
+      ]
+    },
+    {
+      "id": "route_test_group_by-role",
+      "tree": "route_test",
+      "labels": {
+        "group_by": "role"
+      },
+      "receivers": [
+        "notify-def"
+      ],
+      "group_by": [
+        [
+          "role"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "route_test_env-testing_group_by-role",
+      "tree": "route_test",
+      "labels": {
+        "env": "testing",
+        "group_by": "role"
+      },
+      "receivers": [
+        "notify-testing"
+      ],
+      "group_by": [
+        [
+          "role"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "route_test_env-testing_group_by-role_wait-long",
+      "tree": "route_test",
+      "labels": {
+        "env": "testing",
+        "group_by": "role",
+        "wait": "long"
+      },
+      "receivers": [
+        "notify-testing"
+      ],
+      "group_by": [
+        [
+          "role"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "default_root",
+      "tree": "conf_good",
+      "labels": {},
+      "receivers": [
+        "team-X-mails"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_foo1",
+      "tree": "conf_good",
+      "labels": {
+        "service": "foo1"
+      },
+      "receivers": [
+        "team-X-mails"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_foo1_critical",
+      "tree": "conf_good",
+      "labels": {
+        "service": "foo1",
+        "severity": "critical"
+      },
+      "receivers": [
+        "team-X-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_files",
+      "tree": "conf_good",
+      "labels": {
+        "service": "files"
+      },
+      "receivers": [
+        "team-Y-mails"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_files_critical",
+      "tree": "conf_good",
+      "labels": {
+        "service": "files",
+        "severity": "critical"
+      },
+      "receivers": [
+        "team-Y-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_database",
+      "tree": "conf_good",
+      "labels": {
+        "service": "database"
+      },
+      "receivers": [
+        "team-DB-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "database"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_database_owner2",
+      "tree": "conf_good",
+      "labels": {
+        "service": "database",
+        "owner2": "team-X"
+      },
+      "receivers": [
+        "team-X-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "database"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_database_owner_y",
+      "tree": "conf_good",
+      "labels": {
+        "service": "database",
+        "owner": "team-Y"
+      },
+      "receivers": [
+        "team-Y-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "database"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    },
+    {
+      "id": "service_database_continue",
+      "tree": "conf_good",
+      "labels": {
+        "service": "database",
+        "owner2": "team-X",
+        "owner": "team-Y"
+      },
+      "receivers": [
+        "team-X-pager",
+        "team-Y-pager"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "database"
+        ],
+        [
+          "alertname",
+          "cluster",
+          "database"
+        ]
+      ],
+      "group_by_all": [
+        false,
+        false
+      ]
+    },
+    {
+      "id": "service_unknown",
+      "tree": "conf_good",
+      "labels": {
+        "service": "unknown"
+      },
+      "receivers": [
+        "team-X-mails"
+      ],
+      "group_by": [
+        [
+          "alertname",
+          "cluster",
+          "service"
+        ]
+      ],
+      "group_by_all": [
+        false
+      ]
+    }
+  ]
+}
