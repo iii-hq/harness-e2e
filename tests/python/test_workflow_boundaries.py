@@ -310,7 +310,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflows = {path.name for path in (ROOT / ".github/workflows").glob("*.yml")}
         self.assertIn("exact-stack-e2e.yml", workflows)
         self.assertNotIn("shadow.yml", workflows)
-        self.assertNotIn("release.yml", workflows)
+        # Releasing is one workflow on main: the tag cut-release.yml pushes
+        # builds, publishes next and promotes latest in release.yml itself.
+        self.assertIn("release.yml", workflows)
+        self.assertNotIn("promote-latest.yml", workflows)
+        release = (ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        self.assertIn("scripts/release_worker.py build-payload", release)
+        self.assertIn("scripts/promote_registry.py promote", release)
+        self.assertNotIn("inputs.expected_latest_version", release)
+        cut = (ROOT / ".github/workflows/cut-release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("cherry-pick", cut)
+        self.assertIn("git push origin HEAD:main", cut)
 
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
