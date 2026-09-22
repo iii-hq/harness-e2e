@@ -23,6 +23,11 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: dashboard/pnpm-lock.yaml
+      # The Alertmanager delegation probe builds upstream Go code in its tests.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25.x"
+          cache: false
       - run: pnpm --dir dashboard install --frozen-lockfile
       - run: pnpm --dir dashboard typecheck
       - run: pnpm --dir dashboard lint

@@ -131,7 +131,7 @@ impl Scenario for CrossRepoContractMigration {
             prompt: "Migrate a versioned producer contract across the repositories currently available to you while preserving backwards compatibility. Treat trusted canary evidence as authoritative, replan when a later consumer is revealed, validate the full compatibility matrix, and leave repository cleanup to the runner.".into(),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 1,
+                max_turns: Some(1),
                 max_output_tokens: None,
                 max_total_tokens: Some(700_000),
                 stuck_timeout_seconds: 900,

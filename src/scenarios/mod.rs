@@ -189,7 +189,9 @@ impl CriterionSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionPolicy {
-    pub max_turns: u32,
+    /// Subject turn ceiling. `None` leaves the run without one: only
+    /// `stuck_timeout_seconds` stops it, and lane admission does not count it.
+    pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
     /// Shared Harness token budget. `None` leaves the Harness budget
@@ -207,8 +209,8 @@ pub struct ExecutionPolicy {
 
 impl ExecutionPolicy {
     fn validate(self, scenario_id: &str) -> Result<()> {
-        if self.max_turns == 0 {
-            bail!("scenario '{scenario_id}': execution.max_turns=0; expected at least 1");
+        if self.max_turns == Some(0) {
+            bail!("scenario '{scenario_id}': execution.max_turns=0; expected None (unbounded) or at least 1");
         }
         if self.max_output_tokens == Some(0) {
             bail!(
@@ -851,8 +853,8 @@ mod tests {
         let cases: [ValidationCase; 5] = [
             (
                 "max_turns",
-                |execution| execution.max_turns = 0,
-                "scenario 'context_pressure': execution.max_turns=0; expected at least 1",
+                |execution| execution.max_turns = Some(0),
+                "scenario 'context_pressure': execution.max_turns=0; expected None (unbounded) or at least 1",
             ),
             (
                 "max_output_tokens",

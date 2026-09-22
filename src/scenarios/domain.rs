@@ -68,6 +68,8 @@ pub enum Capability {
     GitOfflineBundle,
     #[serde(rename = "github::trusted-handoff")]
     GithubTrustedHandoff,
+    #[serde(rename = "go")]
+    Go,
     #[serde(rename = "harness::independent_session")]
     HarnessIndependentSession,
     #[serde(rename = "harness::post-turn-validation")]
@@ -126,6 +128,7 @@ impl Capability {
             Self::GitDeterministicFixtureV1 => "git::deterministic-fixture-v1",
             Self::GitOfflineBundle => "git::offline-bundle",
             Self::GithubTrustedHandoff => "github::trusted-handoff",
+            Self::Go => "go",
             Self::HarnessIndependentSession => "harness::independent_session",
             Self::HarnessPostTurnValidation => "harness::post-turn-validation",
             Self::HarnessScriptedDialogueV1 => "harness::scripted-dialogue-v1",

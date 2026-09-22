@@ -47,6 +47,9 @@ const BUNDLE_RELATIVE_PATH: &str = "input/repository.bundle";
 const MANIFEST_RELATIVE_PATH: &str = "input/case.json";
 const CHECKOUT_RELATIVE_PATH: &str = "checkout";
 const GIT_TIMEOUT: Duration = Duration::from_secs(60);
+/// Covers a cold module download and build of the dispatch package.
+const GO_TEST_TIMEOUT: Duration = Duration::from_secs(600);
+const CLOSED_ENGINE_URL: &str = "ws://127.0.0.1:9";
 const PROTECTED_PATHS: &[&str] = &["notify", "api", "config/testdata"];
 
 const PUBLIC_MANIFEST: &str =
@@ -69,7 +72,7 @@ const MATCH_EQUIVALENT: AssessmentSpec = AssessmentSpec::scored_in(
 const DELEGATION_WIRED: AssessmentSpec = AssessmentSpec::scored(
     "delegation_wired",
     10,
-    "dispatch/route.go changed and non-test Go code calls route::match.",
+    "Upstream TestRouteMatch passes through route::match and fails without the engine.",
 );
 const SCOPE_EXACT: AssessmentSpec = AssessmentSpec::scored(
     "scope_exact",
@@ -119,6 +122,7 @@ struct Snapshot {
     pinned_reachable: bool,
     protected_unchanged: bool,
     delegation_wired: bool,
+    delegation_detail: String,
     function_registered: bool,
     match_cases: Vec<(String, bool, String)>,
 }
@@ -214,6 +218,7 @@ impl Scenario for AlertmanagerRouteMatch {
                 Capability::IiiFunctions,
                 Capability::IiiShell,
                 Capability::GitOfflineBundle,
+                Capability::Go,
             ],
             deliverable_contract(),
         )
@@ -245,8 +250,12 @@ API unchanged. Do not edit `config/testdata/`, `notify/`, or `api/`.
 The runner scores this by calling `{function}` on the iii stack. For each
 case it sends the route YAML and one label set, then compares the receivers
 and group-by labels in the JSON you return. Label sets may carry labels the route tree never
-mentions. It also checks that `dispatch/route.go` changed and that non-test Go code calls
-`{function}`. It does not start Alertmanager. When the run ends, the runner stops every worker
+mentions. It does not start Alertmanager.
+
+Go 1.25 is on PATH. Your Go code must reach the engine at the URL in the `III_URL` environment
+variable and the namespace in `III_NAMESPACE`. The runner copies your checkout, restores upstream
+`dispatch/route_test.go`, and runs `go test -run '^TestRouteMatch$' ./dispatch/` twice: with the
+live engine it must pass, and with `III_URL` pointing at a closed port it must fail. When the run ends, the runner stops every worker
 and process started from this workspace."#,
                 bundle = bundle.display(),
                 checkout = checkout.display(),
@@ -255,9 +264,8 @@ and process started from this workspace."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                // No token budget. 500 turns is the Harness default ceiling;
-                // lane admission sums declared turns, so it cannot be unbounded.
-                max_turns: 500,
+                // No turn or token ceiling: only a stalled session stops it.
+                max_turns: None,
                 max_output_tokens: Some(16_384),
                 max_total_tokens: None,
                 stuck_timeout_seconds: 1_800,
@@ -269,6 +277,7 @@ and process started from this workspace."#,
     }
 
     async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
+        require_go_toolchain().await?;
         prepare_workspace(&workspace_root(run_id)).await
     }
 
@@ -509,7 +518,11 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
         args.extend(PROTECTED_PATHS.iter().copied());
         git_diff_empty(&checkout, PINNED_REVISION, &args).await
     };
-    let delegation_wired = checkout_is_repository && delegation_is_wired(&checkout).await;
+    let (delegation_wired, delegation_detail) = if checkout_is_repository {
+        delegation_probe(context, &checkout).await
+    } else {
+        (false, "checkout is not a Git repository".into())
+    };
     let function_registered = context.function_exists(FUNCTION_ID).await.unwrap_or(false);
     let match_cases = if function_registered {
         probe_match_cases(context).await
@@ -522,6 +535,7 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
         pinned_reachable,
         protected_unchanged,
         delegation_wired,
+        delegation_detail,
         function_registered,
         match_cases,
     })
@@ -698,6 +712,7 @@ fn audit_content(snapshot: &Snapshot) -> Value {
         },
         "delegation": {
             "wired": snapshot.delegation_wired,
+            "detail": snapshot.delegation_detail,
         },
         "scope": {
             "protected_unchanged": snapshot.protected_unchanged,
@@ -755,11 +770,7 @@ fn match_reason(snapshot: &Snapshot) -> String {
 }
 
 fn delegation_reason(snapshot: &Snapshot) -> String {
-    if snapshot.delegation_wired {
-        format!("dispatch/route.go changed and Go code calls {FUNCTION_ID}")
-    } else {
-        format!("dispatch/route.go is unchanged or no non-test Go code calls {FUNCTION_ID}")
-    }
+    snapshot.delegation_detail.clone()
 }
 
 fn scope_reason(snapshot: &Snapshot) -> String {
@@ -789,26 +800,126 @@ async fn revision_is_pinned(checkout: &Path, head: Option<&str>) -> bool {
     .is_ok_and(|output| output.lines().any(|line| !line.is_empty()))
 }
 
-/// Static evidence that `dispatch.Route.Match` moved onto the function: the
-/// router file changed and non-test Go code holds the `"route::match"` literal.
-// ponytail: static check; running the Go router against the function needs
-// the module cache offline, add it when the stack guarantees that.
-async fn delegation_is_wired(checkout: &Path) -> bool {
-    !git_diff_empty(checkout, PINNED_REVISION, &["--", "dispatch/route.go"]).await
-        && git_succeeds(
-            checkout,
-            &[
-                "grep",
-                "-q",
-                "--untracked",
-                "-F",
-                &format!("\"{FUNCTION_ID}\""),
-                "--",
-                "*.go",
-                ":!*_test.go",
-            ],
-        )
+/// Runs upstream `TestRouteMatch` against a copy of the checkout, with the
+/// test file restored to the pinned revision. Delegation is proven when the
+/// test passes with the live engine and fails when `III_URL` points at a
+/// closed port: the Go router then depends on `route::match`.
+async fn delegation_probe(context: &E2eContext, checkout: &Path) -> (bool, String) {
+    let namespace = context
+        .client()
+        .namespace()
+        .unwrap_or_else(|| "default".into());
+    delegation_probe_at(context.client().address(), &namespace, checkout).await
+}
+
+async fn delegation_probe_at(url: &str, namespace: &str, checkout: &Path) -> (bool, String) {
+    let probe = checkout.with_file_name(".delegation-probe");
+    let outcome = run_delegation_probe(url, namespace, checkout, &probe).await;
+    let _ = remove_directory(&probe);
+    match outcome {
+        Ok(outcome) => outcome,
+        Err(error) => (false, format!("delegation probe failed: {error:#}")),
+    }
+}
+
+async fn run_delegation_probe(
+    url: &str,
+    namespace: &str,
+    checkout: &Path,
+    probe: &Path,
+) -> Result<(bool, String)> {
+    remove_directory(probe)?;
+    let copied = Command::new("cp")
+        .arg("-a")
+        .arg(checkout)
+        .arg(probe)
+        .stdin(Stdio::null())
+        .output()
         .await
+        .context("copy the checkout for the delegation probe")?;
+    if !copied.status.success() {
+        bail!(
+            "cp -a failed: {}",
+            String::from_utf8_lossy(&copied.stderr).trim()
+        );
+    }
+    git(
+        probe,
+        &["checkout", PINNED_REVISION, "--", "dispatch/route_test.go"],
+    )
+    .await?;
+    let live = go_route_test(probe, url, namespace).await?;
+    if !live.0 {
+        return Ok((
+            false,
+            format!("TestRouteMatch fails with the live engine: {}", live.1),
+        ));
+    }
+    let dead = go_route_test(probe, CLOSED_ENGINE_URL, namespace).await?;
+    if dead.0 {
+        return Ok((
+            false,
+            "TestRouteMatch passes without the engine, so Route.Match does not call route::match"
+                .into(),
+        ));
+    }
+    Ok((
+        true,
+        "TestRouteMatch passes with the engine and fails without it".into(),
+    ))
+}
+
+/// `go test` for upstream `TestRouteMatch`; `Ok((passed, output tail))`.
+async fn go_route_test(checkout: &Path, url: &str, namespace: &str) -> Result<(bool, String)> {
+    let output = Command::new("go")
+        .args([
+            "test",
+            "-count=1",
+            "-timeout",
+            "120s",
+            "-run",
+            "^TestRouteMatch$",
+            "./dispatch/",
+        ])
+        .current_dir(checkout)
+        .env("III_URL", url)
+        .env("III_NAMESPACE", namespace)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        .output();
+    let output = tokio::time::timeout(GO_TEST_TIMEOUT, output)
+        .await
+        .context("go test timed out")?
+        .context("run go test")?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let tail = text.lines().rev().take(5).collect::<Vec<_>>();
+    let tail = tail.into_iter().rev().collect::<Vec<_>>().join(" | ");
+    Ok((output.status.success(), tail))
+}
+
+/// The runner needs Go to prove delegation, and the subject needs it to build
+/// Alertmanager. Refuse to start without Go 1.25, which the pinned go.mod asks
+/// for, instead of scoring the subject for a missing toolchain.
+async fn require_go_toolchain() -> Result<()> {
+    let output = Command::new("go")
+        .args(["env", "GOVERSION"])
+        .stdin(Stdio::null())
+        .output()
+        .await
+        .context("Go toolchain is not on PATH; Alertmanager needs Go 1.25+")?;
+    let version = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let minor = version
+        .strip_prefix("go1.")
+        .and_then(|rest| rest.split(['.', '-', ' ']).next())
+        .and_then(|minor| minor.parse::<u32>().ok());
+    if !output.status.success() || minor.is_none_or(|minor| minor < 25) {
+        bail!("Alertmanager needs Go 1.25+, found {version:?}");
+    }
+    Ok(())
 }
 
 /// Stop what the subject left serving: Compose containers declared from the
@@ -1014,6 +1125,7 @@ mod tests {
             pinned_reachable: true,
             protected_unchanged: true,
             delegation_wired: true,
+            delegation_detail: "probe passed".into(),
             function_registered: true,
             match_cases: vec![(
                 "route_test_owner-team-A".into(),
@@ -1046,7 +1158,11 @@ mod tests {
             .prompt
             .contains("calling `route::match` on the iii stack"));
         assert!(spec.prompt.contains("does not start Alertmanager"));
-        assert!(!spec.prompt.contains("go test"));
+        assert!(spec
+            .prompt
+            .contains("go test -run '^TestRouteMatch$' ./dispatch/"));
+        assert!(spec.prompt.contains("`III_URL`"));
+        assert!(spec.prompt.contains("`III_NAMESPACE`"));
         assert!(spec.prompt.contains("do not fetch another"));
         assert!(spec.prompt.contains("input/repository.bundle"));
         assert_eq!(spec.criteria.iter().map(|c| c.weight).sum::<u8>(), 100);
@@ -1181,10 +1297,7 @@ mod tests {
         )
         .await
         .expect("clone the pinned bundle into checkout");
-        let route_go = root.join(CHECKOUT_RELATIVE_PATH).join("dispatch/route.go");
-        let mut source = fs::read_to_string(&route_go).unwrap();
-        source.push_str("\nconst routeMatchFunction = \"route::match\"\n");
-        fs::write(&route_go, source).unwrap();
+        require_engine_in_route_match(&root.join(CHECKOUT_RELATIVE_PATH));
         context.client().register_function(
             FUNCTION_ID,
             iii_sdk::RegisterFunction::new_async(|payload: Value| async move {
@@ -1282,31 +1395,46 @@ mod tests {
         assert_eq!(answer["receivers"], json!(oracle.cases[4].receivers));
     }
 
+    /// Makes `Route.Match` refuse to run unless `III_URL` accepts a TCP
+    /// connection: the smallest router that depends on the engine.
+    fn require_engine_in_route_match(checkout: &Path) {
+        fs::write(
+            checkout.join("dispatch/zz_e2e_engine.go"),
+            "package dispatch\n\nimport (\n\t\"net\"\n\t\"os\"\n\t\"strings\"\n)\n\n\
+             func e2eRequireEngine() {\n\tc, err := net.Dial(\"tcp\", \
+             strings.TrimPrefix(os.Getenv(\"III_URL\"), \"ws://\"))\n\
+             \tif err != nil {\n\t\tpanic(err)\n\t}\n\tc.Close()\n}\n",
+        )
+        .unwrap();
+        let route_go = checkout.join("dispatch/route.go");
+        let signature = "func (r *Route) Match(lset model.LabelSet) []*Route {";
+        let source = fs::read_to_string(&route_go).unwrap();
+        assert!(source.contains(signature));
+        fs::write(
+            &route_go,
+            source.replace(signature, &format!("{signature}\n\te2eRequireEngine()")),
+        )
+        .unwrap();
+    }
+
+    /// Needs Go 1.25+ on PATH, as CI and the exact-stack runners provide.
     #[tokio::test]
-    async fn delegation_needs_a_changed_router_and_a_non_test_literal() {
+    async fn delegation_probe_tells_a_wired_router_from_the_pinned_one() {
+        require_go_toolchain().await.unwrap();
+        let engine = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("ws://{}", engine.local_addr().unwrap());
         let temporary = tempfile::tempdir().unwrap();
         let bundle = temporary.path().join("repository.bundle");
         fs::write(&bundle, BUNDLE_BYTES).unwrap();
         let checkout = temporary.path().join("checkout");
         validate_bundle(&bundle, &checkout).await.unwrap();
-        assert!(!delegation_is_wired(&checkout).await);
-        let route_go = checkout.join("dispatch/route.go");
-        let mut source = fs::read_to_string(&route_go).unwrap();
-        source.push_str("\n// moved\n");
-        fs::write(&route_go, &source).unwrap();
-        fs::write(
-            checkout.join("dispatch/route_match_test.go"),
-            "package dispatch\nconst f = \"route::match\"\n",
-        )
-        .unwrap();
-        assert!(!delegation_is_wired(&checkout).await);
-        fs::create_dir_all(checkout.join("internal/routeclient")).unwrap();
-        fs::write(
-            checkout.join("internal/routeclient/client.go"),
-            "package routeclient\nconst f = \"route::match\"\n",
-        )
-        .unwrap();
-        assert!(delegation_is_wired(&checkout).await);
+        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
+        assert!(!wired, "the pinned router must not count: {detail}");
+        assert!(detail.contains("passes without the engine"), "{detail}");
+        require_engine_in_route_match(&checkout);
+        let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
+        assert!(wired, "{detail}");
+        assert!(!temporary.path().join(".delegation-probe").exists());
     }
 
     #[tokio::test]

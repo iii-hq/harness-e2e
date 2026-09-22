@@ -1512,7 +1512,10 @@ mod tests {
     fn excluded_or_changed_cases_cannot_silently_pass_the_gate() {
         let to = report("1111111111111111111111111111111111111111", false, false);
         let mut from = report("2222222222222222222222222222222222222222", false, false);
-        from.scenarios[0].execution_policy.max_turns += 1;
+        from.scenarios[0].execution_policy.max_turns = from.scenarios[0]
+            .execution_policy
+            .max_turns
+            .map(|turns| turns + 1);
 
         let comparison = compare_reports(
             "from",
@@ -1747,7 +1750,7 @@ mod tests {
         let scenario = E2eScenarioReport::aggregate_case(
             case,
             ExecutionPolicy {
-                max_turns: 10,
+                max_turns: Some(10),
                 max_output_tokens: Some(100),
                 max_total_tokens: Some(1_000),
                 stuck_timeout_seconds: 30,

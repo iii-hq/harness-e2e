@@ -232,6 +232,7 @@ impl MasterPlan {
         let mut subject_turns = 0_u64;
         let mut subject_token_limit = Some(0_u64);
         let mut unbounded_token_cases = Vec::new();
+        let mut unbounded_turn_cases = Vec::new();
         for id in &scenario_ids {
             let case = &native[id];
             let key = &case.scenario_id;
@@ -248,7 +249,10 @@ impl MasterPlan {
             crate::control::validate_run_request(&admission)?;
             let attempts = u64::from(profile.repetitions) * (1 + u64::from(retries));
             let envelope = &case.resource_envelope;
-            subject_turns += u64::from(envelope.execution.max_turns) * attempts;
+            match envelope.execution.max_turns {
+                Some(max_turns) => subject_turns += u64::from(max_turns) * attempts,
+                None => unbounded_turn_cases.push(id.clone()),
+            }
             // A session ceiling cannot stand in for an unbounded workflow
             // containing several sessions. Keep that whole-case limit unknown.
             let tokens = match &envelope.workflow {
@@ -318,6 +322,7 @@ impl MasterPlan {
                 "planned_runs": scenario_ids.len() as u64 * u64::from(profile.repetitions),
                 "session_turn_limit_sum": subject_turns, "subject_token_limit": subject_token_limit,
                 "unbounded_token_cases": unbounded_token_cases,
+                "unbounded_turn_cases": unbounded_turn_cases,
                 "max_concurrent_groups": 1, "scope": "turn sum counts per-session limits, not a whole-workflow ceiling; tokens cover subject only; setup, capture and cleanup are additional"}),
             interpretation: "descriptive_only".into(),
         })

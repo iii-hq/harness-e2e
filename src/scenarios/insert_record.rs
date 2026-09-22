@@ -70,7 +70,7 @@ impl Scenario for InsertRecord {
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 12,
+                max_turns: Some(12),
                 max_output_tokens: Some(4_096),
                 max_total_tokens: Some(80_000),
                 stuck_timeout_seconds: 180,

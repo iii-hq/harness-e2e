@@ -250,7 +250,7 @@ observed it. If any goal is unmet, report `INCOMPLETE` instead and name the goal
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: 80,
+                max_turns: Some(80),
                 max_output_tokens: Some(32_768),
                 max_total_tokens: Some(1_500_000),
                 stuck_timeout_seconds: 1_200,

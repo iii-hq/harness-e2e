@@ -134,7 +134,7 @@ impl Scenario for Kanban {
             prompt: format!("{}\n\n{}\n\nAcceptance criteria:\n{}\n\n{}\n\nThe repository is /workspace inside an isolated container. Dependencies are installed; external networking is disabled. Use agent_trigger with {{\"function\":\"{}\",\"description\":\"Inspect repository\",\"payload\":{{\"command\":\"pwd\"}}}} to inspect, edit and test. This is a shell executor, not delegation. Commands have a 120-second and 256-KiB output limit. Reaching either limit returns nonzero feedback after candidate processes are stopped; use a narrower command and continue. Do not inspect the host working directory.",
                 catalog().shared_prompt, case.prompt, rubric(self.0).iter().map(|c| format!("- {} ({} points)", c.description, c.weight)).collect::<Vec<_>>().join("\n"), INSTRUCTIONS.trim(), function_id(run_id)),
             filesystem_root: None,
-            execution: ExecutionPolicy { max_turns: 100, max_output_tokens: Some(65_536),
+            execution: ExecutionPolicy { max_turns: Some(100), max_output_tokens: Some(65_536),
                 max_total_tokens: Some(1_000_000), stuck_timeout_seconds: 1_800, max_validation_retries: Some(0) },
             denied_functions: &["harness::spawn", "shell::*", "coder::*", "compose::*", "router::*", "harness::send", "harness::run"],
             criteria: criteria(self.0),
