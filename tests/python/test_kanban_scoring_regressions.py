@@ -40,6 +40,17 @@ console.log(JSON.stringify(await (await probe.ticketDetail(page,ticket)).getAttr
 """, browser=True)
         self.assertEqual(result, 'detail')
 
+    def test_detail_title_outside_the_action_block_still_scopes_to_the_detail_region(self):
+        # Reference fixture layout: the title heading sits above a content block that
+        # carries its own heading ("Description") together with the Delete action.
+        result = self.node("""
+const ticket={key:'KAN-1',title:'Editable probe',description:'Keep me',status:'todo',priority:'high',assignee:'Initial'};
+await page.setContent('<main><section id="ticket-view"><p>KAN-1</p><h1>Editable probe</h1><div id="detail-content"><dl><dt>Status</dt><dd>To do</dd><dt>Priority</dt><dd>high</dd><dt>Assignee</dt><dd>Initial</dd></dl><h2>Description</h2><p>Keep me</p><div><p>Deleting removes this ticket.</p><button>Delete ticket</button></div></div></section></main>');
+await probe.assertTicketDetails(page,ticket);
+console.log(JSON.stringify(await (await probe.ticketDetail(page,ticket)).getAttribute('id')));
+""", browser=True)
+        self.assertEqual(result, 'ticket-view')
+
     def test_detail_validation_never_borrows_matching_fields_from_the_board(self):
         result = self.node("""
 const ticket={key:'KAN-1',title:'Ticket',description:'Details',status:'in_review',priority:'urgent',assignee:'Lin'};

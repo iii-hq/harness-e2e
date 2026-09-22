@@ -342,15 +342,24 @@ export function ticketCard(page, ticket) {
 export async function ticketDetail(page, ticket) {
   const action = page.getByRole('button', { name: /^delete ticket$/i }).filter({ visible: true })
   await action.waitFor({ state: 'visible', timeout: 8_000 })
-  // Start at the detail action, never at a title that may also exist on a card.
-  const heading = './/*[self::h1 or self::h2 or self::h3 or self::h4 or self::h5 or self::h6 or @role="heading"]'
-  // Skip the action header, but never jump to an outer landmark shared with cards.
-  const detail = action.locator(`xpath=ancestor::*[not(self::header or self::nav or self::footer) and ${heading}][1]`)
   const name = new RegExp(`^(?:${literalPattern(ticket.key)}\\s*[·:—–-]\\s*)?${literalPattern(ticket.title)}$`)
+  const title = page.getByRole('heading', { name }).filter({ visible: true })
+  // Start at the detail action, never at a title that may also exist on a card, and
+  // take the innermost ancestor that also holds the title: the title may sit above
+  // the block carrying the action, but never in a landmark shared with cards.
+  const detail = action
+    .locator('xpath=ancestor::*[not(self::header or self::nav or self::footer or self::body or self::html)]')
+    .filter({ has: title }).last()
   await eventually(async () => await action.count() === 1 && await detail.count() === 1
     && await detail.getByRole('heading', { name }).count() === 1,
   'ticket details are unavailable or show the wrong ticket')
-  return detail
+  // Pin the resolved region structurally so a later title edit cannot detach it.
+  const depth = await action.evaluate((button, scope) => {
+    let levels = 1
+    for (let node = button.parentElement; node !== scope; node = node.parentElement) levels++
+    return levels
+  }, await detail.elementHandle())
+  return action.locator(`xpath=ancestor::*[${depth}]`)
 }
 
 export async function holdResponse(page, pattern, method) {
