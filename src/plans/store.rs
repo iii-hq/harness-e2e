@@ -2432,7 +2432,7 @@ mod tests {
         for (profile, expected_slots, expected_submissions) in [
             ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 46, 46),
+            ("capability", 45, 45),
             ("evolution", 54, 51),
             ("endurance", 4, 4),
             ("software-engineering", 13, 12),
