@@ -31,10 +31,11 @@ alone is not accepted as a successfully detected defect.
 
 Four positive controls combine two different designs with the original and
 deterministically varied feeds. A fifth checks article line breaks rendered with
-`<br>`. Variation preserves six topics and the schema,
+`<br>`, and a sixth shows the edition in a header outside `<main>`. Variation
+preserves six topics and the schema,
 but changes edition, IDs, nonsequential ranks, text and URLs and shuffles the
-array. The alternate design uses native ordered-list numbering. The 22 negative
-controls exercise a placeholder, hardcoded data, missing/duplicate topics, hidden
+array. The alternate design uses native ordered-list numbering. The 23 negative
+controls exercise a placeholder, hardcoded data, a missing edition, missing/duplicate topics, hidden
 ranks and misleading accessible labels, incorrect DOM and CSS ordering, hidden
 or incomplete/clipped content, source/back links, history and direct entry,
 missing keyboard/focus support (including animated links without a focus indicator),
