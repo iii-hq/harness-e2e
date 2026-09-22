@@ -321,6 +321,29 @@ fn oracle() -> Result<Oracle> {
     serde_json::from_str(ORACLE_JSON).context("decode embedded Alertmanager route-match oracle")
 }
 
+fn oracle_answer(payload: &Value) -> Option<Value> {
+    let oracle = oracle().ok()?;
+    let route = payload.get("route")?.as_str()?;
+    let tree = if route == oracle.trees.route_test {
+        "route_test"
+    } else if route == oracle.trees.conf_good {
+        "conf_good"
+    } else {
+        return None;
+    };
+    let incoming: BTreeMap<String, String> =
+        serde_json::from_value(payload.get("labels").cloned().unwrap_or_else(|| json!({}))).ok()?;
+    let case = oracle
+        .cases
+        .iter()
+        .find(|case| case.tree == tree && case.labels == incoming)?;
+    Some(json!({
+        "receivers": case.receivers,
+        "group_by": case.group_by,
+        "group_by_all": case.group_by_all,
+    }))
+}
+
 fn deliverable_contract() -> DeliverableContract {
     DeliverableContract {
         artifacts: vec![ArtifactExpectation {
@@ -437,15 +460,8 @@ async fn collect_snapshot(context: &E2eContext, root: &Path) -> Result<Snapshot>
     } else {
         None
     };
-    let pinned_reachable = if checkout_is_repository {
-        git_succeeds(
-            &checkout,
-            &["merge-base", "--is-ancestor", PINNED_REVISION, "HEAD"],
-        )
-        .await
-    } else {
-        false
-    };
+    let pinned_reachable =
+        checkout_is_repository && revision_is_pinned(&checkout, head.as_deref()).await;
     let protected_unchanged = checkout_is_repository && {
         let mut args = vec!["--"];
         args.extend(PROTECTED_PATHS.iter().copied());
@@ -625,7 +641,9 @@ fn audit_content(snapshot: &Snapshot) -> Value {
 }
 
 fn revision_reason(snapshot: &Snapshot) -> String {
-    if snapshot.revision_pinned() {
+    if snapshot.head.as_deref() == Some(PINNED_REVISION) {
+        format!("checkout HEAD is {PINNED_REVISION}")
+    } else if snapshot.revision_pinned() {
         format!(
             "checkout HEAD {:?} descends from {PINNED_REVISION}",
             snapshot.head
@@ -677,6 +695,25 @@ fn scope_reason(snapshot: &Snapshot) -> String {
     } else {
         "protected Alertmanager paths changed".into()
     }
+}
+
+/// The pinned bundle is depth 1, so `merge-base --is-ancestor` cannot read the
+/// missing parent even when HEAD is that commit. Equality is pinned, and a
+/// later commit is pinned when `rev-list --ancestry-path` can see it.
+async fn revision_is_pinned(checkout: &Path, head: Option<&str>) -> bool {
+    if head == Some(PINNED_REVISION) {
+        return true;
+    }
+    git(
+        checkout,
+        &[
+            "rev-list",
+            "--ancestry-path",
+            &format!("{PINNED_REVISION}..HEAD"),
+        ],
+    )
+    .await
+    .is_ok_and(|output| output.lines().any(|line| !line.is_empty()))
 }
 
 async fn git_diff_empty(cwd: &Path, revision: &str, extra: &[&str]) -> bool {
@@ -753,8 +790,10 @@ fn workspace_root(run_id: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
-    use crate::scenarios::ScenarioId;
+    use crate::scenarios::{ScenarioId, ScenarioObservation};
 
     fn valid_snapshot() -> Snapshot {
         Snapshot {
@@ -902,15 +941,126 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires the local iii engine at ws://127.0.0.1:49134 in namespace my-project"]
+    async fn live_oracle_function_scores_on_the_running_engine() {
+        std::env::set_var("III_NAMESPACE", "my-project");
+        let context = E2eContext::connect("ws://127.0.0.1:49134")
+            .await
+            .expect("connect to the local iii engine");
+        let run_id = "live-alertmanager-probe";
+        let root = workspace_root(run_id);
+        let _ = remove_directory(&root);
+        AlertmanagerRouteMatch
+            .setup(&context, run_id)
+            .await
+            .expect("prepare the bundle workspace");
+        validate_bundle(
+            &root.join(BUNDLE_RELATIVE_PATH),
+            &root.join(CHECKOUT_RELATIVE_PATH),
+        )
+        .await
+        .expect("clone the pinned bundle into checkout");
+        context.client().register_function(
+            FUNCTION_ID,
+            iii_sdk::RegisterFunction::new_async(|payload: Value| async move {
+                Ok::<Value, iii_sdk::errors::Error>(
+                    oracle_answer(&payload).unwrap_or_else(|| json!({ "error": "no oracle case" })),
+                )
+            })
+            .description("Live probe: route::match answers from the frozen oracle."),
+        );
+        let ready = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if context.function_exists(FUNCTION_ID).await.unwrap_or(false) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await;
+        assert!(ready.is_ok(), "route::match did not register on the engine");
+        let snapshot = collect_snapshot(&context, &root)
+            .await
+            .expect("score the live calls");
+        let evaluation = AlertmanagerRouteMatch
+            .evaluate(
+                &context,
+                &ScenarioObservation {
+                    case: ScenarioId::AlertmanagerRouteMatch
+                        .materialize(run_id, CANONICAL_SEED)
+                        .unwrap()
+                        .case,
+                    metrics: crate::wire::SessionMetricsResponse::from_normalized(
+                        crate::wire::SessionMetricsPayload {
+                            root_session_id: run_id.into(),
+                            complete: true,
+                            totals: Default::default(),
+                            by_session: Vec::new(),
+                            traces: None,
+                        },
+                    ),
+                    transcript: Value::Null,
+                    response: String::new(),
+                    deliverables: Vec::new(),
+                },
+                run_id,
+            )
+            .await
+            .expect("evaluate");
+        let _ = remove_directory(&root);
+        context.shutdown().await;
+        assert!(
+            snapshot.task_completed(),
+            "task incomplete: {}",
+            match_reason(&snapshot)
+        );
+        assert_eq!(
+            snapshot.match_awarded(),
+            MATCH_EQUIVALENT.weight(),
+            "{}",
+            match_reason(&snapshot)
+        );
+        assert!(snapshot.revision_pinned(), "{}", revision_reason(&snapshot));
+        assert!(snapshot.scope_exact(), "{}", scope_reason(&snapshot));
+        assert_eq!(
+            evaluation.completion,
+            crate::report::CompletionState::Completed
+        );
+        let match_award = evaluation
+            .awards
+            .iter()
+            .find(|award| award.id == "match_equivalent")
+            .expect("match award");
+        assert_eq!(match_award.awarded, Some(MATCH_EQUIVALENT.weight()));
+    }
+
+    #[tokio::test]
     async fn embedded_bundle_head_is_the_pinned_revision() {
         let temporary = tempfile::tempdir().unwrap();
         let bundle = temporary.path().join("repository.bundle");
         fs::write(&bundle, BUNDLE_BYTES).unwrap();
         let checkout = temporary.path().join("checkout");
         validate_bundle(&bundle, &checkout).await.unwrap();
-        assert_eq!(
-            git(&checkout, &["rev-parse", "HEAD"]).await.unwrap(),
-            PINNED_REVISION
-        );
+        let head = git(&checkout, &["rev-parse", "HEAD"]).await.unwrap();
+        assert_eq!(head, PINNED_REVISION);
+        assert!(revision_is_pinned(&checkout, Some(&head)).await);
+        git(
+            &checkout,
+            &[
+                "-c",
+                "user.email=probe@example.com",
+                "-c",
+                "user.name=probe",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "descendant",
+            ],
+        )
+        .await
+        .unwrap();
+        let descendant = git(&checkout, &["rev-parse", "HEAD"]).await.unwrap();
+        assert_ne!(descendant, PINNED_REVISION);
+        assert!(revision_is_pinned(&checkout, Some(&descendant)).await);
     }
 }
