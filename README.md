@@ -473,11 +473,25 @@ are parity fixtures, not a linked product API.
 
 ## Package boundary
 
-This repository executes exact-stack test plans and does not publish itself as
-a Registry worker. Release Control supplies a stack policy and an immutable
-executor SHA to `exact-stack-e2e.yml`. The contract assembled from those inputs
-pins every Registry version, including historical candidates, so a campaign can
-state afterwards exactly what it ran.
+This repository executes exact-stack test plans and publishes immutable
+`harness-e2e` Registry releases from `main`. Release Control supplies a stack
+policy and an immutable executor SHA to `exact-stack-e2e.yml`. The contract
+assembled from those inputs pins every Registry version, including historical
+candidates, so a campaign can state afterwards exactly what it ran.
+
+## Releases
+
+`cut-release.yml` is dispatched by hand with `bump` set to `patch`, `minor` or
+`major`. It writes the next version into `Cargo.toml` and `Cargo.lock`, commits
+that on `main` and pushes the tag `harness-e2e/v<version>`. The tag runs
+`release.yml`: it checks that the tag, the manifest and the commit agree, builds
+the dashboard once and the binaries for `x86_64-unknown-linux-gnu` and
+`aarch64-apple-darwin`, creates the GitHub release, collects the typed
+interface in an isolated engine, publishes the Registry candidate to `next`
+and promotes it to `latest` with a compare-and-swap on the previous `latest`.
+The Registry job runs in the `workers-registry-next` environment; required
+reviewers on that environment turn it into a manual approval. Versions are
+plain semver; the `-experimental` suffix ended with 0.11.19.
 
 The root `iii.worker.yaml` is the public manifest for local `iii worker`
 development and package compatibility. The root `worker-compose.yaml` is a
