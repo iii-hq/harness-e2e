@@ -321,6 +321,7 @@ fn oracle() -> Result<Oracle> {
     serde_json::from_str(ORACLE_JSON).context("decode embedded Alertmanager route-match oracle")
 }
 
+#[cfg(test)]
 fn oracle_answer(payload: &Value) -> Option<Value> {
     let oracle = oracle().ok()?;
     let route = payload.get("route")?.as_str()?;
