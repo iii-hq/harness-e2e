@@ -41,6 +41,8 @@ export type PlanMetricComparison = {
     | PlanMetricId
     | 'score'
     | 'completed'
+    | 'cache_read'
+    | 'cache_write'
     | `workflow:${string}`
     | `criterion:${string}`
   label: string

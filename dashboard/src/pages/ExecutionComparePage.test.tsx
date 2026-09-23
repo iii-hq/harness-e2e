@@ -61,6 +61,12 @@ describe('execution comparison page', () => {
   it('shows what changed, the totals and every scenario, without a verdict', () => {
     const a = imported()
     const b = local()
+    for (const [detail, version] of [
+      [a, '0.11.24'],
+      [b, '0.11.27'],
+    ] as const)
+      for (const worker of detail.plan_execution?.stack ?? [])
+        if (worker.name === 'harness-e2e') worker.observed = version
     const html = renderToStaticMarkup(
       <ComparisonView
         comparison={compareExecutions(a, b)}
@@ -72,11 +78,32 @@ describe('execution comparison page', () => {
     )
     expect(html).toContain('A (base)')
     expect(html).toContain('GitHub run 35823421664 · RC 366030b3')
-    expect(html).toContain('data-change="llm-router"')
-    expect(html).toContain('Out of the totals')
-    expect(html).toContain('shell_coder_sandbox (technical_invalid in A)')
-    expect(html).toContain('data-metric-id="tokens_per_completion"')
+    expect(html).toContain(
+      'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ.',
+    )
+    // One line for the stack at the top; its groups below the totals.
+    expect(html).toContain(
+      'stack · 2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
+    )
+    expect(html.indexOf('data-comparison-metrics')).toBeLessThan(
+      html.indexOf('data-layer="comparison-stack"'),
+    )
+    expect(html).toContain('data-stack-group="only in B"')
+    // Out of the totals, with the run's own reason, and its state where a
+    // score would be.
+    expect(html).toContain(
+      'technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
+    )
+    expect(html).toContain('>infrastructure_error</td>')
+    expect(html).not.toMatch(/Not reported|Not comparable/)
+    expect(html).toContain('1 (1 run out of the totals)')
+    expect(html).toContain('data-metric-id="cache_read"')
+    expect(html).not.toContain('Tokens (incl. cache)')
     expect(html.match(/data-scenario="/g)).toHaveLength(3)
+    // Checkbox and name share one cell.
+    expect(html).toMatch(
+      /<td><span class="flex items-center gap-2"><input type="checkbox" aria-label="Select minimal_path to run again"/,
+    )
     expect(html).toContain('+ answer cites the source')
     expect(html).toContain('rerun selected')
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)

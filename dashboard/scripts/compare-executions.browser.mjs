@@ -8,7 +8,10 @@ const png = (color) =>
     ? 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
     : 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPj/HwADBwIAMCbHYQAAAABJRU5ErkJggg=='
 
-function run(id, { score = 80, technical = 'valid', screenshot = false } = {}) {
+function run(
+  id,
+  { score = 80, technical = 'valid', screenshot = false, failure = null } = {},
+) {
   return {
     run_id: id,
     attempt_id: `${id}-attempt`,
@@ -21,6 +24,7 @@ function run(id, { score = 80, technical = 'valid', screenshot = false } = {}) {
     metrics: { complete: true, totals: { cache_read_tokens: 10 } },
     cost: { subject_usd: 0.01 },
     criteria: [],
+    failures: failure ? [{ phase: 'setup', message: failure }] : [],
     deliverables: screenshot
       ? [
           {
@@ -39,7 +43,7 @@ function run(id, { score = 80, technical = 'valid', screenshot = false } = {}) {
   }
 }
 
-function execution(id, label, source, parameters, runs) {
+function execution(id, label, source, parameters, runs, stack) {
   const reports = Object.entries(runs).map(([scenario, runValue], index) => ({
     subject_id: 'flash',
     scenario_id: scenario,
@@ -69,7 +73,7 @@ function execution(id, label, source, parameters, runs) {
     totals: {},
     parameters,
     source,
-    stack: [],
+    stack,
     reports,
     plan_execution: {
       id,
@@ -78,7 +82,7 @@ function execution(id, label, source, parameters, runs) {
       label,
       parameters,
       source,
-      stack: [],
+      stack,
       warnings: [],
       state: 'completed',
       slots: [],
@@ -86,6 +90,14 @@ function execution(id, label, source, parameters, runs) {
   }
 }
 
+const worker = (name, observed) => ({
+  name,
+  source: 'package',
+  requested: null,
+  observed,
+  commit: null,
+  dirty: null,
+})
 const parameters = (runs) => ({
   scenarios: ['minimal_path', 'persistent_state', 'timer_wake'],
   runs,
@@ -110,8 +122,13 @@ const a = execution(
   {
     minimal_path: run('a1', { score: 82 }),
     persistent_state: run('a2', { score: 100, screenshot: true }),
-    timer_wake: run('a3', { technical: 'technical_invalid', score: null }),
+    timer_wake: run('a3', {
+      technical: 'technical_invalid',
+      score: null,
+      failure: 'scenario setup failed: UNKNOWN_DB primary',
+    }),
   },
+  [worker('harness-e2e', '0.11.24'), worker('state', '0.22.3')],
 )
 const b = execution(
   'plan-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
@@ -123,6 +140,16 @@ const b = execution(
     persistent_state: run('b2', { score: 62, screenshot: true }),
     timer_wake: run('b3', { score: 40 }),
   },
+  [
+    worker('harness-e2e', '0.11.27'),
+    worker('state', '0.22.3'),
+    {
+      ...worker('llm-router', '1.3.0'),
+      source: 'path',
+      commit: '852b87e0',
+      dirty: true,
+    },
+  ],
 )
 const details = { [a.id]: a, [b.id]: b }
 const started = []
@@ -175,7 +202,27 @@ try {
     await page.evaluate(() => location.hash),
     new RegExp(`/compare/${a.id}/${b.id}$`),
   )
-  await page.getByText('timer_wake (technical_invalid in A)').waitFor()
+  // Why a scenario is out, in the run's words; its state where a score would be.
+  await page
+    .getByText(
+      'technical_invalid in A: infrastructure_error — scenario setup failed: UNKNOWN_DB primary',
+    )
+    .first()
+    .waitFor()
+  assert.equal(
+    await page.locator('[data-scenario="timer_wake"] td').nth(1).innerText(),
+    'infrastructure_error',
+  )
+  assert.equal(await page.getByText(/Not reported|Not comparable/).count(), 0)
+  await page
+    .getByText(
+      'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ.',
+    )
+    .waitFor()
+  assert.equal(
+    await page.locator('[data-stack-summary]').innerText(),
+    'stack · 1 worker from your code @852b87e (uncommitted changes) · 1 only in B',
+  )
 
   // Both sides' screenshots, read on demand from their native runs.
   await page.getByRole('button', { name: 'persistent_state' }).click()

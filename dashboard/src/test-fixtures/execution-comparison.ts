@@ -8,6 +8,9 @@ export type Row = {
   technical?: string
   completion?: string
   score?: number | null
+  status?: string
+  /** The run's first failure message. */
+  failure?: string
   /** The case definition, `case.inputs_sha256`. */
   definition?: string
   seed?: number | string
@@ -28,6 +31,11 @@ export function reportRun(id: string, row: Row = {}) {
   const tokens = row.tokens ?? 100
   return {
     run_id: id,
+    ...(row.status === undefined ? {} : { status: row.status }),
+    failures:
+      row.failure === undefined
+        ? []
+        : [{ phase: 'setup', message: row.failure }],
     technical: row.technical ?? 'valid',
     completion: row.completion ?? 'completed',
     score: row.score === undefined ? 80 : row.score,
@@ -45,6 +53,32 @@ export function reportRun(id: string, row: Row = {}) {
     },
     cost: { subject_usd: 0.01, total_usd: 0.012 },
     criteria: row.criteria ?? [],
+  }
+}
+
+/** The scenario aggregate of a one-run report, counts consistent with the run. */
+function aggregate(row: Row) {
+  const completion = row.completion ?? 'completed'
+  const technical = row.technical ?? 'valid'
+  return {
+    planned_runs: 1,
+    observed_runs: 1,
+    deferred_runs: 0,
+    completed_runs: completion === 'completed' ? 1 : 0,
+    task_incomplete_runs: completion === 'task_incomplete' ? 1 : 0,
+    undetermined_runs: completion === 'undetermined' ? 1 : 0,
+    technical_valid_runs: technical === 'valid' ? 1 : 0,
+    technical_invalid_runs: technical === 'valid' ? 0 : 1,
+    scored_runs: row.score === null ? 0 : 1,
+    technical_failures: technical === 'valid' ? 0 : 1,
+    execution_reliability: null,
+    completion_evidence_coverage: null,
+    completion_rate: null,
+    mean_score: null,
+    total_tokens_consumed: null,
+    tokens_completed_p50: null,
+    failed_attempt_tokens: null,
+    tokens_per_completion: null,
   }
 }
 
@@ -70,6 +104,8 @@ export function execution(
         ...(row.round === undefined ? {} : { round: row.round }),
         report: {
           result_contract_sha256: 'contract',
+          report_state: 'complete',
+          objective_outcome: 'passed',
           scenarios: [
             {
               scenario_id: scenario,
@@ -79,11 +115,7 @@ export function execution(
                 seed: row.seed ?? 1,
                 inputs_sha256: row.definition ?? `definition-${scenario}`,
               },
-              aggregate: {
-                planned_runs: 1,
-                observed_runs: 1,
-                deferred_runs: 0,
-              },
+              aggregate: aggregate(row),
               runs: [reportRun(`${id}-${index}`, row)],
             },
           ],
@@ -165,6 +197,9 @@ export function imported() {
         scenario: 'shell_coder_sandbox',
         technical: 'technical_invalid',
         completion: 'undetermined',
+        status: 'infrastructure_error',
+        failure:
+          'scenario setup failed: database never became ready\nUNKNOWN_DB primary',
         score: null,
         tokens: 300,
       },

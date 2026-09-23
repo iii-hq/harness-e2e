@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
@@ -41,7 +42,11 @@ import {
   comparisonMarkdown,
   type ExecutionComparison,
   exclusionPhrase,
+  runnerWarning,
   type ScenarioComparison,
+  type StackComparison,
+  scenarioScore,
+  stackSummary,
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { formatPlanMetricDelta } from '@/lib/plan-comparison'
@@ -269,23 +274,20 @@ function MetricTable({
       <tbody>
         {metrics.map((metric) => (
           <tr key={metric.id} data-metric-id={metric.id}>
-            <th
-              scope="row"
-              className="normal-case tracking-normal align-top whitespace-normal font-mono text-xs font-medium text-ink"
-            >
+            <td className="font-mono text-xs font-medium text-ink">
               {metric.label}
-            </th>
+            </td>
             <td data-label="A" className={numericCellClassName}>
-              {comparedValue(metric, 'baseline', 'Not reported')}
+              {comparedValue(metric, 'baseline')}
             </td>
             <td data-label="B" className={numericCellClassName}>
-              {comparedValue(metric, 'candidate', 'Not reported')}
+              {comparedValue(metric, 'candidate')}
             </td>
             <td
               data-label="Difference"
               className={`${numericCellClassName} text-ink-soft`}
             >
-              {formatPlanMetricDelta(metric)}
+              {differenceText(metric)}
             </td>
           </tr>
         ))}
@@ -375,8 +377,45 @@ function ScenarioDetail({
   )
 }
 
+/** A difference, or a dash where one side has no figure to take it from. */
+function differenceText(metric: ComparedMetric) {
+  return metric.delta === null ? '—' : formatPlanMetricDelta(metric)
+}
+
 function formatPoints(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
+}
+
+/** The stack in groups: your code, version differences, one side only. */
+function StackDetail({ stack }: { stack: StackComparison }) {
+  const rows: Array<[string, string]> = [
+    ...stack.yourCode.map((group): [string, string] => [
+      `your code in ${group.side.toUpperCase()} ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}`,
+      group.workers.join(', '),
+    ]),
+    ...stack.versions.map((change): [string, string] => [
+      `version · ${change.field}`,
+      `${change.a} → ${change.b}`,
+    ]),
+    ...(stack.onlyA.length > 0
+      ? [['only in A', stack.onlyA.join(', ')] as [string, string]]
+      : []),
+    ...(stack.onlyB.length > 0
+      ? [['only in B', stack.onlyB.join(', ')] as [string, string]]
+      : []),
+  ]
+  if (rows.length === 0)
+    return <p className="m-0 text-sm text-ink-muted">Same stack.</p>
+  return (
+    <dl className="m-0 grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
+      {rows.map(([label, value]) => (
+        <div key={label} className="contents" data-stack-group={label}>
+          <dt className="ds-label">{label}</dt>
+          <dd className="m-0 break-words text-ink">{value}</dd>
+        </div>
+      ))}
+    </dl>
+  )
 }
 
 /** The comparison itself, from two loaded executions. No side is labelled
@@ -397,10 +436,8 @@ export function ComparisonView({
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [selected, setSelected] = useState<Set<string>>(new Set())
-  const changes = [...comparison.parameters, ...comparison.stack]
-  const unrecorded = (['a', 'b'] as const).filter(
-    (which) => !comparison.stackRecorded[which],
-  )
+  const { stack } = comparison
+  const warning = runnerWarning(comparison.runner)
   const out = comparison.scenarios.filter((scenario) => !scenario.counted)
   const toggle = (set: Set<string>, id: string) => {
     const next = new Set(set)
@@ -426,6 +463,12 @@ export function ComparisonView({
         ))}
       </dl>
 
+      {warning ? (
+        <Callout className="mt-6" tone="warning" data-runner-warning>
+          {warning}
+        </Callout>
+      ) : null}
+
       <section
         className="mt-6 grid min-w-0 gap-3"
         aria-labelledby="comparison-changes-heading"
@@ -437,24 +480,21 @@ export function ComparisonView({
         >
           What changed
         </h2>
-        {changes.length > 0 ? (
-          <DataTable caption="Parameters and stack that differ" collapse>
+        {comparison.parameters.length > 0 ? (
+          <DataTable caption="Parameters that differ" collapse>
             <thead>
               <tr>
-                <th scope="col">field</th>
+                <th scope="col">parameter</th>
                 <th scope="col">A</th>
                 <th scope="col">B</th>
               </tr>
             </thead>
             <tbody>
-              {changes.map((change) => (
+              {comparison.parameters.map((change) => (
                 <tr key={change.field} data-change={change.field}>
-                  <th
-                    scope="row"
-                    className="normal-case tracking-normal align-top whitespace-normal font-mono text-xs font-medium text-ink"
-                  >
+                  <td className="font-mono text-xs font-medium text-ink">
                     {change.field}
-                  </th>
+                  </td>
                   <td data-label="A" className="font-mono text-xs">
                     {change.a}
                   </td>
@@ -467,23 +507,25 @@ export function ComparisonView({
           </DataTable>
         ) : (
           <p className="m-0 text-sm text-ink-muted">
-            Same scenarios, runs, model, provider and profile
-            {unrecorded.length === 0 ? ', and the same stack' : ''}.
+            Same scenarios, runs, model, provider and profile.
           </p>
         )}
-        {unrecorded.length > 0 ? (
-          <p className="m-0 text-sm text-ink-muted">
-            {`No stack recorded for ${unrecorded.map((which) => which.toUpperCase()).join(' and ')}; workers are not compared.`}
-          </p>
-        ) : null}
+        <p className="m-0 font-mono text-xs text-ink" data-stack-summary>
+          stack · {stackSummary(stack)}
+        </p>
       </section>
 
       {out.length > 0 ? (
         <Callout className="mt-6" tone="info" title="Out of the totals">
-          {out
-            .map((scenario) => `${scenario.id} (${exclusionPhrase(scenario)})`)
-            .join(', ')}
-          . Their rows keep their values; count them again from the table.
+          <ul className="m-0 grid list-none gap-1 p-0" data-out-of-totals>
+            {out.map((scenario) => (
+              <li key={scenario.id} className="break-words">
+                <strong className="font-mono text-xs">{scenario.id}</strong> ·{' '}
+                {exclusionPhrase(scenario)}
+              </li>
+            ))}
+          </ul>
+          Their rows keep their values; count them again from the table.
         </Callout>
       ) : null}
 
@@ -499,6 +541,19 @@ export function ComparisonView({
         </h2>
         <MetricTable caption="Totals" metrics={comparison.totals} />
       </section>
+
+      {stack.recorded.a && stack.recorded.b ? (
+        <div className="mt-6">
+          <DisclosureLayer
+            id="comparison-stack"
+            label="stack"
+            scent={stackSummary(stack)}
+            open={false}
+          >
+            <StackDetail stack={stack} />
+          </DisclosureLayer>
+        </div>
+      ) : null}
 
       <section
         className="mt-6 grid min-w-0 gap-3"
@@ -527,9 +582,6 @@ export function ComparisonView({
         <DataTable caption="Scenarios" collapse data-comparison-scenarios>
           <thead>
             <tr>
-              <th scope="col">
-                <span className="ds-visually-hidden">Select</span>
-              </th>
               <th scope="col">scenario</th>
               <th scope="col" className={numericCellClassName}>
                 score A
@@ -555,47 +607,49 @@ export function ComparisonView({
                     data-scenario={scenario.id}
                     data-counted={scenario.counted}
                   >
-                    <td data-label="Select">
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${scenario.id} to run again`}
-                        checked={selected.has(scenario.id)}
-                        onChange={() =>
-                          setSelected((current) => toggle(current, scenario.id))
-                        }
-                      />
-                    </td>
-                    <th
-                      scope="row"
-                      className="normal-case tracking-normal align-top"
-                    >
-                      <button
-                        type="button"
-                        className="inline-flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-xs font-medium text-ink"
-                        aria-expanded={open}
-                        onClick={() =>
-                          setExpanded((current) => toggle(current, scenario.id))
-                        }
-                      >
-                        <ChevronDown
-                          size={14}
-                          className={open ? '' : '-rotate-90'}
-                          aria-hidden="true"
+                    <td>
+                      {/* Checkbox and name share the cell, so they share the line. */}
+                      <span className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${scenario.id} to run again`}
+                          checked={selected.has(scenario.id)}
+                          onChange={() =>
+                            setSelected((current) =>
+                              toggle(current, scenario.id),
+                            )
+                          }
                         />
-                        {scenario.id}
-                      </button>
-                    </th>
+                        <button
+                          type="button"
+                          className="inline-flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-xs font-medium text-ink"
+                          aria-expanded={open}
+                          onClick={() =>
+                            setExpanded((current) =>
+                              toggle(current, scenario.id),
+                            )
+                          }
+                        >
+                          <ChevronDown
+                            size={14}
+                            className={open ? '' : '-rotate-90'}
+                            aria-hidden="true"
+                          />
+                          {scenario.id}
+                        </button>
+                      </span>
+                    </td>
                     <td data-label="Score A" className={numericCellClassName}>
-                      {comparedValue(score, 'baseline', 'Not reported')}
+                      {scenarioScore(scenario, 'a')}
                     </td>
                     <td data-label="Score B" className={numericCellClassName}>
-                      {comparedValue(score, 'candidate', 'Not reported')}
+                      {scenarioScore(scenario, 'b')}
                     </td>
                     <td
                       data-label="Difference"
                       className={`${numericCellClassName} text-ink-soft`}
                     >
-                      {formatPlanMetricDelta(score)}
+                      {differenceText(score)}
                     </td>
                     <td data-label="Criteria" className="text-xs">
                       {scenario.criteria.length > 0
@@ -608,7 +662,7 @@ export function ComparisonView({
                         : '—'}
                     </td>
                     <td data-label="Totals" className="text-xs">
-                      <span className="block text-ink-muted">
+                      <span className="block break-words text-ink-muted">
                         {phrase ? `out · ${phrase}` : 'counted'}
                       </span>
                       <button
@@ -625,7 +679,7 @@ export function ComparisonView({
                   </tr>
                   {open ? (
                     <tr data-scenario-detail={scenario.id}>
-                      <td colSpan={7}>
+                      <td colSpan={6}>
                         <ScenarioDetail
                           scenario={scenario}
                           comparison={comparison}

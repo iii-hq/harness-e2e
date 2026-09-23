@@ -4,6 +4,7 @@ import type {
   JsonObject,
   StackWorker,
 } from '@/lib/dashboard-data-source'
+import { runTotalTokens } from '@/lib/execution-metrics'
 import {
   buildExecutionPresentation,
   executionTitle,
@@ -15,6 +16,7 @@ import {
   type MetricFormat,
   type PlanMetricComparison,
 } from '@/lib/plan-comparison'
+import { primaryRunValues } from '@/lib/primary-metrics'
 
 /**
  * Two executions, any two. A is the base only because the reader chose it,
@@ -43,7 +45,15 @@ export type CompareRun = {
 /** A run with Release Control's ledger columns. */
 type LedgerRun = CompareRun & {
   run: DashboardRunProjection
-  totalTokens: number | null
+  status: string | null
+  /** The first failure message the run reports. */
+  failure: string | null
+  /** The scenario definition digest, which moves with the runner. */
+  behavior: string | null
+  /** Input and output tokens, retries included, as the execution page counts them. */
+  subjectTokens: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
   turns: number | null
   functionCalls: number | null
   functionCallErrors: number | null
@@ -83,6 +93,17 @@ export type ComparisonChoice = {
 /** A figure, and whether a side's value is short of runs (then no difference is given). */
 export type ComparedMetric = PlanMetricComparison & {
   partial: { baseline: boolean; candidate: boolean }
+  /** For figures over every run: how many of those runs are out of the totals. */
+  outside?: { baseline: number; candidate: number }
+}
+
+/** One side of a scenario: its runs, and what kept it from a result when anything did. */
+export type ScenarioSide = {
+  runs: number
+  /** `no run`, or the status of the first run that is technically invalid, undetermined or unscored. */
+  state: string | null
+  /** That run's first failure message. */
+  failure: string | null
 }
 
 export type CriterionChange = {
@@ -109,9 +130,36 @@ export type ScenarioComparison = {
   criteria: CriterionChange[]
   /** Anything moved: presence, a run's state, a metric or a criterion. */
   differs: boolean
+  sides: { a: ScenarioSide; b: ScenarioSide }
 }
 
 export type ComparisonChange = { field: string; a: string; b: string }
+
+/** The stack in groups a reader can take in at once. */
+export type StackComparison = {
+  /** A side without a recorded stack is not compared worker by worker. */
+  recorded: { a: boolean; b: boolean }
+  /** Workers run from a local checkout, one entry per side and commit. */
+  yourCode: Array<{
+    side: 'a' | 'b'
+    commit: string | null
+    dirty: boolean
+    workers: string[]
+  }>
+  /** Workers on both sides, neither from a checkout, whose observed version differs. */
+  versions: ComparisonChange[]
+  onlyA: string[]
+  onlyB: string[]
+}
+
+/** The runner that measured each side, and the scenarios whose definition moved with it. */
+export type RunnerComparison = {
+  a: string | null
+  b: string | null
+  differs: boolean
+  /** Scenarios whose behavior digest differs between A and B. */
+  definitionsChanged: string[]
+}
 
 export type ComparisonSide = {
   id: string
@@ -127,9 +175,8 @@ export type ExecutionComparison = {
   a: ComparisonSide
   b: ComparisonSide
   parameters: ComparisonChange[]
-  stack: ComparisonChange[]
-  /** A side without a recorded stack is not compared worker by worker. */
-  stackRecorded: { a: boolean; b: boolean }
+  stack: StackComparison
+  runner: RunnerComparison
   totals: ComparedMetric[]
   scenarios: ScenarioComparison[]
   exclusions: TestExclusion[]
@@ -141,6 +188,8 @@ type MetricId =
   | 'coverage'
   | 'technical_failures'
   | 'tokens'
+  | 'cache_read'
+  | 'cache_write'
   | 'tokens_per_completion'
   | 'cost'
   | 'duration'
@@ -153,7 +202,9 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
   ['completed', 'Completed tasks', 'count'],
   ['coverage', 'Observed / planned runs', 'percent_points'],
   ['technical_failures', 'Technically invalid runs', 'count'],
-  ['tokens', 'Tokens (incl. cache)', 'tokens'],
+  ['tokens', 'Total tokens', 'tokens'],
+  ['cache_read', 'Cache read', 'tokens'],
+  ['cache_write', 'Cache written', 'tokens'],
   ['tokens_per_completion', 'Tokens per completed task', 'tokens'],
   ['cost', 'Subject cost', 'usd'],
   ['duration', 'Total run duration', 'seconds'],
@@ -195,34 +246,11 @@ function tokenCount(value: unknown): number | null {
     : null
 }
 
-function sumOrNull(values: (number | null)[]): number | null {
-  let total = 0
-  for (const value of values) {
-    if (value === null) return null
-    total += value
-  }
-  return total
-}
-
 function distinct<T>(values: (T | null | undefined)[]): T[] {
   const seen: T[] = []
   for (const value of values)
     if (value != null && !seen.includes(value)) seen.push(value)
   return seen
-}
-
-function cacheTokens(attempt: JsonObject): number | null {
-  const metrics = objectValue(attempt.metrics)
-  if (metrics.complete !== true || !isObject(metrics.totals)) return null
-  const totals = objectValue(metrics.totals)
-  return tokenCount(
-    sumOrNull([
-      totals.cache_read_tokens === undefined
-        ? 0
-        : tokenCount(totals.cache_read_tokens),
-      tokenCount(totals.cache_write_tokens ?? 0),
-    ]),
-  )
 }
 
 /** The ledger columns of one run, as Release Control's `projectRun` reads them. */
@@ -261,13 +289,6 @@ function ledgerColumns(run: DashboardRunProjection) {
     completion,
     technical,
     score: finite(run.score),
-    // Input and output of every attempt, plus each attempt's cache reads and writes.
-    totalTokens: tokenCount(
-      sumOrNull([
-        tokenCount(efficiency?.total_tokens),
-        tokenCount(sumOrNull([cacheTokens(run), ...retries.map(cacheTokens)])),
-      ]),
-    ),
     turns:
       rootTurns !== null
         ? rootTurns + (finite(efficiency?.child_turns) ?? 0)
@@ -305,8 +326,20 @@ export function compareRuns(detail: DashboardExecutionDetail): LedgerRun[] {
       const seed = scenarioCase.seed == null ? null : String(scenarioCase.seed)
       scenario.runs.forEach((run, repetition) => {
         const columns = ledgerColumns(run)
+        const usage = primaryRunValues(run)
         runs.push({
           ...columns,
+          status: text(run.status),
+          failure:
+            (Array.isArray(run.failures) ? run.failures : [])
+              .map((failure) => text(objectValue(failure).message))
+              .find((message) => message !== null) ?? null,
+          behavior:
+            text(scenario.behavior_sha256) ??
+            text(scenarioCase.behavior_sha256),
+          subjectTokens: runTotalTokens(run),
+          cacheRead: usage.cacheRead,
+          cacheWrite: usage.cacheWrite,
           scenarioId: scenario.scenario_id,
           slotId: JSON.stringify([scenario.scenario_id, seed, repetition]),
           runId: text(run.run_id),
@@ -454,7 +487,9 @@ function consolidate(
     ) as Record<MetricId, Aggregate>
   const scored = runs.flatMap((run) => (run.score === null ? [] : [run.score]))
   const completed = runs.filter((run) => run.completion === 'completed').length
-  const tokens = aggregate((run) => run.totalTokens)
+  // The execution page's definitions: input + output, retries included, and
+  // cache reads and writes apart.
+  const tokens = aggregate((run) => run.subjectTokens, false)
   const errors = runs.filter(
     (run) =>
       run.attemptsComplete &&
@@ -479,6 +514,8 @@ function consolidate(
       runs.filter((run) => run.technical === 'technical_invalid').length,
     ),
     tokens,
+    cache_read: aggregate((run) => run.cacheRead, false),
+    cache_write: aggregate((run) => run.cacheWrite, false),
     tokens_per_completion: {
       value:
         tokens.complete && tokens.value !== null && completed > 0
@@ -622,17 +659,6 @@ function stackOf(detail: DashboardExecutionDetail): StackWorker[] {
   return Array.isArray(stack) ? stack : []
 }
 
-function workerState(worker: StackWorker): string {
-  return [
-    worker.source,
-    worker.observed ?? 'version not observed',
-    worker.commit ? `@ ${worker.commit.slice(0, 7)}` : null,
-    worker.dirty ? '(uncommitted changes)' : null,
-  ]
-    .filter(Boolean)
-    .join(' ')
-}
-
 /** What running the execution again would take: parameters when recorded,
  *  else what the report says. A profile is known only from parameters. */
 function parametersOf(detail: DashboardExecutionDetail) {
@@ -722,26 +748,157 @@ function parameterChanges(
   return changes
 }
 
-function stackChanges(
+const RUNNER = 'harness-e2e'
+
+/**
+ * The stack in groups: workers run from a checkout (one line per commit),
+ * versions that differ between packaged workers, and workers on one side
+ * only. The runner is compared on its own.
+ */
+function stackComparison(
   left: DashboardExecutionDetail,
   right: DashboardExecutionDetail,
-): Pick<ExecutionComparison, 'stack' | 'stackRecorded'> {
-  const a = stackOf(left)
-  const b = stackOf(right)
-  const stackRecorded = { a: a.length > 0, b: b.length > 0 }
-  if (!stackRecorded.a || !stackRecorded.b) return { stack: [], stackRecorded }
-  const state = (workers: StackWorker[], name: string) =>
-    distinct(workers.filter((worker) => worker.name === name).map(workerState))
+): StackComparison {
+  const stacks = { a: stackOf(left), b: stackOf(right) }
+  const recorded = { a: stacks.a.length > 0, b: stacks.b.length > 0 }
+  const empty = { recorded, yourCode: [], versions: [], onlyA: [], onlyB: [] }
+  if (!recorded.a || !recorded.b) return empty
+  const yourCode: StackComparison['yourCode'] = []
+  for (const side of SIDES)
+    for (const worker of stacks[side].filter(
+      (entry) => entry.source === 'path',
+    )) {
+      const commit = worker.commit ? worker.commit.slice(0, 7) : null
+      const dirty = worker.dirty === true
+      const group = yourCode.find(
+        (entry) =>
+          entry.side === side &&
+          entry.commit === commit &&
+          entry.dirty === dirty,
+      )
+      if (group) group.workers = distinct([...group.workers, worker.name])
+      else yourCode.push({ side, commit, dirty, workers: [worker.name] })
+    }
+  const names = (side: 'a' | 'b') =>
+    distinct(stacks[side].map((worker) => worker.name))
+  const versions = (side: 'a' | 'b', name: string) =>
+    distinct(
+      stacks[side]
+        .filter((worker) => worker.name === name)
+        .map((worker) => worker.observed ?? 'version not observed'),
+    )
       .sort()
-      .join(' | ') || 'absent'
-  const stack = distinct([...a, ...b].map((worker) => worker.name))
-    .sort()
-    .flatMap((name) => {
-      const one = state(a, name)
-      const two = state(b, name)
-      return one === two ? [] : [{ field: name, a: one, b: two }]
-    })
-  return { stack, stackRecorded }
+      .join(' | ')
+  const fromCheckout = (name: string) =>
+    [...stacks.a, ...stacks.b].some(
+      (worker) => worker.name === name && worker.source === 'path',
+    )
+  return {
+    recorded,
+    yourCode,
+    versions: names('a')
+      .filter(
+        (name) =>
+          name !== RUNNER && names('b').includes(name) && !fromCheckout(name),
+      )
+      .sort()
+      .flatMap((name) => {
+        const a = versions('a', name)
+        const b = versions('b', name)
+        return a === b ? [] : [{ field: name, a, b }]
+      }),
+    onlyA: names('a')
+      .filter((name) => !names('b').includes(name))
+      .sort(),
+    onlyB: names('b')
+      .filter((name) => !names('a').includes(name))
+      .sort(),
+  }
+}
+
+/** "14 workers from your code @852b87e · 2 version differences · 5 only in B". */
+export function stackSummary(stack: StackComparison): string {
+  const unrecorded = SIDES.filter((side) => !stack.recorded[side])
+  if (unrecorded.length > 0)
+    return `no stack recorded for ${sidesLabel(unrecorded)}`
+  const parts = [
+    ...stack.yourCode.map(
+      (group) =>
+        `${group.workers.length} worker${group.workers.length === 1 ? '' : 's'} from your code${
+          stack.yourCode.some((other) => other.side !== group.side)
+            ? ` in ${group.side.toUpperCase()}`
+            : ''
+        } ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}`,
+    ),
+    ...(stack.versions.length > 0
+      ? [
+          `${stack.versions.length} version difference${stack.versions.length === 1 ? '' : 's'}`,
+        ]
+      : []),
+    ...(stack.onlyA.length > 0 ? [`${stack.onlyA.length} only in A`] : []),
+    ...(stack.onlyB.length > 0 ? [`${stack.onlyB.length} only in B`] : []),
+  ]
+  return parts.length > 0 ? parts.join(' · ') : 'same stack'
+}
+
+function runnerComparison(
+  left: DashboardExecutionDetail,
+  right: DashboardExecutionDetail,
+  runs: { a: LedgerRun[]; b: LedgerRun[] },
+  ids: string[],
+): RunnerComparison {
+  const version = (detail: DashboardExecutionDetail) =>
+    distinct(
+      stackOf(detail)
+        .filter((worker) => worker.name === RUNNER)
+        .map((worker) => worker.observed),
+    ).join(' | ') || null
+  const a = version(left)
+  const b = version(right)
+  const behaviors = (side: LedgerRun[], id: string) =>
+    distinct(
+      side.filter((run) => run.scenarioId === id).map((run) => run.behavior),
+    )
+      .sort()
+      .join(',')
+  return {
+    a,
+    b,
+    differs: a !== null && b !== null && a !== b,
+    definitionsChanged: ids.filter((id) => {
+      const one = behaviors(runs.a, id)
+      const two = behaviors(runs.b, id)
+      return one !== '' && two !== '' && one !== two
+    }),
+  }
+}
+
+/** The runner warning, when the runners or the scenario definitions differ. */
+export function runnerWarning(runner: RunnerComparison): string | null {
+  const changed = runner.definitionsChanged.join(', ')
+  if (runner.differs)
+    return `Different runners: ${runner.a} → ${runner.b} — scenario definitions and scoring may differ.${changed ? ` Definitions changed: ${changed}.` : ''}`
+  return changed ? `Scenario definitions differ: ${changed}.` : null
+}
+
+const FAILURE_LENGTH = 240
+
+/** What kept one side of a scenario from a result, when anything did. */
+function scenarioSide(runs: LedgerRun[]): ScenarioSide {
+  if (runs.length === 0) return { runs: 0, state: 'no run', failure: null }
+  const gap =
+    runs.find((run) => run.technical === 'technical_invalid') ??
+    runs.find((run) => run.completion === 'undetermined') ??
+    runs.find((run) => run.score === null)
+  const failure = gap?.failure?.split(/\r?\n|\r/)[0]?.trim() ?? null
+  return {
+    runs: runs.length,
+    state: gap ? (gap.status ?? gap.technical ?? gap.completion) : null,
+    failure:
+      failure && failure.length > FAILURE_LENGTH
+        ? `${failure.slice(0, FAILURE_LENGTH - 1)}…`
+        : failure || null,
+  }
 }
 
 function settled(detail: DashboardExecutionDetail) {
@@ -820,6 +977,10 @@ export function compareExecutions(
       details[which].reports.some((record) => record.scenario_id === id)
     return {
       id,
+      sides: {
+        a: scenarioSide(runs.a.filter((run) => run.scenarioId === id)),
+        b: scenarioSide(runs.b.filter((run) => run.scenarioId === id)),
+      },
       counted: isCounted(id),
       exclusion,
       leftOut: exclude.has(id),
@@ -839,12 +1000,59 @@ export function compareExecutions(
   const counted = scenarios
     .filter((scenario) => scenario.counted)
     .map((scenario) => scenario.id)
+  // Invalid runs and coverage are counted over every run, so leaving a test
+  // out of the totals never hides them; the rows say how many are out.
+  const outside = (which: 'a' | 'b', pick: (run: LedgerRun) => boolean) =>
+    runs[which].filter((run) => !counted.includes(run.scenarioId) && pick(run))
+      .length
+  const everyRun = (
+    id: MetricId,
+    value: (which: 'a' | 'b') => number | null,
+    pick: (run: LedgerRun) => boolean,
+  ) => {
+    const [, label, format] = METRICS.find(([metric]) => metric === id) ?? []
+    return {
+      ...comparisonMetric(
+        id,
+        label ?? id,
+        value('a'),
+        value('b'),
+        format ?? 'count',
+      ),
+      partial: { baseline: false, candidate: false },
+      outside: { baseline: outside('a', pick), candidate: outside('b', pick) },
+    }
+  }
+  const planned = (which: 'a' | 'b') =>
+    ids.reduce((total, id) => total + plannedRuns(details[which], id), 0)
+  const totals = metricRows(measure('a', counted), measure('b', counted)).map(
+    (metric): ComparedMetric =>
+      metric.id === 'technical_failures'
+        ? everyRun(
+            'technical_failures',
+            (which) =>
+              runs[which].filter((run) => run.technical === 'technical_invalid')
+                .length,
+            (run) => run.technical === 'technical_invalid',
+          )
+        : metric.id === 'coverage'
+          ? everyRun(
+              'coverage',
+              (which) =>
+                planned(which) > 0
+                  ? (runs[which].length / planned(which)) * 100
+                  : null,
+              () => true,
+            )
+          : metric,
+  )
   return {
     a: sideFacts(a),
     b: sideFacts(b),
     parameters: parameterChanges(a, b),
-    ...stackChanges(a, b),
-    totals: metricRows(measure('a', counted), measure('b', counted)),
+    stack: stackComparison(a, b),
+    runner: runnerComparison(a, b, runs, ids),
+    totals,
     scenarios,
     exclusions,
   }
@@ -862,7 +1070,12 @@ export function comparedValue(
 ) {
   if (metric[side] === null) return unavailable
   const value = formatPlanMetricValue(metric, side)
-  return metric.partial[side] ? `${value} (partial)` : value
+  const outside = metric.outside?.[side] ?? 0
+  return metric.partial[side]
+    ? `${value} (partial)`
+    : outside > 0
+      ? `${value} (${outside} run${outside === 1 ? '' : 's'} out of the totals)`
+      : value
 }
 
 function markdownDelta(metric: ComparedMetric) {
@@ -875,12 +1088,38 @@ function sidesLabel(sides: ('a' | 'b')[]) {
   return sides.map((which) => which.toUpperCase()).join(' and ')
 }
 
+/** Why a gap took the scenario out, in the runs' own words. */
+export function gapPhrase(scenario: ScenarioComparison): string | null {
+  const exclusion = scenario.exclusion
+  if (!exclusion) return null
+  if (exclusion.reason === 'missing')
+    return `no run in ${sidesLabel(exclusion.sides)}`
+  if (exclusion.reason === 'redefined')
+    return 'redefined: the case inputs differ between A and B'
+  const reason = exclusion.reason === 'no_score' ? 'no score' : exclusion.reason
+  return exclusion.sides
+    .map((which) => {
+      const side = scenario.sides[which]
+      return `${reason} in ${which.toUpperCase()}${side.state ? `: ${side.state}` : ''}${side.failure ? ` — ${side.failure}` : ''}`
+    })
+    .join('; ')
+}
+
 /** Out of the totals, and why, in one phrase per scenario. */
 export function exclusionPhrase(scenario: ScenarioComparison): string | null {
   if (scenario.leftOut) return 'left out by the reader'
-  if (scenario.exclusion?.applied)
-    return `${scenario.exclusion.reason} in ${sidesLabel(scenario.exclusion.sides)}`
-  return null
+  return scenario.exclusion?.applied ? gapPhrase(scenario) : null
+}
+
+/** A scenario's score on one side; a run without one says what it was. */
+export function scenarioScore(
+  scenario: ScenarioComparison,
+  which: 'a' | 'b',
+): string {
+  const score = scenario.metrics[0]
+  const side = which === 'a' ? 'baseline' : 'candidate'
+  if (score[side] !== null) return comparedValue(score, side)
+  return scenario.sides[which].state ?? '—'
 }
 
 /** A pull-request-ready summary of the same comparison, without a verdict. */
@@ -902,16 +1141,31 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
     `A (base): ${cell(`${a.title} · ${a.origin}`)}`,
     `B: ${cell(`${b.title} · ${b.origin}`)}`,
   ]
-  const changes = [...comparison.parameters, ...comparison.stack]
-  if (changes.length > 0)
+  const warning = runnerWarning(comparison.runner)
+  if (warning) lines.push('', `> **${cell(warning)}**`)
+  if (comparison.parameters.length > 0)
     lines.push(
       '',
-      'What changed:',
-      ...changes.map(
+      'Parameters that differ:',
+      ...comparison.parameters.map(
         (change) =>
           `- ${cell(change.field)}: ${cell(change.a)} → ${cell(change.b)}`,
       ),
     )
+  const { stack } = comparison
+  lines.push('', `Stack: ${cell(stackSummary(stack))}`)
+  for (const group of stack.yourCode)
+    lines.push(
+      `- Your code in ${group.side.toUpperCase()} ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}: ${group.workers.join(', ')}`,
+    )
+  if (stack.versions.length > 0)
+    lines.push(
+      `- Version differences: ${stack.versions.map((change) => `${change.field} ${change.a} → ${change.b}`).join('; ')}`,
+    )
+  if (stack.onlyA.length > 0)
+    lines.push(`- Only in A: ${stack.onlyA.join(', ')}`)
+  if (stack.onlyB.length > 0)
+    lines.push(`- Only in B: ${stack.onlyB.join(', ')}`)
   const reported = comparison.totals.filter(
     (metric) => metric.baseline !== null || metric.candidate !== null,
   )
@@ -932,14 +1186,13 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
       '| Scenario | Score A → B | Criteria that changed |',
       '| --- | --- | --- |',
       ...differing.map((scenario) => {
-        const score = scenario.metrics[0]
         const criteria = scenario.criteria
           .map(
             (criterion) =>
               `${criterion.delta < 0 ? '−' : '+'} ${cell(criterion.label)}`,
           )
           .join('; ')
-        return `| ${cell(scenario.id)} | ${comparedValue(score, 'baseline')} → ${comparedValue(score, 'candidate')} | ${criteria || '—'} |`
+        return `| ${cell(scenario.id)} | ${cell(scenarioScore(scenario, 'a'))} → ${cell(scenarioScore(scenario, 'b'))} | ${criteria || '—'} |`
       }),
     )
   // Only a counted scenario can be said to show no difference.
@@ -953,20 +1206,21 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
     )
   const out = comparison.scenarios.flatMap((scenario) => {
     const phrase = exclusionPhrase(scenario)
-    return phrase ? [`${cell(scenario.id)} (${phrase})`] : []
+    return phrase ? [`- ${cell(scenario.id)}: ${cell(phrase)}`] : []
   })
-  if (out.length > 0) lines.push('', `Out of the totals: ${out.join(', ')}.`)
-  const back = comparison.exclusions.filter(
-    (exclusion) =>
-      !exclusion.applied &&
-      comparison.scenarios.some(
-        (scenario) => scenario.id === exclusion.scenario_id && scenario.counted,
-      ),
+  if (out.length > 0) lines.push('', 'Out of the totals:', ...out)
+  const back = comparison.scenarios.filter(
+    (scenario) =>
+      scenario.counted && scenario.exclusion && !scenario.exclusion.applied,
   )
   if (back.length > 0)
     lines.push(
       '',
-      `Counted despite a gap: ${back.map((exclusion) => `${cell(exclusion.scenario_id)} (${exclusion.reason} in ${sidesLabel(exclusion.sides)})`).join(', ')}.`,
+      'Counted despite a gap:',
+      ...back.map(
+        (scenario) =>
+          `- ${cell(scenario.id)}: ${cell(gapPhrase(scenario) ?? '')}`,
+      ),
     )
   return `${lines.join('\n')}\n`
 }

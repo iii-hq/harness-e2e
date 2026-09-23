@@ -2,10 +2,16 @@ import { describe, expect, it } from 'vitest'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   automaticExclusions,
+  comparedValue,
   compareExecutions,
   compareRuns,
   comparisonMarkdown,
+  exclusionPhrase,
+  runnerWarning,
+  scenarioScore,
+  stackSummary,
 } from '@/lib/execution-comparison'
+import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import {
   execution,
   imported,
@@ -339,7 +345,7 @@ describe('pairing', () => {
     })
     expect(whole.totals.find((metric) => metric.id === 'tokens')).toMatchObject(
       {
-        baseline: 220,
+        baseline: 200,
         partial: { baseline: true, candidate: false },
         delta: null,
       },
@@ -386,20 +392,26 @@ describe('comparing two executions', () => {
       'local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
     )
     expect(comparison.parameters).toEqual([])
-    // The requested version is not a difference; source, observed version,
-    // commit and dirty state are.
-    expect(comparison.stack).toEqual([
-      {
-        field: 'llm-router',
-        a: 'package 1.2.0',
-        b: 'path 1.3.0-dev @ a1b2c3d (uncommitted changes)',
-      },
-      {
-        field: 'session-manager',
-        a: 'absent',
-        b: 'path 0.4.0 @ a1b2c3d (uncommitted changes)',
-      },
-    ])
+    // Workers from a checkout are one line per commit; the requested version
+    // is never a difference.
+    expect(comparison.stack).toEqual({
+      recorded: { a: true, b: true },
+      yourCode: [
+        {
+          side: 'b',
+          commit: 'a1b2c3d',
+          dirty: true,
+          workers: ['llm-router', 'session-manager'],
+        },
+      ],
+      versions: [],
+      onlyA: [],
+      onlyB: ['session-manager'],
+    })
+    expect(stackSummary(comparison.stack)).toBe(
+      '2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
+    )
+    expect(runnerWarning(comparison.runner)).toBeNull()
     expect(comparison.exclusions).toEqual([
       {
         scenario_id: 'shell_coder_sandbox',
@@ -422,7 +434,15 @@ describe('comparing two executions', () => {
     ).toMatchObject({ baseline: 91, candidate: 78, delta: -13 })
     expect(
       comparison.totals.find((metric) => metric.id === 'tokens'),
-    ).toMatchObject({ baseline: 2310, candidate: 2090, delta: -220 })
+    ).toMatchObject({
+      label: 'Total tokens',
+      baseline: 2100,
+      candidate: 1900,
+      delta: -200,
+    })
+    expect(
+      comparison.totals.find((metric) => metric.id === 'cache_read'),
+    ).toMatchObject({ label: 'Cache read', baseline: 210, candidate: 190 })
     expect(
       comparison.totals.find((metric) => metric.id === 'completed'),
     ).toMatchObject({ baseline: 2, candidate: 2, delta: 0 })
@@ -462,11 +482,10 @@ describe('comparing two executions', () => {
       backward.totals.find((metric) => metric.id === 'score'),
     ).toMatchObject({ baseline: 78, candidate: 91, delta: 13 })
     expect(backward.exclusions[0].sides).toEqual(['b'])
-    expect(backward.stack[0]).toEqual({
-      field: 'llm-router',
-      a: forward.stack[0].b,
-      b: forward.stack[0].a,
-    })
+    expect(backward.stack.yourCode).toEqual(
+      forward.stack.yourCode.map((group) => ({ ...group, side: 'a' })),
+    )
+    expect(backward.stack.onlyA).toEqual(forward.stack.onlyB)
   })
 
   it('names parameter changes and a side whose stack was not recorded', () => {
@@ -493,8 +512,153 @@ describe('comparing two executions', () => {
       { field: 'model', a: 'flash', b: 'pro' },
       { field: 'profile', a: 'no profile', b: 'coder' },
     ])
-    expect(comparison.stackRecorded).toEqual({ a: true, b: false })
-    expect(comparison.stack).toEqual([])
+    expect(comparison.stack.recorded).toEqual({ a: true, b: false })
+    expect(stackSummary(comparison.stack)).toBe('no stack recorded for B')
+  })
+
+  it('says why a scenario is out of the totals, in the runs’ own words', () => {
+    const b = local()
+    b.reports = b.reports.filter(
+      (record) => record.scenario_id !== 'persistent_state',
+    )
+    const comparison = compareExecutions(imported(), b)
+    const byId = Object.fromEntries(
+      comparison.scenarios.map((scenario) => [scenario.id, scenario]),
+    )
+    const sandbox = byId.shell_coder_sandbox
+    expect(exclusionPhrase(sandbox)).toBe(
+      'technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
+    )
+    // The run exists: its state stands where a score would.
+    expect(scenarioScore(sandbox, 'a')).toBe('infrastructure_error')
+    expect(scenarioScore(sandbox, 'b')).toBe('40')
+    expect(exclusionPhrase(byId.persistent_state)).toBe('no run in B')
+    expect(scenarioScore(byId.persistent_state, 'b')).toBe('no run')
+  })
+
+  it('counts invalid runs and coverage over every run and says how many are out', () => {
+    const comparison = compareExecutions(imported(), local())
+    const invalid = comparison.totals.find(
+      (metric) => metric.id === 'technical_failures',
+    )
+    expect(invalid).toMatchObject({
+      baseline: 1,
+      candidate: 0,
+      delta: -1,
+      outside: { baseline: 1, candidate: 0 },
+    })
+    if (!invalid) throw new Error('technical_failures')
+    expect(comparedValue(invalid, 'baseline')).toBe(
+      '1 (1 run out of the totals)',
+    )
+    expect(
+      comparison.totals.find((metric) => metric.id === 'coverage'),
+    ).toMatchObject({
+      baseline: 100,
+      candidate: 100,
+      outside: { baseline: 1, candidate: 1 },
+    })
+  })
+
+  it('counts tokens as the execution page does, per scenario too', () => {
+    const b = local()
+    const run = b.reports[0].report?.scenarios[0].runs[0]
+    if (run) {
+      run.efficiency = { ...run.efficiency, total_tokens: 22_928 }
+      run.metrics = {
+        complete: true,
+        totals: { cache_read_tokens: 181_000, cache_write_tokens: 400 },
+      } as never
+    }
+    const comparison = compareExecutions(imported(), b)
+    const minimal = comparison.scenarios.find(
+      (scenario) => scenario.id === 'minimal_path',
+    )
+    const figure = (id: string) =>
+      minimal?.metrics.find((metric) => metric.id === id)?.candidate
+    const page = buildExecutionMetrics({
+      ...b,
+      reports: b.reports.filter(
+        (record) => record.scenario_id === 'minimal_path',
+      ),
+    })
+    expect(figure('tokens')).toBe(22_928)
+    expect(figure('tokens')).toBe(page.subjectTokens.total)
+    expect(figure('cache_read')).toBe(181_000)
+    expect(figure('cache_write')).toBe(400)
+    expect(comparison.totals.map((metric) => metric.label)).not.toContain(
+      'Tokens (incl. cache)',
+    )
+  })
+
+  it('warns when the runners differ and names the definitions that moved', () => {
+    const a = imported()
+    const b = local()
+    const runnerOf = (detail: typeof a, version: string) => {
+      for (const stack of [detail.stack, detail.plan_execution?.stack])
+        for (const worker of Array.isArray(stack) ? stack : [])
+          if (worker.name === 'harness-e2e') worker.observed = version
+    }
+    runnerOf(a, '0.11.24')
+    runnerOf(b, '0.11.27')
+    const scenario = b.reports[1].report?.scenarios[0]
+    if (scenario) scenario.behavior_sha256 = 'sha256:rescored'
+    const comparison = compareExecutions(a, b)
+    expect(comparison.runner).toEqual({
+      a: '0.11.24',
+      b: '0.11.27',
+      differs: true,
+      definitionsChanged: ['persistent_state'],
+    })
+    // Same inputs: the definition moved with the runner, not the case.
+    expect(comparison.exclusions.map((entry) => entry.reason)).not.toContain(
+      'redefined',
+    )
+    expect(runnerWarning(comparison.runner)).toBe(
+      'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ. Definitions changed: persistent_state.',
+    )
+    // The runner is not listed again as a version difference.
+    expect(comparison.stack.versions).toEqual([])
+  })
+
+  it('groups version differences and workers on one side only', () => {
+    const a = imported()
+    const b = local()
+    for (const detail of [a, b])
+      detail.plan_execution?.stack.push(
+        {
+          name: 'state',
+          source: 'package',
+          requested: null,
+          observed: detail === a ? '0.22.3' : '0.22.17',
+          commit: null,
+          dirty: null,
+        },
+        {
+          name: 'queue',
+          source: 'package',
+          requested: null,
+          observed: '1.0.0',
+          commit: null,
+          dirty: null,
+        },
+      )
+    a.plan_execution?.stack.push({
+      name: 'legacy',
+      source: 'package',
+      requested: null,
+      observed: '0.1.0',
+      commit: null,
+      dirty: null,
+    })
+    const { stack } = compareExecutions(a, b)
+    expect(stack.versions).toEqual([
+      { field: 'state', a: '0.22.3', b: '0.22.17' },
+    ])
+    expect(stack.onlyA).toEqual(['legacy'])
+    expect(stackSummary(stack)).toBe(
+      '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
+    )
   })
 })
 
@@ -503,6 +667,14 @@ describe('comparison summary', () => {
     const a = imported()
     const b = local()
     a.label = 'smoke\r\nnightly'
+    for (const [detail, version] of [
+      [a, '0.11.24'],
+      [b, '0.11.27'],
+    ] as const)
+      for (const worker of detail.plan_execution?.stack ?? [])
+        if (worker.name === 'harness-e2e') worker.observed = version
+    const persistent = b.reports[1].report?.scenarios[0]
+    if (persistent) persistent.behavior_sha256 = 'sha256:rescored'
     // Scenarios that moved nowhere: one counted, one the reader left out.
     for (const detail of [a, b])
       for (const scenario of ['timer_wake', 'quiet_path']) {
@@ -518,21 +690,25 @@ describe('comparison summary', () => {
       [
         '### deepseek/flash · no profile',
         '',
-        'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · runner 0.9.3',
-        'B: smoke · local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+        'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · runner 0.11.24',
+        'B: smoke · local · runner 0.11.27 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
         '',
-        'What changed:',
-        '- llm-router: package 1.2.0 → path 1.3.0-dev @ a1b2c3d (uncommitted changes)',
-        '- session-manager: absent → path 0.4.0 @ a1b2c3d (uncommitted changes)',
+        '> **Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ. Definitions changed: persistent_state.**',
+        '',
+        'Stack: 2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
+        '- Your code in B @a1b2c3d (uncommitted changes): llm-router, session-manager',
+        '- Only in B: session-manager',
         '',
         '| Metric | A | B | Difference |',
         '| --- | --- | --- | --- |',
         '| Score | 84 | 75.3 | -8.7 pts |',
         '| Completed tasks | 3 | 3 | No change |',
-        '| Observed / planned runs | 100% | 100% | No change |',
-        '| Technically invalid runs | 0 | 0 | No change |',
-        '| Tokens (incl. cache) | 2.42K | 2.2K | -220 (-9.1%) |',
-        '| Tokens per completed task | 807 | 733 | -73.3 (-9.1%) |',
+        '| Observed / planned runs | 100% (2 runs out of the totals) | 100% (2 runs out of the totals) | No change |',
+        '| Technically invalid runs | 1 (1 run out of the totals) | 0 | -1 (-100.0%) |',
+        '| Total tokens | 2.2K | 2K | -200 (-9.1%) |',
+        '| Cache read | 220 | 200 | -20 (-9.1%) |',
+        '| Cache written | 0 | 0 | No change |',
+        '| Tokens per completed task | 733 | 667 | -66.7 (-9.1%) |',
         '| Subject cost | $0.0300 | $0.0300 | No change |',
         '| Total run duration | 6.0s | 6.0s | No change |',
         '| Total turns | 9 | 9 | No change |',
@@ -543,11 +719,13 @@ describe('comparison summary', () => {
         '| --- | --- | --- |',
         '| minimal_path | 82 → 94 | + answer cites the source |',
         '| persistent_state | 100 → 62 | − state read after restart |',
-        '| shell_coder_sandbox | — → 40 | — |',
+        '| shell_coder_sandbox | infrastructure_error → 40 | — |',
         '',
         'No difference: timer_wake.',
         '',
-        'Out of the totals: quiet_path (left out by the reader), shell_coder_sandbox (technical_invalid in A).',
+        'Out of the totals:',
+        '- quiet_path: left out by the reader',
+        '- shell_coder_sandbox: technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
         '',
       ].join('\n'),
     )
