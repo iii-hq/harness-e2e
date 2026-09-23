@@ -56,7 +56,15 @@ impl AssessmentSpec {
     ) -> AssessmentOutcome {
         AssessmentOutcome {
             spec: self,
-            awarded: if satisfied { self.weight } else { 0 },
+            awarded: Some(if satisfied { self.weight } else { 0 }),
+            details: details.into(),
+        }
+    }
+
+    pub(super) fn unverified(self, details: impl Into<String>) -> AssessmentOutcome {
+        AssessmentOutcome {
+            spec: self,
+            awarded: None,
             details: details.into(),
         }
     }
@@ -66,7 +74,7 @@ impl AssessmentSpec {
     fn skipped_due_to_prerequisite(self, details: impl Into<String>) -> AssessmentOutcome {
         AssessmentOutcome {
             spec: self,
-            awarded: 0,
+            awarded: Some(0),
             details: details.into(),
         }
     }
@@ -79,7 +87,7 @@ impl AssessmentSpec {
         self.validate_award("award", awarded)?;
         Ok(AssessmentOutcome {
             spec: self,
-            awarded,
+            awarded: Some(awarded),
             details: details.into(),
         })
     }
@@ -140,7 +148,7 @@ impl ScenarioSpec {
 #[derive(Debug)]
 pub(super) struct AssessmentOutcome {
     spec: AssessmentSpec,
-    awarded: u8,
+    awarded: Option<u8>,
     details: String,
 }
 
@@ -161,7 +169,7 @@ pub(super) fn build_evaluation(
     for result in results {
         awards.push(CriterionAward {
             id: result.spec.id.to_string(),
-            awarded: Some(result.awarded),
+            awarded: result.awarded,
             reason: result.details,
         });
     }
@@ -258,6 +266,19 @@ mod tests {
 
         assert_eq!(evaluation.awards[0].awarded, Some(70));
         assert_eq!(evaluation.awards[1].awarded, Some(12));
+    }
+
+    #[test]
+    fn unverified_criterion_has_no_award() {
+        let evaluation = build_evaluation(
+            CompletionState::Completed,
+            [
+                REQUIRED.full_or_zero(true, "satisfied"),
+                SIGNAL.unverified("blocked"),
+            ],
+        );
+        assert_eq!(evaluation.awards[0].awarded, Some(70));
+        assert_eq!(evaluation.awards[1].awarded, None);
     }
 
     #[test]

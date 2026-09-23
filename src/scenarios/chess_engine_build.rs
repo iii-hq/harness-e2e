@@ -177,7 +177,8 @@ after you finish.
 
 Register these exact functions with non-empty descriptions and JSON request/response schemas:
   - `{legal}`: `{{"fen": string}} -> {{"moves": sorted UCI string[]}}`
-  - `{perft}`: `{{"fen": string, "depth": integer 0..4}} -> {{"nodes": integer}}`
+  - `{perft}`: `{{"fen": string, "depth": integer 0..4}} -> {{"nodes": integer}}`.
+    Its request JSON Schema must declare `minimum: 0` and `maximum: 4` for `depth`.
   - `{play}`: `{{"fen": string, "move": UCI string}} -> {{"fen": resulting FEN}}`
   - `{ui_content}`: `{{"path": string}} -> {{"content": string, "content_type"?: string}}`
 
@@ -272,16 +273,7 @@ manifest, then drive the page at `#/worker/{worker}/chess` after you finish."#,
             .find(|item| item.id == EVIDENCE_ID)
             .and_then(|item| item.content.as_json())
             .context("chess Worker evidence deliverable is missing")?;
-        Ok(assessment::build_evaluation(
-            if observation.metrics.complete {
-                CompletionState::Completed
-            } else {
-                CompletionState::TaskIncomplete
-            },
-            ASSESSMENTS.iter().copied().map(|spec| {
-                spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
-            }),
-        ))
+        Ok(evaluate_evidence(evidence, observation.metrics.complete))
     }
 
     async fn cleanup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
@@ -496,28 +488,55 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         )
         .await;
     ensure_remote_or_success(&info, "inspect candidate function surface")?;
-    let surface = info
+    let functions = info
         .as_ref()
         .ok()
-        .and_then(|value| value["functions"].as_array())
-        .is_some_and(|functions| {
-            contract.functions.iter().all(|(operation, id)| {
+        .and_then(|value| value["functions"].as_array());
+    let invalid_functions = contract
+        .functions
+        .iter()
+        .filter(|(operation, id)| {
+            !functions.is_some_and(|functions| {
                 functions.iter().any(|function| {
-                    function["function_id"] == *id
+                    function["function_id"] == id.as_str()
                         && function["description"]
                             .as_str()
                             .is_some_and(|text| !text.trim().is_empty())
                         && function_schema_matches(operation, function)
                 })
             })
-        });
+        })
+        .map(|(operation, _)| *operation)
+        .collect::<Vec<_>>();
+    let surface = invalid_functions.is_empty();
+    let surface_reason = if surface {
+        "all four described functions are registered".to_string()
+    } else {
+        let mut reason = format!(
+            "missing or malformed functions: {}",
+            invalid_functions.join(", ")
+        );
+        if invalid_functions.contains(&"perft")
+            && functions.is_some_and(|functions| {
+                functions.iter().any(|function| {
+                    function["function_id"] == contract.functions["perft"]
+                        && function["request_schema"]["properties"]["depth"]["type"] == "integer"
+                        && (function["request_schema"]["properties"]["depth"]["minimum"] != 0
+                            || function["request_schema"]["properties"]["depth"]["maximum"] != 4)
+                })
+            })
+        {
+            reason.push_str("; perft.depth requires minimum: 0 and maximum: 4");
+        }
+        reason
+    };
     checks.insert(
         "function_surface".into(),
-        json!({"passed":surface,"reason":if surface {"all four described functions are registered"} else {"function surface is incomplete or malformed"},"observed":result_value(info)}),
+        json!({"passed":surface,"reason":surface_reason,"invalid_functions":invalid_functions,"observed":result_value(info)}),
     );
     checks.insert(
         "runtime_contract".into(),
-        json!({"passed":compose_valid && ready && surface,"reason":format!("compose_valid={compose_valid}, worker_ready={ready}, function_surface={surface}")}),
+        json!({"passed":compose_valid && ready && surface,"reason":format!("compose_valid={compose_valid}, worker_ready={ready}, function_surface={surface}; {surface_reason}")}),
     );
 
     let families = [
@@ -559,10 +578,8 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
             .as_ref()
             .ok()
             .and_then(|value| value["nodes"].as_u64());
-        let ok = ready
-            && surface
-            && actual_moves.as_ref() == Some(&expected_moves)
-            && actual_nodes == Some(expected_nodes);
+        let ok =
+            actual_moves.as_ref() == Some(&expected_moves) && actual_nodes == Some(expected_nodes);
         checks.insert(id.into(), json!({
             "passed":ok,
             "reason":if ok {"legal moves and perft match the oracle"} else {"Worker result differs from the oracle"},
@@ -709,9 +726,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         .ok()
         .and_then(|value| value["moves"].as_array())
         .is_some_and(|moves| moves.len() == 20);
-    let invalid_ok = ready
-        && surface
-        && invalid_fen.as_ref().err().is_some_and(is_remote_failure)
+    let invalid_ok = invalid_fen.as_ref().err().is_some_and(is_remote_failure)
         && invalid_depth.as_ref().err().is_some_and(is_remote_failure)
         && invalid_move.as_ref().err().is_some_and(is_remote_failure)
         && healthy;
@@ -774,7 +789,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         "console":{"http_port":console_port,"manifest":manifest},
         "fen":{"start":START_FEN,"oracle":{"after_e2e4":expected_after,"after_e7e5":expected_final},"actual":{"after_e2e4":actual_after,"after_e7e5":actual_final}}
     });
-    let browser = if ready && surface && play_ok && console_delivery {
+    let browser = if ready && play_ok && console_delivery {
         capture_browser(
             context,
             &contract,
@@ -789,11 +804,12 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         )
         .await?
     } else {
-        json!({"passed":false,"reason":"runtime, play, and Console delivery contracts are prerequisites","captures":[]})
+        json!({"passed":false,"status":"blocked","reason":format!("Not verified: worker_ready={ready}, play_contract={play_ok}, console_delivery={console_delivery}"),"captures":[]})
     };
+    let browser_blocked = browser["status"] == "blocked";
     checks.insert(
         "playable_ui".into(),
-        json!({"passed":browser["passed"],"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"]}}),
+        json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"]}}),
     );
 
     let mut files = serde_json::Map::new();
@@ -815,8 +831,25 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && browser["passed"] == true
         && source_sha256.is_some()
         && compose_sha256.is_some();
-    checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"reason":if evidence_ok {"portable screenshots are bound to candidate and checked FENs"} else {"screenshot or identity evidence is incomplete"}}));
+    checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser probe was blocked by prerequisites"} else if evidence_ok {"portable screenshots are bound to candidate and checked FENs"} else {"screenshot or identity evidence is incomplete"}}));
     Ok(json!({"identity":identity,"checks":checks,"files":files}))
+}
+
+fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
+    assessment::build_evaluation(
+        if complete {
+            CompletionState::Completed
+        } else {
+            CompletionState::TaskIncomplete
+        },
+        ASSESSMENTS.iter().copied().map(|spec| {
+            if evidence["checks"][spec.id()]["status"] == "blocked" {
+                spec.unverified(reason(evidence, spec.id()))
+            } else {
+                spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
+            }
+        }),
+    )
 }
 
 fn result_value(result: Result<Value>) -> Value {
@@ -1435,6 +1468,35 @@ mod tests {
     }
 
     #[test]
+    fn blocked_browser_does_not_erase_observed_chess_behavior() {
+        let checks = ASSESSMENTS
+            .iter()
+            .map(|spec| {
+                let blocked = matches!(spec.id(), "playable_ui" | "evidence_complete");
+                (
+                    spec.id().to_string(),
+                    json!({"passed":spec.id() != "runtime_contract" && !blocked,"status":if blocked {"blocked"} else {"evaluated"},"reason":"probe result"}),
+                )
+            })
+            .collect::<serde_json::Map<_, _>>();
+        let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
+        assert_eq!(evaluation.completion, CompletionState::Completed);
+        assert_eq!(
+            evaluation
+                .awards
+                .iter()
+                .filter_map(|award| award.awarded)
+                .sum::<u8>(),
+            70
+        );
+        assert!(evaluation
+            .awards
+            .iter()
+            .filter(|award| matches!(award.id.as_str(), "playable_ui" | "evidence_complete"))
+            .all(|award| award.awarded.is_none()));
+    }
+
+    #[test]
     fn family_positions_cover_special_rules_and_have_oracle_answers() {
         for fen in [
             START_FEN,
@@ -1476,6 +1538,8 @@ mod tests {
         });
         assert!(function_schema_matches("perft", &function));
         function["request_schema"]["properties"]["depth"]["maximum"] = json!(99);
+        assert!(!function_schema_matches("perft", &function));
+        function["request_schema"]["properties"]["depth"] = json!({"type":"integer"});
         assert!(!function_schema_matches("perft", &function));
     }
 
