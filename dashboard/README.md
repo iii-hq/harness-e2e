@@ -28,16 +28,24 @@ The Console routes live under `#/ext/harness-e2e`. The page exposes Overview,
 Tests, Executions and Plans and keeps entity detail inside the same extension
 route.
 
-The Console page can execute one or more scenarios against the Harness already
-running at `III_URL`. It discovers registered provider/model pairs from that
-stack and scenario ids from the same E2E binary only when the execution dialog
-opens. The primary form only asks for an optional label, a subject model, and
-scenarios; URL, run count, and technical retries remain under **Advanced
-options** with safe defaults. Use **Refresh
-catalog** after restarting the Harness or changing its URL. The binary runs only
-one experiment at a time, streams incremental log chunks, indexes the resulting
-`results.json`, and keeps run metadata and logs under the worker's configured
-evidence root.
+**Run tests** executes one or more scenarios against the Harness already
+running at `III_URL`. **Run again**, on any execution (local or imported), opens
+the same form with that execution's scenarios, runs, technical retries, seed,
+model and agent profile copied and editable. Both call
+`e2e::dashboard::execution-start`, which creates an execution with a `local`
+origin and no plan, and the Console follows it on its page. The form discovers
+registered provider/model pairs from the stack and scenario ids from the same
+E2E binary only when it opens; runs, retries, seed and agent profile sit under
+**Advanced**. Use **Refresh catalog** after restarting the Harness or changing
+its URL. One execution runs at a time.
+
+Before its first slot every local execution records its stack: the containers
+of the compose project that runs this worker (`package://` or `path://`, the
+requested version, and the commit and dirty state of each path checkout) and
+the versions `engine::workers::list` reports in the worker's namespace. What
+cannot be read becomes a warning shown with the execution, never an error. A
+scenario this runner does not know, or a run that fails on this stack, fails
+only its own slot; the others run.
 
 The React page uses the Console host's iii client and change trigger. The initial
 overview receives at most 25 compact

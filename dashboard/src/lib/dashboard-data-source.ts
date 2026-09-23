@@ -569,8 +569,7 @@ export type RuntimeConfig = {
     test_version_get: string
     test_history_get: string
     catalog_get: string
-    run_status: string
-    run_start: string
+    execution_start: string
     run_cancel: string
     plan_control: string
     plans_list: string
@@ -615,8 +614,11 @@ export type DashboardDataBridge = {
   deletePlan(planId: string): Promise<void>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
-  getRunSnapshot(after?: number): Promise<JsonObject>
-  startRun(request: JsonObject): Promise<JsonObject>
+  /** Starts an execution on this stack; Run tests and Run again alike. */
+  startExecution(request: {
+    parameters: ExecutionParameters
+    label: string
+  }): Promise<{ execution_id: string }>
   cancelRun(): Promise<JsonObject>
   subscribeRunChanges(
     handler: (payload: JsonObject) => void,
@@ -709,9 +711,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
-    getRunSnapshot: (after) =>
-      call(runtime.functions.run_status, after === undefined ? {} : { after }),
-    startRun: (request) => call(runtime.functions.run_start, request),
+    startExecution: (request) =>
+      call(runtime.functions.execution_start, request),
     cancelRun: () => call(runtime.functions.run_cancel, {}),
     subscribeRunChanges: async (handler) => {
       const client = await getDashboardIiiClient()

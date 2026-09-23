@@ -259,7 +259,7 @@ export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
 
 function LedgerRowCells({ row }: { row: LedgerRow }) {
   const { presentation, execution, status } = row
-  const { title, detail } = executionTitle(presentation)
+  const { title } = executionTitle(presentation)
   const tokens = tokensOf(row)
   const origin = executionOrigin(execution)
   const score = executionScore(execution)
@@ -280,6 +280,7 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         >
           {title}
         </a>
+        {/* Every row names its origin the same way: local or GitHub #run. */}
         <span className="font-mono text-label text-ink-muted">
           {origin.href ? (
             <a
@@ -296,7 +297,6 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         </span>
         <span className="block truncate font-mono text-label text-ink-muted">
           {formatDate(presentation.completedAt)}
-          {detail ? ` · ${detail}` : ''}
         </span>
       </td>
       <td data-label="Result">
@@ -812,7 +812,6 @@ export function ExecutionsPage() {
         open={runnerOpen}
         initialScenarios={runnerScope}
         onClose={() => setRunnerOpen(false)}
-        onCompleted={() => void load()}
       />
       <GithubImportDialog
         bridge={bridge}

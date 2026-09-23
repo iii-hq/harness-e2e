@@ -43,6 +43,23 @@ describe('live dashboard transport', () => {
     expect(trigger).toHaveBeenCalledWith('execution-delete', {
       execution_id: 'execution-1',
     })
+    installDashboardRuntimeConfig({
+      functions: { execution_start: 'execution-start' },
+    } as RuntimeConfig)
+    const started = {
+      label: '',
+      parameters: {
+        scenarios: ['minimal_path'],
+        runs: 1,
+        technical_retries: 0,
+        seed: null,
+        model: 'model',
+        provider: 'provider',
+        agent: null,
+      },
+    }
+    await (await getDashboardDataBridge()).startExecution(started)
+    expect(trigger).toHaveBeenCalledWith('execution-start', started)
   })
 
   it('does not retry iii failures through HTTP', async () => {

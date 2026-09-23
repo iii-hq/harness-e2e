@@ -15,9 +15,9 @@ import {
 } from '@/components/ExecutionConfiguration'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
-import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { PlanProgress } from '@/components/PlanStatus'
 import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
 import {
@@ -53,10 +53,12 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
+  type ExecutionParameters,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
+  type ExecutionModel,
   type ExecutionPresentation,
   executionTitle,
   formatDate,
@@ -102,6 +104,26 @@ function summaryFromDetail(
     status: detail.status || fallback?.status || 'incomplete',
     subjects: detail.subjects ?? fallback?.subjects ?? [],
   }
+}
+
+/** What running an execution again starts from: its recorded parameters, or
+ *  for a run that recorded none, the scenarios and model it reports. */
+export function rerunParameters(
+  detail: DashboardExecutionDetail,
+  scenarios: string[],
+  subject: ExecutionModel | undefined,
+): ExecutionParameters {
+  return (
+    detail.plan_execution?.parameters ?? {
+      scenarios: [...new Set(scenarios)],
+      runs: 1,
+      technical_retries: 1,
+      seed: null,
+      model: subject?.model ?? '',
+      provider: subject?.provider ?? '',
+      agent: null,
+    }
+  )
 }
 
 function executionStatus(presentation: ExecutionPresentation): {
@@ -419,6 +441,8 @@ export function ExecutionPage({
   const [cancelling, setCancelling] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // The parameters the Run again form opened with; null while it is closed.
+  const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
@@ -695,30 +719,35 @@ export function ExecutionPage({
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
-              {ready ? (
+              {ready && detail.plan_id ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
                     className: 'no-underline',
                   })}
-                  href={
-                    detail.plan_id
-                      ? hashForPlan(detail.plan_id)
-                      : hashForWorkspace()
-                  }
+                  href={hashForPlan(detail.plan_id)}
+                >
+                  back to plan
+                </a>
+              ) : null}
+              {ready ? (
+                <button
+                  className={buttonClassName({ variant: 'secondary' })}
+                  type="button"
                   onClick={() =>
-                    !detail.plan_id &&
-                    requestQuickExecution(
-                      scenarioMatrix?.items.map((item) => item.scenarioId) ??
-                        [],
+                    setRerun(
+                      rerunParameters(
+                        detail,
+                        scenarioMatrix?.items.map((item) => item.scenarioId) ??
+                          [],
+                        presentation.subjects[0],
+                      ),
                     )
                   }
                 >
-                  {!detail.plan_id ? (
-                    <RotateCcw size={15} aria-hidden="true" />
-                  ) : null}
-                  {detail.plan_id ? 'back to plan' : 're-run same scope'}
-                </a>
+                  <RotateCcw size={15} aria-hidden="true" />
+                  run again
+                </button>
               ) : null}
               <button
                 className={buttonClassName({
@@ -936,6 +965,12 @@ export function ExecutionPage({
             </button>
           </div>
         }
+      />
+      <LocalRunnerDialog
+        bridge={bridge}
+        open={rerun !== null}
+        parameters={rerun}
+        onClose={() => setRerun(null)}
       />
       {/* Audit AW-09: the evidence record is a route, so back returns here. */}
       {evidenceRun ? (

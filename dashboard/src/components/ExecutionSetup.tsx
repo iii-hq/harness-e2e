@@ -163,6 +163,8 @@ type ExecutionSetupProps = {
   runs: string
   technicalRetries: string
   seed: string
+  /** Agent profile; the field shows only where the host can send it. */
+  agent?: string
   disabled?: boolean
   catalogLoading?: boolean
   catalogStatus: { tone: 'ready' | 'loading' | 'unavailable'; text: string }
@@ -179,6 +181,7 @@ type ExecutionSetupProps = {
   onRunsChange: (value: string) => void
   onTechnicalRetriesChange: (value: string) => void
   onSeedChange: (value: string) => void
+  onAgentChange?: (value: string) => void
 }
 
 function SetupSection({
@@ -233,6 +236,7 @@ export function ExecutionSetup({
   runs,
   technicalRetries,
   seed,
+  agent = '',
   disabled = false,
   catalogLoading = false,
   catalogStatus,
@@ -248,6 +252,7 @@ export function ExecutionSetup({
   onRunsChange,
   onTechnicalRetriesChange,
   onSeedChange,
+  onAgentChange,
 }: ExecutionSetupProps) {
   const [onlySelected, setOnlySelected] = useState(false)
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -497,6 +502,23 @@ export function ExecutionSetup({
                 disabled={disabled}
               />
             </Field>
+            {onAgentChange ? (
+              <Field
+                label="Agent profile"
+                htmlFor={`${idPrefix}-agent`}
+                className="sm:col-span-3"
+                hint="Leave blank for the Harness default profile."
+              >
+                <Input
+                  id={`${idPrefix}-agent`}
+                  className="font-mono"
+                  value={agent}
+                  placeholder="default"
+                  onChange={(event) => onAgentChange(event.target.value)}
+                  disabled={disabled}
+                />
+              </Field>
+            ) : null}
             <Field
               label="Harness endpoint"
               htmlFor={`${idPrefix}-url`}
