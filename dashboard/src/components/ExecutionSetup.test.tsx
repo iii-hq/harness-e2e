@@ -64,9 +64,6 @@ describe('execution setup sheet', () => {
       expect(html).not.toContain('logical')
       // Audit RS-04: no 01/02/03 numerals.
       expect(html).not.toContain('>01<')
-      // Audit PN-21: the endpoint lives under advanced, read from the summary.
-      expect(html).toContain('Harness endpoint')
-      expect(html).toContain('ws://127.0.0.1:49134')
       // Audit PN-12: the model trigger is a labelled 36px control.
       expect(html).toContain('for="test-setup-subject"')
       expect(html).toContain('id="test-setup-subject"')
@@ -82,6 +79,12 @@ describe('execution setup sheet', () => {
       expect(html).not.toContain('type="search"')
       expect(html).toContain('1 of 1 shown · 1 selected · 2 runs in total')
     }
+    // Audit PN-21: a plan's endpoint lives under advanced, read from the
+    // summary. A quick run always targets this worker's stack.
+    expect(plan).toContain('Harness endpoint')
+    expect(plan).toContain('ws://127.0.0.1:49134')
+    expect(quick).not.toContain('Harness endpoint')
+    expect(quick).not.toContain('ws://127.0.0.1:49134')
     expect(plan).toContain('Plan label')
     expect(plan).toContain('Name the plan')
     expect(plan).toContain('Purpose')
@@ -105,15 +108,43 @@ describe('execution setup sheet', () => {
       scenarios: 'Select at least one test.',
       url: 'The Harness endpoint is missing.',
     })
+    // A quick run needs no endpoint, so a failed catalog does not block it.
     expect(
       validateExecutionSetup({
         mode: 'quick',
         label: '',
         subject: 'openai\ngpt-5',
         selectedScenarios: ['a'],
-        url: 'ws://x',
       }),
     ).toEqual({})
+    // Seeds are digits up to 2^64 - 1, checked before anything is sent.
+    for (const [seed, valid] of [
+      ['18446744073709551615', true],
+      [' 7 ', true],
+      ['18446744073709551616', false],
+      ['1e5', false],
+      ['-1', false],
+      ['7.5', false],
+    ] as const) {
+      const errors = validateExecutionSetup({
+        mode: 'quick',
+        label: '',
+        subject: 'openai\ngpt-5',
+        selectedScenarios: ['a'],
+        seed,
+      })
+      expect(errors.seed === undefined, seed).toBe(valid)
+    }
+    expect(
+      renderToStaticMarkup(
+        <ExecutionSetup
+          {...sharedProps}
+          mode="quick"
+          seed="1e5"
+          errors={{ seed: 'The seed is a whole number.' }}
+        />,
+      ),
+    ).toContain('The seed is a whole number.')
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
@@ -145,9 +176,7 @@ describe('execution setup sheet', () => {
     expect(summary.headline).toBe(
       '2 tests · 2 runs · anthropic / claude-fable-5',
     )
-    expect(summary.detail).toBe(
-      '1 run per test · 1 retry · canonical seed · ws://127.0.0.1:49134',
-    )
+    expect(summary.detail).toBe('1 run per test · 1 retry · canonical seed')
     const html = renderToStaticMarkup(
       <ExecutionSetupFooter
         summary={{

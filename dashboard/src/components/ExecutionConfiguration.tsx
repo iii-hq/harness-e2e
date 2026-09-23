@@ -25,7 +25,7 @@ export function ExecutionOriginLink({
 }
 
 /** What the execution ran with (what running it again needs), where it came
- *  from, the stack it ran on and what could not be recorded about it. */
+ *  from, the stack it ran on and the warnings recorded with it. */
 export function ExecutionConfiguration({
   execution,
 }: {
@@ -79,7 +79,7 @@ export function ExecutionConfiguration({
       {execution.warnings?.length ? (
         <ul
           className="m-0 grid gap-1 pl-4 text-xs text-warning"
-          aria-label="Stack warnings"
+          aria-label="Execution warnings"
           data-execution-warnings
         >
           {execution.warnings.map((warning) => (

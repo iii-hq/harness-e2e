@@ -202,7 +202,6 @@ const trigger = (name, request = {}) => {
         { provider: 'openai-codex', model: 'codex/gpt-5.6-terra' },
       ],
     }
-  if (id === 'run-status') return { job: null, defaults: configuration }
   throw new Error(`Unexpected RPC ${name}`)
 }
 const browser = await chromium.launch({ headless: true })

@@ -67,29 +67,46 @@ export type ExecutionModelGroup = {
   models: { label: string; value: string }[]
 }
 
-export type ExecutionSetupField = 'label' | 'subject' | 'scenarios' | 'url'
+export type ExecutionSetupField =
+  | 'label'
+  | 'subject'
+  | 'scenarios'
+  | 'seed'
+  | 'url'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
-/** Audit PN-05: validation runs on submit and names each pending item. */
+const LARGEST_SEED = 18_446_744_073_709_551_615n
+
+/** Audit PN-05: validation runs on submit and names each pending item. A
+ *  quick run always targets this worker's stack, so it has no endpoint. */
 export function validateExecutionSetup({
   mode,
   label,
   subject,
   selectedScenarios,
-  url,
+  seed = '',
+  url = '',
 }: {
   mode: ExecutionSetupMode
   label: string
   subject: string
   selectedScenarios: string[]
-  url: string
+  seed?: string
+  url?: string
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
   if (mode === 'plan' && label.trim() === '') errors.label = 'Add a plan label.'
   if (!subject) errors.subject = 'Choose an execution model.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
-  if (url.trim() === '') errors.url = 'The Harness endpoint is missing.'
+  const typedSeed = seed.trim()
+  if (
+    typedSeed &&
+    (!/^\d+$/.test(typedSeed) || BigInt(typedSeed) > LARGEST_SEED)
+  )
+    errors.seed = `The seed is a whole number from 0 to ${LARGEST_SEED}.`
+  if (mode === 'plan' && url.trim() === '')
+    errors.url = 'The Harness endpoint is missing.'
   return errors
 }
 
@@ -102,6 +119,7 @@ export function focusFirstInvalid(
     ['label', `${idPrefix}-label`],
     ['subject', `${idPrefix}-subject`],
     ['scenarios', `${idPrefix}-scenario-search`],
+    ['seed', `${idPrefix}-seed`],
     ['url', `${idPrefix}-url`],
   ]
   for (const [field, id] of order) {
@@ -154,7 +172,8 @@ type ExecutionSetupProps = {
   mode: ExecutionSetupMode
   label: string
   purpose?: string
-  url: string
+  /** Plans only: a quick run always targets this worker's stack. */
+  url?: string
   subject: string
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
@@ -174,7 +193,7 @@ type ExecutionSetupProps = {
   onRefreshCatalog?: () => void
   onLabelChange: (value: string) => void
   onPurposeChange?: (value: string) => void
-  onUrlChange: (value: string) => void
+  onUrlChange?: (value: string) => void
   onSubjectChange: (value: string) => void
   onSelectedScenariosChange: (value: string[]) => void
   onQueryChange: (value: string) => void
@@ -227,7 +246,7 @@ export function ExecutionSetup({
   mode,
   label,
   purpose = '',
-  url,
+  url = '',
   subject,
   modelGroups,
   availableScenarios,
@@ -435,8 +454,8 @@ export function ExecutionSetup({
             <span className="ml-auto hidden min-w-0 truncate font-mono text-label text-ink-muted @[560px]:block">
               {runsPerScenario} per test · {retries} retr
               {retries === 1 ? 'y' : 'ies'} ·{' '}
-              {seed.trim() ? `seed ${seed.trim()}` : 'canonical seed'} ·{' '}
-              {url || 'endpoint not loaded'}
+              {seed.trim() ? `seed ${seed.trim()}` : 'canonical seed'}
+              {mode === 'plan' ? ` · ${url || 'endpoint not loaded'}` : ''}
             </span>
           </summary>
           <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-3">
@@ -488,16 +507,18 @@ export function ExecutionSetup({
               label="Seed"
               htmlFor={`${idPrefix}-seed`}
               hint="Leave blank for the canonical case set."
+              error={errors.seed}
             >
+              {/* Text, not a number input: seeds reach 2^64 - 1, beyond the
+                  integers a JavaScript number holds exactly. */}
               <Input
                 id={`${idPrefix}-seed`}
                 className="font-mono"
-                type="number"
-                min="0"
-                step="1"
+                type="text"
                 inputMode="numeric"
                 value={seed}
                 placeholder="canonical"
+                aria-invalid={errors.seed ? true : undefined}
                 onChange={(event) => onSeedChange(event.target.value)}
                 disabled={disabled}
               />
@@ -519,23 +540,25 @@ export function ExecutionSetup({
                 />
               </Field>
             ) : null}
-            <Field
-              label="Harness endpoint"
-              htmlFor={`${idPrefix}-url`}
-              className="sm:col-span-3"
-              hint="Refresh the catalog after changing it."
-              error={errors.url}
-            >
-              <Input
-                id={`${idPrefix}-url`}
-                className="font-mono text-xs"
-                value={url}
-                placeholder="ws://127.0.0.1:49134"
-                aria-invalid={errors.url ? true : undefined}
-                onChange={(event) => onUrlChange(event.target.value)}
-                disabled={disabled}
-              />
-            </Field>
+            {mode === 'plan' ? (
+              <Field
+                label="Harness endpoint"
+                htmlFor={`${idPrefix}-url`}
+                className="sm:col-span-3"
+                hint="Refresh the catalog after changing it."
+                error={errors.url}
+              >
+                <Input
+                  id={`${idPrefix}-url`}
+                  className="font-mono text-xs"
+                  value={url}
+                  placeholder="ws://127.0.0.1:49134"
+                  aria-invalid={errors.url ? true : undefined}
+                  onChange={(event) => onUrlChange?.(event.target.value)}
+                  disabled={disabled}
+                />
+              </Field>
+            ) : null}
           </div>
         </details>
       </SetupSection>
@@ -801,11 +824,13 @@ export type ExecutionSetupSummaryInput = {
   technicalRetries: number
   seed: string
   subject: string
-  url: string
+  /** Plans only. */
+  url?: string
 }
 
 /** Audit RS-07 / PN-20: the review is one sentence, not four tiles. */
 export function executionSetupSummary({
+  mode,
   selectedScenarios,
   runsPerScenario,
   technicalRetries,
@@ -823,7 +848,7 @@ export function executionSetupSummary({
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,
     `${technicalRetries} retr${technicalRetries === 1 ? 'y' : 'ies'}`,
     seed.trim() ? `seed ${seed.trim()}` : 'canonical seed',
-    url || 'endpoint not loaded',
+    ...(mode === 'plan' ? [url || 'endpoint not loaded'] : []),
   ].join(' · ')
   return { headline, detail }
 }

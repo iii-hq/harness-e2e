@@ -7,6 +7,7 @@ import {
   EvidenceBundleUnavailable,
   executionOutcome,
   provenanceEntries,
+  rerunParameters,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -140,5 +141,44 @@ describe('execution layers', () => {
     expect(byKey.completed).toMatch(/· 4m 00s$/)
     expect(byKey.completed).not.toContain('2026-08-26T20:11:31Z')
     expect(byKey.actor).toBe('layon')
+  })
+})
+
+describe('run again', () => {
+  const parameters = {
+    scenarios: ['minimal_path'],
+    runs: 3,
+    technical_retries: 2,
+    seed: '18446744073709551615',
+    model: 'gpt-5.6-terra',
+    provider: 'openai-codex',
+    agent: 'tech-lead',
+  }
+  const subject = { provider: 'deepseek', model: 'deepseek-v4-flash' }
+
+  it("starts from the execution's recorded parameters", () => {
+    const execution = {
+      ...detail,
+      plan_execution: { parameters },
+      parameters: { ...parameters, runs: 1 },
+    } as unknown as DashboardExecutionDetail
+    expect(rerunParameters(execution, ['other'], subject)).toBe(parameters)
+  })
+
+  it('starts an older native run from its own request', () => {
+    const native = { ...detail, parameters } as DashboardExecutionDetail
+    expect(rerunParameters(native, ['other'], subject)).toBe(parameters)
+  })
+
+  it('falls back to what the report shows when nothing was recorded', () => {
+    expect(rerunParameters(detail, ['a', 'b', 'a'], subject)).toEqual({
+      scenarios: ['a', 'b'],
+      runs: 1,
+      technical_retries: 1,
+      seed: null,
+      model: 'deepseek-v4-flash',
+      provider: 'deepseek',
+      agent: null,
+    })
   })
 })

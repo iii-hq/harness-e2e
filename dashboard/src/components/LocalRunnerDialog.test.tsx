@@ -32,10 +32,12 @@ describe('run form', () => {
       label: '',
       parameters: imported,
     })
+    // Seeds stay text end to end, exact beyond 2^53.
+    const seed = '18446744073709551615'
+    expect(runnerForm({ ...imported, seed }).seed).toBe(seed)
     expect(
-      executionStartRequest({ ...runnerForm({ ...imported, seed: 7 }) })
-        .parameters.seed,
-    ).toBe(7)
+      executionStartRequest(runnerForm({ ...imported, seed })).parameters.seed,
+    ).toBe(seed)
   })
 
   it('opens with only a chosen subset of the scenarios marked', () => {
@@ -52,7 +54,7 @@ describe('run form', () => {
       ...runnerForm(null, ['minimal_path']),
       label: '  Before the prompt change ',
       subject: 'deepseek\ndeepseek-v4-flash',
-      seed: '42',
+      seed: ' 42 ',
       agent: ' ',
     }
     expect(executionStartRequest(form)).toEqual({
@@ -61,7 +63,7 @@ describe('run form', () => {
         scenarios: ['minimal_path'],
         runs: 1,
         technical_retries: 1,
-        seed: 42,
+        seed: '42',
         model: 'deepseek-v4-flash',
         provider: 'deepseek',
         agent: null,

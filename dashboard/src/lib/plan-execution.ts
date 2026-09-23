@@ -28,7 +28,8 @@ export type PlanExecution = {
   parameters: ExecutionParameters | null
   source: ExecutionSource
   stack: StackWorker[]
-  /** What could not be recorded about the stack; shown, never blocking. */
+  /** What could not be recorded about the stack, and scenarios added to
+   *  complete a sequential group; shown, never blocking. */
   warnings?: string[]
   state: string
   started_at: string

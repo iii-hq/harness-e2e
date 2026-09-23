@@ -16,14 +16,12 @@ import type {
 
 type RunnerModel = { provider: string; model: string }
 type RunnerCatalog = {
-  url: string
   models: RunnerModel[]
   scenarios: string[]
 }
 
 export type RunnerForm = {
   label: string
-  url: string
   subject: string
   scenarios: string[]
   runs: string
@@ -34,7 +32,6 @@ export type RunnerForm = {
 
 const initialForm: RunnerForm = {
   label: '',
-  url: '',
   subject: '',
   scenarios: [],
   runs: '1',
@@ -63,7 +60,7 @@ export function runnerForm(
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
     // Copied as is; cleared means the canonical case set.
-    seed: parameters.seed === null ? '' : String(parameters.seed),
+    seed: parameters.seed ?? '',
     agent: parameters.agent ?? '',
   }
 }
@@ -80,7 +77,7 @@ export function executionStartRequest(form: RunnerForm): {
       scenarios: form.scenarios,
       runs: Number(form.runs) || 1,
       technical_retries: Number(form.technicalRetries) || 0,
-      seed: form.seed.trim() ? Number(form.seed) : null,
+      seed: form.seed.trim() || null,
       model,
       provider,
       agent: form.agent.trim() || null,
@@ -125,11 +122,7 @@ function asCatalog(value: JsonObject): RunnerCatalog {
         (scenario): scenario is string => typeof scenario === 'string',
       )
     : []
-  return {
-    url: typeof value.url === 'string' ? value.url : '',
-    models,
-    scenarios,
-  }
+  return { models, scenarios }
 }
 
 function errorMessage(cause: unknown) {
@@ -166,11 +159,10 @@ export function LocalRunnerDialog({
     setLoadingCatalog(true)
     setError(null)
     try {
-      const next = asCatalog(await bridge.getCatalog(form.url || undefined))
+      const next = asCatalog(await bridge.getCatalog())
       setCatalog(next)
       setForm((current) => ({
         ...current,
-        url: current.url || next.url,
         subject:
           current.subject || (next.models[0] ? modelKey(next.models[0]) : ''),
         // Keep the local loop deliberate: selecting every scenario is too
@@ -183,7 +175,7 @@ export function LocalRunnerDialog({
     } finally {
       setLoadingCatalog(false)
     }
-  }, [bridge, form.url])
+  }, [bridge])
 
   useEffect(() => {
     if (!open) return
@@ -237,13 +229,14 @@ export function LocalRunnerDialog({
       : 'run tests'
   // Audit RS-10 / PN-05: the primary stays enabled; after a submit attempt
   // the footer lists what is still pending and the fields show it inline.
+  // Without the catalog the form still sends what it holds.
   const validation = () =>
     validateExecutionSetup({
       mode: 'quick',
       label: form.label,
       subject: form.subject,
       selectedScenarios: form.scenarios,
-      url: form.url,
+      seed: form.seed,
     })
   const errors = attempted ? validation() : {}
 
@@ -283,7 +276,6 @@ export function LocalRunnerDialog({
     subject: form.subject
       ? `${request.parameters.provider} / ${request.parameters.model}`
       : '',
-    url: form.url,
   }
 
   return (
@@ -347,7 +339,6 @@ export function LocalRunnerDialog({
           mode="quick"
           stickyOffset="dialog"
           label={form.label}
-          url={form.url}
           subject={form.subject}
           modelGroups={modelOptions}
           availableScenarios={scenarios}
@@ -372,7 +363,6 @@ export function LocalRunnerDialog({
           errors={errors}
           onRefreshCatalog={() => void refreshCatalog()}
           onLabelChange={(value) => update('label', value)}
-          onUrlChange={(value) => update('url', value)}
           onSubjectChange={(value) => update('subject', value)}
           onSelectedScenariosChange={(value) => update('scenarios', value)}
           onQueryChange={setScenarioQuery}

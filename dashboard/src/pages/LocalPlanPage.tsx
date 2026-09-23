@@ -274,6 +274,7 @@ export function LocalPlanCreatePage({
         label,
         subject,
         selectedScenarios: scenarios,
+        seed,
         url,
       })
     : {}
@@ -305,6 +306,7 @@ export function LocalPlanCreatePage({
       label,
       subject,
       selectedScenarios: scenarios,
+      seed,
       url,
     })
     if (Object.keys(nextErrors).length > 0 || !bridge || !selectedSubject) {

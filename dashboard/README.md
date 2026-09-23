@@ -33,11 +33,15 @@ running at `III_URL`. **Run again**, on any execution (local or imported), opens
 the same form with that execution's scenarios, runs, technical retries, seed,
 model and agent profile copied and editable. Both call
 `e2e::dashboard::execution-start`, which creates an execution with a `local`
-origin and no plan, and the Console follows it on its page. The form discovers
-registered provider/model pairs from the stack and scenario ids from the same
-E2E binary only when it opens; runs, retries, seed and agent profile sit under
-**Advanced**. Use **Refresh catalog** after restarting the Harness or changing
-its URL. One execution runs at a time.
+origin and no plan on this worker's stack, and the Console follows it on its
+page. The form discovers registered provider/model pairs from the stack and
+scenario ids from the same E2E binary only when it opens, and still sends what
+it holds when that catalog cannot be read; runs, retries, seed and agent
+profile sit under **Advanced**. Seeds travel as text so values above 2^53 stay
+exact. A scenario of a sequential group (such as `registry_implementation`
+then `registry_verification`) brings the whole group, noted on the execution.
+One execution runs at a time. A finished execution without a plan can be
+deleted with its native runs; a plan's executions go with the plan.
 
 Before its first slot every local execution records its stack: the containers
 of the compose project that runs this worker (`package://` or `path://`, the

@@ -106,15 +106,17 @@ function summaryFromDetail(
   }
 }
 
-/** What running an execution again starts from: its recorded parameters, or
- *  for a run that recorded none, the scenarios and model it reports. */
+/** What running an execution again starts from: its recorded parameters (a
+ *  native run's are its own request), or when nothing was recorded, the
+ *  scenarios and model it reports with the form's defaults. */
 export function rerunParameters(
   detail: DashboardExecutionDetail,
   scenarios: string[],
   subject: ExecutionModel | undefined,
 ): ExecutionParameters {
   return (
-    detail.plan_execution?.parameters ?? {
+    detail.plan_execution?.parameters ??
+    detail.parameters ?? {
       scenarios: [...new Set(scenarios)],
       runs: 1,
       technical_retries: 1,
@@ -766,7 +768,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {ready && !live && !detail.plan_execution ? (
+              {ready && !live && !detail.plan_id ? (
                 <button
                   className={buttonClassName({
                     variant: 'quiet',
