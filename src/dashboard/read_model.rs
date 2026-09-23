@@ -1889,12 +1889,13 @@ mod tests {
             .expect("the scoring contract should be projected");
 
         // The prompt reaches the reader as the subject receives it.
-        assert!(spec.prompt.contains("perft(fen, depth)"));
-        assert!(spec.prompt.contains("legalmoves"));
+        assert!(spec.prompt.contains("worker-compose.yaml"));
+        assert!(spec.prompt.contains("legal_moves"));
+        assert!(spec.prompt.contains("/api/play"));
         assert!(spec
             .summary
             .as_deref()
-            .is_some_and(|summary| summary.contains("frozen fixture repository")));
+            .is_some_and(|summary| summary.contains("run-scoped iii Worker")));
 
         // Weights, policy and the description of every criterion travel with it.
         let weights: Vec<_> = spec
@@ -1905,10 +1906,16 @@ mod tests {
         assert_eq!(
             weights,
             vec![
-                ("perft_exact", 40, AssessmentPolicy::Advisory),
-                ("legal_moves_correct", 30, AssessmentPolicy::Advisory),
-                ("interface_contract", 20, AssessmentPolicy::Advisory),
-                ("build_discipline", 10, AssessmentPolicy::Advisory),
+                ("runtime_contract", 15, AssessmentPolicy::Advisory),
+                ("rules_start", 7, AssessmentPolicy::Advisory),
+                ("rules_castling", 7, AssessmentPolicy::Advisory),
+                ("rules_en_passant", 7, AssessmentPolicy::Advisory),
+                ("rules_promotion", 7, AssessmentPolicy::Advisory),
+                ("rules_check_evasion", 7, AssessmentPolicy::Advisory),
+                ("play_contract", 10, AssessmentPolicy::Advisory),
+                ("invalid_inputs", 10, AssessmentPolicy::Advisory),
+                ("playable_ui", 20, AssessmentPolicy::Advisory),
+                ("evidence_complete", 10, AssessmentPolicy::Advisory),
             ]
         );
         assert_eq!(
@@ -1918,10 +1925,10 @@ mod tests {
                 .sum::<u32>(),
             100
         );
-        assert!(spec.criteria[0].description.contains("kernel oracle"));
+        assert!(spec.criteria[0].description.contains("run-scoped Worker"));
 
         // The limits the run answers to are part of the contract, not trivia.
-        assert_eq!(spec.execution.max_turns, Some(48));
+        assert_eq!(spec.execution.max_turns, Some(64));
         assert_eq!(
             spec.denied_functions,
             ["http::*", "browser::*", "github::*"]
