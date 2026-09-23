@@ -28,6 +28,7 @@ import {
 } from '@/hooks/use-hash-route'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import {
+  type DashboardDataBridge,
   type DashboardExecutionDetail,
   getDashboardDataBridge,
   type JsonObject,
@@ -112,21 +113,130 @@ function objects(value: unknown): JsonObject[] {
     : []
 }
 
+export type ScreenshotEntry = {
+  key: string
+  /** The native execution whose report declares the deliverable. */
+  executionId: string
+  runId: string
+  path: string
+  pointer: string
+  caption: string
+}
+
 /** Screenshots each run's deliverables name, as the report lists them. */
-function screenshotsOf(detail: DashboardExecutionDetail, scenarioId: string) {
-  return scenarioDetail(detail, scenarioId).reports.flatMap((record) =>
-    (record.report?.scenarios ?? []).flatMap((scenario) =>
+export function screenshotsOf(
+  detail: DashboardExecutionDetail,
+  scenarioId: string,
+): ScreenshotEntry[] {
+  return scenarioDetail(detail, scenarioId).reports.flatMap((record) => {
+    const executionId =
+      typeof record.native_execution_id === 'string' &&
+      record.native_execution_id
+        ? record.native_execution_id
+        : detail.id
+    return (record.report?.scenarios ?? []).flatMap((scenario) =>
       scenario.runs.flatMap((run) =>
-        objects(run.deliverables).flatMap((deliverable) =>
-          objects(deliverable.screenshots).map((screenshot) => ({
-            key: `${run.run_id}:${deliverable.id}:${screenshot.pointer}`,
+        objects(run.deliverables).flatMap((deliverable) => {
+          const path = objects([deliverable.artifact])[0]?.path
+          if (typeof path !== 'string') return []
+          return objects(deliverable.screenshots).map((screenshot) => ({
+            key: `${executionId}:${run.run_id}:${path}:${screenshot.pointer}`,
+            executionId,
             runId: run.run_id,
+            path,
+            pointer: String(screenshot.pointer ?? ''),
             caption: String(screenshot.caption ?? screenshot.pointer ?? ''),
-            mediaType: String(screenshot.media_type ?? ''),
-          })),
-        ),
+          }))
+        }),
       ),
-    ),
+    )
+  })
+}
+
+/** A screenshot's bytes as a data URL, read through `e2e::dashboard::evidence-read`. */
+export async function screenshotSource(
+  read: DashboardDataBridge['readEvidence'],
+  screenshot: ScreenshotEntry,
+): Promise<string> {
+  const file = await read({
+    execution_id: screenshot.executionId,
+    path: screenshot.path,
+    pointer: screenshot.pointer,
+  })
+  return `data:${file.media_type};base64,${file.base64}`
+}
+
+type ScreenshotImage = { source: string } | { error: string } | undefined
+
+export function ScreenshotFigure({
+  screenshot,
+  image,
+  evidenceHref,
+}: {
+  screenshot: ScreenshotEntry
+  image: ScreenshotImage
+  evidenceHref: string
+}) {
+  return (
+    <figure className="m-0 grid min-w-0 gap-1" data-screenshot={screenshot.key}>
+      {image && 'source' in image ? (
+        <img
+          className="block h-auto w-full"
+          src={image.source}
+          alt={screenshot.caption}
+          loading="lazy"
+        />
+      ) : (
+        <span className="text-xs text-ink-muted" role="status">
+          {image ? image.error : 'loading screenshot…'}
+        </span>
+      )}
+      <figcaption className="font-mono text-label text-ink-muted">
+        {screenshot.caption} · <a href={evidenceHref}>evidence record</a>
+      </figcaption>
+    </figure>
+  )
+}
+
+/** The screenshots of one side, read when the scenario opens. */
+function Screenshots({
+  screenshots,
+  hrefFor,
+}: {
+  screenshots: ScreenshotEntry[]
+  hrefFor: (screenshot: ScreenshotEntry) => string
+}) {
+  const [images, setImages] = useState<Record<string, ScreenshotImage>>({})
+  useEffect(() => {
+    let cancelled = false
+    void getDashboardDataBridge().then((bridge) => {
+      for (const screenshot of screenshots)
+        screenshotSource(bridge.readEvidence, screenshot)
+          .then((source) => ({ source }))
+          .catch((cause: unknown) => ({
+            error: cause instanceof Error ? cause.message : String(cause),
+          }))
+          .then((image) => {
+            if (!cancelled)
+              setImages((current) => ({ ...current, [screenshot.key]: image }))
+          })
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [screenshots])
+  if (screenshots.length === 0) return null
+  return (
+    <section className="grid min-w-0 gap-3" aria-label="Screenshots">
+      {screenshots.map((screenshot) => (
+        <ScreenshotFigure
+          key={screenshot.key}
+          screenshot={screenshot}
+          image={images[screenshot.key]}
+          evidenceHref={hrefFor(screenshot)}
+        />
+      ))}
+    </section>
   )
 }
 
@@ -192,6 +302,14 @@ function ScenarioDetail({
   sides: Sides
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
+  // Stable per open scenario, so the screenshots are read once.
+  const screenshots = useMemo(
+    () => ({
+      a: screenshotsOf(sides.a, scenario.id),
+      b: screenshotsOf(sides.b, scenario.id),
+    }),
+    [sides, scenario.id],
+  )
   return (
     <div className="grid min-w-0 gap-4">
       <MetricTable
@@ -226,48 +344,29 @@ function ScenarioDetail({
         </section>
       ) : null}
       <div className="grid min-w-0 gap-4 @[1000px]/harness:grid-cols-2">
-        {(['a', 'b'] as const).map((which) => {
-          const screenshots = screenshotsOf(sides[which], scenario.id)
-          return (
-            <section
-              key={which}
-              className="grid min-w-0 content-start gap-2"
-              aria-label={`${which.toUpperCase()} evidence`}
-              data-comparison-evidence={which}
-            >
-              <h4 className="m-0 ds-label">
-                {which === 'a' ? 'A (base)' : 'B'} · {comparison[which].title}
-              </h4>
-              <ScenarioMatrix
-                detail={scenarioDetail(sides[which], scenario.id)}
-                onTranscript={onTranscript}
-                showContract={false}
-              />
-              {screenshots.length > 0 ? (
-                <ul
-                  className="m-0 grid list-none gap-1 p-0 font-mono text-label text-ink-muted"
-                  aria-label="Screenshots"
-                >
-                  {screenshots.map((screenshot) => (
-                    <li key={screenshot.key}>
-                      screenshot · {screenshot.caption} · {screenshot.mediaType}{' '}
-                      ·{' '}
-                      <a
-                        href={hashForExecution(
-                          sides[which].id,
-                          null,
-                          screenshot.runId,
-                        )}
-                      >
-                        evidence record
-                      </a>
-                    </li>
-                  ))}
-                </ul>
-              ) : null}
-            </section>
-          )
-        })}
+        {(['a', 'b'] as const).map((which) => (
+          <section
+            key={which}
+            className="grid min-w-0 content-start gap-2"
+            aria-label={`${which.toUpperCase()} evidence`}
+            data-comparison-evidence={which}
+          >
+            <h4 className="m-0 ds-label">
+              {which === 'a' ? 'A (base)' : 'B'} · {comparison[which].title}
+            </h4>
+            <ScenarioMatrix
+              detail={scenarioDetail(sides[which], scenario.id)}
+              onTranscript={onTranscript}
+              showContract={false}
+            />
+            <Screenshots
+              screenshots={screenshots[which]}
+              hrefFor={(screenshot) =>
+                hashForExecution(sides[which].id, null, screenshot.runId)
+              }
+            />
+          </section>
+        ))}
       </div>
     </div>
   )

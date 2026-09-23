@@ -8,6 +8,9 @@ import {
   choiceToParams,
   ExecutionComparePage,
   loadExecutionPair,
+  ScreenshotFigure,
+  screenshotSource,
+  screenshotsOf,
   toggleCounted,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
@@ -113,5 +116,74 @@ describe('execution comparison page', () => {
     )
     expect(failed).toContain('The comparison could not be loaded')
     expect(failed).toContain('B (gone) could not be loaded')
+  })
+
+  it('reads each declared screenshot from its native run and shows it', async () => {
+    const b = local()
+    const record = b.reports[1]
+    record.native_execution_id = '0123456789abcdef0123456789abcdef'
+    const run = record.report?.scenarios[0].runs[0]
+    if (run)
+      run.deliverables = [
+        {
+          id: 'board',
+          artifact: { path: 'deliverables/r/a/board.json' },
+          screenshots: [
+            {
+              pointer: '/attachments/board-desktop.png',
+              caption: 'board, desktop',
+              media_type: 'image/png',
+            },
+          ],
+        },
+      ]
+    const [screenshot] = screenshotsOf(b, 'persistent_state')
+    expect(screenshot).toMatchObject({
+      executionId: '0123456789abcdef0123456789abcdef',
+      path: 'deliverables/r/a/board.json',
+      pointer: '/attachments/board-desktop.png',
+      caption: 'board, desktop',
+    })
+    const requests: unknown[] = []
+    const source = await screenshotSource(async (input) => {
+      requests.push(input)
+      return { media_type: 'image/png', base64: 'iVBORw0K' }
+    }, screenshot)
+    expect(requests).toEqual([
+      {
+        execution_id: '0123456789abcdef0123456789abcdef',
+        path: 'deliverables/r/a/board.json',
+        pointer: '/attachments/board-desktop.png',
+      },
+    ])
+    expect(source).toBe('data:image/png;base64,iVBORw0K')
+
+    const shown = renderToStaticMarkup(
+      <ScreenshotFigure
+        screenshot={screenshot}
+        image={{ source }}
+        evidenceHref="#run"
+      />,
+    )
+    expect(shown).toContain('src="data:image/png;base64,iVBORw0K"')
+    expect(shown).toContain('alt="board, desktop"')
+    expect(
+      renderToStaticMarkup(
+        <ScreenshotFigure
+          screenshot={screenshot}
+          image={undefined}
+          evidenceHref="#run"
+        />,
+      ),
+    ).toContain('loading screenshot')
+    expect(
+      renderToStaticMarkup(
+        <ScreenshotFigure
+          screenshot={screenshot}
+          image={{ error: 'Evidence is 11000000 bytes' }}
+          evidenceHref="#run"
+        />,
+      ),
+    ).toContain('Evidence is 11000000 bytes')
   })
 })
