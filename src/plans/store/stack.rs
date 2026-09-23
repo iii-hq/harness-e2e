@@ -127,6 +127,7 @@ pub(super) fn observed_versions(
         .into_iter()
         .flatten()
         .filter(|worker| worker["runtime"] != "engine")
+        .filter(|worker| !worker["name"].as_str().is_some_and(cli_client))
         .filter(|worker| namespace.is_none_or(|namespace| worker["namespace"] == namespace))
         .filter_map(|worker| {
             Some((
@@ -135,6 +136,14 @@ pub(super) fn observed_versions(
             ))
         })
         .collect()
+}
+
+/// `iii trigger` connects as `<host>:<pid>` for the length of one call; it is
+/// the CLI, not a worker of the stack.
+fn cli_client(name: &str) -> bool {
+    name.rsplit_once(':').is_some_and(|(host, pid)| {
+        !host.is_empty() && !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit())
+    })
 }
 
 /// One row per container (of a compose file or lock) with the version the
@@ -239,6 +248,17 @@ mod tests {
             {"file": file, "namespace": "my-project",
              "containers": [{"container": "queue"}, {"container": WORKER_NAME}]},
         ]})
+    }
+
+    #[test]
+    fn cli_connections_are_not_stack_workers() {
+        let workers = json!({"workers": [
+            {"name": "harness", "version": "1.8.8", "runtime": "rust"},
+            {"name": "runnervmlun5p:2889", "version": "0.24.2", "runtime": "rust"},
+            {"name": "iii-http", "version": "0.24.2", "runtime": "engine"},
+        ]});
+        let observed = observed_versions(&workers, None);
+        assert_eq!(observed.keys().collect::<Vec<_>>(), ["harness"]);
     }
 
     #[tokio::test]
