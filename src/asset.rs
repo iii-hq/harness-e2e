@@ -417,6 +417,12 @@ fn evaluate_assets_with_policy(
             invariants: candidate.invariants,
             provenance: candidate.provenance.clone(),
             preview: preview.clone(),
+            screenshots: match &candidate.content {
+                CapturedDeliverableContent::Json(value) => {
+                    crate::screenshot::embedded_screenshots(value)
+                }
+                CapturedDeliverableContent::TextUtf8(_) => Vec::new(),
+            },
             artifact: None,
             content: candidate.content,
         };

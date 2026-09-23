@@ -21,6 +21,7 @@ pub mod report;
 pub mod result_contract;
 pub mod scenarios;
 pub mod schema;
+pub mod screenshot;
 pub mod suite;
 pub mod test_plan;
 pub mod wire;
