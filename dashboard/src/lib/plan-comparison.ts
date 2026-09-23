@@ -667,8 +667,14 @@ export function metricById(
 }
 
 function compactNumber(value: number) {
+  // Three significant digits in compact notation, so 1,000 and 1,100 do not
+  // both read "1K".
+  if (Math.abs(value) >= 1000)
+    return new Intl.NumberFormat('en-US', {
+      notation: 'compact',
+      maximumSignificantDigits: 3,
+    }).format(value)
   return new Intl.NumberFormat('en-US', {
-    notation: Math.abs(value) >= 1000 ? 'compact' : 'standard',
     maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
   }).format(value)
 }

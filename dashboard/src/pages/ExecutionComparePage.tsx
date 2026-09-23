@@ -158,7 +158,10 @@ function MetricTable({
       <tbody>
         {metrics.map((metric) => (
           <tr key={metric.id} data-metric-id={metric.id}>
-            <th scope="row" className="font-mono text-xs font-medium">
+            <th
+              scope="row"
+              className="normal-case tracking-normal align-top whitespace-normal font-mono text-xs font-medium text-ink"
+            >
               {metric.label}
             </th>
             <td data-label="A" className={numericCellClassName}>
@@ -343,7 +346,10 @@ export function ComparisonView({
             <tbody>
               {changes.map((change) => (
                 <tr key={change.field} data-change={change.field}>
-                  <th scope="row" className="font-mono text-xs font-medium">
+                  <th
+                    scope="row"
+                    className="normal-case tracking-normal align-top whitespace-normal font-mono text-xs font-medium text-ink"
+                  >
                     {change.field}
                   </th>
                   <td data-label="A" className="font-mono text-xs">
@@ -461,7 +467,10 @@ export function ComparisonView({
                         }
                       />
                     </td>
-                    <th scope="row" className="font-normal">
+                    <th
+                      scope="row"
+                      className="normal-case tracking-normal align-top"
+                    >
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 border-0 bg-transparent p-0 font-mono text-xs font-medium text-ink"

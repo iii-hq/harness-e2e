@@ -294,7 +294,7 @@ describe('comparison summary', () => {
         '| Completed | 3 | 3 | No change |',
         '| Coverage | 100% | 100% | No change |',
         '| Technical failures | 0 | 0 | No change |',
-        '| Tokens | 2K | 2K | -200 (-9.1%) |',
+        '| Tokens | 2.2K | 2K | -200 (-9.1%) |',
         '| Tokens per completion | 733 | 667 | -66.7 (-9.1%) |',
         '| Cost | $0.0300 | $0.0300 | No change |',
         '| Duration | 6.0s | 6.0s | No change |',
