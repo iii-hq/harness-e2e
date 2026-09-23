@@ -54,11 +54,11 @@ import {
   StatusBadge,
 } from '@/design-system'
 import {
-  hashForComparison,
   hashForExecution,
   hashForNewPlan,
   hashForTestHistory,
   hashForTests,
+  hashForVersionComparison,
   hashForWorkspace,
   replaceRouteParams,
   routeParams,
@@ -1064,7 +1064,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           <>
             <a
               className={dashboardHeaderActionClassName()}
-              href={hashForComparison()}
+              href={hashForVersionComparison()}
             >
               compare systems
             </a>

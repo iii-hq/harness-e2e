@@ -24,6 +24,7 @@ const ROUTES = [
   { name: 'plans', route: 'plans' },
   { name: 'plan-new', route: 'plans/new' },
   { name: 'compare', route: 'compare' },
+  { name: 'versions', route: 'versions' },
   { name: 'execution', discover: 'execution/' },
   { name: 'test-history', discover: 'tests/' },
   { name: 'plan-detail', discover: 'plans/' },

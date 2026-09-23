@@ -11,6 +11,7 @@ import {
   LedgerTable,
   ledgerFiltersFromParams,
   ledgerFiltersToParams,
+  toggleComparisonSelection,
   triggerLabel,
 } from '@/pages/ExecutionsPage'
 
@@ -246,6 +247,32 @@ describe('executions ledger', () => {
     // Every row names its origin; none names a workflow.
     expect(html).not.toContain('Harness plan')
     expect(html).not.toContain('Harness E2E Local')
+  })
+
+  it('ticks two executions for comparison, the first one as A', () => {
+    let ids: string[] = []
+    for (const id of ['passed-1', 'failed-1', 'running-1'])
+      ids = toggleComparisonSelection(ids, id)
+    expect(ids).toEqual(['passed-1', 'failed-1'])
+    expect(toggleComparisonSelection(ids, 'passed-1')).toEqual(['failed-1'])
+
+    const grouped = groupLedgerRows(rows, NOW)
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        caption="Executions"
+        groups={grouped.groups}
+        selection={{ ids, onToggle: () => undefined }}
+      />,
+    )
+    expect(html.match(/type="checkbox"/g)).toHaveLength(3)
+    expect(html.match(/checked=""/g)).toHaveLength(2)
+    expect(html.match(/text-ink-muted">(A|B)<\/span>/g)).toEqual([
+      'text-ink-muted">A</span>',
+      'text-ink-muted">B</span>',
+    ])
+    expect(html).toContain(
+      'aria-label="Compare context impact · baseline" disabled=""',
+    )
   })
 
   // Audit O-03 / E-11: the row carries every column with a label, and a

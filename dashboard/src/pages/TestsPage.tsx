@@ -31,10 +31,10 @@ import {
   StatusBadge,
 } from '@/design-system'
 import {
-  hashForComparison,
   hashForExecution,
   hashForTestHistory,
   hashForTests,
+  hashForVersionComparison,
   hashForWorkspace,
   replaceDashboardHash,
 } from '@/hooks/use-hash-route'
@@ -862,7 +862,7 @@ export function TestsPage({
   // Audit CP-10: the pair lives in the hash, without a reload.
   useEffect(() => {
     if (!fromVersionId || !toVersionId) return
-    replaceDashboardHash(hashForComparison(fromVersionId, toVersionId))
+    replaceDashboardHash(hashForVersionComparison(fromVersionId, toVersionId))
   }, [fromVersionId, toVersionId])
 
   const chooseVersions = useCallback(

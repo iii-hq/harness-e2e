@@ -12,7 +12,10 @@ export type DashboardRoute =
       /** Evidence record open on top of the execution (audit AW-09). */
       runId: string | null
     }
+  /** Two executions, A (base) and B. */
   | { page: 'compare'; left: string | null; right: string | null }
+  /** Two evaluated system versions of the test catalog. */
+  | { page: 'versions'; left: string | null; right: string | null }
   | { page: 'test-history'; testId: string }
   | { page: 'plans' }
   | {
@@ -112,9 +115,9 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
       runId: null,
     }
   }
-  if (head === 'compare') {
+  if (head === 'compare' || head === 'versions') {
     return {
-      page: 'compare',
+      page: head,
       left: rest[0] ?? null,
       right: rest[1] ?? null,
     }
@@ -161,13 +164,26 @@ export function hashForExecution(
   return anchor ? `${route}/${encodeSegment(anchor)}` : route
 }
 
+function pairHash(head: string, left: string | null, right: string | null) {
+  if (!left) return dashboardHash(head)
+  const route = dashboardHash(`${head}/${encodeSegment(left)}`)
+  return right ? `${route}/${encodeSegment(right)}` : route
+}
+
+/** Two executions: A (the base) then B. */
 export function hashForComparison(
   left: string | null = null,
   right: string | null = null,
 ): string {
-  if (!left) return dashboardHash('compare')
-  const route = dashboardHash(`compare/${encodeSegment(left)}`)
-  return right ? `${route}/${encodeSegment(right)}` : route
+  return pairHash('compare', left, right)
+}
+
+/** Two evaluated system versions of the test catalog. */
+export function hashForVersionComparison(
+  left: string | null = null,
+  right: string | null = null,
+): string {
+  return pairHash('versions', left, right)
 }
 
 export function hashForTestHistory(testId: string): string {
@@ -188,7 +204,7 @@ export function hashForPlan(planId: string): string {
 
 export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'execution') return `${route.page}:${route.executionId}`
-  if (route.page === 'compare') {
+  if (route.page === 'compare' || route.page === 'versions') {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
   }
   if (route.page === 'test-history') return `${route.page}:${route.testId}`

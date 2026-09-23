@@ -1,5 +1,6 @@
 import { DashboardShell } from '@/components/DashboardShell'
 import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
+import { ExecutionComparePage } from '@/pages/ExecutionComparePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
 import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
@@ -19,6 +20,14 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
         />
       )
     case 'compare':
+      return (
+        <ExecutionComparePage
+          key={`${route.left}:${route.right}`}
+          left={route.left}
+          right={route.right}
+        />
+      )
+    case 'versions':
       return <TestsPage initialFrom={route.left} initialTo={route.right} />
     case 'test-history':
       return <TestHistoryPage key={route.testId} testId={route.testId} />

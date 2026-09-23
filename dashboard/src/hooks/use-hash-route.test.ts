@@ -6,6 +6,7 @@ import {
   hashForPlan,
   hashForPlans,
   hashForTestHistory,
+  hashForVersionComparison,
   hashForWorkspace,
   routeFromHash,
   routeRenderIdentity,
@@ -53,13 +54,19 @@ describe('dashboard hash routes', () => {
     })
   })
 
-  it('routes comparisons from the single entry point', () => {
-    const comparison = hashForComparison('version/a', 'version b')
+  it('routes execution and version comparisons apart', () => {
+    const comparison = hashForComparison('execution/a', 'execution b')
+    expect(comparison).toBe(
+      '#/ext/harness-e2e/compare/execution%2Fa/execution%20b',
+    )
     expect(routeFromHash(comparison)).toEqual({
       page: 'compare',
-      left: 'version/a',
-      right: 'version b',
+      left: 'execution/a',
+      right: 'execution b',
     })
+    expect(
+      routeFromHash(hashForVersionComparison('version/a', 'version b')),
+    ).toEqual({ page: 'versions', left: 'version/a', right: 'version b' })
     expect(routeFromHash('#main')).toBeNull()
   })
 
