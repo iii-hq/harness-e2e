@@ -40,6 +40,13 @@ a fixture checkout or `HARNESS_E2E_FIXTURE_PATH`. Each attempt uses a private
 workspace, and temporary source checkouts are removed after their contents are
 read.
 
+`chess_engine_build` also needs a Compose daemon, a running iii Console, and an
+interactive browser. It grades a run-scoped chess Worker through live functions,
+the Console injectable-UI manifest, and the playable page at
+`#/worker/<worker>/chess`, then preserves screenshots of the real Console with
+the functional evidence. Setup installs the pinned iii SDK with npm before the
+run; a cold npm cache needs Registry access.
+
 `typescript_chat_service` carries its own frozen skeleton. It needs Node 22.6
 or newer on the runner host: the subject's TypeScript application runs through
 Node type stripping, both in the public suite and in the runner-owned
@@ -138,7 +145,7 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | Profile | Purpose |
 | --- | --- |
 | `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
-| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Linkly and Alertmanager route migration. |
+| `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Linkly, Alertmanager route migration and a playable chess Worker. |
 | `pr` | Four essential checks of a candidate stack before merging a change. |
 | `after-release` | Five essential checks of the published stack. |
 
@@ -156,8 +163,9 @@ cargo run --locked -- test-plan materialize --profile software-engineering
 
 The `software-engineering` profile runs each selected case once, with no
 technical retries: the seven Kanban cases, Registry implementation and verification,
-the trending-topics build, the Linkly tutorial, and Alertmanager route migration.
-That is 12 cases and 12 planned runs, in 11 execution groups. Registry
+the trending-topics build, the Linkly tutorial, Alertmanager route migration,
+and the playable chess Worker in the Console. That is 13 cases and 13 planned runs,
+in 12 execution groups. Registry
 implementation and verification share a group, in that order, so verification
 receives the implementation delivery. Trending topics runs in
 `case-trending-topics-build`. Linkly runs its eight exchanges in

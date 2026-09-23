@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(plan.profiles.len(), 4);
         for (id, cases, runs) in [
             ("regression", 9, 9),
-            ("software-engineering", 12, 12),
+            ("software-engineering", 13, 13),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {

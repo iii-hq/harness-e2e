@@ -105,6 +105,10 @@ pub struct DeliverableReport {
     pub invariants: Vec<CapturedInvariant>,
     pub provenance: Vec<ProvenanceEvidence>,
     pub preview: Value,
+    /// The screenshots embedded in the content, so a reader can list them
+    /// without opening the artifact. Empty when there are none.
+    #[serde(default)]
+    pub screenshots: Vec<crate::screenshot::ScreenshotReference>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact: Option<ArtifactReference>,
     #[serde(skip)]
@@ -4324,6 +4328,7 @@ mod tests {
             invariants: Vec::new(),
             provenance: Vec::new(),
             preview: serde_json::json!({}),
+            screenshots: Vec::new(),
             artifact: Some(crate::artifact::ArtifactReference {
                 id: "linkly_evidence".into(),
                 kind: "application_audit".into(),
