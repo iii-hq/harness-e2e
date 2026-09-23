@@ -4,24 +4,16 @@ use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use axum::extract::State;
-use axum::http::StatusCode;
-use axum::response::{Html, IntoResponse, Response};
-use axum::routing::{get, post};
-use axum::{Json, Router};
 use base64::Engine as _;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
 use shakmaty::fen::Fen;
 use shakmaty::{CastlingMode, Chess, EnPassantMode};
-use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::{oneshot, Mutex};
 
 use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
@@ -35,7 +27,7 @@ use super::{
 };
 
 pub const ID: &str = "chess_engine_build";
-pub const SUMMARY: &str = "Build a run-scoped iii Worker that implements correct chess rules and serves a playable board. The runner independently checks its Compose lifecycle and function contracts, compares chess behavior with the shared shakmaty oracle, drives e2-e4 and e7-e5 in a real browser, and captures before/after screenshots bound to the candidate source and verified FENs.";
+pub const SUMMARY: &str = "Build a run-scoped iii Worker that implements correct chess rules and registers a playable page in the iii Console. The runner independently checks its Compose lifecycle, function and injectable-UI contracts, compares chess behavior with the shared shakmaty oracle, drives e2-e4 and e7-e5 in the real Console, and captures before/after screenshots bound to the candidate source and verified FENs.";
 
 const FIXTURE_REVISION: &str = "16f6b9e05e34e09c824191eed0631d77f85be6a9";
 const CHESS_SUBTREE: &str = "chess";
@@ -53,7 +45,7 @@ const PINNED_FEN: &str = "4r1k1/8/8/8/8/8/4R3/4K3 w - - 0 1";
 
 const RUNTIME_CONTRACT: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
-    15,
+    10,
     "worker-compose.yaml declares the run-scoped Worker, Compose reports its container ready, and all four described iii functions are registered.",
     EvaluationDimension::Deliverable,
 );
@@ -92,10 +84,16 @@ const INVALID_INPUTS: AssessmentSpec = AssessmentSpec::scored(
     10,
     "Malformed FEN, invalid depth, and malformed move requests are rejected.",
 );
+const CONSOLE_DELIVERY: AssessmentSpec = AssessmentSpec::scored_in(
+    "console_delivery",
+    15,
+    "The Worker registers loadable script and style assets; the Console manifest reports fresh hashes, no warnings, and an enabled worker.",
+    EvaluationDimension::Deliverable,
+);
 const PLAYABLE_UI: AssessmentSpec = AssessmentSpec::scored_in(
     "playable_ui",
-    20,
-    "Worker-authored HTML renders a playable 64-square board; a real browser plays e2-e4 and e7-e5 through the Worker and reaches both oracle FENs.",
+    10,
+    "The real iii Console renders the Worker's 64-square page and plays e2-e4 and e7-e5 through Worker functions to both oracle FENs.",
     EvaluationDimension::Deliverable,
 );
 const EVIDENCE_COMPLETE: AssessmentSpec = AssessmentSpec::scored_in(
@@ -113,6 +111,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     CHECK_RULES,
     PLAY_RULES,
     INVALID_INPUTS,
+    CONSOLE_DELIVERY,
     PLAYABLE_UI,
     EVIDENCE_COMPLETE,
 ];
@@ -136,7 +135,7 @@ impl Scenario for ChessEngineBuild {
             json!({
                 "fixture_revision": FIXTURE_REVISION,
                 "fixture_manifest_sha256": CHESS_MANIFEST_SHA256,
-                "worker_functions": ["legal_moves", "perft", "play", "view"],
+                "worker_functions": ["legal_moves", "perft", "play", "ui-content"],
                 "browser_moves": ["e2e4", "e7e5"],
                 "oracle": "shakmaty",
             }),
@@ -168,8 +167,8 @@ with a run-scoped iii Worker declared in `{compose}`. The Compose worker and con
 `{worker}`, its `worker` URI must be exactly `path://.`, and `scripts.run` must be exactly
 `npm start`. Declare no sibling containers, `start_after`, or external working directory.
 Do not declare `engine:`; the run-scoped project uses the existing iii Engine.
-Keep all chess logic and application HTML in this Worker. Chess libraries and external network
-services are forbidden. The runner supplies the relative `/api/play` transport after completion.
+Keep all chess logic and the Console page in this Worker. Chess libraries and external network
+services are forbidden.
 The Harness has already materialized `iii-sdk@0.23.1-rc.6` and its lockfile in this workspace solely
 for iii integration. Do not change dependencies. Set `scripts.run` to exactly `npm start`; the
 supplied start script runs `src/index.mjs`.
@@ -180,29 +179,36 @@ Register these exact functions with non-empty descriptions and JSON request/resp
   - `{legal}`: `{{"fen": string}} -> {{"moves": sorted UCI string[]}}`
   - `{perft}`: `{{"fen": string, "depth": integer 0..4}} -> {{"nodes": integer}}`
   - `{play}`: `{{"fen": string, "move": UCI string}} -> {{"fen": resulting FEN}}`
-  - `{view}`: `{{"fen": string}} -> {{"html": complete HTML document}}`
+  - `{ui_content}`: `{{"path": string}} -> {{"content": string, "content_type"?: string}}`
 
 Reject malformed/illegal FENs and moves and depths outside 0..4. Implement standard chess,
 including castling, en passant, four promotion pieces, pins, and check evasion.
 
-The HTML returned by `{view}` is the application. It must render exactly 64 board squares carrying
-`data-square="a1"` through `data-square="h8"`; occupied squares must also carry `data-piece` with
-the FEN piece letter. Show the current FEN in an element with
-`data-testid="fen"`, and let a user choose a source and destination square. Its own JavaScript must
-POST `{{"fen": currentFen, "move": source + destination}}` to `/api/play`, replace the board with
-the returned `html`, remain interactive for the next move, and show failures in an element with `data-testid="error"`. The page must be
-usable at 1280x900 without external assets.
+Register Message-path `console:script` and `console:style` triggers whose only config is `path`,
+both backed by `{ui_content}`. Their paths must be `{script_path}` and `{style_path}`. The first
+must return an ESM module with `export default function setup(host)` that calls
+`host.pages.register({{ id: 'chess', ... }})`; the second must return CSS scoped under
+`[data-iii-ui="{worker}"]`. Do not use `engine::register_trigger` or `console:assets`.
 
-Run local chess-logic tests and inspect the generated view HTML and interaction contract before
-reporting completion. The Harness will validate Compose, inspect the live functions, proxy the
-page, and drive the browser after you finish."#,
+The registered Console page must render exactly 64 board squares carrying `data-square="a1"`
+through `data-square="h8"`; occupied squares must also carry `data-piece` with the FEN piece letter.
+Show the current FEN in an element with `data-testid="fen"`, let a user choose a source and
+destination square, call `{play}` through `host.iii.trigger`, remain interactive for the next move,
+and show failures in an element with `data-testid="error"`. The page must be usable at 1280x900
+without external assets.
+
+Run local chess-logic tests and inspect the generated Console assets and interaction contract before
+reporting completion. The Harness will validate Compose, inspect the live functions and Console
+manifest, then drive the page at `#/worker/{worker}/chess` after you finish."#,
                 root = root.display(),
                 compose = root.join("worker-compose.yaml").display(),
                 worker = contract.worker,
                 legal = contract.functions["legal_moves"],
                 perft = contract.functions["perft"],
                 play = contract.functions["play"],
-                view = contract.functions["view"],
+                ui_content = contract.functions["ui-content"],
+                script_path = contract.script_path(),
+                style_path = contract.style_path(),
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
@@ -227,6 +233,8 @@ page, and drive the browser after you finish."#,
             "compose::status",
             "compose::down",
             "engine::functions::info",
+            "console::status",
+            "console::ui-manifest",
             "browser::sessions::start",
             "browser::navigate",
             "browser::resize",
@@ -248,14 +256,19 @@ page, and drive the browser after you finish."#,
         run_id: &str,
     ) -> Result<Vec<CapturedDeliverable>> {
         let evidence = validate_candidate(context, run_id).await?;
-        let invariants = ["runtime_contract", "playable_ui", "evidence_complete"]
-            .into_iter()
-            .map(|id| CapturedInvariant {
-                id: id.to_string(),
-                passed: passed(&evidence, id),
-                reason: reason(&evidence, id),
-            })
-            .collect();
+        let invariants = [
+            "runtime_contract",
+            "console_delivery",
+            "playable_ui",
+            "evidence_complete",
+        ]
+        .into_iter()
+        .map(|id| CapturedInvariant {
+            id: id.to_string(),
+            passed: passed(&evidence, id),
+            reason: reason(&evidence, id),
+        })
+        .collect();
         Ok(vec![CapturedDeliverable {
             id: EVIDENCE_ID.into(),
             kind: "chess_worker_audit".into(),
@@ -281,25 +294,13 @@ page, and drive the browser after you finish."#,
             .find(|item| item.id == EVIDENCE_ID)
             .and_then(|item| item.content.as_json())
             .context("chess Worker evidence deliverable is missing")?;
-        let specs = [
-            RUNTIME_CONTRACT,
-            START_RULES,
-            CASTLING_RULES,
-            EN_PASSANT_RULES,
-            PROMOTION_RULES,
-            CHECK_RULES,
-            PLAY_RULES,
-            INVALID_INPUTS,
-            PLAYABLE_UI,
-            EVIDENCE_COMPLETE,
-        ];
         Ok(assessment::build_evaluation(
             if observation.metrics.complete {
                 CompletionState::Completed
             } else {
                 CompletionState::TaskIncomplete
             },
-            specs.map(|spec| {
+            ASSESSMENTS.iter().copied().map(|spec| {
                 spec.full_or_zero(passed(evidence, spec.id()), reason(evidence, spec.id()))
             }),
         ))
@@ -355,11 +356,21 @@ fn worker_contract(run_id: &str) -> WorkerContract {
         .take(16)
         .collect();
     let worker = format!("chess_{}", if suffix.is_empty() { "run" } else { &suffix });
-    let functions = ["legal_moves", "perft", "play", "view"]
+    let functions = ["legal_moves", "perft", "play", "ui-content"]
         .into_iter()
         .map(|name| (name, format!("{worker}::{name}")))
         .collect();
     WorkerContract { worker, functions }
+}
+
+impl WorkerContract {
+    fn script_path(&self) -> String {
+        format!("{}/page.js", self.worker)
+    }
+
+    fn style_path(&self) -> String {
+        format!("{}/styles.css", self.worker)
+    }
 }
 
 fn deliverable_contract() -> DeliverableContract {
@@ -386,9 +397,15 @@ fn deliverable_contract() -> DeliverableContract {
                     .into(),
             },
             InvariantSpec {
+                id: "console_delivery".into(),
+                description:
+                    "The iii Console can load the Worker's warning-free script and style assets."
+                        .into(),
+            },
+            InvariantSpec {
                 id: "playable_ui".into(),
-                description: "A browser completes e2-e4 and e7-e5 through Worker-authored UI."
-                    .into(),
+                description:
+                    "A browser completes e2-e4 and e7-e5 on the Worker's real Console page.".into(),
             },
             InvariantSpec {
                 id: "evidence_complete".into(),
@@ -722,15 +739,68 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && healthy;
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid requests were rejected and Worker stayed healthy"} else {"invalid-input rejection or post-rejection health failed"},"observed":[result_value(invalid_fen),result_value(invalid_depth),result_value(invalid_move)],"health_after_rejections":result_value(health_after_rejections)}));
 
+    let script = invoke(
+        context.client(),
+        &contract.functions["ui-content"],
+        json!({"path":contract.script_path()}),
+    )
+    .await;
+    let style = invoke(
+        context.client(),
+        &contract.functions["ui-content"],
+        json!({"path":contract.style_path()}),
+    )
+    .await;
+    ensure_remote_or_success(&script, "fetch candidate Console script")?;
+    ensure_remote_or_success(&style, "fetch candidate Console style")?;
+
+    let console_status = context.trigger_value("console::status", json!({})).await;
+    ensure_remote_or_success(&console_status, "inspect iii Console status")?;
+    let console_port = console_status
+        .as_ref()
+        .ok()
+        .and_then(|value| value["http_port"].as_u64())
+        .filter(|port| u16::try_from(*port).is_ok());
+
+    let mut manifest = Value::Null;
+    if ready {
+        for _ in 0..40 {
+            let observed = context
+                .trigger_value("console::ui-manifest", json!({}))
+                .await;
+            ensure_remote_or_success(&observed, "inspect Console UI manifest")?;
+            manifest = observed.unwrap_or(Value::Null);
+            if console_assets_ok(&manifest, &contract) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
+    let assets_ok = console_assets_ok(&manifest, &contract);
+    let content_ok = ui_content_ok(&script, &style, &contract);
+    let console_delivery = console_port.is_some() && assets_ok && content_ok;
+    checks.insert(
+        "console_delivery".into(),
+        json!({
+            "passed":console_delivery,
+            "reason":if console_delivery {"Console reports an enabled Worker with loadable, hashed, warning-free script and style assets"} else {"Console asset registration, content, status, or manifest contract failed"},
+            "console_status":result_value(console_status),
+            "manifest":bounded_value(manifest.clone()),
+            "content":{"script":result_value(script),"style":result_value(style)}
+        }),
+    );
+
     let identity = json!({
         "worker":contract.worker,"functions":contract.functions,
         "source_sha256":source_sha256,"compose_sha256":compose_sha256,
+        "console":{"http_port":console_port,"manifest":manifest},
         "fen":{"start":START_FEN,"oracle":{"after_e2e4":expected_after,"after_e7e5":expected_final},"actual":{"after_e2e4":actual_after,"after_e7e5":actual_final}}
     });
-    let browser = if ready && surface && play_ok {
+    let browser = if ready && surface && play_ok && console_delivery {
         capture_browser(
             context,
             &contract,
+            console_port.expect("console_delivery requires a Console port") as u16,
             &identity,
             actual_after
                 .as_deref()
@@ -741,16 +811,16 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         )
         .await?
     } else {
-        json!({"passed":false,"reason":"runtime and play contract are prerequisites","captures":[]})
+        json!({"passed":false,"reason":"runtime, play, and Console delivery contracts are prerequisites","captures":[]})
     };
     checks.insert(
         "playable_ui".into(),
-        json!({"passed":browser["passed"],"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"proxy_audit":browser["proxy_audit"]}}),
+        json!({"passed":browser["passed"],"reason":browser["reason"],"observed":{"interaction":browser["interaction"],"url":browser["url"]}}),
     );
 
     let mut files = serde_json::Map::new();
     let captures = browser["captures"].clone();
-    let capture_document = json!({"identity":identity,"viewport":{"width":1280,"height":900},"captures":captures,"proxy_audit":browser["proxy_audit"]});
+    let capture_document = json!({"identity":identity,"viewport":{"width":1280,"height":900},"captures":captures,"console_url":browser["url"]});
     insert_text_file(
         &mut files,
         "screenshots/captures.json",
@@ -842,14 +912,71 @@ fn function_schema_matches(operation: &str, function: &Value) -> bool {
                 && required(response, "fen")
                 && typed(response, "fen", "string")
         }
-        "view" => {
-            required(request, "fen")
-                && typed(request, "fen", "string")
-                && required(response, "html")
-                && typed(response, "html", "string")
+        "ui-content" => {
+            required(request, "path")
+                && typed(request, "path", "string")
+                && required(response, "content")
+                && typed(response, "content", "string")
+                && typed(response, "content_type", "string")
         }
         _ => false,
     }
+}
+
+fn console_assets_ok(manifest: &Value, contract: &WorkerContract) -> bool {
+    let expected = [
+        (contract.script_path(), "script"),
+        (contract.style_path(), "style"),
+    ];
+    let Some(assets) = manifest["assets"].as_array() else {
+        return false;
+    };
+    let worker_assets = assets
+        .iter()
+        .filter(|asset| {
+            asset["path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with(&format!("{}/", contract.worker)))
+        })
+        .collect::<Vec<_>>();
+    let assets_match = worker_assets.len() == expected.len()
+        && expected.iter().all(|(path, kind)| {
+            worker_assets.iter().any(|asset| {
+                asset["path"] == *path
+                    && asset["kind"] == *kind
+                    && asset["hash"].as_str().is_some_and(|hash| !hash.is_empty())
+                    && asset["warnings"].as_array().is_some_and(Vec::is_empty)
+            })
+        });
+    let worker_enabled = manifest["workers"].as_array().is_some_and(|workers| {
+        workers.iter().any(|worker| {
+            worker["worker"] == contract.worker
+                && worker["enabled"] == true
+                && worker["assets"] == expected.len()
+        })
+    });
+    manifest["disabled"] == false && assets_match && worker_enabled
+}
+
+fn ui_content_ok(script: &Result<Value>, style: &Result<Value>, contract: &WorkerContract) -> bool {
+    let script = script
+        .as_ref()
+        .ok()
+        .and_then(|value| value["content"].as_str());
+    let style = style
+        .as_ref()
+        .ok()
+        .and_then(|value| value["content"].as_str());
+    script.is_some_and(|content| {
+        content.contains("export default")
+            && content.contains("host.pages.register")
+            && content.contains("host.iii.trigger")
+            && content.contains("chess")
+    }) && style.is_some_and(|content| {
+        content.contains(&format!("[data-iii-ui=\"{}\"]", contract.worker))
+            || content.contains(&format!("[data-iii-ui='{}']", contract.worker))
+            || content.contains(&format!("[data-iii-ui={}]", contract.worker))
+    })
 }
 
 fn ensure_remote_or_success(result: &Result<Value>, action: &str) -> Result<()> {
@@ -881,78 +1008,18 @@ async fn invoke(client: &IIIClient, function_id: &str, payload: Value) -> Result
         .with_context(|| format!("invoke {function_id}"))
 }
 
-#[derive(Clone)]
-struct ProxyState {
-    client: IIIClient,
-    view: String,
-    play: String,
-    audit: Arc<Mutex<Vec<Value>>>,
-}
-
-async fn proxy_home(State(state): State<ProxyState>) -> Response {
-    match invoke(&state.client, &state.view, json!({"fen":START_FEN})).await {
-        Ok(value) => value["html"]
-            .as_str()
-            .map(|html| Html(html.to_string()).into_response())
-            .unwrap_or_else(|| {
-                (StatusCode::BAD_GATEWAY, "view response omitted html").into_response()
-            }),
-        Err(error) => (StatusCode::BAD_GATEWAY, format!("{error:#}")).into_response(),
-    }
-}
-
-async fn proxy_play(State(state): State<ProxyState>, Json(payload): Json<Value>) -> Response {
-    let request = payload.clone();
-    match invoke(&state.client, &state.play, payload).await {
-        Ok(play) => {
-            let Some(fen) = play["fen"].as_str() else {
-                return (StatusCode::BAD_GATEWAY, "play response omitted fen").into_response();
-            };
-            match invoke(&state.client, &state.view, json!({"fen":fen})).await {
-                Ok(view) if view["html"].is_string() => {
-                    state.audit.lock().await.push(json!({
-                        "request": request,
-                        "play_fen": fen,
-                        "view_returned": true
-                    }));
-                    Json(json!({"fen":fen,"html":view["html"]})).into_response()
-                }
-                Ok(_) => (StatusCode::BAD_GATEWAY, "view response omitted html").into_response(),
-                Err(error) => (StatusCode::BAD_GATEWAY, format!("{error:#}")).into_response(),
-            }
-        }
-        Err(error) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{error:#}")).into_response(),
-    }
-}
-
 async fn capture_browser(
     context: &E2eContext,
     contract: &WorkerContract,
+    console_port: u16,
     identity: &Value,
     actual_after: &str,
     actual_final: &str,
 ) -> Result<Value> {
-    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
-    let address = listener.local_addr()?;
-    let audit = Arc::new(Mutex::new(Vec::new()));
-    let state = ProxyState {
-        client: context.client().clone(),
-        view: contract.functions["view"].clone(),
-        play: contract.functions["play"].clone(),
-        audit: audit.clone(),
-    };
-    let router = Router::new()
-        .route("/", get(proxy_home))
-        .route("/api/play", post(proxy_play))
-        .with_state(state);
-    let (shutdown_tx, shutdown_rx) = oneshot::channel();
-    let proxy = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async {
-                let _ = shutdown_rx.await;
-            })
-            .await
-    });
+    let url = format!(
+        "http://127.0.0.1:{console_port}/#/worker/{}/chess",
+        contract.worker
+    );
     let started = context
         .trigger_value(
             "browser::sessions::start",
@@ -966,7 +1033,7 @@ async fn capture_browser(
     let result = capture_browser_session(
         context,
         &session,
-        &format!("http://{address}"),
+        &url,
         identity,
         actual_after,
         actual_final,
@@ -975,30 +1042,8 @@ async fn capture_browser(
     let stop = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
-    let _ = shutdown_tx.send(());
-    let _ = proxy.await;
     stop.context("stop chess evidence browser session")?;
-    let mut evidence = result?;
-    let calls = audit.lock().await.clone();
-    let routed = calls.iter().any(|call| {
-        call["request"]["fen"] == START_FEN
-            && call["request"]["move"] == "e2e4"
-            && call["play_fen"] == actual_after
-            && call["view_returned"] == true
-    });
-    let routed_second = calls.iter().any(|call| {
-        call["request"]["fen"] == actual_after
-            && call["request"]["move"] == "e7e5"
-            && call["play_fen"] == actual_final
-            && call["view_returned"] == true
-    });
-    evidence["proxy_audit"] = json!(calls);
-    evidence["passed"] = json!(evidence["passed"] == true && routed && routed_second);
-    if !routed || !routed_second {
-        evidence["reason"] =
-            json!("browser did not complete both moves through the runner transport proxy");
-    }
-    Ok(evidence)
+    result
 }
 
 async fn capture_browser_session(
@@ -1023,9 +1068,15 @@ async fn capture_browser_session(
         .await?;
     if navigation["ok"] != true || navigation["timed_out"] == true {
         return Ok(
-            json!({"passed":false,"reason":format!("Worker-authored page could not be rendered: {navigation}"),"captures":[]}),
+            json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"captures":[],"url":url}),
         );
     }
+    context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async () => { for (let i=0; i<200; i++) { if (document.querySelector('[data-testid="fen"]')) return true; await new Promise(resolve => setTimeout(resolve, 50)); } return false; })();"#}),
+        )
+        .await?;
     let before_state = inspect_ui(context, session, START_FEN, false).await?;
     let before = screenshot_png(context, session).await?;
     let interaction_code = format!(
@@ -1043,10 +1094,10 @@ async fn capture_browser_session(
             if (fen === expected) return {fen, squares: document.querySelectorAll('[data-square]').length};
             await new Promise(resolve => setTimeout(resolve, 50));
           } return null; };
-          click('e2'); click('e4');
+          click('e2'); await new Promise(resolve => requestAnimationFrame(resolve)); click('e4');
           const first = await waitFor(expectedFirst);
           if (!first) return {error:'e2e4 did not render', fen:document.querySelector('[data-testid="fen"]')?.textContent?.trim()};
-          click('e7'); click('e5');
+          click('e7'); await new Promise(resolve => requestAnimationFrame(resolve)); click('e5');
           const second = await waitFor(expectedFinal);
           return second ? {fen:second.fen, transitions:[first.fen,second.fen]} : {error:'e7e5 did not render',fen:document.querySelector('[data-testid="fen"]')?.textContent?.trim()};
         })();"#
@@ -1065,11 +1116,11 @@ async fn capture_browser_session(
         && after["data"].is_string()
         && interaction["result"]["fen"] == actual_final;
     let captures = json!([
-        {"id":"before","caption":"Playable chess Worker before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":START_FEN,"sha256":before["sha256"]},
-        {"id":"after","caption":"Playable chess Worker after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":actual_final,"transitions":[actual_after,actual_final],"sha256":after["sha256"]}
+        {"id":"before","caption":"Playable chess Worker in iii Console before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":START_FEN,"sha256":before["sha256"]},
+        {"id":"after","caption":"Playable chess Worker in iii Console after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":actual_final,"transitions":[actual_after,actual_final],"sha256":after["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"reason":if passed {"browser rendered a visible board and completed two moves"} else {"browser interaction, visibility, pieces, or checked FEN failed"},"captures":captures,"before":before,"after":after,"interaction":interaction["result"]}),
+        json!({"passed":passed,"reason":if passed {"iii Console rendered a visible board and completed two moves"} else {"Console interaction, visibility, pieces, or checked FEN failed"},"url":url,"captures":captures,"before":before,"after":after,"interaction":interaction["result"]}),
     )
 }
 
@@ -1182,8 +1233,16 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
     fs::write(
         &original_readme,
         format!(
-            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker and playable HTML board. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section. Harness validates, starts, and stops the Worker after completion; run local logic tests without launching it manually.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\n```\n",
-            contract.worker, contract.functions["legal_moves"]
+            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker with a playable page injected into the real iii Console. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section. Harness validates, starts, and stops the Worker after completion; run local logic tests without launching it manually.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\niii.registerFunction('{}', async ({{ path }}) => assets[path], {{ description: 'Console UI assets', request_format: {{ type: 'object', required: ['path'], properties: {{ path: {{ type: 'string' }} }} }}, response_format: {{ type: 'object', required: ['content'], properties: {{ content: {{ type: 'string' }}, content_type: {{ type: 'string' }} }} }} }})\niii.registerTrigger({{ type: 'console:script', function_id: '{}', config: {{ path: '{}' }} }})\niii.registerTrigger({{ type: 'console:style', function_id: '{}', config: {{ path: '{}' }} }})\n```\n\nThe page asset is plain ESM. It may import shared `react` at runtime, must default-export `setup(host)`, and registers `host.pages.register({{ id: 'chess', title: 'Chess', render }})`. Its board invokes `{}` with `host.iii.trigger`. Scope every CSS rule under `[data-iii-ui=\"{}\"]`.\n",
+            contract.worker,
+            contract.functions["legal_moves"],
+            contract.functions["ui-content"],
+            contract.functions["ui-content"],
+            contract.script_path(),
+            contract.functions["ui-content"],
+            contract.style_path(),
+            contract.functions["play"],
+            contract.worker,
         ),
     )?;
     fs::write(
@@ -1440,6 +1499,31 @@ mod tests {
         assert!(function_schema_matches("perft", &function));
         function["request_schema"]["properties"]["depth"]["maximum"] = json!(99);
         assert!(!function_schema_matches("perft", &function));
+    }
+
+    #[test]
+    fn console_delivery_requires_enabled_hashed_warning_free_assets() {
+        let contract = worker_contract("run-a");
+        let manifest = json!({
+            "disabled": false,
+            "assets": [
+                {"path":contract.script_path(),"kind":"script","hash":"0123456789abcdef","warnings":[]},
+                {"path":contract.style_path(),"kind":"style","hash":"fedcba9876543210","warnings":[]}
+            ],
+            "workers":[{"worker":contract.worker,"enabled":true,"assets":2}]
+        });
+        let script = Ok(
+            json!({"content":"export default function setup(host) { host.pages.register({ id: 'chess', render: () => host.iii.trigger('play') }) }","content_type":"text/javascript"}),
+        );
+        let style = Ok(
+            json!({"content":format!("[data-iii-ui=\"{}\"] .board {{ display: grid; }}", contract.worker),"content_type":"text/css"}),
+        );
+        assert!(console_assets_ok(&manifest, &contract));
+        assert!(ui_content_ok(&script, &style, &contract));
+
+        let mut warned = manifest;
+        warned["assets"][1]["warnings"] = json!(["unscoped selector"]);
+        assert!(!console_assets_ok(&warned, &contract));
     }
 
     #[test]

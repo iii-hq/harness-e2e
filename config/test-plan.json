@@ -128,7 +128,7 @@
     ],
     "chess_engine_build": [
       "Pinned shared engineering fixture",
-      "Compose daemon with a writable run-scoped worker project and an interactive browser",
+      "Compose daemon, running iii Console, writable run-scoped worker project, and interactive browser",
       "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
     ],
     "trend_blog": [

@@ -1891,7 +1891,8 @@ mod tests {
         // The prompt reaches the reader as the subject receives it.
         assert!(spec.prompt.contains("worker-compose.yaml"));
         assert!(spec.prompt.contains("legal_moves"));
-        assert!(spec.prompt.contains("/api/play"));
+        assert!(spec.prompt.contains("console:script"));
+        assert!(spec.prompt.contains("#/worker/"));
         assert!(spec
             .summary
             .as_deref()
@@ -1906,7 +1907,7 @@ mod tests {
         assert_eq!(
             weights,
             vec![
-                ("runtime_contract", 15, AssessmentPolicy::Advisory),
+                ("runtime_contract", 10, AssessmentPolicy::Advisory),
                 ("rules_start", 7, AssessmentPolicy::Advisory),
                 ("rules_castling", 7, AssessmentPolicy::Advisory),
                 ("rules_en_passant", 7, AssessmentPolicy::Advisory),
@@ -1914,7 +1915,8 @@ mod tests {
                 ("rules_check_evasion", 7, AssessmentPolicy::Advisory),
                 ("play_contract", 10, AssessmentPolicy::Advisory),
                 ("invalid_inputs", 10, AssessmentPolicy::Advisory),
-                ("playable_ui", 20, AssessmentPolicy::Advisory),
+                ("console_delivery", 15, AssessmentPolicy::Advisory),
+                ("playable_ui", 10, AssessmentPolicy::Advisory),
                 ("evidence_complete", 10, AssessmentPolicy::Advisory),
             ]
         );
