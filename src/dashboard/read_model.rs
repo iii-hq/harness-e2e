@@ -1930,11 +1930,11 @@ mod tests {
         assert!(spec.criteria[0].description.contains("run-scoped Worker"));
 
         // The limits the run answers to are part of the contract, not trivia.
-        assert_eq!(spec.execution.max_turns, Some(64));
-        assert_eq!(
-            spec.denied_functions,
-            ["http::*", "browser::*", "compose::*", "github::*"]
-        );
+        assert_eq!(spec.execution.max_turns, Some(256));
+        assert_eq!(spec.execution.max_output_tokens, Some(65_536));
+        assert_eq!(spec.execution.max_total_tokens, Some(6_000_000));
+        assert_eq!(spec.execution.stuck_timeout_seconds, 1_800);
+        assert!(spec.denied_functions.is_empty());
     }
 
     #[test]

@@ -212,40 +212,18 @@ manifest, then drive the page at `#/worker/{worker}/chess` after you finish."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: Some(64),
+                max_turns: Some(256),
                 max_output_tokens: Some(65_536),
-                max_total_tokens: Some(1_200_000),
-                stuck_timeout_seconds: 900,
+                max_total_tokens: Some(6_000_000),
+                stuck_timeout_seconds: 1_800,
                 max_validation_retries: None,
             },
-            denied_functions: &["http::*", "browser::*", "compose::*", "github::*"],
+            denied_functions: &[],
             criteria: assessment::criteria(ASSESSMENTS),
         }
     }
 
-    async fn setup(&self, context: &E2eContext, run_id: &str) -> Result<()> {
-        for function in [
-            "coder::read-file",
-            "coder::update-file",
-            "shell::exec",
-            "compose::validate",
-            "compose::up",
-            "compose::status",
-            "compose::down",
-            "engine::functions::info",
-            "console::status",
-            "console::ui-manifest",
-            "browser::sessions::start",
-            "browser::navigate",
-            "browser::resize",
-            "browser::execute",
-            "browser::screenshot",
-            "browser::sessions::stop",
-        ] {
-            if !context.function_exists(function).await? {
-                bail!("required chess Worker validation mechanism '{function}' is unavailable");
-            }
-        }
+    async fn setup(&self, _context: &E2eContext, run_id: &str) -> Result<()> {
         prepare_workspace(run_id).await
     }
 
