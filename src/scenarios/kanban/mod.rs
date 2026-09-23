@@ -203,6 +203,7 @@ fn criteria(index: usize) -> Vec<CriterionSpec> {
                 criterion.description.as_str(),
                 EvaluationDimension::Deliverable,
             )
+            .with_gate(criterion.gate)
         })
         .collect()
 }
@@ -960,6 +961,32 @@ mod tests {
             .iter()
             .enumerate()
             .all(|(index, _)| rubric(index).iter().any(|criterion| criterion.gate)));
+    }
+
+    #[test]
+    fn the_reported_gates_are_the_ones_completion_reads() {
+        for (index, id) in IDS.iter().enumerate() {
+            let reported = criteria(index)
+                .into_iter()
+                .filter(|criterion| criterion.gate)
+                .map(|criterion| criterion.id)
+                .collect::<Vec<_>>();
+            let decided = rubric(index)
+                .iter()
+                .filter(|criterion| criterion.gate)
+                .map(|criterion| criterion.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(reported, decided, "{id}");
+        }
+        // C5: saving is the primary flow.
+        assert_eq!(
+            criteria(4)
+                .into_iter()
+                .filter(|criterion| criterion.gate)
+                .map(|criterion| criterion.id)
+                .collect::<Vec<_>>(),
+            ["criterion_save"]
+        );
     }
 
     #[test]

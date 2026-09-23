@@ -177,6 +177,7 @@ impl Scenario for TrendingTopicsBuild {
                 .iter()
                 .map(|(id, weight, description)| {
                     CriterionSpec::scored(id, *weight, description, EvaluationDimension::Deliverable)
+                        .with_gate(GATES.contains(id))
                 })
                 .collect(),
         }
@@ -841,6 +842,18 @@ mod tests {
             "criteria":[], "complete":true, "infrastructure_errors":[],
             "delivery":{"remote_sha":"delivered"}, "evaluations":evaluations, "evidence":evidence,
         })
+    }
+
+    #[test]
+    fn the_reported_gates_are_the_ones_completion_reads() {
+        let gates = TrendingTopicsBuild
+            .spec("run")
+            .criteria
+            .into_iter()
+            .filter(|criterion| criterion.gate)
+            .map(|criterion| criterion.id)
+            .collect::<Vec<_>>();
+        assert_eq!(gates, GATES);
     }
 
     #[test]

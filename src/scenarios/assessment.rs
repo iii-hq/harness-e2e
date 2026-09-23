@@ -105,6 +105,7 @@ impl AssessmentSpec {
             kind: declaration.kind,
             policy: declaration.policy,
             dimension: declaration.dimension,
+            gate: false,
         }
     }
 
