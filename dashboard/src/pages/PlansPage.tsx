@@ -10,7 +10,6 @@ import {
   Callout,
   DataTable,
   DataTableRow,
-  Dialog,
   EmptyState,
   FilterChip,
   FilterChipGroup,
@@ -18,7 +17,6 @@ import {
   numericCellClassName,
   type OperationalStatus,
   PageHeader,
-  Select,
   StatusBadge,
 } from '@/design-system'
 import { hashForNewPlan, hashForPlan } from '@/hooks/use-hash-route'
@@ -27,13 +25,7 @@ import {
   getDashboardDataBridge,
   type LocalPlan,
   type MasterTestPlan,
-  type Plan,
 } from '@/lib/dashboard-data-source'
-import {
-  buildExecutionPresentation,
-  formatDate,
-  statusCopy,
-} from '@/lib/execution-view'
 import {
   buildPlanComparison,
   formatPlanMetricValue,
@@ -41,156 +33,8 @@ import {
   metricById,
   type PlanMetricId,
 } from '@/lib/plan-comparison'
-import {
-  discoverReleaseControlHistory,
-  exportReleaseControlHistory,
-  type RcHistoryPlan,
-} from '@/lib/release-control-reference'
 
 type PlanFilter = 'all' | 'needs_action' | 'running' | 'compared'
-
-type ReleaseControlPlan = {
-  key: string
-  executions: DashboardExecutionSummary[]
-}
-
-export function releaseControlPlans(executions: DashboardExecutionSummary[]) {
-  const plans = new Map<string, DashboardExecutionSummary[]>()
-  for (const execution of executions) {
-    const key = execution.release_control?.profile
-    if (!key) continue
-    plans.set(key, [...(plans.get(key) ?? []), execution])
-  }
-  return [...plans]
-    .map(([key, history]) => ({
-      key,
-      executions: history.sort(
-        (left, right) =>
-          Date.parse(right.started_at ?? '') -
-          Date.parse(left.started_at ?? ''),
-      ),
-    }))
-    .sort(
-      (left, right) =>
-        Date.parse(right.executions[0]?.started_at ?? '') -
-        Date.parse(left.executions[0]?.started_at ?? ''),
-    )
-}
-
-export function ReleaseControlPlans({
-  plans,
-  loading,
-  error,
-  reload,
-}: {
-  plans: ReleaseControlPlan[]
-  loading: boolean
-  error: string | null
-  reload: () => void
-}) {
-  if (error)
-    return (
-      <EmptyState
-        className="mt-5"
-        tone="error"
-        title="Release Control history is unavailable"
-        description={error}
-        actions={
-          <button
-            type="button"
-            className={buttonClassName({ variant: 'secondary' })}
-            onClick={reload}
-          >
-            try again
-          </button>
-        }
-      />
-    )
-  if (loading)
-    return (
-      <p className="mt-5 font-mono text-xs text-ink-muted" role="status">
-        loading Release Control history…
-      </p>
-    )
-  if (plans.length === 0)
-    return (
-      <EmptyState
-        className="mt-5"
-        title="No Release Control history found"
-        description="Keep an authenticated Release Control tab connected to this personal Engine, then try again."
-      />
-    )
-  return (
-    <DataTable
-      className="mt-5"
-      caption="Reference plans from Release Control"
-      collapse
-      minWidth="44rem"
-    >
-      <thead>
-        <tr>
-          <th scope="col">Plan</th>
-          <th scope="col">Latest result</th>
-          <th scope="col">History</th>
-          <th scope="col">Last run</th>
-          <th scope="col">
-            <span className="ds-visually-hidden">Open</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {plans.map((plan) => {
-          const latest = plan.executions[0]
-          return (
-            <DataTableRow key={plan.key} href={hashForPlan(`rc:${plan.key}`)}>
-              <td data-label="Plan" className="ds-table-sticky-col">
-                <span className="block font-mono text-xs font-medium text-ink">
-                  {plan.key}
-                </span>
-                <span className="font-mono text-label text-ink-muted">
-                  Reference: Release Control
-                </span>
-              </td>
-              <td data-label="Latest result">
-                {latest ? (
-                  <StatusBadge
-                    {...statusCopy(buildExecutionPresentation(latest))}
-                    label={latest.status.replaceAll('_', ' ')}
-                  />
-                ) : (
-                  '—'
-                )}
-              </td>
-              <td data-label="History" className="font-mono text-xs">
-                {plan.executions.length} execution
-                {plan.executions.length === 1 ? '' : 's'}
-              </td>
-              <td
-                data-label="Last run"
-                className="font-mono text-xs text-ink-muted"
-              >
-                {latest
-                  ? formatDate(latest.completed_at ?? latest.started_at ?? '')
-                  : '—'}
-              </td>
-              <td className="text-right">
-                <a
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                  })}
-                  href={hashForPlan(`rc:${plan.key}`)}
-                >
-                  open
-                </a>
-              </td>
-            </DataTableRow>
-          )
-        })}
-      </tbody>
-    </DataTable>
-  )
-}
 
 export type PlanStatePresentation = {
   status: OperationalStatus
@@ -246,9 +90,8 @@ export function planStatePresentation(plan: LocalPlan): PlanStatePresentation {
   }
 }
 
-export function matchesFilter(plan: Plan, filter: PlanFilter) {
+export function matchesFilter(plan: LocalPlan, filter: PlanFilter) {
   if (filter === 'all') return true
-  if (!isLocalPlan(plan)) return false
   if (filter === 'needs_action')
     return plan.state === 'draft' || plan.state === 'baseline_ready'
   if (filter === 'running')
@@ -442,18 +285,10 @@ export function PlanRow({
   )
 }
 
-function isLocalPlan(
-  plan: import('@/lib/dashboard-data-source').Plan,
-): plan is LocalPlan {
-  return plan.origin !== 'remote'
-}
-
 export function PlansPage() {
   const viewsId = useId()
   const [tab, setTab] = useState<'mine' | 'profiles'>('mine')
-  const [plans, setPlans] = useState<
-    import('@/lib/dashboard-data-source').Plan[]
-  >([])
+  const [plans, setPlans] = useState<LocalPlan[]>([])
   const [masterPlan, setMasterPlan] = useState<MasterTestPlan | null>(null)
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
@@ -463,70 +298,6 @@ export function PlansPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [comparisonError, setComparisonError] = useState<string | null>(null)
-  const [importing, setImporting] = useState(false)
-  const [importError, setImportError] = useState<string | null>(null)
-  const [importWarnings, setImportWarnings] = useState<string[]>([])
-  const [importOpen, setImportOpen] = useState(false)
-  const [discovering, setDiscovering] = useState(false)
-  const [remotePlans, setRemotePlans] = useState<RcHistoryPlan[]>([])
-  const [remotePlanKey, setRemotePlanKey] = useState('')
-
-  const importHistory = async (file: File) => {
-    setImporting(true)
-    setImportError(null)
-    setImportWarnings([])
-    try {
-      const json = await file.text()
-      const bridge = await getDashboardDataBridge()
-      const imported = await bridge.planControl({
-        action: 'import_history',
-        history: json,
-      })
-      setImportWarnings(
-        Array.isArray(imported.warnings)
-          ? imported.warnings.filter(
-              (warning): warning is string => typeof warning === 'string',
-            )
-          : [],
-      )
-      await load({ silent: true })
-    } catch (cause) {
-      setImportError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setImporting(false)
-    }
-  }
-  const openImport = async () => {
-    setImportOpen(true)
-    setImportError(null)
-    setRemotePlans([])
-    setRemotePlanKey('')
-    setDiscovering(true)
-    try {
-      setRemotePlans(await discoverReleaseControlHistory())
-    } catch (cause) {
-      setImportError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setDiscovering(false)
-    }
-  }
-  const importRemote = async () => {
-    if (!remotePlanKey) return
-    setImporting(true)
-    setImportError(null)
-    try {
-      const history = await exportReleaseControlHistory(remotePlanKey)
-      const bridge = await getDashboardDataBridge()
-      await bridge.planControl({ action: 'import_history', history })
-      await load({ silent: true })
-      setImportOpen(false)
-    } catch (cause) {
-      setImportError(cause instanceof Error ? cause.message : String(cause))
-    } finally {
-      setImporting(false)
-    }
-  }
-
   const load = useCallback(async ({ silent = false } = {}) => {
     if (!silent) setLoading(true)
     setError(null)
@@ -539,15 +310,11 @@ export function PlansPage() {
         right.updated_at.localeCompare(left.updated_at),
       )
       setPlans(orderedPlans)
-      const executionIds = orderedPlans.flatMap((plan) =>
-        isLocalPlan(plan)
-          ? [
-              plan.baseline_execution_id ?? '',
-              plan.candidate_execution_ids.at(-1) ?? '',
-              plan.last_attempt_id ?? '',
-            ]
-          : [plan.execution_ids[0] ?? ''],
-      )
+      const executionIds = orderedPlans.flatMap((plan) => [
+        plan.baseline_execution_id ?? '',
+        plan.candidate_execution_ids.at(-1) ?? '',
+        plan.last_attempt_id ?? '',
+      ])
       try {
         setExecutionSummaries(
           await loadExecutionSummaries(next.listExecutions, executionIds),
@@ -596,9 +363,9 @@ export function PlansPage() {
         plan.label,
         plan.purpose,
         plan.id,
-        ...(isLocalPlan(plan)
-          ? [plan.model, plan.provider, ...plan.scenario_ids]
-          : [plan.source.plan_key, plan.source.instance_id]),
+        plan.model,
+        plan.provider,
+        ...plan.scenario_ids,
       ]
         .join(' ')
         .toLowerCase()
@@ -622,21 +389,12 @@ export function PlansPage() {
         active="plans"
         actionsLabel="Local plan actions"
         actions={
-          <>
-            <button
-              type="button"
-              className={dashboardHeaderActionClassName()}
-              onClick={() => void openImport()}
-            >
-              {importing ? 'importing…' : 'import history'}
-            </button>
-            <a
-              className={dashboardHeaderActionClassName({ primary: true })}
-              href={hashForNewPlan()}
-            >
-              new plan
-            </a>
-          </>
+          <a
+            className={dashboardHeaderActionClassName({ primary: true })}
+            href={hashForNewPlan()}
+          >
+            new plan
+          </a>
         }
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
@@ -656,29 +414,6 @@ export function PlansPage() {
             ) : undefined
           }
         />
-        {importError ? (
-          <Callout
-            className="mt-4"
-            tone="warning"
-            title="History import failed"
-          >
-            {importError}
-          </Callout>
-        ) : null}
-        {importWarnings.length > 0 ? (
-          <Callout
-            className="mt-4"
-            tone="warning"
-            title="History imported with warnings"
-          >
-            <ul className="m-0 list-disc pl-4">
-              {importWarnings.map((warning) => (
-                <li key={warning}>{warning}</li>
-              ))}
-            </ul>
-          </Callout>
-        ) : null}
-
         <Tabs
           value={tab}
           onValueChange={(value) => setTab(value as typeof tab)}
@@ -880,69 +615,13 @@ export function PlansPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {filteredPlans.map((plan) =>
-                        isLocalPlan(plan) ? (
-                          <PlanRow
-                            key={plan.id}
-                            plan={plan}
-                            executionSummaries={executionSummaries}
-                          />
-                        ) : (
-                          <DataTableRow
-                            key={plan.id}
-                            href={hashForPlan(plan.id)}
-                          >
-                            <td
-                              data-label="Plan"
-                              className="ds-table-sticky-col"
-                            >
-                              <span className="font-medium text-ink">
-                                {plan.label}
-                              </span>
-                              <span className="ml-2 rounded bg-[var(--surface-fill)] px-1 font-mono text-label text-ink-muted">
-                                remote
-                              </span>
-                              <span className="block font-mono text-label text-ink-muted">
-                                {plan.source.instance_id} ·{' '}
-                                {plan.source.plan_key}
-                              </span>
-                            </td>
-                            <td data-label="Details">{plan.purpose || '—'}</td>
-                            <td data-label="Reference">
-                              Release Control
-                              <span className="block text-xs text-ink-muted">
-                                Imported local copy
-                              </span>
-                            </td>
-                            <td data-label="Metrics">
-                              <PlanMetricsCell
-                                execution={
-                                  executionSummaries[plan.execution_ids[0]] ??
-                                  null
-                                }
-                                source="Latest execution"
-                              />
-                            </td>
-                            <td
-                              data-label="Last activity"
-                              className={numericCellClassName}
-                            >
-                              {shortDate(plan.updated_at)}
-                            </td>
-                            <td className="text-right">
-                              <a
-                                className={buttonClassName({
-                                  variant: 'quiet',
-                                  size: 'compact',
-                                })}
-                                href={hashForPlan(plan.id)}
-                              >
-                                open
-                              </a>
-                            </td>
-                          </DataTableRow>
-                        ),
-                      )}
+                      {filteredPlans.map((plan) => (
+                        <PlanRow
+                          key={plan.id}
+                          plan={plan}
+                          executionSummaries={executionSummaries}
+                        />
+                      ))}
                     </tbody>
                   </DataTable>
                 )}
@@ -951,67 +630,6 @@ export function PlansPage() {
           )}
         </div>
       </div>
-      <Dialog
-        open={importOpen}
-        bodyPadding
-        onClose={() => !importing && setImportOpen(false)}
-        title="Import Release Control history"
-        description="History is copied into this Harness. Later reading, comparison and reproduction use the local copy."
-      >
-        <div className="grid gap-4">
-          <label
-            className="grid gap-1 text-sm"
-            htmlFor={`${viewsId}-import-plan`}
-          >
-            Release Control plan
-            <Select
-              id={`${viewsId}-import-plan`}
-              value={remotePlanKey}
-              disabled={discovering || importing}
-              onChange={(event) => setRemotePlanKey(event.target.value)}
-            >
-              <option value="">
-                {discovering ? 'Loading plans…' : 'Select a plan…'}
-              </option>
-              {remotePlans.map((plan) => (
-                <option key={plan.key} value={plan.key}>
-                  {plan.key}
-                  {plan.active ? '' : ' (inactive)'}
-                </option>
-              ))}
-            </Select>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            <button
-              className={buttonClassName({ variant: 'primary' })}
-              type="button"
-              disabled={!remotePlanKey || importing}
-              onClick={() => void importRemote()}
-            >
-              {importing ? 'importing…' : 'import selected history'}
-            </button>
-            <label className={buttonClassName({ variant: 'secondary' })}>
-              <input
-                className="ds-visually-hidden"
-                type="file"
-                disabled={importing}
-                accept="application/json,.json"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0]
-                  if (file) void importHistory(file)
-                  event.currentTarget.value = ''
-                }}
-              />
-              import JSON file
-            </label>
-          </div>
-          {importError ? (
-            <Callout tone="warning" title="Import unavailable">
-              {importError}
-            </Callout>
-          ) : null}
-        </div>
-      </Dialog>
     </>
   )
 }

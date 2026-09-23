@@ -2,7 +2,6 @@ import {
   type DashboardExecutionDetail,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
-import type { RcReference } from '@/lib/release-control-reference'
 
 export type ScenarioChatTarget = {
   executionId: string
@@ -39,23 +38,14 @@ export function scenarioChatTargets(
 ): ScenarioChatTarget[] {
   const targets: ScenarioChatTarget[] = []
   const seen = new Set<string>()
-  const reference = detail.remote_reference as RcReference | undefined
-  const scenarios =
-    detail.origin === 'remote'
-      ? (reference?.runs ?? []).map((run) => ({
-          subjectId: run.identity?.subjectModel ?? '',
-          scenarioId: run.scenarioId,
-          behaviorSha256: run.behaviorSha256,
-          runs: run.record ? [run.record] : [],
-        }))
-      : (detail.reports ?? []).flatMap((record) =>
-          (record.report?.scenarios ?? []).map((scenario) => ({
-            subjectId: record.subject_id,
-            scenarioId: scenario.scenario_id,
-            behaviorSha256: scenario.behavior_sha256,
-            runs: scenario.runs ?? [],
-          })),
-        )
+  const scenarios = (detail.reports ?? []).flatMap((record) =>
+    (record.report?.scenarios ?? []).map((scenario) => ({
+      subjectId: record.subject_id,
+      scenarioId: scenario.scenario_id,
+      behaviorSha256: scenario.behavior_sha256,
+      runs: scenario.runs ?? [],
+    })),
+  )
 
   for (const scenario of scenarios) {
     if (subjectId && scenario.subjectId !== subjectId) continue

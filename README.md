@@ -294,38 +294,22 @@ Filtering and cursor pagination run on the server. Transport failures stay
 visible. The trusted publisher still writes the bounded JSON report archive
 used by CI. It does not publish a standalone Harness E2E web application.
 
-### Compare a local change with Release Control
+### Import executions from GitHub
 
-On Plans, **Reference: Release Control** browses RC history through the
-authenticated Release Control browser bridge. Keep the RC tab open, enable its
-local Harness connection, and connect it to the same personal Engine as the
-Console. The bridge needs the E2E read functions from the companion Release
-Control change. No GitHub token or artifact sync is required.
+On Executions, **Import from GitHub** lists the completed runs of the
+`exact-stack-e2e.yml` workflow in `github_repository` (worker config, default
+`iii-hq/harness-e2e`) with their suite, model, agent profile, date and
+conclusion. The worker calls the `gh` CLI, so sign it in once with
+`gh auth login`; its errors are shown as they come.
 
-Open a plan to see remote and local executions together, with their origin.
-Select a reference and a local result to compare measurements. Scenario links
-open the existing A → B comparison with both executions selected. Missing
-reports and metrics stay visible as unavailable. Reading history does not
-create a local plan, and the comparison sends no local results to Release
-Control.
-
-**Run locally** on a remote reference saves that execution's materialized test
-parameters as a local plan and runs them against the current Harness.
-Repeating the action creates a new local plan from the current scenario
-contracts and keeps earlier plans and results. Scenarios, rounds, repetitions,
-and retries come from the execution's materialization, not from a current
-profile of the same name. The local scenario implementations and Harness are
-used on purpose: this is a personal experiment, not an exact-stack
-certification. Fault-injection groups still require the protected executor.
-References without a shard seed for every scenario cannot be reproduced.
-Differences in the local scenario definition or case identity are shown as
-advisory information.
-
-Results stay in the local plan store. The RC execution remains a reference.
-Native result validation stays strict; remote data is read through the RC API
-and is not installed as a native report. Full remote evidence is the
-execution's GitHub link, subject to retention. This flow does not download an
-evidence archive.
+**Import** answers at once with an execution in the `importing` state; the
+worker downloads the run's highest-attempt bundle into its data directory and
+installs every group's native run as an ordinary retained run. The execution
+records its parameters, the stack each group resolved and observed, and its
+GitHub origin. A group that left only `failure.json` is kept as a slot with
+that error. Importing a run again replaces the runs of the earlier import; the
+execution keeps its name. Imported and local executions are the same record:
+lists, reports, evidence and renaming treat them alike.
 
 ## Worker
 
@@ -394,26 +378,17 @@ fingerprint of the statements that create it. At start, the worker recreates
 tables whose fingerprint moved, in one transaction. It keeps the execution
 records, local plans, and receipts it can still read, and rebuilds run
 projections from the native bundles. Rows it cannot read, missing bundles, and
-imported Release Control history in a recreated table are logged as warnings.
-That history returns by importing it again. Nothing is reconstructed as a
+tables this binary no longer writes (such as the retired `history_*` import
+tables) are dropped and logged as warnings. Nothing is reconstructed as a
 scored result. A report or plan written under another results contract is read
 with a warning.
 
-Plan definitions and composed execution receipts live in `saved_plans` and
-`saved_plan_executions`. A saved plan or receipt this binary cannot read is
+Plan definitions and executions (planned here or imported from GitHub) live in
+`saved_plans` and `saved_plan_executions`. A saved plan or receipt this binary cannot read is
 deleted on the next read. Plans written by another binary are not migrated.
 
-Release Control history imports use `harness-e2e-history`, wrapped as
-`{json, sha256}` with a `sha256:` digest of the exact UTF-8 JSON. **Import
-history** in the Console imports a file or fetches a plan from the RC bridge.
-Plans and executions keep source identities, revisions, and every retained
-report. Repeated imports do not create duplicates. Imported active work never
-enters local admission or recovery. History stays readable without RC.
-Evidence uses local `gh` credentials and Python 3 to verify the GitHub bundle
-manifest, execution and attempt identity, and file checksums. Missing,
-expired, inaccessible, and invalid evidence are separate states. Native
-bundles keep full reports, manifests, and transcripts, loaded on demand. The
-runner has no S3, GCS, R2, SQL-driver, or Harness dependency.
+Native bundles keep full reports, manifests, and transcripts, loaded on
+demand. The runner has no S3, GCS, R2, SQL-driver, or Harness dependency.
 
 Weekly Stress materializes deterministic fault plans and evaluates journals
 from a protected supervisor. Lane promotion is governed by

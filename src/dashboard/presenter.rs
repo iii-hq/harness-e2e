@@ -828,10 +828,7 @@ pub(crate) fn validate_execution_id(value: &str) -> std::result::Result<(), Stri
         && native_or_plan_id
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit());
-    let imported_id = value
-        .strip_prefix("remote-execution-")
-        .is_some_and(|id| id.len() == 64 && id.bytes().all(|byte| byte.is_ascii_hexdigit()));
-    if local_id || control_plane_id || imported_id {
+    if local_id || control_plane_id {
         Ok(())
     } else {
         Err("invalid execution id".into())

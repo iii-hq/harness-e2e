@@ -37,7 +37,7 @@ Evidências: [fixture compartilhada](../src/scenarios/shell_coder_sandbox.rs), [
 
 ### Inicialização e persistência têm duas fontes de configuração
 
-O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e `III_CONFIG`, fornecidos pelo Compose. Seu YAML define `data_dir`, `control_database` e `control_namespace`. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
+O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e `III_CONFIG`, fornecidos pelo Compose. Seu YAML define `data_dir`, `control_database` e `control_namespace`; `github_repository` (padrão `iii-hq/harness-e2e`) escolhe o repositório cujas execuções o Console importa do GitHub com o `gh` autenticado. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
 
 O setup documentado exige iniciar dois arquivos Compose em ordem. [worker-compose.control.yaml](../worker-compose.control.yaml) depende de `path://../workers/database` e contém um caminho absoluto da máquina do autor; [worker-compose.yaml](../worker-compose.yaml) aponta para o banco desse namespace. O pacote declara dependências, mas isso não comprova que a instalação inicial configure automaticamente o banco nomeado e a ligação entre namespaces.
 
@@ -165,7 +165,7 @@ Fontes principais por grupo: [CLI](../src/main.rs), [defaults da execução ráp
 | `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, `III_CONFIG` | Contrato de inicialização injetado pelo Compose. Manter; não são perguntas do onboarding. |
 | `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN` em `redaction.rs` | Leitura para ocultar valores sensíveis. Essa ocorrência não os torna credenciais obrigatórias do E2E. Credenciais dos workers e do CI seguem seus próprios contratos. |
 | `TARGET`, `CARGO_MANIFEST_DIR`, `SKIP_CONSOLE_UI_BUILD`, `PNPM` | Build a partir do código. O binário publicado incorpora os assets da Console; essas opções não devem aparecer na instalação de usuário. |
-| `UPDATE_HISTORY_SCHEMA`, `HISTORY_EXPORT_ARTIFACT`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
+| `UPDATE_PROFILE_SNAPSHOT_SCHEMA`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
 | `HOME`, `PATH`, `TMPDIR`, `RUST_LOG` e ambiente do sistema | Convenções de runtime e diagnóstico. A meta elimina configuração manual do E2E, não o uso de ambiente pelo sistema operacional. |
 
 ## Limites da auditoria

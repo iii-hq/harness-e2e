@@ -21,12 +21,15 @@ use super::read_model::{
 use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::plans::{PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
+use crate::plans::store::{GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
-pub(super) const EVIDENCE_OPEN: &str = "e2e::dashboard::evidence-open";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
+pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
+pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
+pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
@@ -89,6 +92,13 @@ pub(super) struct ExecutionGetRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct ExecutionRenameRequest {
+    pub execution_id: String,
+    /// Empty restores the default name.
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
 pub(super) struct AttemptGetRequest {
     pub execution_id: String,
     pub run_id: String,
@@ -125,22 +135,11 @@ struct PlanGetRequest {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 struct PlansListResponse {
     mode: String,
-    plans: Vec<Value>,
+    plans: Vec<LocalPlan>,
     master_plan: Value,
 }
 
 type PlanControlResponse = BTreeMap<String, Value>;
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-struct EvidenceResponse {
-    availability: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    content_base64: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    mime_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    reason: Option<String>,
-}
 
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct AttemptResponse {
@@ -273,16 +272,6 @@ impl DashboardEvents {
 }
 
 pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
-    register(iii, EVIDENCE_OPEN, "Read retained GitHub evidence using local credentials and verify its bundle identity and checksum.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: crate::history::evidence::EvidenceRequest| {
-            let controller = controller.clone();
-            async move {
-                let response = controller.open_history_evidence(request).await.map_err(handler_error)?;
-                serde_json::from_value::<EvidenceResponse>(response).map_err(handler_error)
-            }
-        })
-    });
     register(
         iii,
         EXECUTIONS_LIST,
@@ -329,6 +318,57 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .await
                         .map(|()| PlanControlResponse::new())
                         .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_RENAME,
+        "Name one execution; an empty label restores its default name.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionRenameRequest| {
+                let controller = controller.clone();
+                async move {
+                    let execution = controller
+                        .rename_execution(&request.execution_id, &request.label)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(execution).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        GITHUB_RUNS_LIST,
+        "List completed exact-stack workflow runs on GitHub with their suite, subject and local import.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: GithubRunsListRequest| {
+                let controller = controller.clone();
+                async move {
+                    let runs = controller.github_runs(request).await.map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        GITHUB_RUN_IMPORT,
+        "Import one exact-stack workflow run from GitHub as an execution; answers at once and imports in the background.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: GithubRunImportRequest| {
+                let controller = controller.clone();
+                async move {
+                    let accepted = controller
+                        .github_run_import(request)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(accepted).map_err(handler_error)
                 }
             })
         },
@@ -416,7 +456,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         PLANS_LIST,
-        "List saved local and imported plans from the local database.",
+        "List saved plans from the local database.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
@@ -448,16 +488,15 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             }
         })
     });
-    register(iii, PLAN_GET, "Read one saved local or imported plan.", {
+    register(iii, PLAN_GET, "Read one saved plan.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |request: PlanGetRequest| {
             let controller = controller.clone();
             async move {
-                let response = controller
+                controller
                     .get_plan(&request.plan_id)
                     .await
-                    .map_err(handler_error)?;
-                serde_json::from_value::<PlanControlResponse>(response).map_err(handler_error)
+                    .map_err(handler_error)
             }
         })
     });
@@ -872,18 +911,6 @@ mod response_contract_tests {
 
     #[test]
     fn registered_response_types_describe_and_preserve_existing_payloads() {
-        let evidence_schema =
-            serde_json::to_value(schemars::schema_for!(EvidenceResponse)).unwrap();
-        assert_eq!(evidence_schema["required"], json!(["availability"]));
-        assert!(evidence_schema["properties"]["content_base64"].is_object());
-        for payload in [
-            json!({"availability": "available", "content_base64": "YQ==", "mime_type": "text/plain"}),
-            json!({"availability": "access_unavailable", "reason": "GitHub credentials unavailable"}),
-        ] {
-            let typed: EvidenceResponse = serde_json::from_value(payload.clone()).unwrap();
-            assert_eq!(serde_json::to_value(typed).unwrap(), payload);
-        }
-
         let attempt_schema = serde_json::to_value(schemars::schema_for!(AttemptResponse)).unwrap();
         for field in [
             "status",
@@ -914,8 +941,8 @@ mod response_contract_tests {
             json!({})
         );
         for payload in [
-            json!({"origin": "local", "id": "plan-local", "snapshot": {"models": []}}),
-            json!({"origin": "remote", "id": "plan-remote", "configuration": null}),
+            json!({"id": "plan-local", "snapshot": {"models": []}}),
+            json!({"execution_id": "plan-imported", "state": "importing"}),
         ] {
             let typed: PlanControlResponse = serde_json::from_value(payload.clone()).unwrap();
             assert_eq!(serde_json::to_value(typed).unwrap(), payload);

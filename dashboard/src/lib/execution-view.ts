@@ -161,11 +161,13 @@ export function attentionState(
   breakdown = failureBreakdown(execution),
 ): ExecutionAttentionState {
   const status = stringValue(execution.status)
-  if (status === 'running') return 'running'
+  // An import in progress is followed like a running execution.
+  if (status === 'running' || status === 'importing') return 'running'
   if (status === 'cancelling') return 'cancelling'
   if (status === 'cancelled') return 'cancelled'
   if (status === 'incomplete') return 'incomplete'
   if (status === 'unavailable') return 'unavailable'
+  if (status === 'failed') return 'needs_attention'
   const hasAttention = CATEGORY_ORDER.some(
     (category) => breakdown[category] > 0,
   )
@@ -301,6 +303,8 @@ export function detailHasAttention(detail: DashboardExecutionDetail): boolean {
 }
 
 export function statusCopy(presentation: ExecutionPresentation) {
+  if (presentation.execution.status === 'importing')
+    return { label: 'importing', status: 'running' as const }
   if (presentation.attention === 'passed')
     return { label: 'passed', status: 'passed' as const }
   if (presentation.attention === 'running')
@@ -319,6 +323,35 @@ export function statusCopy(presentation: ExecutionPresentation) {
   )
     return { label: 'inconclusive', status: 'inconclusive' as const }
   return { label: 'failed', status: 'failed' as const }
+}
+
+/** Where an execution came from, as text with a link when it has one. Native
+ *  runs and executions planned here read as local. */
+export function executionOrigin(execution: DashboardExecutionSummary): {
+  label: string
+  href: string | null
+} {
+  const source = objectValue(execution.source)
+  if (source.kind === 'github')
+    return {
+      label: `GitHub #${String(source.run_id ?? '')}`,
+      href: stringValue(source.url) || null,
+    }
+  return { label: 'local', href: null }
+}
+
+/** Mean of the per-scenario mean scores; null unless every scenario has one. */
+export function executionScore(
+  execution: DashboardExecutionSummary | null,
+): number | null {
+  const scores =
+    execution?.subjects.flatMap((subject) =>
+      subject.scenarios.map((scenario) => numberValue(scenario.mean_score)),
+    ) ?? []
+  return scores.length > 0 && scores.every((score) => score !== null)
+    ? scores.reduce<number>((total, score) => total + (score ?? 0), 0) /
+        scores.length
+    : null
 }
 
 export function modelNames(models: ExecutionPresentation['subjects']) {

@@ -23,6 +23,9 @@ pub struct WorkerConfig {
     /// Namespace that owns the control-plane database worker.
     #[serde(default = "default_control_namespace")]
     pub control_namespace: String,
+    /// GitHub repository whose exact-stack workflow runs can be imported.
+    #[serde(default = "default_github_repository")]
+    pub github_repository: String,
 }
 
 fn default_control_database() -> String {
@@ -31,6 +34,9 @@ fn default_control_database() -> String {
 fn default_control_namespace() -> String {
     "harness-e2e-control".into()
 }
+fn default_github_repository() -> String {
+    "iii-hq/harness-e2e".into()
+}
 
 impl Default for WorkerConfig {
     fn default() -> Self {
@@ -38,6 +44,7 @@ impl Default for WorkerConfig {
             data_dir: "~/.iii/data/harness-e2e".into(),
             control_database: default_control_database(),
             control_namespace: default_control_namespace(),
+            github_repository: default_github_repository(),
         }
     }
 }
@@ -136,9 +143,13 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
     .context("restore the E2E control plane")?;
     control.register();
     crate::console_ui::register(&iii);
-    crate::dashboard::register_worker_functions(&iii, control.clone())
-        .await
-        .context("register dashboard functions")?;
+    crate::dashboard::register_worker_functions(
+        &iii,
+        control.clone(),
+        config.github_repository.clone(),
+    )
+    .await
+    .context("register dashboard functions")?;
     tracing::info!(worker = WORKER_NAME, "e2e control plane ready");
     shutdown_signal().await?;
     iii.shutdown_async().await;

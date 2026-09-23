@@ -12,8 +12,10 @@ const runtimeConfig: RuntimeConfig = {
   functions: {
     executions_list: 'e2e::dashboard::executions-list',
     execution_get: 'e2e::dashboard::execution-get',
-    execution_evidence_open: 'e2e::dashboard::evidence-open',
     execution_delete: 'e2e::dashboard::execution-delete',
+    execution_rename: 'e2e::dashboard::execution-rename',
+    github_runs_list: 'e2e::dashboard::github-runs-list',
+    github_run_import: 'e2e::dashboard::github-run-import',
     evaluated_versions_list: 'e2e::dashboard::evaluated-versions-list',
     tests_list: 'e2e::dashboard::tests-list',
     test_version_get: 'e2e::dashboard::test-version-get',

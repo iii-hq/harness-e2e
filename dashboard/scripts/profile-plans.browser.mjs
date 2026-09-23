@@ -85,6 +85,18 @@ function startPlan(plan, role) {
     plan_id: plan.id,
     state: 'running',
     role,
+    label: null,
+    parameters: {
+      scenarios: plan.scenario_ids,
+      runs: plan.runs,
+      technical_retries: plan.technical_retries,
+      seed: plan.seed,
+      model: plan.model,
+      provider: plan.provider,
+      agent: null,
+    },
+    source: { kind: 'local' },
+    stack: [],
     started_at: new Date().toISOString(),
     slots: [],
     measurements: null,
@@ -135,7 +147,10 @@ function executionDetail(execution) {
     plan_id: plan.id,
     plan_execution: execution,
     status: execution.state,
-    event: 'local',
+    state: execution.state,
+    parameters: execution.parameters,
+    source: execution.source,
+    stack: execution.stack,
     availability: 'aggregate',
     subjects: [
       {
@@ -188,7 +203,6 @@ const trigger = (name, request = {}) => {
       ],
     }
   if (id === 'run-status') return { job: null, defaults: configuration }
-  if (name === 'release-control::test-plans::list') return { plans: [] }
   throw new Error(`Unexpected RPC ${name}`)
 }
 const browser = await chromium.launch({ headless: true })
