@@ -62,56 +62,38 @@ function detail(): DashboardExecutionDetail {
 }
 
 describe('scenario chat targets', () => {
-  it('loads imported transcripts and retries with the same identity filters', async () => {
-    const local = detail()
-    const scenario = local.reports[0].report?.scenarios[0]
+  it('loads transcripts and retries through the bridge with identity filters', async () => {
+    const execution = { ...detail(), id: 'plan-imported' }
+    const scenario = execution.reports[0].report?.scenarios[0]
     if (!scenario) throw new Error('missing scenario fixture')
-    const imported = {
-      ...local,
-      id: 'remote-execution-1',
-      origin: 'remote',
-      reports: [],
-      remote_reference: {
-        runs: [
-          {
-            scenarioId: scenario.scenario_id,
-            behaviorSha256: scenario.behavior_sha256,
-            identity: { subjectModel: 'openai/codex' },
-            record: scenario.runs[0],
-          },
-        ],
-      },
-    } as DashboardExecutionDetail
-    const getExecution = vi.fn().mockResolvedValue(imported)
+    const getExecution = vi.fn().mockResolvedValue(execution)
     vi.mocked(getDashboardDataBridge).mockResolvedValue({
       getExecution,
     } as never)
     const targets = await loadScenarioChatTargets({
-      executionId: imported.id,
+      executionId: execution.id,
       scenarioId: 'direct_answer',
       subjectId: 'openai/codex',
       runId: 'run-1',
       behaviorSha256: scenario.behavior_sha256,
     })
     expect(targets).toEqual(
-      scenarioChatTargets(local, 'direct_answer').map((target) => ({
+      scenarioChatTargets(detail(), 'direct_answer').map((target) => ({
         ...target,
-        executionId: imported.id,
+        executionId: execution.id,
       })),
     )
-    expect(getExecution).toHaveBeenCalledWith(imported.id)
-    expect(scenarioChatTargets(imported, 'other_test')).toEqual([])
+    expect(getExecution).toHaveBeenCalledWith(execution.id)
+    expect(scenarioChatTargets(execution, 'other_test')).toEqual([])
     expect(
-      scenarioChatTargets(imported, 'direct_answer', 'other-model'),
+      scenarioChatTargets(execution, 'direct_answer', 'other-model'),
     ).toEqual([])
     expect(
-      scenarioChatTargets(imported, 'direct_answer', null, 'other-run'),
+      scenarioChatTargets(execution, 'direct_answer', null, 'other-run'),
     ).toEqual([])
     expect(
-      scenarioChatTargets(imported, 'direct_answer', null, null, null),
+      scenarioChatTargets(execution, 'direct_answer', null, null, null),
     ).toEqual([])
-    imported.remote_reference = { runs: [{ scenarioId: 'direct_answer' }] }
-    expect(scenarioChatTargets(imported, 'direct_answer')).toEqual([])
   })
 
   it('keeps the current attempt first and preserves retry sessions', () => {

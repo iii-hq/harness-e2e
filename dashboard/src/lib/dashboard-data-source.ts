@@ -32,9 +32,6 @@ export type LocalPlanState =
   | 'comparison_ready'
 
 export type LocalPlan = {
-  origin?: 'local'
-  reference_execution_id?: string
-  reference_differences?: string[]
   id: string
   label: string
   purpose: string
@@ -67,31 +64,71 @@ export type LocalPlan = {
   compatible?: boolean
 }
 
-export type ImportedPlan = {
-  origin: 'remote'
-  id: string
-  label: string
-  purpose: string
-  created_at: string | null
-  updated_at: string
-  template_id: string | null
-  source: {
-    instance_id: string
-    plan_key: string
-    captured_at: string
-    active: boolean
-    limitation: string | null
-  }
-  configuration: JsonObject | null
-  execution_ids: string[]
-}
-
-export type Plan = LocalPlan | ImportedPlan
-
 export type LocalPlansResponse = {
   mode: 'unified'
-  plans: Plan[]
+  plans: LocalPlan[]
   master_plan?: MasterTestPlan
+}
+
+/** What running an execution again would need. */
+export type ExecutionParameters = {
+  scenarios: string[]
+  runs: number
+  technical_retries: number
+  seed: number | null
+  model: string
+  provider: string
+  /** Agent profile the subject ran under. */
+  agent: string | null
+}
+
+/** Where an execution came from; data only, every execution reads alike. */
+export type ExecutionSource =
+  | { kind: 'local' }
+  | {
+      kind: 'github'
+      repository: string
+      run_id: number
+      run_attempt: number
+      url: string
+      release_control_execution_id: string | null
+    }
+
+export type StackWorker = {
+  name: string
+  source: 'package' | 'path'
+  requested: string | null
+  observed: string | null
+  commit: string | null
+  dirty: boolean | null
+  /** Groups that ran this version, listed only when groups disagree. */
+  groups?: string[]
+}
+
+export type GithubRun = {
+  run_id: number
+  run_attempt: number
+  title: string
+  created_at: string | null
+  conclusion: string | null
+  url: string
+  release_control_execution_id: string | null
+  suite?: string | null
+  suite_label?: string | null
+  model?: string | null
+  provider?: string | null
+  agent?: string | null
+  runner_version?: string | null
+  contract_error?: string
+  execution_id: string | null
+  execution_state: string | null
+}
+
+export type GithubRunsResponse = {
+  repository: string
+  page: number
+  runs: GithubRun[]
+  next_page: number | null
 }
 
 export type MasterTestProfile = {
@@ -229,18 +266,9 @@ export type DashboardSubjectSummary = JsonObject & {
   scenarios: DashboardScenarioSummary[]
 }
 
-export type ReleaseControlIdentity = {
-  execution_id: string
-  attempt: number | null
-  profile: string | null
-  campaign_id: string | null
-  group_id: string | null
-}
-
 export type DashboardExecutionSummary = JsonObject & {
   id: string
   label?: string
-  execution_label?: string | null
   run_id?: string
   attempt?: number
   status: string
@@ -253,11 +281,15 @@ export type DashboardExecutionSummary = JsonObject & {
   actor?: string
   conclusion?: string
   availability?: 'full' | 'aggregate' | 'unavailable' | string
+  /** A native run's stack source, or an execution's origin. */
   source?: JsonObject
   release?: JsonObject
   lane?: string
-  /** Set when Release Control dispatched the run; groups the ledger by plan. */
-  release_control?: ReleaseControlIdentity | null
+  /** Execution state (`importing`, `completed`, …) of a composed execution. */
+  state?: string
+  parameters?: ExecutionParameters | null
+  stack?: JsonObject | StackWorker[]
+  plan_id?: string | null
   subjects: DashboardSubjectSummary[]
   scenario_metrics?: DashboardScenarioMetricSummary[]
   workflow_metrics?: DashboardWorkflowMetricSummary | null
@@ -500,13 +532,7 @@ export type DashboardReportProjection = JsonObject & {
 }
 
 export type DashboardExecutionDetail = DashboardExecutionSummary & {
-  origin?: 'local' | 'remote'
-  remote_reference?: JsonObject
-  retained_runs?: JsonValue[]
-  retained_reports?: JsonValue[]
-  history_source?: JsonObject
   plan_execution?: PlanExecution
-  plan_id?: string
   evidence_error?: string
   reports: Array<
     JsonObject & {
@@ -534,8 +560,10 @@ export type RuntimeConfig = {
   functions: {
     executions_list: string
     execution_get: string
-    execution_evidence_open: string
     execution_delete: string
+    execution_rename: string
+    github_runs_list: string
+    github_run_import: string
     evaluated_versions_list: string
     tests_list: string
     test_version_get: string
@@ -567,17 +595,12 @@ export type ExecutionListInput = {
 export type DashboardDataBridge = {
   listExecutions(input?: ExecutionListInput): Promise<ExecutionManifest>
   getExecution(executionId: string): Promise<DashboardExecutionDetail>
-  openEvidence(input: {
-    execution_id: string
-    report_id: string
-    path: string
-  }): Promise<{
-    availability: string
-    content_base64?: string
-    mime_type?: string
-    reason?: string
-  }>
   deleteExecution(executionId: string): Promise<void>
+  renameExecution(executionId: string, label: string): Promise<PlanExecution>
+  listGithubRuns(page?: number): Promise<GithubRunsResponse>
+  importGithubRun(
+    runId: number,
+  ): Promise<{ execution_id: string; state: string }>
   listEvaluatedVersions(input?: {
     cohort_id?: string
   }): Promise<EvaluatedVersionsResponse>
@@ -586,7 +609,7 @@ export type DashboardDataBridge = {
   getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
   planControl(request: JsonObject): Promise<JsonObject>
   listPlans(): Promise<LocalPlansResponse>
-  getPlan(planId: string): Promise<Plan>
+  getPlan(planId: string): Promise<LocalPlan>
   createPlan(request: JsonObject): Promise<LocalPlan>
   updatePlan(planId: string, request: JsonObject): Promise<LocalPlan>
   deletePlan(planId: string): Promise<void>
@@ -645,12 +668,19 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call<ExecutionBundle>(runtime.functions.execution_get, {
         execution_id: executionId,
       }).then((bundle) => bundle.detail),
-    openEvidence: (input) =>
-      call(runtime.functions.execution_evidence_open, input),
     deleteExecution: (executionId) =>
       call(runtime.functions.execution_delete, {
         execution_id: executionId,
       }).then(() => undefined),
+    renameExecution: (executionId, label) =>
+      call(runtime.functions.execution_rename, {
+        execution_id: executionId,
+        label,
+      }),
+    listGithubRuns: (page = 1) =>
+      call(runtime.functions.github_runs_list, { page }),
+    importGithubRun: (runId) =>
+      call(runtime.functions.github_run_import, { run_id: runId }),
     listEvaluatedVersions: (input = {}) =>
       cachedCall(runtime.functions.evaluated_versions_list, input),
     listTests: (input = {}) => cachedCall(runtime.functions.tests_list, input),

@@ -79,9 +79,8 @@ export function testObservationKey(observation: TestObservation) {
 
 /**
  * The scenario the two observations answer to. The retained contract digest
- * settles it; a source that only carries the definition digest — a Release
- * Control ledger, say — is settled by that instead. Neither on both sides
- * means no delta, not an error.
+ * settles it; an observation that only carries the definition digest is
+ * settled by that instead. Neither on both sides means no delta, not an error.
  */
 function sameScenario(
   baseline: TestObservation,
@@ -99,23 +98,6 @@ function sameScenario(
     return
   }
   reasons.push('Scenario definition is not recorded on both executions')
-}
-
-/**
- * Whether both observations describe the same scenario. A Release Control
- * reference is read against a local candidate even when the stack, cohort and
- * system differ on purpose; the scenario itself still has to match, and a
- * ledger that carries no digest at all is simply not comparable.
- */
-export function sameScenarioDefinition(
-  baseline: TestObservation,
-  candidate: TestObservation,
-) {
-  const reasons: string[] = []
-  sameRequired(baseline.case_id, candidate.case_id, 'Case', reasons)
-  sameRequired(baseline.seed, candidate.seed, 'Seed', reasons)
-  sameScenario(baseline, candidate, reasons)
-  return { matches: reasons.length === 0, reasons }
 }
 
 /**

@@ -1,9 +1,20 @@
 import { Link2, RotateCcw, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
+import {
+  ExecutionConfiguration,
+  ExecutionOriginLink,
+} from '@/components/ExecutionConfiguration'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
+import { ExecutionNameControl } from '@/components/ExecutionNameControl'
 import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
@@ -52,12 +63,10 @@ import {
   formatDuration,
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
-import { excludeUnsuccessfulTests } from '@/lib/primary-metrics'
 import {
-  comparisonPrimaryMetrics,
-  filterReferenceScenarios,
-  type RcReference,
-} from '@/lib/release-control-reference'
+  buildPrimaryMetrics,
+  excludeUnsuccessfulTests,
+} from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import { watchExecution } from '@/lib/watch-execution'
 import '@/design-system/styles.css'
@@ -466,9 +475,9 @@ export function ExecutionPage({
     [summary],
   )
   const live =
-    detail?.origin !== 'remote' &&
-    (presentation?.attention === 'running' ||
-      presentation?.attention === 'cancelling')
+    presentation?.attention === 'running' ||
+    presentation?.attention === 'cancelling'
+  const importing = detail?.status === 'importing'
 
   // Audit ED-12: a live execution follows the run instead of waiting for F5.
   useEffect(() => {
@@ -486,52 +495,16 @@ export function ExecutionPage({
   )
 
   const allPrimaryMetrics = useMemo(
-    () => comparisonPrimaryMetrics(detail, null).baseline,
+    () => (detail ? buildPrimaryMetrics(detail) : null),
     [detail],
   )
-  const excludedScenarioIds = useMemo(() => {
-    const excluded = new Set<string>()
-    if (!excludeFailedTests || detail?.origin !== 'remote') return excluded
-    for (const test of allPrimaryMetrics?.tests ?? []) {
-      if (test.metrics.score.value === 0) excluded.add(test.label)
-    }
-    for (const item of scenarioMatrix?.items ?? []) {
-      if (
-        item.objective.status === 'failed' ||
-        item.runs.some(
-          (run) =>
-            [
-              'hard_gate_failed',
-              'subject_error',
-              'resource_limit',
-              'infrastructure_error',
-            ].includes(run.status) || run.technical === 'technical_invalid',
-        )
-      )
-        excluded.add(item.scenarioId)
-    }
-    return excluded
-  }, [allPrimaryMetrics, detail, excludeFailedTests, scenarioMatrix])
-  const resultDetail = useMemo(() => {
-    if (!detail || !excludeFailedTests) return detail
-    if (detail.origin !== 'remote') return excludeUnsuccessfulTests(detail)
-    const reference = detail.remote_reference as RcReference | undefined
-    return reference
-      ? ({
-          ...detail,
-          remote_reference: filterReferenceScenarios(
-            reference,
-            new Set(
-              (allPrimaryMetrics?.tests ?? [])
-                .filter((test) => !excludedScenarioIds.has(test.label))
-                .map((test) => test.label),
-            ),
-          ),
-        } as DashboardExecutionDetail)
-      : detail
-  }, [detail, excludeFailedTests, excludedScenarioIds, allPrimaryMetrics])
+  const resultDetail = useMemo(
+    () =>
+      detail && excludeFailedTests ? excludeUnsuccessfulTests(detail) : detail,
+    [detail, excludeFailedTests],
+  )
   const primaryMetrics = useMemo(
-    () => comparisonPrimaryMetrics(resultDetail, null).baseline,
+    () => (resultDetail ? buildPrimaryMetrics(resultDetail) : null),
     [resultDetail],
   )
   const excludedTests =
@@ -606,24 +579,14 @@ export function ExecutionPage({
     ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
     : null
   const scenarioSummary = scenarioMatrix?.summary ?? null
-  const status =
-    detail.origin === 'remote' &&
-    scenarioSummary &&
-    !['running', 'cancelling', 'cancelled', 'incomplete'].includes(
-      presentation.attention,
-    )
-      ? scenarioSummary.failed > 0
-        ? { status: 'failed' as const, label: 'Failed' }
-        : scenarioSummary.passed > 0 &&
-            scenarioSummary.passed === scenarioSummary.total
-          ? { status: 'passed' as const, label: 'Passed' }
-          : { status: 'inconclusive' as const, label: 'Inconclusive' }
-      : executionStatus(presentation)
+  const status = importing
+    ? { status: 'running' as const, label: 'Importing' }
+    : executionStatus(presentation)
   const runCount =
     scenarioMatrix?.items.reduce((total, item) => total + item.runCount, 0) ?? 0
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const { title } = executionTitle(presentation)
-  const identity: Array<[string, string]> = [
+  const identity: Array<[string, ReactNode]> = [
     [
       'subject',
       presentation.subjects
@@ -635,9 +598,15 @@ export function ExecutionPage({
       presentation.startedAt ? formatDate(presentation.startedAt) : '—',
     ],
     [
-      'trigger',
-      [detail.event, detail.actor].filter(Boolean).join(' · ') ||
-        'not reported',
+      'origin',
+      detail.plan_execution ? (
+        <ExecutionOriginLink
+          key="origin"
+          source={detail.plan_execution.source}
+        />
+      ) : (
+        'local'
+      ),
     ],
     ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
   ]
@@ -660,6 +629,11 @@ export function ExecutionPage({
     } finally {
       setCancelling(false)
     }
+  }
+  const renameExecution = async (id: string, label: string) => {
+    if (!bridge) return
+    await bridge.renameExecution(id, label)
+    await load()
   }
   const deleteExecution = async () => {
     if (!bridge || !detail) return
@@ -710,6 +684,14 @@ export function ExecutionPage({
           ]}
           actions={
             <>
+              {ready && detail.plan_execution ? (
+                <ExecutionNameControl
+                  executionId={detail.id}
+                  fallbackLabel={title}
+                  label={detail.plan_execution.label ?? ''}
+                  onRename={renameExecution}
+                />
+              ) : null}
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
@@ -755,10 +737,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {ready &&
-              !live &&
-              !detail.plan_execution &&
-              detail.origin !== 'remote' ? (
+              {ready && !live && !detail.plan_execution ? (
                 <button
                   className={buttonClassName({
                     variant: 'quiet',
@@ -794,6 +773,11 @@ export function ExecutionPage({
             updates will retry. {error}
           </p>
         ) : null}
+        {detail.plan_execution?.error && !live ? (
+          <Callout className="mt-4" tone="warning" title="Execution error">
+            {detail.plan_execution.error}
+          </Callout>
+        ) : null}
         {detail.live_progress_error ? (
           <p className="mt-4 text-sm text-warning" role="status">
             {detail.live_progress_error}
@@ -807,20 +791,16 @@ export function ExecutionPage({
         ) : null}
         {!detail.evidence_error &&
         (noRun || live) &&
-        !(detail.plan_execution && live) ? (
+        !(detail.plan_execution && live && !importing) ? (
           <LiveState
             presentation={presentation}
             status={status}
             cancelling={cancelling}
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
-            onCancel={
-              ready && detail.origin !== 'remote'
-                ? () => void cancelRun()
-                : undefined
-            }
+            onCancel={ready && !importing ? () => void cancelRun() : undefined}
           />
         ) : null}
-        {detail.plan_execution && live ? (
+        {detail.plan_execution && live && !importing ? (
           <PlanProgress
             execution={detail.plan_execution}
             actions={
@@ -876,14 +856,16 @@ export function ExecutionPage({
                 </div>
               }
             />
-            {detail.origin !== 'remote' &&
-            !noRun &&
+            {!noRun &&
             !live &&
             resultDetail &&
             primaryMetrics.tests.length > 0 ? (
               <ExecutionMetricsPanel detail={resultDetail} />
             ) : null}
           </section>
+        ) : null}
+        {detail.plan_execution && !live ? (
+          <ExecutionConfiguration execution={detail.plan_execution} />
         ) : null}
         {!noRun && !live ? (
           <div className="execution-layers mt-6 grid min-w-0 gap-3">

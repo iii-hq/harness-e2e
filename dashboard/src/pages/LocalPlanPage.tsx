@@ -185,10 +185,6 @@ export function LocalPlanCreatePage({
         setTemplates(listed.master_plan?.profiles ?? [])
         if (duplicateId || editId) {
           const source = await next.getPlan((duplicateId ?? editId) as string)
-          if (source.origin === 'remote')
-            throw Error(
-              'Imported history cannot be edited or duplicated as a local plan.',
-            )
           setLabel(duplicateId ? `${source.label} copy` : source.label)
           setPurpose(source.purpose)
           setUrl(source.url)

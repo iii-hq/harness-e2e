@@ -83,8 +83,8 @@ describe('test history execution comparison', () => {
     )
   })
 
-  // Point 7 of the definition-digest contract: a Release Control ledger that
-  // carries neither digest is not comparable, not an error.
+  // Point 7 of the definition-digest contract: an observation that carries
+  // neither digest is not comparable, not an error.
   it('settles the scenario by contract digest, then by definition digest', () => {
     const withoutContract = (overrides = {}) =>
       observation({ contract_sha256: '', ...overrides })
@@ -107,19 +107,15 @@ describe('test history execution comparison', () => {
       ).reasons,
     ).toEqual(['Scenario definition differs'])
 
-    const reference = compareTestObservations(
-      withoutContract({
-        execution_id: 'rc:reference',
-        source: 'release-control',
-        behavior_sha256: '',
-      }),
-      withoutContract({ execution_id: 'local-candidate', source: 'local' }),
+    const unrecorded = compareTestObservations(
+      withoutContract({ execution_id: 'baseline', behavior_sha256: '' }),
+      withoutContract({ execution_id: 'candidate' }),
     )
-    expect(reference.compatible).toBe(false)
-    expect(reference.reasons).toEqual([
+    expect(unrecorded.compatible).toBe(false)
+    expect(unrecorded.reasons).toEqual([
       'Scenario definition is not recorded on both executions',
     ])
-    expect(reference.metrics.score.delta).toBe(0)
+    expect(unrecorded.metrics.score.delta).toBe(0)
   })
 
   it('keeps missing metrics unknown and makes the selected observation key stable', () => {

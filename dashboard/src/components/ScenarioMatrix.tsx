@@ -268,16 +268,9 @@ function ScenarioResult({
     [detail],
   )
   const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
-  const importedTest = item.primaryTest
-  const scoreMean = importedTest
-    ? (importedTest.metrics.score.value ?? importedTest.metrics.score.observed)
-    : metrics.scoreMean
-  const scoreSamples = importedTest
-    ? importedTest.metrics.score.samples
-    : metrics.scoreSamples
-  const planned = importedTest
-    ? importedTest.metrics.score.expected
-    : metrics.planned
+  const scoreMean = metrics.scoreMean
+  const scoreSamples = metrics.scoreSamples
+  const planned = metrics.planned
   const usage = [
     { label: 'Runtime', id: 'durationMs' as const, metric: metrics.durationMs },
     {
@@ -317,11 +310,7 @@ function ScenarioResult({
       id: 'functionErrors' as const,
       metric: metrics.functionErrors,
     },
-  ].map(({ label, id, metric: localMetric }) => {
-    const importedMetric = importedTest?.metrics[id]
-    const metric = importedMetric
-      ? { ...importedMetric, total: importedMetric.value }
-      : localMetric
+  ].map(({ label, metric }) => {
     const value = metric.total ?? metric.observed
     return {
       label,
@@ -339,11 +328,7 @@ function ScenarioResult({
         metric.total !== null
           ? 'Accumulated across runs, including retries'
           : metric.observed !== null
-            ? importedTest &&
-              !importedTest.scopeKnown &&
-              metric.samples === metric.expected
-              ? 'Partial · planned scope not confirmed'
-              : `Partial · ${metric.samples}/${metric.expected} runs reported`
+            ? `Partial · ${metric.samples}/${metric.expected} runs reported`
             : 'Not reported',
     }
   })
@@ -407,9 +392,7 @@ function ScenarioResult({
           <strong className="font-mono">{scoreLabel(scoreMean)}</strong>
           <span className="mt-1 block text-label text-ink-muted">
             {scoreSamples > 0
-              ? importedTest && !importedTest.scopeKnown
-                ? `Mean · ${scoreSamples} runs scored · partial scope`
-                : `Mean · ${scoreSamples}/${planned} planned runs scored`
+              ? `Mean · ${scoreSamples}/${planned} planned runs scored`
               : 'Not reported'}
           </span>
         </td>
@@ -438,8 +421,7 @@ function ScenarioResult({
           ))}
         <td className="col-span-2 min-w-0 px-3 py-2">
           <div className="flex flex-wrap items-center gap-2">
-            {runId &&
-            (detail.origin !== 'remote' || assessmentRuns.length > 0) ? (
+            {runId ? (
               <a
                 className={buttonClassName({
                   variant: 'secondary',
@@ -512,17 +494,15 @@ function ScenarioResult({
                     <span className="break-all font-mono text-label">
                       {run.run_id}
                     </span>
-                    {detail.origin !== 'remote' || assessment ? (
-                      <a
-                        className={buttonClassName({
-                          variant: 'secondary',
-                          size: 'compact',
-                        })}
-                        href={hashForExecution(executionId, null, run.run_id)}
-                      >
-                        evidence record
-                      </a>
-                    ) : null}
+                    <a
+                      className={buttonClassName({
+                        variant: 'secondary',
+                        size: 'compact',
+                      })}
+                      href={hashForExecution(executionId, null, run.run_id)}
+                    >
+                      evidence record
+                    </a>
                     {assessment?.transcript ? (
                       <button
                         type="button"

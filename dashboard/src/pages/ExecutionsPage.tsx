@@ -5,6 +5,7 @@ import {
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
 import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
+import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
@@ -31,12 +32,13 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
-  type ReleaseControlIdentity,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
   categoryMessage,
   type ExecutionPresentation,
+  executionOrigin,
+  executionScore,
   executionTitle,
   formatDate,
   formatDuration,
@@ -118,17 +120,7 @@ export function buildLedgerRows(
     return {
       execution,
       presentation,
-      status: execution.id.startsWith('rc:')
-        ? {
-            label: execution.status.replaceAll('_', ' '),
-            status:
-              execution.status === 'running'
-                ? ('running' as const)
-                : execution.status === 'cancelled'
-                  ? ('cancelled' as const)
-                  : ('inconclusive' as const),
-          }
-        : statusCopy(presentation),
+      status: statusCopy(presentation),
       searchText: [
         title,
         detail,
@@ -138,9 +130,9 @@ export function buildLedgerRows(
         execution.run_id,
         formatDate(presentation.completedAt),
         execution.source?.sha,
-        execution.release_control?.execution_id,
-        execution.release_control?.profile,
-        execution.release_control?.campaign_id,
+        executionOrigin(execution).label,
+        execution.parameters?.agent,
+        ...(execution.parameters?.scenarios ?? []),
         ...presentation.subjects.flatMap((model) => [
           model.model,
           `${model.provider}/${model.model}`,
@@ -228,56 +220,13 @@ export type LedgerGroup = {
   key: string
   label: string
   rows: LedgerRow[]
-  /** Present when the group is one Release Control execution (its plan). */
-  plan?: ReleaseControlIdentity
-}
-
-/** One Release Control execution reads as its plan: profile · campaign · id. */
-export function planGroupLabel(plan: ReleaseControlIdentity): string {
-  const head = [plan.profile, plan.campaign_id].filter(Boolean).join(' · ')
-  return `${head || 'release control'} · release control ${plan.execution_id.slice(0, 8)}`
-}
-
-/** Additive figures over a group's rows; absence stays absent, never zero. */
-export function groupStats(rows: LedgerRow[]) {
-  const passed = rows.filter((row) => row.status.status === 'passed').length
-  const tokens = rows.map(tokensOf).filter((value) => value !== null)
-  const seconds = rows
-    .map((row) => row.presentation.modelRuntimeSeconds)
-    .filter((value): value is number => value !== null)
-  return {
-    runs: rows.length,
-    passed,
-    passRate: rows.length > 0 ? passed / rows.length : null,
-    tokens: tokens.length > 0 ? tokens.reduce((sum, v) => sum + v, 0) : null,
-    seconds: seconds.length > 0 ? seconds.reduce((sum, v) => sum + v, 0) : null,
-  }
 }
 
 export function groupHeading(group: LedgerGroup): string {
-  if (
-    !group.plan ||
-    group.rows.some((row) => row.execution.id.startsWith('rc:'))
-  )
-    return `${group.label} · ${group.rows.length}`
-  const stats = groupStats(group.rows)
-  const parts = [
-    group.label,
-    `${stats.runs} run${stats.runs === 1 ? '' : 's'}`,
-    stats.passRate === null
-      ? null
-      : `${formatPercent(percentPoints(stats.passRate), false)} pass`,
-    stats.tokens === null ? null : `${stats.tokens.toLocaleString()} tokens`,
-    stats.seconds === null ? null : formatDuration(stats.seconds),
-  ]
-  return parts.filter(Boolean).join(' · ')
+  return `${group.label} · ${group.rows.length}`
 }
 
-/**
- * Audit E-12: a running execution is pinned above the groups. Runs that
- * Release Control dispatched are grouped by their execution (the plan they
- * belong to); everything else keeps its day group.
- */
+/** Audit E-12: a running execution is pinned above its day groups. */
 export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
   const running = rows.filter(
     (row) =>
@@ -296,19 +245,6 @@ export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
     }
   }
   for (const row of settled) {
-    const plan = row.execution.release_control
-    if (plan?.execution_id) {
-      push(
-        {
-          key: `plan:${plan.execution_id}`,
-          label: planGroupLabel(plan),
-          rows: [],
-          plan,
-        },
-        row,
-      )
-      continue
-    }
     push(
       {
         key: dayKey(row.presentation.completedAt),
@@ -325,6 +261,9 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
   const { presentation, execution, status } = row
   const { title, detail } = executionTitle(presentation)
   const tokens = tokensOf(row)
+  const origin = executionOrigin(execution)
+  const score = executionScore(execution)
+  const scenarios = execution.parameters?.scenarios.length
   const evidenceNote =
     execution.availability === 'aggregate'
       ? 'aggregate report'
@@ -342,12 +281,22 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           {title}
         </a>
         <span className="font-mono text-label text-ink-muted">
-          {execution.id.startsWith('rc:') ? 'team · RC' : 'my Harness · local'}
+          {origin.href ? (
+            <a
+              className="text-ink-muted"
+              href={origin.href}
+              target="_blank"
+              rel="noreferrer"
+            >
+              {origin.label}
+            </a>
+          ) : (
+            origin.label
+          )}
         </span>
         <span className="block truncate font-mono text-label text-ink-muted">
           {formatDate(presentation.completedAt)}
           {detail ? ` · ${detail}` : ''}
-          {execution.event ? ` · ${triggerLabel(String(execution.event))}` : ''}
         </span>
       </td>
       <td data-label="Result">
@@ -370,7 +319,14 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
           {presentation.subjects[0]?.model ?? '—'}
         </span>
         <span className="block font-mono text-label text-ink-muted">
-          {presentation.subjects[0]?.provider ?? ''}
+          {[
+            presentation.subjects[0]?.provider,
+            execution.parameters?.agent
+              ? `profile ${execution.parameters.agent}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join(' · ')}
         </span>
       </td>
       <td data-label="Scope" className={numericCellClassName}>
@@ -378,6 +334,19 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         presentation.expectedReports === null
           ? '—'
           : `${presentation.receivedReports ?? '—'}/${presentation.expectedReports ?? '—'}`}
+        {scenarios ? (
+          <span
+            className="block font-mono text-label text-ink-muted"
+            title={execution.parameters?.scenarios.join(', ')}
+          >
+            {scenarios} scenario{scenarios === 1 ? '' : 's'}
+          </span>
+        ) : null}
+      </td>
+      <td data-label="Score" className={numericCellClassName}>
+        {score === null
+          ? '—'
+          : score.toLocaleString('en-US', { maximumFractionDigits: 1 })}
       </td>
       <td data-label="Pass rate" className={numericCellClassName}>
         {presentation.passRate === null
@@ -414,7 +383,7 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
  * One table for the whole page: the day groups are separator rows so the
  * header is read once and the rhythm stays (audit E-07 / E-12).
  */
-function LedgerTable({
+export function LedgerTable({
   caption,
   groups,
 }: {
@@ -426,7 +395,7 @@ function LedgerTable({
       caption={caption}
       collapse
       collapseInline
-      minWidth="58rem"
+      minWidth="62rem"
       sticky
       data-ledger-table
     >
@@ -437,6 +406,9 @@ function LedgerTable({
           <th scope="col">subject</th>
           <th scope="col" className={numericCellClassName}>
             scope
+          </th>
+          <th scope="col" className={numericCellClassName}>
+            score
           </th>
           <th scope="col" className={numericCellClassName}>
             pass rate
@@ -454,8 +426,8 @@ function LedgerTable({
       </thead>
       {groups.map((group) => (
         <tbody key={group.key} data-ledger-group={group.key}>
-          <tr data-ledger-day data-ledger-plan={group.plan?.execution_id}>
-            <th className="ds-label" colSpan={8} scope="colgroup">
+          <tr data-ledger-day>
+            <th className="ds-label" colSpan={9} scope="colgroup">
               {groupHeading(group)}
             </th>
           </tr>
@@ -477,6 +449,7 @@ function LedgerTable({
 
 export function ExecutionsPage() {
   const [runnerOpen, setRunnerOpen] = useState(false)
+  const [importOpen, setImportOpen] = useState(false)
   const [runnerScope, setRunnerScope] = useState<string[]>([])
   useEffect(() => {
     const requested = consumeQuickExecutionRequest()
@@ -618,6 +591,13 @@ export function ExecutionsPage() {
         actions={
           bridge ? (
             <>
+              <button
+                className={dashboardHeaderActionClassName()}
+                type="button"
+                onClick={() => setImportOpen(true)}
+              >
+                Import from GitHub
+              </button>
               <a
                 className={dashboardHeaderActionClassName()}
                 href={hashForNewPlan()}
@@ -833,6 +813,12 @@ export function ExecutionsPage() {
         initialScenarios={runnerScope}
         onClose={() => setRunnerOpen(false)}
         onCompleted={() => void load()}
+      />
+      <GithubImportDialog
+        bridge={bridge}
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onImported={() => void load()}
       />
     </div>
   )

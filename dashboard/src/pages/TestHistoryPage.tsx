@@ -9,13 +9,6 @@ import {
   formatTokens,
   SectionPanel,
 } from '@/components/ExecutionComparisonPanel'
-import {
-  getImportedReference,
-  listComparisonExecutions,
-  localScenarioObservations,
-  referenceScenarioObservations,
-} from '@/lib/release-control-reference'
-import { watchExecution } from '@/lib/watch-execution'
 
 export {
   formatCost,
@@ -64,7 +57,6 @@ import {
   hashForComparison,
   hashForExecution,
   hashForNewPlan,
-  hashForPlan,
   hashForTestHistory,
   hashForTests,
   hashForWorkspace,
@@ -73,7 +65,6 @@ import {
 } from '@/hooks/use-hash-route'
 import {
   type DashboardExecutionDetail,
-  type DashboardExecutionSummary,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
@@ -86,7 +77,6 @@ import type {
 } from '@/lib/test-catalog'
 import {
   compareTestObservations,
-  sameScenarioDefinition,
   testObservationKey,
 } from '@/lib/test-history-comparison'
 import { catalogRealismPresentation } from '@/pages/TestsCatalogPage'
@@ -538,57 +528,34 @@ export function ObservationComparisonPanel({
 }) {
   const comparison =
     baseline && candidate ? compareTestObservations(baseline, candidate) : null
-  const personal =
-    baseline?.source === 'release-control' ||
-    candidate?.source === 'release-control'
-  // A Release Control reference keeps its own stack, cohort and system; only
-  // the scenario has to match before its descriptive deltas mean anything.
-  const scenario =
-    baseline && candidate ? sameScenarioDefinition(baseline, candidate) : null
-  const verdict =
-    comparison?.compatible && !personal ? comparisonVerdict(comparison) : null
+  const verdict = comparison?.compatible ? comparisonVerdict(comparison) : null
   return (
     <ExecutionComparisonPanel
       headingId="test-comparison-title"
       data-test-comparison
       aria-live="polite"
       summary={
-        personal
-          ? `Reference: Release Control · ${baseline?.execution_id.replace(/^rc:/, '')} · Candidate: Local · ${candidate?.execution_id}`
-          : baseline && candidate
-            ? `a = ${formatDate(baseline.completed_at)} · b = ${formatDate(candidate.completed_at)}`
-            : 'choose two executions in the table'
+        baseline && candidate
+          ? `a = ${formatDate(baseline.completed_at)} · b = ${formatDate(candidate.completed_at)}`
+          : 'choose two executions in the table'
       }
       metrics={comparison?.metrics ?? {}}
-      interpretDeltas={Boolean(comparison?.compatible && !personal)}
-      showDeltas={Boolean(
-        personal ? scenario?.matches : comparison?.compatible,
-      )}
-      metricLabels={
-        personal
-          ? {
-              score: 'mean score',
-              cost: 'subject cost',
-              tokens: 'tokens incl. cache',
-            }
-          : undefined
-      }
+      interpretDeltas={Boolean(comparison?.compatible)}
+      showDeltas={Boolean(comparison?.compatible)}
       controls={
         <>
-          {!personal ? (
-            <button
-              className={buttonClassName({
-                variant: 'secondary',
-                size: 'compact',
-              })}
-              type="button"
-              onClick={onSwap}
-              disabled={!candidate || personal}
-            >
-              <ArrowLeftRight aria-hidden="true" size={13} />
-              swap
-            </button>
-          ) : null}
+          <button
+            className={buttonClassName({
+              variant: 'secondary',
+              size: 'compact',
+            })}
+            type="button"
+            onClick={onSwap}
+            disabled={!candidate}
+          >
+            <ArrowLeftRight aria-hidden="true" size={13} />
+            swap
+          </button>
           <button
             className={buttonClassName({ variant: 'quiet', size: 'compact' })}
             type="button"
@@ -602,53 +569,30 @@ export function ObservationComparisonPanel({
       actions={
         baseline && candidate ? (
           <>
-            {[baseline, candidate].map((observation, index) =>
-              observation.source === 'release-control' &&
-              !observation.source_url ? null : (
-                <a
-                  key={observation.execution_id}
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                    className: 'no-underline',
-                  })}
-                  href={
-                    observation.source === 'release-control'
-                      ? (observation.source_url ?? undefined)
-                      : hashForExecution(observation.execution_id)
-                  }
-                >
-                  open {index === 0 ? 'a' : 'b'}
-                  <ArrowRight aria-hidden="true" size={13} />
-                </a>
-              ),
-            )}
-            {candidate.source !== 'release-control' ? (
-              <ScenarioChatAction
-                compact
-                executionId={candidate.execution_id}
-                scenarioId={testId}
-              />
-            ) : null}
+            {[baseline, candidate].map((observation, index) => (
+              <a
+                key={observation.execution_id}
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                  className: 'no-underline',
+                })}
+                href={hashForExecution(observation.execution_id)}
+              >
+                open {index === 0 ? 'a' : 'b'}
+                <ArrowRight aria-hidden="true" size={13} />
+              </a>
+            ))}
+            <ScenarioChatAction
+              compact
+              executionId={candidate.execution_id}
+              scenarioId={testId}
+            />
           </>
         ) : null
       }
     >
-      {personal ? (
-        <Callout tone={scenario?.matches ? 'info' : 'warning'}>
-          {scenario?.matches
-            ? 'Descriptive comparison of this scenario.'
-            : 'Not comparable · values shown, deltas withheld.'}{' '}
-          Scored runs: {baseline?.scored_runs}/{baseline?.run_count} →{' '}
-          {candidate?.scored_runs}/{candidate?.run_count}.{' '}
-          {(scenario?.matches
-            ? (comparison?.reasons ?? []).filter((reason) =>
-                reason.endsWith('differs'),
-              )
-            : (scenario?.reasons ?? [])
-          ).join(' · ')}
-        </Callout>
-      ) : comparison ? (
+      {comparison ? (
         comparison.compatible ? (
           <Callout tone="success">
             <span className="flex flex-wrap items-center gap-2">
@@ -954,124 +898,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   )
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
-  const initialSourceParams = routeParams(
-    typeof window === 'undefined' ? '' : window.location.hash,
-  )
-  const [referenceId, setReferenceId] = useState(
-    () => initialSourceParams.get('reference') ?? '',
-  )
-  const [candidateExecutionId, setCandidateExecutionId] = useState(
-    () => initialSourceParams.get('candidate') ?? '',
-  )
-  const [referenceOptions, setReferenceOptions] = useState<
-    DashboardExecutionSummary[]
-  >([])
-  const [referenceObservations, setReferenceObservations] = useState<
-    TestObservation[]
-  >([])
-  const [candidateObservations, setCandidateObservations] = useState<
-    TestObservation[]
-  >([])
-  const [referenceCase, setReferenceCase] = useState(
-    () => initialSourceParams.get('reference_case') ?? '',
-  )
-  const [candidateCase, setCandidateCase] = useState(
-    () => initialSourceParams.get('candidate_case') ?? '',
-  )
-  const [referencePlanKey, setReferencePlanKey] = useState('')
-  const [referenceError, setReferenceError] = useState<string | null>(null)
-  const [referenceLoading, setReferenceLoading] = useState(false)
-  const [candidateError, setCandidateError] = useState<string | null>(null)
-  const sourceBaseline =
-    referenceObservations.find(
-      (item) => testObservationKey(item) === referenceCase,
-    ) ?? (referenceObservations.length === 1 ? referenceObservations[0] : null)
-  const sourceCandidate =
-    candidateObservations.find(
-      (item) => testObservationKey(item) === candidateCase,
-    ) ?? (candidateObservations.length === 1 ? candidateObservations[0] : null)
-
-  useEffect(() => {
-    let current = true
-    setReferenceObservations([])
-    setReferencePlanKey('')
-    setReferenceLoading(false)
-    if (!referenceId) return
-    setReferenceError(null)
-    setReferenceLoading(true)
-    void getImportedReference(referenceId)
-      .then((value) => {
-        if (!current) return
-        setReferencePlanKey(value.execution.planKey)
-        const observations = referenceScenarioObservations(value, testId)
-        setReferenceObservations(observations)
-        if (!observations.length)
-          setReferenceError(
-            'This reference has no retained results for this scenario.',
-          )
-      })
-      .catch((error) => {
-        if (current) setReferenceError(String(error))
-      })
-      .finally(() => {
-        if (current) setReferenceLoading(false)
-      })
-    return () => {
-      current = false
-    }
-  }, [referenceId, testId])
-
-  useEffect(() => {
-    let current = true
-    let stop: (() => void) | undefined
-    setCandidateObservations([])
-    setCandidateError(null)
-    if (!referenceId || !candidateExecutionId) return
-    void getDashboardDataBridge()
-      .then((bridge) => {
-        if (!current) return
-        const refresh = async () => {
-          const detail = await bridge.getExecution(candidateExecutionId)
-          if (!current) return
-          const observations = localScenarioObservations(detail, testId)
-          setCandidateObservations(observations)
-          setCandidateError(
-            observations.length
-              ? null
-              : 'This local execution has no retained results for this scenario yet.',
-          )
-        }
-        void refresh().catch((error) => {
-          if (current) setCandidateError(String(error))
-        })
-        stop = watchExecution(bridge, candidateExecutionId, refresh)
-      })
-      .catch((error) => {
-        if (current) setCandidateError(String(error))
-      })
-    return () => {
-      current = false
-      stop?.()
-    }
-  }, [referenceId, candidateExecutionId, testId])
-
-  async function loadReferenceOptions() {
-    setReferenceError(null)
-    setReferenceLoading(true)
-    try {
-      setReferenceOptions(
-        (await listComparisonExecutions()).filter(
-          (execution) => execution.origin === 'remote',
-        ),
-      )
-    } catch (error) {
-      setReferenceError(String(error))
-      setReferenceOptions([])
-    } finally {
-      setReferenceLoading(false)
-    }
-  }
-
   useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -1127,23 +953,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   }, [testId])
 
   useEffect(() => {
-    const params = historyStateToParams(filters, comparisonKeys, openKey)
-    if (referenceId) params.set('reference', referenceId)
-    if (candidateExecutionId) params.set('candidate', candidateExecutionId)
-    if (referenceId && referenceCase)
-      params.set('reference_case', referenceCase)
-    if (candidateExecutionId && candidateCase)
-      params.set('candidate_case', candidateCase)
-    replaceRouteParams(params)
-  }, [
-    filters,
-    comparisonKeys,
-    openKey,
-    referenceId,
-    candidateExecutionId,
-    referenceCase,
-    candidateCase,
-  ])
+    replaceRouteParams(historyStateToParams(filters, comparisonKeys, openKey))
+  }, [filters, comparisonKeys, openKey])
 
   const executionModelGroups = useMemo(() => modelGroups(history), [history])
 
@@ -1184,12 +995,8 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const comparisonSelections = comparisonKeys
     .map((key) => observations.find((item) => testObservationKey(item) === key))
     .filter((item): item is TestObservation => Boolean(item))
-  const baseline = referenceId
-    ? sourceBaseline
-    : (comparisonSelections[0] ?? null)
-  const candidate = referenceId
-    ? sourceCandidate
-    : (comparisonSelections[1] ?? null)
+  const baseline = comparisonSelections[0] ?? null
+  const candidate = comparisonSelections[1] ?? null
   const openObservation =
     openKey === null
       ? null
@@ -1213,13 +1020,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   function selectForComparison(observation: TestObservation) {
     const key = testObservationKey(observation)
     setSelectionNotice(null)
-    if (referenceId) {
-      const selected = comparisonKeys.includes(key)
-      setCandidateCase('')
-      setCandidateExecutionId(selected ? '' : observation.execution_id)
-      setComparisonKeys(selected ? [] : [key])
-      return
-    }
     setComparisonKeys((current) => {
       const selectedIndex = current.indexOf(key)
       if (selectedIndex === 0) return current.slice(1)
@@ -1369,125 +1169,6 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           }
         />
 
-        <section className="mt-6 grid gap-3" aria-label="Scenario reference">
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={referenceLoading}
-              onClick={() => void loadReferenceOptions()}
-            >
-              Reference: Release Control
-            </button>
-            {referenceOptions.length ? (
-              <Select
-                aria-label="Release Control scenario reference"
-                value={
-                  referenceId ? `rc:${referenceId.replace(/^rc:/, '')}` : ''
-                }
-                onChange={(event) => {
-                  setReferenceId(event.target.value.replace(/^rc:/, ''))
-                  setReferenceCase('')
-                  setComparisonKeys([])
-                }}
-              >
-                <option value="">choose reference execution</option>
-                {referenceOptions.map((item) => (
-                  <option value={item.id} key={item.id}>
-                    {item.label || item.id} · {item.id.slice(-8)}
-                  </option>
-                ))}
-              </Select>
-            ) : null}
-            {referencePlanKey ? (
-              <a
-                className={buttonClassName({ variant: 'quiet' })}
-                href={hashForPlan(`rc:${referencePlanKey}`)}
-              >
-                back to reference plan
-              </a>
-            ) : null}
-            {referenceId ? (
-              <button
-                type="button"
-                className={buttonClassName({ variant: 'quiet' })}
-                onClick={() => {
-                  setReferenceId('')
-                  setCandidateExecutionId('')
-                  setComparisonKeys([])
-                  setReferenceError(null)
-                }}
-              >
-                clear reference
-              </button>
-            ) : null}
-          </div>
-          {referenceLoading ? (
-            <p className="font-mono text-label">Loading reference…</p>
-          ) : null}
-          {referenceError || candidateError ? (
-            <Callout tone="warning" title="Reference comparison unavailable">
-              {referenceError || candidateError}
-            </Callout>
-          ) : null}
-          {referenceId ? (
-            <p className="font-mono text-label text-ink-muted">
-              Reference: Release Control · {referenceId}. Select a local
-              execution in the history as candidate.
-            </p>
-          ) : null}
-          {referenceObservations.length > 1 ? (
-            <Select
-              aria-label="Reference case"
-              value={referenceCase}
-              onChange={(event) => setReferenceCase(event.target.value)}
-            >
-              <option value="">select reference case</option>
-              {referenceObservations.map((item) => (
-                <option
-                  key={testObservationKey(item)}
-                  value={testObservationKey(item)}
-                >
-                  {item.case_id || 'Case unavailable'} ·{' '}
-                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
-                  seed {item.seed ?? '—'}
-                </option>
-              ))}
-            </Select>
-          ) : null}
-          {candidateObservations.length > 1 ? (
-            <Select
-              aria-label="Candidate case"
-              value={candidateCase}
-              onChange={(event) => setCandidateCase(event.target.value)}
-            >
-              <option value="">select local case</option>
-              {candidateObservations.map((item) => (
-                <option
-                  key={testObservationKey(item)}
-                  value={testObservationKey(item)}
-                >
-                  {item.case_id || 'Case unavailable'} ·{' '}
-                  {shortDefinition(item.behavior_sha256) ?? 'no definition'} ·
-                  seed {item.seed ?? '—'}
-                </option>
-              ))}
-            </Select>
-          ) : null}
-          {sourceBaseline && sourceCandidate ? (
-            <ObservationComparisonPanel
-              baseline={sourceBaseline}
-              candidate={sourceCandidate}
-              testId={testId}
-              onSwap={() => {}}
-              onClear={() => {
-                setCandidateExecutionId('')
-                setComparisonKeys([])
-              }}
-            />
-          ) : null}
-        </section>
-
         {error ? (
           <EmptyState
             className="mt-6"
@@ -1497,7 +1178,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           />
         ) : null}
 
-        {!error && !loading && !hasEvidence && !filtered && !sourceCandidate ? (
+        {!error && !loading && !hasEvidence && !filtered ? (
           // Audit TH-01: an empty history is one message and the next action.
           <EmptyState
             className="mt-6"
@@ -1805,9 +1486,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                               aria-label={`Select ${formatDate(item.completed_at)} for comparison`}
                             />
                             {selectedIndex === 0
-                              ? referenceId
-                                ? 'b'
-                                : 'a'
+                              ? 'a'
                               : selectedIndex === 1
                                 ? 'b'
                                 : ''}
@@ -1895,7 +1574,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               </DataTable>
             )}
 
-            {!referenceId && baseline && candidate ? (
+            {baseline && candidate ? (
               <ObservationComparisonPanel
                 baseline={baseline}
                 candidate={candidate}
@@ -1919,8 +1598,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         ) : null}
       </div>
 
-      {(comparisonKeys.length > 0 || (referenceId && sourceCandidate)) &&
-      !loading ? (
+      {comparisonKeys.length > 0 && !loading ? (
         // Audit TH-09: the selection bar stays in view while rows are ticked.
         <div
           className="sticky bottom-0 z-10 bg-panel px-3 py-3 md:px-6"
@@ -1928,25 +1606,19 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         >
           <div className="mx-auto flex max-w-[1420px] flex-wrap items-center gap-3 font-mono text-xs">
             <span className="text-ink">
-              {referenceId
-                ? Number(Boolean(sourceBaseline)) +
-                  Number(Boolean(sourceCandidate))
-                : comparisonKeys.length}{' '}
-              selected
+              {comparisonKeys.length} selected
               {baseline ? ` · a = ${formatDate(baseline.completed_at)}` : ''}
               {candidate ? ` · b = ${formatDate(candidate.completed_at)}` : ''}
             </span>
             <span className="text-ink-muted">
               {!candidate
                 ? 'tick another execution as b'
-                : referenceId
-                  ? 'Reference: Release Control · Candidate: Local · descriptive deltas'
-                  : compareTestObservations(
-                        baseline as TestObservation,
-                        candidate,
-                      ).compatible
-                    ? 'same model and cohort · deltas interpreted'
-                    : 'different model or cohort · deltas shown, not interpreted'}
+                : compareTestObservations(
+                      baseline as TestObservation,
+                      candidate,
+                    ).compatible
+                  ? 'same model and cohort · deltas interpreted'
+                  : 'different model or cohort · deltas shown, not interpreted'}
             </span>
             <span className="ms-auto flex gap-2">
               <button
@@ -1960,7 +1632,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                     current.length === 2 ? [current[1], current[0]] : current,
                   )
                 }
-                disabled={!candidate || Boolean(referenceId)}
+                disabled={!candidate}
               >
                 swap
               </button>
@@ -1970,10 +1642,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                   size: 'compact',
                 })}
                 type="button"
-                onClick={() => {
-                  setComparisonKeys([])
-                  if (referenceId) setCandidateExecutionId('')
-                }}
+                onClick={() => setComparisonKeys([])}
               >
                 clear
               </button>

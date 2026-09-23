@@ -49,23 +49,14 @@ definition digest; retained observations load only when that row is expanded. Th
 read model from retained reports, pools raw run scores, and invalidates it on run
 changes. There is no alternate HTTP or static-data transport.
 
-In the Console, Plans offers **Reference: Release Control** through the RC browser
-bridge. Each reference plan combines remote and local execution history and uses
-the same comparison cards as scenario history. Scenario links preserve the selected
-reference and candidate in the existing A → B comparison. Keep the authenticated
-RC tab connected to the same personal Engine. Remote results are fetched on
-demand; they are not installed into the native runs directory and no GitHub
-token is needed. Origin labels distinguish Release Control results from local experiments.
-
-Selecting **run locally** imports the selected execution's materialized test
-parameters only when requested and starts a new local plan using the current
-scenario contracts. Earlier plans and results are preserved. The local Harness
-and scenario implementations may differ from the remote
-reference; the comparison is descriptive. No local execution is posted to RC.
-The comparison offers the same opt-in filter as RC: **Exclude tests with a zero
-or missing result in A or B**. It removes matching test slots from both sides
-and recalculates metrics; original executions remain unchanged.
-A disconnected RC bridge leaves the existing local execution tools available.
+Executions offers **Import from GitHub**: completed exact-stack workflow runs of
+the worker's `github_repository`, listed through `e2e::dashboard::github-runs-list`
+with their suite, model, profile and conclusion. `github-run-import` answers with
+an `importing` execution at once; the worker downloads the run's bundle and
+installs its native runs like finished local runs. An imported execution is the
+same record as one planned here: the list, the report, evidence and
+`e2e::dashboard::execution-rename` treat both alike, and its origin is shown as
+text (`local` or `GitHub #<run>` with a link). `gh` errors are shown as they come.
 
 The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable
@@ -172,21 +163,8 @@ step: at start the worker recreates any table whose layout fingerprint moved,
 keeping every execution, plan and receipt the current binary can still read.
 Plans written by another binary are deleted, never migrated.
 
-The plans list combines local plans and imported RC plans, marked `remote`.
-Import history accepts the versioned JSON transport or explicitly discovers and
-exports a plan through the RC bridge. Updating an imported plan is explicit.
-Lists, execution detail, test history and comparisons read the local copy, even
-when RC is disconnected. Imported history has no local cancel/edit/admit action.
-Reproduction creates a separate local configuration and checks local capability.
-
-GitHub evidence is fetched on demand through `e2e::dashboard::evidence-open`
-using local `gh` authentication and Python 3. Paths stay relative to the bundle.
-The reader verifies the workflow/attempt identity and manifest hashes and returns
-availability independently of the retained results. File retrieval does not
-create or select personal conversations.
-
 Creation, reading, updates and starts use the `plan-*` iii functions. Starting a
-plan requires a caller idempotency key. `e2e::dashboard::plan-control` provide requirements, historical import, explicit reproduction, export, execution lookup and
+plan requires a caller idempotency key. `e2e::dashboard::plan-control` provide requirements, export, execution lookup and
 cancellation. The former profile-plan endpoint, duplicate creation/start actions,
 native plan-context tracking and manual-route alias have been removed.
 

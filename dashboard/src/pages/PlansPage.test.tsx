@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type {
   DashboardExecutionSummary,
-  ImportedPlan,
   LocalPlan,
 } from '@/lib/dashboard-data-source'
 import {
@@ -10,7 +9,6 @@ import {
   PlanMetricsCell,
   PlanRow,
   planStatePresentation,
-  releaseControlPlans,
 } from '@/pages/PlansPage'
 
 const plan: LocalPlan = {
@@ -60,30 +58,6 @@ function execution(id: string, passRate: number): DashboardExecutionSummary {
 }
 
 describe('plan list metrics', () => {
-  it('orders Release Control executions by the instant across timezones', () => {
-    const dated = (id: string, profile: string, started_at: string) => ({
-      ...execution(id, 100),
-      release_control: {
-        profile,
-        execution_id: id,
-        attempt: 1,
-        campaign_id: null,
-        group_id: null,
-      },
-      started_at,
-    })
-    const result = releaseControlPlans([
-      dated('earlier', 'smoke', '2026-09-14T12:00:00+03:00'),
-      dated('later', 'smoke', '2026-09-14T07:00:00-03:00'),
-      dated('middle', 'other', '2026-09-14T09:30:00Z'),
-    ])
-    expect(result.map((plan) => plan.key)).toEqual(['smoke', 'other'])
-    expect(result[0].executions.map((execution) => execution.id)).toEqual([
-      'later',
-      'earlier',
-    ])
-  })
-
   it('shows the latest candidate metrics and puts identity before status', () => {
     const html = renderToStaticMarkup(
       <table>
@@ -206,33 +180,21 @@ describe('plan list metrics', () => {
   })
 })
 
-it('keeps imported history out of local operational filters and their counts', () => {
-  const imported: ImportedPlan = {
-    origin: 'remote',
-    id: 'imported-plan',
-    label: 'Retained RC history',
-    purpose: '',
-    created_at: null,
-    updated_at: '2026-09-12T00:00:00Z',
-    template_id: null,
-    source: {
-      instance_id: 'rc-production',
-      plan_key: 'regression',
-      captured_at: '2026-09-12T00:00:00Z',
-      active: true,
-      limitation: null,
-    },
-    configuration: null,
-    execution_ids: [],
+it('filters plans by their operational state', () => {
+  const draft: LocalPlan = {
+    ...plan,
+    id: 'plan-draft',
+    state: 'draft',
+    candidate_execution_ids: [],
   }
-  const plans = [plan, imported]
+  const plans = [plan, draft]
   expect(plans.filter((entry) => matchesFilter(entry, 'all'))).toEqual(plans)
   expect(plans.filter((entry) => matchesFilter(entry, 'compared'))).toEqual([
     plan,
   ])
   expect(plans.filter((entry) => matchesFilter(entry, 'running'))).toEqual([])
   expect(plans.filter((entry) => matchesFilter(entry, 'needs_action'))).toEqual(
-    [],
+    [draft],
   )
   expect(matchesFilter({ ...plan, state: 'baseline_running' }, 'running')).toBe(
     true,

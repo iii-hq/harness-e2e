@@ -2,7 +2,6 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type {
   DashboardExecutionSummary,
-  ImportedPlan,
   LocalPlan,
 } from '@/lib/dashboard-data-source'
 import { buildPlanComparison } from '@/lib/plan-comparison'
@@ -578,11 +577,12 @@ describe('local plan execution comparison', () => {
     expect(html).not.toContain('<details id="plan-executions"')
   })
 
-  it('orders both origins by execution time, keeps missing dates last, and renders compact names', () => {
+  it('orders executions by execution time, keeps missing dates last, and renders compact names', () => {
     const plan: LocalPlan = {
       ...candidateRunningPlan,
       label: 'Smoke',
       candidate_execution_ids: ['candidate-1'],
+      candidate_labels: { 'candidate-1': 'Reviewed release' },
     }
     const summaries = {
       'baseline-1': execution('baseline-1', {
@@ -593,35 +593,21 @@ describe('local plan execution comparison', () => {
         started_at: '2026-09-08T15:00:00+02:00',
         label: 'candidate-1',
       }),
-      'remote-old': execution('remote-old', {
-        origin: 'remote',
+      'extra-old': execution('extra-old', {
         started_at: '2026-09-07T12:00:00Z',
         generated_at: '2026-09-14T12:00:00Z',
         label: 'Smoke',
         subjects: [{ id: 'test', model: 'deepseek-v4-flash', scenarios: [] }],
       }),
-      'remote-new': execution('remote-new', {
-        origin: 'remote',
-        started_at: '2026-09-08T12:30:00Z',
-        label: 'Reviewed release',
-        execution_label: 'Reviewed release',
-      }),
       'unknown-date': execution('unknown-date', {
-        origin: 'remote',
         started_at: 'invalid',
         generated_at: '2026-09-01T00:00:00Z',
       }),
     }
-    const ids = ['remote-new', 'unknown-date', 'remote-old']
+    const ids = ['unknown-date', 'extra-old']
     expect(
       executionHistoryRows(plan, summaries, ids).map((row) => row.id),
-    ).toEqual([
-      'remote-old',
-      'baseline-1',
-      'remote-new',
-      'candidate-1',
-      'unknown-date',
-    ])
+    ).toEqual(['extra-old', 'baseline-1', 'candidate-1', 'unknown-date'])
     const html = renderToStaticMarkup(
       <PlanNonComparableAttempts
         plan={plan}
@@ -634,38 +620,22 @@ describe('local plan execution comparison', () => {
     expect(html).toContain('Reviewed release')
     expect(html).toContain('dateTime="2026-09-07T12:00:00Z"')
     expect(html).toContain('Execution date unavailable')
-    expect(html).toContain('>release-control</span>')
-    expect(html).toContain('>local</span>')
+    expect(html).not.toContain('release-control')
     expect(html).not.toContain('<code')
-    expect(html).not.toMatch(/>(?:remote-old|candidate-1|rename|report)</)
+    expect(html).not.toMatch(/>(?:extra-old|candidate-1|rename|report)</)
     expect(html.match(/data-execution-id="candidate-1"/g)).toHaveLength(1)
     expect(html).toContain('aria-label="Rename Reviewed release"')
-    const imported = {
-      id: 'imported',
-      label: 'Smoke',
-      origin: 'remote',
-      execution_ids: ids,
-    } as ImportedPlan
-    const importedHtml = renderToStaticMarkup(
-      <PlanNonComparableAttempts
-        plan={imported}
-        summaries={summaries}
-        onRenameExecution={async () => undefined}
-      />,
-    )
-    expect(importedHtml).toContain('aria-label="Rename Reviewed release"')
     const comparisonHtml = renderToStaticMarkup(
       <PlanExecutionHistory
-        plan={imported}
+        plan={plan}
         summaries={summaries}
-        visualBaselineId="remote-old"
-        comparisonCandidateIds={['remote-new']}
-        selectedCandidateId="remote-new"
+        visualBaselineId="baseline-1"
+        comparisonCandidateIds={['candidate-1']}
+        selectedCandidateId="candidate-1"
         {...controls}
       />,
     )
     expect(comparisonHtml).toContain('Reviewed release')
-    expect(comparisonHtml).not.toContain('Imported execution #')
   })
 
   it('renders general security metrics as baseline to candidate evidence', () => {

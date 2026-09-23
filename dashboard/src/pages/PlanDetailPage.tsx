@@ -1,23 +1,16 @@
 import { Tooltip, TooltipContent, TooltipTrigger } from '@iii-dev/console-ui'
 import {
-  Check,
   Copy,
   Download,
   ExternalLink,
   PencilLine,
   RotateCcw,
   Trash2,
-  X,
 } from 'lucide-react'
-import {
-  type FormEvent,
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-} from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
+import { ExecutionNameControl } from '@/components/ExecutionNameControl'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import {
   DivergingBars,
@@ -41,7 +34,6 @@ import {
   DataTableRow,
   Dialog,
   EmptyState,
-  Input,
   numericCellClassName,
   type OperationalStatus,
   PageHeader,
@@ -60,10 +52,7 @@ import {
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
   getDashboardDataBridge,
-  type ImportedPlan,
-  type JsonObject,
   type LocalPlan,
-  type Plan,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import {
@@ -91,75 +80,12 @@ import {
 } from '@/lib/plan-execution'
 import {
   aggregatePrimaryMetrics,
+  buildPrimaryMetrics,
   comparePrimaryMetrics,
   type MetricId,
   type PrimaryMetrics,
 } from '@/lib/primary-metrics'
-import {
-  comparisonPrimaryMetrics,
-  exportReleaseControlHistory,
-  getImportedReference,
-  listComparisonExecutions,
-  type RcReference,
-} from '@/lib/release-control-reference'
 import { watchExecution } from '@/lib/watch-execution'
-
-function object(value: unknown): JsonObject {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? (value as JsonObject)
-    : {}
-}
-
-function text(value: unknown) {
-  return typeof value === 'string' ? value : ''
-}
-
-function count(value: unknown) {
-  return typeof value === 'number' && Number.isInteger(value) ? value : null
-}
-
-function model(value: unknown) {
-  const entry = object(value)
-  return { provider: text(entry.provider), model: text(entry.model) }
-}
-
-function frozenSetup(reference: RcReference) {
-  const plan = object(reference.execution.plan)
-  const materialized = object(reference.materialized)
-  const profile = object(materialized.profile)
-  const campaigns = Array.isArray(materialized.campaigns)
-    ? materialized.campaigns.map(object)
-    : []
-  const groups = campaigns.flatMap((campaign) =>
-    Array.isArray(campaign.groups) ? campaign.groups.map(object) : [],
-  )
-  const scenarios = [
-    ...new Set(
-      groups
-        .flatMap((group) =>
-          Array.isArray(group.scenarios) ? group.scenarios : [],
-        )
-        .filter((id): id is string => typeof id === 'string'),
-    ),
-  ]
-  const seeds = new Map<string, string>()
-  for (const shard of reference.shards) {
-    if (!Array.isArray(shard.runs)) continue
-    for (const candidate of shard.runs.map(object)) {
-      const scenario = text(candidate.scenario_id)
-      const seed = candidate.seed
-      if (scenario && (typeof seed === 'number' || typeof seed === 'string'))
-        seeds.set(scenario, String(seed))
-    }
-  }
-  return {
-    subject: model(plan.subject),
-    scenarios,
-    repetitions: count(profile.repetitions),
-    technicalRetries: count(profile.technical_retries),
-    seeds,
-  }
-}
 
 /* ------------------------------------------------------------- helpers */
 
@@ -341,12 +267,10 @@ export function PlanRunDialog({
   requirements,
   baselineSummary = null,
   lastRunSummary = null,
-  importedScope,
 }: {
   open: boolean
   onClose: () => void
-  plan: LocalPlan | null
-  importedScope?: React.ReactNode
+  plan: LocalPlan
   starting: PlanRunRole | null
   feedback: PlanRunFeedback | null
   onStart: (role: PlanRunRole) => void
@@ -354,29 +278,18 @@ export function PlanRunDialog({
   baselineSummary?: DashboardExecutionSummary | null
   lastRunSummary?: DashboardExecutionSummary | null
 }) {
-  const nextAction: PlanNextAction = plan
-    ? nextPlanAction(plan)
-    : {
-        title: 'Run plan',
-        detail:
-          'Run the imported test scope on the current local Harness. Results are kept with this plan history.',
-        role: 'baseline',
-        actionLabel: 'Run plan',
-        executionId: null,
-        state: 'ready',
-      }
+  const nextAction: PlanNextAction = nextPlanAction(plan)
   const role = nextAction.role
   const baselineAttention =
     baselineSummary &&
     buildExecutionPresentation(baselineSummary).attention === 'needs_attention'
   const lastRun = lastRunSentence(lastRunSummary)
-  const action = !plan
-    ? 'Run plan'
-    : role === 'baseline'
-      ? plan?.incomplete_execution_ids.length
+  const action =
+    role === 'baseline'
+      ? plan.incomplete_execution_ids.length
         ? 'Retry baseline'
         : 'Run baseline'
-      : `Run candidate #${plan?.candidate_execution_ids.length + 1}`
+      : `Run candidate #${plan.candidate_execution_ids.length + 1}`
   return (
     <Dialog
       open={open}
@@ -402,7 +315,7 @@ export function PlanRunDialog({
             <button
               type="button"
               className={buttonClassName({ variant: 'primary' })}
-              disabled={starting !== null || plan?.compatible === false}
+              disabled={starting !== null || plan.compatible === false}
               aria-busy={starting !== null}
               onClick={() => onStart(role)}
             >
@@ -420,11 +333,7 @@ export function PlanRunDialog({
       }
     >
       <div className="grid gap-4">
-        {plan ? (
-          <p className="m-0 text-sm font-medium">{scopeSentence(plan)}</p>
-        ) : (
-          importedScope
-        )}
+        <p className="m-0 text-sm font-medium">{scopeSentence(plan)}</p>
         {lastRun ? (
           <p className="m-0 text-xs text-ink-muted">{lastRun}</p>
         ) : null}
@@ -457,25 +366,8 @@ export function PlanRunDialog({
 
 /* --------------------------------------------------------------- scope */
 
-export function PlanScope({
-  plan,
-  reference,
-}: {
-  plan: Plan
-  reference?: RcReference | null
-}) {
-  const frozen = reference ? frozenSetup(reference) : null
-  const scope =
-    plan.origin === 'remote'
-      ? {
-          scenarios: [],
-          scenario_ids: frozen?.scenarios ?? [],
-          runs: frozen?.repetitions,
-          technical_retries: frozen?.technicalRetries,
-          seed: null,
-          ...model(object(plan.configuration).subject),
-        }
-      : plan
+export function PlanScope({ plan }: { plan: LocalPlan }) {
+  const scope = plan
   const scenarios = scope.scenarios.length
     ? scope.scenarios.map((scenario) => ({
         id: scenario.scenario_id,
@@ -508,12 +400,7 @@ export function PlanScope({
           ['Model', scope.model || 'Not set'],
           ['Provider', scope.provider || 'Not set'],
           ['Technical retries', scope.technical_retries],
-          [
-            'Seed',
-            plan.origin === 'remote'
-              ? 'Frozen per test'
-              : (scope.seed ?? 'Canonical'),
-          ],
+          ['Seed', scope.seed ?? 'Canonical'],
         ].map(([label, value]) => (
           <div key={label} className="grid gap-1">
             <dt className="text-ink-muted">{label}</dt>
@@ -577,67 +464,63 @@ type ExecutionHistoryRow = {
 }
 
 export function executionHistoryRows(
-  plan: Plan,
+  plan: LocalPlan,
   summaries: Record<string, DashboardExecutionSummary>,
   executionIds?: string[],
 ): ExecutionHistoryRow[] {
   const rows: ExecutionHistoryRow[] = []
   const retained = new Set<string>()
-  if (plan.origin !== 'remote') {
-    if (plan.baseline_execution_id) {
-      retained.add(plan.baseline_execution_id)
-      rows.push({
-        id: plan.baseline_execution_id,
-        role: 'baseline',
-        detail: '',
-        summary: summaries[plan.baseline_execution_id] ?? null,
-        fallback: null,
-      })
-    }
-    if (
-      plan.last_attempt_id &&
-      ['baseline_running', 'candidate_running'].includes(plan.state)
-    ) {
-      retained.add(plan.last_attempt_id)
-      const baselineRun = plan.state === 'baseline_running'
-      rows.push({
-        id: plan.last_attempt_id,
-        role: baselineRun ? 'baseline' : 'candidate',
-        detail: 'Active execution',
-        summary: summaries[plan.last_attempt_id] ?? null,
-        fallback: 'running',
-      })
-    }
-    for (
-      let index = plan.candidate_execution_ids.length - 1;
-      index >= 0;
-      index--
-    ) {
-      const id = plan.candidate_execution_ids[index]
-      if (retained.has(id)) continue
-      retained.add(id)
-      rows.push({
-        id,
-        role: 'candidate',
-        detail:
-          index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
-        summary: summaries[id] ?? null,
-        fallback: null,
-      })
-    }
-    for (const id of [...plan.incomplete_execution_ids].reverse()) {
-      if (retained.has(id)) continue
-      rows.push({
-        id,
-        role: 'attempt',
-        detail: 'Incomplete results',
-        summary: summaries[id] ?? null,
-        fallback: 'incomplete',
-      })
-    }
+  if (plan.baseline_execution_id) {
+    retained.add(plan.baseline_execution_id)
+    rows.push({
+      id: plan.baseline_execution_id,
+      role: 'baseline',
+      detail: '',
+      summary: summaries[plan.baseline_execution_id] ?? null,
+      fallback: null,
+    })
   }
-  for (const id of executionIds ??
-    (plan.origin === 'remote' ? plan.execution_ids : [])) {
+  if (
+    plan.last_attempt_id &&
+    ['baseline_running', 'candidate_running'].includes(plan.state)
+  ) {
+    retained.add(plan.last_attempt_id)
+    const baselineRun = plan.state === 'baseline_running'
+    rows.push({
+      id: plan.last_attempt_id,
+      role: baselineRun ? 'baseline' : 'candidate',
+      detail: 'Active execution',
+      summary: summaries[plan.last_attempt_id] ?? null,
+      fallback: 'running',
+    })
+  }
+  for (
+    let index = plan.candidate_execution_ids.length - 1;
+    index >= 0;
+    index--
+  ) {
+    const id = plan.candidate_execution_ids[index]
+    if (retained.has(id)) continue
+    retained.add(id)
+    rows.push({
+      id,
+      role: 'candidate',
+      detail: index === plan.candidate_execution_ids.length - 1 ? 'Latest' : '',
+      summary: summaries[id] ?? null,
+      fallback: null,
+    })
+  }
+  for (const id of [...plan.incomplete_execution_ids].reverse()) {
+    if (retained.has(id)) continue
+    rows.push({
+      id,
+      role: 'attempt',
+      detail: 'Incomplete results',
+      summary: summaries[id] ?? null,
+      fallback: 'incomplete',
+    })
+  }
+  for (const id of executionIds ?? []) {
     if (rows.some((row) => row.id === id)) continue
     rows.push({
       id,
@@ -658,12 +541,10 @@ export function executionHistoryRows(
 }
 
 function executionHistoryLabel(
-  plan: Plan,
+  plan: LocalPlan,
   row: Pick<ExecutionHistoryRow, 'id' | 'summary'>,
 ) {
-  const label =
-    row.summary?.execution_label ||
-    (plan.origin !== 'remote' ? plan.candidate_labels?.[row.id] : null)
+  const label = plan.candidate_labels?.[row.id]
   if (label) return label
   const recordedLabel = row.summary?.label
   if (recordedLabel && recordedLabel !== plan.label && recordedLabel !== row.id)
@@ -673,9 +554,8 @@ function executionHistoryLabel(
       .map((subject) => subject.model)
       .filter(Boolean)
       .join(', ') ||
-    (plan.origin !== 'remote' && row.summary?.origin !== 'remote'
-      ? plan.model
-      : 'Execution')
+    plan.model ||
+    'Execution'
   )
 }
 
@@ -689,121 +569,18 @@ export function selectedPlanCandidate(
 }
 
 export function planExecutionLabel(
-  plan: Plan,
+  plan: LocalPlan,
   executionId: string | null,
   summary?: DashboardExecutionSummary | null,
 ) {
   if (!executionId) return 'Execution unavailable'
   if (summary) return executionHistoryLabel(plan, { id: executionId, summary })
-  if (plan.origin === 'remote') {
-    const index = plan.execution_ids.indexOf(executionId)
-    return index < 0 ? executionId : `Imported execution #${index + 1}`
-  }
   if (executionId === plan.baseline_execution_id) return 'Official baseline'
   const candidateIndex = plan.candidate_execution_ids.indexOf(executionId)
   if (candidateIndex < 0) return executionId
   return (
     plan.candidate_labels?.[executionId]?.trim() ||
     `Candidate #${candidateIndex + 1}`
-  )
-}
-
-function ExecutionNameControl({
-  executionId,
-  fallbackLabel,
-  label,
-  onRename,
-}: {
-  executionId: string
-  fallbackLabel: string
-  label: string
-  onRename: (executionId: string, label: string) => Promise<void>
-}) {
-  const [draft, setDraft] = useState(label)
-  const [editing, setEditing] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => setDraft(label), [label])
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    setSaving(true)
-    setError(null)
-    try {
-      await onRename(executionId, draft)
-      setEditing(false)
-    } catch (cause) {
-      setError(errorText(cause))
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <span
-      className="inline-flex flex-wrap items-center gap-2"
-      data-rename-control
-    >
-      {editing ? (
-        <form
-          className="flex flex-wrap items-center gap-2"
-          onSubmit={(event) => void submit(event)}
-        >
-          <Input
-            aria-label={`Name ${fallbackLabel}`}
-            className="w-56"
-            maxLength={80}
-            placeholder={fallbackLabel}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-          />
-          <button
-            className={buttonClassName({ variant: 'primary', size: 'compact' })}
-            disabled={saving}
-            aria-label={
-              saving ? 'Saving execution name' : 'Save execution name'
-            }
-            title="Save execution name"
-            type="submit"
-          >
-            <Check aria-hidden="true" size={14} />
-          </button>
-          <button
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-            })}
-            disabled={saving}
-            aria-label="Cancel rename"
-            title="Cancel rename"
-            type="button"
-            onClick={() => {
-              setDraft(label)
-              setError(null)
-              setEditing(false)
-            }}
-          >
-            <X aria-hidden="true" size={14} />
-          </button>
-        </form>
-      ) : (
-        <button
-          aria-label={`Rename ${label.trim() || fallbackLabel}`}
-          className={buttonClassName({ variant: 'quiet', size: 'compact' })}
-          title={`Rename ${label.trim() || fallbackLabel}`}
-          type="button"
-          onClick={() => setEditing(true)}
-        >
-          <PencilLine aria-hidden="true" size={14} strokeWidth={1.8} />
-        </button>
-      )}
-      {error ? (
-        <small className="text-xs text-danger" role="alert">
-          {error}
-        </small>
-      ) : null}
-    </span>
   )
 }
 
@@ -873,7 +650,7 @@ export function PlanRunHistory({
   onRenameExecution,
   executionIds,
 }: {
-  plan: Plan
+  plan: LocalPlan
   executionIds?: string[]
   summaries: Record<string, DashboardExecutionSummary>
   onRenameExecution?: (executionId: string, label: string) => Promise<void>
@@ -921,10 +698,8 @@ export function PlanRunHistory({
           {rows.map((row) => {
             const status = executionStatus(row.summary, row.fallback)
             const displayLabel = executionHistoryLabel(plan, row)
-            const imported = row.summary?.origin === 'remote'
             const startedAt = row.summary?.started_at
-            const canRename =
-              imported || (plan.origin !== 'remote' && row.role === 'candidate')
+            const canRename = row.role === 'candidate'
             return (
               <DataTableRow
                 key={`${row.role}:${row.id}`}
@@ -937,20 +712,11 @@ export function PlanRunHistory({
                       <strong className="font-mono text-[0.8125rem] text-ink">
                         {displayLabel}
                       </strong>
-                      <span className="rounded bg-panel px-1.5 py-0.5 text-label text-ink-muted">
-                        {imported ? 'release-control' : 'local'}
-                      </span>
                       {canRename && onRenameExecution ? (
                         <ExecutionNameControl
                           executionId={row.id}
                           fallbackLabel={displayLabel}
-                          label={
-                            imported
-                              ? (row.summary?.execution_label ?? '')
-                              : plan.origin !== 'remote'
-                                ? (plan.candidate_labels?.[row.id] ?? '')
-                                : ''
-                          }
+                          label={plan.candidate_labels?.[row.id] ?? ''}
                           onRename={onRenameExecution}
                         />
                       ) : null}
@@ -1070,7 +836,7 @@ type MetricRow = {
 }
 
 export type PlanComparisonInput = {
-  plan: Plan
+  plan: LocalPlan
   executionIds?: string[]
   summaries: Record<string, DashboardExecutionSummary>
   visualBaselineId: string | null
@@ -1205,7 +971,7 @@ function formatWith(
 /** One tile per metric: the selected candidate's value, its delta against the
  *  reference, and every completed execution in capture order behind it. */
 export function planTrendTiles(
-  plan: Plan,
+  plan: LocalPlan,
   model: PlanComparisonModel,
   visualBaselineId: string | null,
   metricsByExecution: Record<string, PrimaryMetrics>,
@@ -1214,9 +980,8 @@ export function planTrendTiles(
   const orderedIds = [
     ...new Set(
       [
-        ...(plan.origin === 'remote'
-          ? plan.execution_ids
-          : [plan.baseline_execution_id, ...plan.candidate_execution_ids]),
+        plan.baseline_execution_id,
+        ...plan.candidate_execution_ids,
         ...model.rows
           .filter((row) => row.fallback !== 'running')
           .map((row) => row.id),
@@ -1224,7 +989,6 @@ export function planTrendTiles(
     ),
   ]
   const running =
-    plan.origin !== 'remote' &&
     ['baseline_running', 'candidate_running'].includes(plan.state) &&
     plan.last_attempt_id &&
     !orderedIds.includes(plan.last_attempt_id)
@@ -1636,7 +1400,7 @@ export function PlanMetricsTable({
   plan,
   model,
 }: {
-  plan: Plan
+  plan: LocalPlan
   model: PlanComparisonModel
 }) {
   return (
@@ -2157,17 +1921,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   )
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [plan, setPlan] = useState<LocalPlan | null>(null)
-  const [importedPlan, setImportedPlan] = useState<ImportedPlan | null>(null)
-  const [reference, setReference] = useState<RcReference | null>(null)
-  const [relatedExecutionIds, setRelatedExecutionIds] = useState<string[]>([])
-  const [updatingHistory, setUpdatingHistory] = useState(false)
-  const displayPlan = importedPlan ?? plan
-  const frozen = reference ? frozenSetup(reference) : null
-  const configuredSubject = model(object(importedPlan?.configuration).subject)
-  const runSubject =
-    configuredSubject.provider && configuredSubject.model
-      ? configuredSubject
-      : frozen?.subject
 
   const [executionSummaries, setExecutionSummaries] = useState<
     Record<string, DashboardExecutionSummary>
@@ -2205,81 +1958,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   const load = useCallback(async () => {
     const next = bridge ?? (await getDashboardDataBridge())
     setBridge(next)
-    const [loaded, allPlans, executions] = await Promise.all([
-      next.getPlan(planId),
-      next.listPlans(),
-      listComparisonExecutions(),
-    ])
-    const remotePlans = allPlans.plans.filter(
-      (entry): entry is ImportedPlan =>
-        entry.origin === 'remote' &&
-        (entry.id === loaded.id ||
-          (loaded.origin !== 'remote' &&
-            executions.some(
-              (execution) =>
-                entry.execution_ids.includes(execution.id) &&
-                execution.run_id === loaded.reference_execution_id,
-            ))),
-    )
-    const importedIds = new Set(
-      remotePlans.flatMap((entry) => entry.execution_ids),
-    )
-    const sourceIds = new Set(
-      executions
-        .filter((entry) => importedIds.has(entry.id))
-        .map((entry) => entry.run_id),
-    )
-    const localPlans = allPlans.plans.filter(
-      (entry): entry is LocalPlan =>
-        entry.origin !== 'remote' &&
-        (entry.id === loaded.id ||
-          Boolean(
-            entry.reference_execution_id &&
-              sourceIds.has(entry.reference_execution_id),
-          )),
-    )
-    const localPlanIds = new Set(localPlans.map((entry) => entry.id))
-    const eligible = executions.filter(
-      (entry) =>
-        importedIds.has(entry.id) ||
-        (entry.origin !== 'remote' &&
-          typeof entry.plan_id === 'string' &&
-          localPlanIds.has(entry.plan_id)),
-    )
-    setRelatedExecutionIds(eligible.map((entry) => entry.id))
-    setExecutionSummaries(
-      Object.fromEntries(eligible.map((entry) => [entry.id, entry])),
-    )
-    setImportedPlan(loaded.origin === 'remote' ? loaded : null)
-    if (loaded.origin === 'remote') {
-      const latest = executions
-        .filter((entry) => loaded.execution_ids.includes(entry.id))
-        .sort(
-          (a, b) =>
-            Date.parse(b.started_at ?? '') - Date.parse(a.started_at ?? ''),
-        )[0]
-      const snapshot = latest ? await getImportedReference(latest.id) : null
-      setReference(snapshot)
-      const configured = model(object(loaded.configuration).subject)
-      const subject =
-        configured.provider && configured.model
-          ? configured
-          : snapshot
-            ? frozenSetup(snapshot).subject
-            : configured
-      const linked = localPlans
-        .filter(
-          (entry) =>
-            entry.reference_execution_id === latest?.run_id &&
-            entry.model === subject.model &&
-            entry.provider === subject.provider,
-        )
-        .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
-      setPlan(linked[0] ?? null)
-    } else {
-      setPlan(loaded)
-      setReference(null)
-    }
+    setPlan(await next.getPlan(planId))
   }, [bridge, planId])
 
   useEffect(() => {
@@ -2298,7 +1977,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       void bridge
         .getPlan(localPlanId)
         .then((next) => {
-          if (next.origin === 'remote') return
           setPlan(next)
           if (!['baseline_running', 'candidate_running'].includes(next.state))
             void load()
@@ -2370,8 +2048,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   }
 
   const executionIdKey = [
-    ...relatedExecutionIds,
-    ...(importedPlan?.execution_ids ?? []),
     plan?.baseline_execution_id ?? '',
     ...(plan?.candidate_execution_ids ?? []),
     ...(plan?.incomplete_execution_ids ?? []),
@@ -2385,12 +2061,12 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   )
   const comparableExecutionIds = useMemo(
     () =>
-      displayPlan
-        ? executionHistoryRows(displayPlan, executionSummaries, [
+      plan
+        ? executionHistoryRows(plan, executionSummaries, [
             ...new Set(executionIds),
           ]).map((row) => row.id)
         : [],
-    [displayPlan, executionIds, executionSummaries],
+    [plan, executionIds, executionSummaries],
   )
   const visualBaselineId =
     visualBaselineOverride &&
@@ -2537,7 +2213,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   }, [bridge, running, plan?.last_attempt_id])
 
   const start = async (role: PlanRunRole) => {
-    if (!bridge || (!plan && !reference)) return
+    if (!bridge || !plan) return
     setStarting(role)
     setRunFeedback({
       role,
@@ -2546,19 +2222,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       executionId: null,
     })
     try {
-      let runPlan = plan
-      if (!runPlan) {
-        if (!reference || !importedPlan) return
-        runPlan = await planAction<LocalPlan>(bridge, {
-          action: 'reproduce_reference',
-          reference_execution_id: reference.execution.id,
-          label: importedPlan.label,
-          subject: runSubject,
-          materialized: reference.materialized,
-          shards: reference.shards,
-        })
-      }
-      setPlan(runPlan)
+      const runPlan = plan
       const checked = await planAction<PlanRequirements>(bridge, {
         action: 'requirements',
         plan_id: runPlan.id,
@@ -2603,8 +2267,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     () =>
       Object.fromEntries(
         Object.entries(executionDetails).flatMap(([id, detail]) => {
-          const metrics = comparisonPrimaryMetrics(detail, null).baseline
-          return metrics ? [[id, metrics] as const] : []
+          return [[id, buildPrimaryMetrics(detail)] as const]
         }),
       ),
     [executionDetails],
@@ -2672,20 +2335,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     }
   }
   const renameExecution = async (executionId: string, label: string) => {
-    if (!bridge) return
-    if (executionSummaries[executionId]?.origin === 'remote') {
-      await bridge.planControl({
-        action: 'rename_imported_execution',
-        execution_id: executionId,
-        label,
-      })
-      const summaries = await loadExecutionSummaries(bridge.listExecutions, [
-        executionId,
-      ])
-      setExecutionSummaries((current) => ({ ...current, ...summaries }))
-      return
-    }
-    if (!plan) return
+    if (!bridge || !plan) return
     const candidateLabels = { ...(plan.candidate_labels ?? {}) }
     const normalized = label.trim()
     if (normalized) candidateLabels[executionId] = normalized
@@ -2696,15 +2346,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
     setPlan(nextPlan)
   }
 
-  const readiness = plan
-    ? planReadiness(plan)
-    : importedPlan
-      ? {
-          status: 'unavailable' as const,
-          label: 'imported local copy',
-          detail: '',
-        }
-      : null
+  const readiness = plan ? planReadiness(plan) : null
   const latestCandidateId = plan?.candidate_execution_ids.at(-1) ?? null
   const baselineSummary = plan?.baseline_execution_id
     ? (executionSummaries[plan.baseline_execution_id] ?? null)
@@ -2714,9 +2356,9 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       ? (executionSummaries[plan.last_attempt_id] ?? null)
       : ((latestCandidateId ? executionSummaries[latestCandidateId] : null) ??
         baselineSummary)
-  const comparisonInput = displayPlan
+  const comparisonInput = plan
     ? {
-        plan: displayPlan,
+        plan,
         executionIds: comparableExecutionIds,
         summaries: executionSummaries,
         visualBaselineId,
@@ -2730,9 +2372,8 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
   function executionChoiceLabel(id: string) {
     const summary = executionSummaries[id]
     return [
-      summary?.origin === 'remote' ? 'Release Control' : 'Local',
-      displayPlan
-        ? executionHistoryLabel(displayPlan, { id, summary: summary ?? null })
+      plan
+        ? executionHistoryLabel(plan, { id, summary: summary ?? null })
         : 'Execution',
       summary?.started_at ? formatDate(summary.started_at) : null,
       summary ? titleCase(summary.status) : null,
@@ -2741,29 +2382,11 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
       .join(' · ')
   }
 
-  const updateHistory = async () => {
-    if (!bridge || !importedPlan) return
-    setUpdatingHistory(true)
-    try {
-      await bridge.planControl({
-        action: 'import_history',
-        history: await exportReleaseControlHistory(
-          importedPlan.source.plan_key,
-        ),
-      })
-      await load()
-    } catch (cause) {
-      setLoadError(errorText(cause))
-    } finally {
-      setUpdatingHistory(false)
-    }
-  }
-
   return (
     <>
       <DashboardPageActions
         active="plans"
-        context={displayPlan ? displayPlan.label || displayPlan.id : undefined}
+        context={plan ? plan.label || plan.id : undefined}
         actionsLabel="Plan actions"
         actions={
           comparableExecutionIds.length > 1 ? (
@@ -2796,7 +2419,7 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             ))}
           </div>
         ) : null}
-        {loadError && !displayPlan ? (
+        {loadError && !plan ? (
           <EmptyState
             tone="error"
             title="Plan unavailable"
@@ -2819,27 +2442,27 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             }
           />
         ) : null}
-        {displayPlan && readiness ? (
+        {plan && readiness ? (
           <div className="grid gap-5">
             <PageHeader
               className="pm-page-header execution-header"
               breadcrumb={[
                 { label: 'plans', href: hashForPlans() },
-                { label: displayPlan.label || displayPlan.id },
+                { label: plan.label || plan.id },
               ]}
-              title={displayPlan.label || displayPlan.id}
+              title={plan.label || plan.id}
               summary={
                 <>
                   <StatusBadge
                     status={readiness.status}
                     label={readiness.label}
                   />
-                  <span>{displayPlan.purpose}</span>
+                  <span>{plan.purpose}</span>
                 </>
               }
               actions={
                 <>
-                  {running && plan?.last_attempt_id ? (
+                  {running && plan.last_attempt_id ? (
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <a
@@ -2859,23 +2482,14 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                           type="button"
                           className={buttonClassName({ variant: 'secondary' })}
                           aria-label={
-                            plan?.baseline_execution_id
+                            plan.baseline_execution_id
                               ? 'Re-run plan'
                               : 'Run plan'
                           }
                           disabled={
                             starting !== null ||
                             running ||
-                            (!plan &&
-                              (!frozen?.scenarios.length ||
-                                frozen.repetitions === null ||
-                                frozen.technicalRetries === null ||
-                                !runSubject?.model ||
-                                !runSubject.provider ||
-                                !frozen.scenarios.every((scenario) =>
-                                  frozen.seeds.has(scenario),
-                                ))) ||
-                            plan?.compatible === false
+                            plan.compatible === false
                           }
                           onClick={() => {
                             setRunFeedback(null)
@@ -2887,76 +2501,62 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                         </button>
                       </TooltipTrigger>
                       <TooltipContent>
-                        {plan?.baseline_execution_id
+                        {plan.baseline_execution_id
                           ? 'Re-run plan'
                           : 'Run plan'}
                       </TooltipContent>
                     </Tooltip>
                   )}
-                  {importedPlan ? (
-                    <button
-                      type="button"
-                      className={buttonClassName({ variant: 'quiet' })}
-                      disabled={updatingHistory}
-                      onClick={() => void updateHistory()}
-                    >
-                      {updatingHistory ? 'Updating…' : 'Update history'}
-                    </button>
-                  ) : null}
-                  {plan && !importedPlan ? (
-                    <>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a
-                            className={buttonClassName({ variant: 'quiet' })}
-                            href={`${hashForNewPlan()}/edit/${plan.id}`}
-                            aria-label="Edit plan"
-                          >
-                            <PencilLine size={16} aria-hidden="true" />
-                          </a>
-                        </TooltipTrigger>
-                        <TooltipContent>Edit plan</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <a
-                            className={buttonClassName({ variant: 'quiet' })}
-                            href={`${hashForNewPlan()}/duplicate/${plan.id}`}
-                            aria-label="Duplicate plan"
-                          >
-                            <Copy size={16} aria-hidden="true" />
-                          </a>
-                        </TooltipTrigger>
-                        <TooltipContent>Duplicate plan</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className={buttonClassName({ variant: 'quiet' })}
-                            onClick={() => void exportPlan()}
-                            aria-label="Export plan"
-                          >
-                            <Download size={16} aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>Export plan</TooltipContent>
-                      </Tooltip>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <button
-                            type="button"
-                            className={buttonClassName({ variant: 'quiet' })}
-                            onClick={() => setDeleteOpen(true)}
-                            aria-label="Delete plan"
-                          >
-                            <Trash2 size={16} aria-hidden="true" />
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent>Delete plan</TooltipContent>
-                      </Tooltip>
-                    </>
-                  ) : null}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <a
+                        className={buttonClassName({ variant: 'quiet' })}
+                        href={`${hashForNewPlan()}/edit/${plan.id}`}
+                        aria-label="Edit plan"
+                      >
+                        <PencilLine size={16} aria-hidden="true" />
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent>Edit plan</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <a
+                        className={buttonClassName({ variant: 'quiet' })}
+                        href={`${hashForNewPlan()}/duplicate/${plan.id}`}
+                        aria-label="Duplicate plan"
+                      >
+                        <Copy size={16} aria-hidden="true" />
+                      </a>
+                    </TooltipTrigger>
+                    <TooltipContent>Duplicate plan</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={buttonClassName({ variant: 'quiet' })}
+                        onClick={() => void exportPlan()}
+                        aria-label="Export plan"
+                      >
+                        <Download size={16} aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Export plan</TooltipContent>
+                  </Tooltip>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        className={buttonClassName({ variant: 'quiet' })}
+                        onClick={() => setDeleteOpen(true)}
+                        aria-label="Delete plan"
+                      >
+                        <Trash2 size={16} aria-hidden="true" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent>Delete plan</TooltipContent>
+                  </Tooltip>
                 </>
               }
             />
@@ -2969,29 +2569,6 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
               open={runOpen}
               onClose={() => setRunOpen(false)}
               plan={plan}
-              importedScope={
-                frozen ? (
-                  <div className="grid gap-3 text-sm">
-                    <p>
-                      {frozen.scenarios.length} tests · {frozen.repetitions} run
-                      per test · {runSubject?.provider} / {runSubject?.model}
-                    </p>
-                    <p>
-                      Technical retries: {frozen.technicalRetries} · Seeds:{' '}
-                      {[...frozen.seeds]
-                        .map(([scenario, seed]) => `${scenario} ${seed}`)
-                        .join(' · ')}
-                    </p>
-                    {runSubject?.model !== frozen.subject.model ? (
-                      <Callout tone="info">
-                        The retained execution used {frozen.subject.provider} /{' '}
-                        {frozen.subject.model}. This run uses the current plan
-                        model shown above.
-                      </Callout>
-                    ) : null}
-                  </div>
-                ) : undefined
-              }
               starting={starting}
               feedback={runFeedback}
               onStart={(role) => void start(role)}
@@ -3146,12 +2723,12 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
             ) : null}
             <div className="grid min-w-0 gap-3">
               <PlanRunHistory
-                plan={displayPlan}
+                plan={plan}
                 executionIds={comparableExecutionIds}
                 summaries={executionSummaries}
                 onRenameExecution={renameExecution}
               />
-              <PlanScope plan={displayPlan} reference={reference} />
+              <PlanScope plan={plan} />
               {comparisonInput && comparisonCandidateIds.length > 0 ? (
                 <DisclosureLayer
                   id="plan-trends"
@@ -3176,27 +2753,20 @@ export function LocalPlanDetailPage({ planId }: { planId: string }) {
                   <PlanComparisonLayers {...comparisonInput} />
                 </DisclosureLayer>
               ) : null}
-              {plan ? (
-                <DisclosureLayer
-                  id="plan-provenance"
-                  label="provenance"
-                  scent={planProvenanceScent(plan)}
-                  open={openLayers.provenance ?? false}
-                  onToggle={(open) =>
-                    setOpenLayers((current) => ({
-                      ...current,
-                      provenance: open,
-                    }))
-                  }
-                >
-                  <PlanProvenance plan={plan} />
-                </DisclosureLayer>
-              ) : importedPlan ? (
-                <p className="text-xs text-ink-muted">
-                  Release Control · {importedPlan.source.instance_id} ·{' '}
-                  {importedPlan.source.plan_key}
-                </p>
-              ) : null}
+              <DisclosureLayer
+                id="plan-provenance"
+                label="provenance"
+                scent={planProvenanceScent(plan)}
+                open={openLayers.provenance ?? false}
+                onToggle={(open) =>
+                  setOpenLayers((current) => ({
+                    ...current,
+                    provenance: open,
+                  }))
+                }
+              >
+                <PlanProvenance plan={plan} />
+              </DisclosureLayer>
             </div>
           </div>
         ) : null}

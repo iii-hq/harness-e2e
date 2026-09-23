@@ -8,6 +8,7 @@ import {
   groupHeading,
   groupLedgerRows,
   LEDGER_DEFAULT_FILTERS,
+  LedgerTable,
   ledgerFiltersFromParams,
   ledgerFiltersToParams,
   triggerLabel,
@@ -158,75 +159,85 @@ describe('executions ledger', () => {
     expect(dayLabel('2026-08-25T11:13:00Z', NOW)).toBe('yesterday · Aug 25')
   })
 
-  it('groups the runs of one Release Control execution as its plan, with additive figures', () => {
-    const plan = {
-      execution_id: '4096c79e-c273-4495-ab8f-4b2741750197',
-      attempt: 1,
-      profile: 'regression',
-      campaign_id: 'regression-r01',
-      group_id: 'case-minimal-path',
-    }
-    const rcRows = buildLedgerRows([
+  it('lists imported executions like local ones, with their origin and import state', () => {
+    const github = (run_id: number) => ({
+      kind: 'github',
+      repository: 'iii-hq/harness-e2e',
+      run_id,
+      run_attempt: 1,
+      url: `https://github.com/iii-hq/harness-e2e/actions/runs/${run_id}`,
+      release_control_execution_id: null,
+    })
+    const rows = buildLedgerRows([
       summary({
-        id: 'rc-a',
-        label:
-          'Regression · regression-r01 · case-minimal-path · Harness 1.8.17',
-        lane: 'local-regression',
-        release_control: plan,
+        id: 'plan-imported',
+        label: 'Software engineering',
         completed_at: '2026-08-26T20:30:00Z',
-        totals: {
-          expected_reports: 1,
-          received_reports: 1,
-          scenario_pass_rate: 1,
-          report_coverage: 1,
-          total_tokens: 4_000,
-          wall_time_seconds: 100,
+        source: github(123),
+        parameters: {
+          scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
+          runs: 1,
+          technical_retries: 0,
+          seed: null,
+          model: 'gpt-5.6-terra',
+          provider: 'openai-codex',
+          agent: 'tech-lead',
         },
+        subjects: [
+          {
+            id: 'terra',
+            provider: 'openai-codex',
+            model: 'gpt-5.6-terra',
+            scenarios: [
+              { id: 'kanban_c1_foundation', mean_score: 80 },
+              { id: 'kanban_c2_persistence', mean_score: 90 },
+            ],
+          },
+        ],
       }),
-      summary({ id: 'local-between', completed_at: '2026-08-26T20:20:00Z' }),
       summary({
-        id: 'rc-b',
-        label: 'Regression · regression-r01 · case-timer-wake · Harness 1.8.17',
-        lane: 'local-regression',
-        status: 'technical_failed',
-        release_control: { ...plan, group_id: 'case-timer-wake' },
-        completed_at: '2026-08-26T20:10:00Z',
-        assessment_summary: {
-          system_statuses: { infrastructure_error: 1 },
-        } as never,
-        totals: {
-          expected_reports: 1,
-          received_reports: 1,
-          scenario_pass_rate: 0,
-          report_coverage: 1,
-          total_tokens: 6_000,
-          wall_time_seconds: 50,
-        },
+        id: 'plan-importing',
+        status: 'importing',
+        state: 'importing',
+        source: github(124),
       }),
+      summary({ id: 'local-run', completed_at: '2026-08-26T20:10:00Z' }),
     ])
     const grouped = groupLedgerRows(
-      filterLedgerRows(rcRows, LEDGER_DEFAULT_FILTERS),
+      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
       NOW,
     )
+    expect(grouped.running.map((row) => row.execution.id)).toEqual([
+      'plan-importing',
+    ])
+    expect(grouped.running[0].status).toEqual({
+      label: 'importing',
+      status: 'running',
+    })
     expect(
       grouped.groups.map((group) => [
         group.key,
         group.rows.map((row) => row.execution.id),
       ]),
-    ).toEqual([
-      ['plan:4096c79e-c273-4495-ab8f-4b2741750197', ['rc-a', 'rc-b']],
-      ['2026-7-26', ['local-between']],
-    ])
-    expect(groupHeading(grouped.groups[0])).toBe(
-      'regression · regression-r01 · release control 4096c79e · 2 runs · 50% pass · 10,000 tokens · 2m 30s',
-    )
-    expect(groupHeading(grouped.groups[1])).toBe('today · Aug 26 · 1')
+    ).toEqual([['2026-7-26', ['plan-imported', 'local-run']]])
+    expect(groupHeading(grouped.groups[0])).toBe('today · Aug 26 · 2')
     expect(
-      filterLedgerRows(rcRows, {
+      filterLedgerRows(rows, {
         ...LEDGER_DEFAULT_FILTERS,
-        query: '4096c79e',
+        query: 'tech-lead',
       }).map((row) => row.execution.id),
-    ).toEqual(['rc-a', 'rc-b'])
+    ).toEqual(['plan-imported'])
+    const html = renderToStaticMarkup(
+      <LedgerTable caption="Executions" groups={grouped.groups} />,
+    )
+    expect(html).toContain(
+      'href="https://github.com/iii-hq/harness-e2e/actions/runs/123"',
+    )
+    expect(html).toContain('GitHub #123')
+    expect(html).toContain('profile tech-lead')
+    expect(html).toContain('2 scenarios')
+    expect(html).toContain('>85<')
+    expect(html).toContain('>local<')
   })
 
   // Audit O-03 / E-11: the row carries every column with a label, and a

@@ -123,8 +123,6 @@ export type TestHistoryResponse = {
 
 export type TestObservation = {
   observation_id?: string
-  source?: 'release-control' | 'local'
-  source_url?: string | null
   execution_id: string
   evaluated_version_id: string | null
   cohort_id: string
@@ -137,8 +135,8 @@ export type TestObservation = {
   run_count: number
   scored_runs: number
   assessment_summary?: AssessmentSummary
-  /** Digest of the definition that evaluated the observation; empty when the
-   *  source (a Release Control ledger, say) does not carry one. */
+  /** Digest of the definition that evaluated the observation; empty when it
+   *  was not recorded. */
   behavior_sha256: string
   seed?: number | null
   system_version_id?: string | null
