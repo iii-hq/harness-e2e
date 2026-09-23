@@ -93,6 +93,7 @@ struct RunSnapshot {
 pub async fn register_worker_functions(
     iii: &iii_sdk::IIIClient,
     control: crate::control::ControlPlane,
+    github_repository: String,
 ) -> Result<()> {
     let events = Some(bus::DashboardEvents::register(iii));
     let controller = controller::Controller::new(
@@ -100,6 +101,7 @@ pub async fn register_worker_functions(
         control.output_root().to_path_buf(),
         events,
         Some(control),
+        github_repository,
     )
     .await?;
     bus::register_functions(iii, controller);
@@ -398,6 +400,7 @@ pub(crate) mod tests {
             root.path().into(),
             None,
             None,
+            "iii-hq/harness-e2e".into(),
         )
         .await
         .unwrap();

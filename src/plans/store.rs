@@ -1,6 +1,6 @@
 //! One saved-plan lifecycle with durable orchestration receipts and native Results.
 //! Every planned child and its idempotency key is durable before admission.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,6 +22,10 @@ use crate::persistence::Persistence;
 use crate::report::{E2eReport, ReportState};
 use crate::test_plan::{self, ProfileSnapshot};
 
+mod github;
+
+pub(crate) use github::{GithubRunImportRequest, GithubRunsListRequest};
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct SavedPlan {
     #[serde(flatten)]
@@ -34,41 +38,10 @@ pub(crate) struct SavedPlan {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub(crate) enum Request {
-    ImportHistory {
-        history: crate::history::HistoryImport,
-    },
-    RenameImportedExecution {
-        execution_id: String,
-        label: String,
-    },
-    ReproduceReference {
-        reference_execution_id: String,
-        #[serde(default)]
-        label: String,
-        subject: ReferenceModel,
-        materialized: Value,
-        #[serde(default)]
-        shards: Vec<Value>,
-    },
-    Requirements {
-        plan_id: String,
-    },
-    Export {
-        plan_id: String,
-    },
-    Execution {
-        execution_id: String,
-    },
-    Cancel {
-        execution_id: String,
-    },
-}
-
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ReferenceModel {
-    model: String,
-    provider: String,
+    Requirements { plan_id: String },
+    Export { plan_id: String },
+    Execution { execution_id: String },
+    Cancel { execution_id: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -102,13 +75,32 @@ pub(crate) struct Slot {
     pub eligible: bool,
 }
 
+/// One execution, whatever produced it: a saved plan run here or a run
+/// imported from GitHub. Where it came from is data (`source`), never a
+/// different record.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct PlanExecution {
     pub id: String,
-    pub plan_id: String,
+    /// The saved plan it ran; absent for an imported execution.
+    #[serde(default)]
+    pub plan_id: Option<String>,
     pub idempotency_key: String,
     pub configuration_sha256: String,
-    pub role: Role,
+    /// Baseline or candidate within its plan; absent without a plan.
+    #[serde(default)]
+    pub role: Option<Role>,
+    /// Editable name; the plan label (or the id) is shown when absent.
+    #[serde(default)]
+    pub label: Option<String>,
+    /// What running it again would need.
+    #[serde(default)]
+    pub parameters: Option<ExecutionParameters>,
+    #[serde(default)]
+    pub source: ExecutionSource,
+    #[serde(default)]
+    pub stack: Vec<StackWorker>,
+    /// `running`, `cancelling` or `importing` while active; `completed`,
+    /// `interrupted`, `cancelled` or `failed` once done.
     pub state: String,
     pub started_at: String,
     pub updated_at: String,
@@ -120,6 +112,54 @@ pub(crate) struct PlanExecution {
     pub measurements: Option<Value>,
     #[serde(default)]
     pub system_under_test: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct ExecutionParameters {
+    pub scenarios: Vec<String>,
+    pub runs: u32,
+    pub technical_retries: u8,
+    pub seed: Option<u64>,
+    pub model: String,
+    pub provider: String,
+    /// Agent profile the subject ran under.
+    pub agent: Option<String>,
+}
+
+/// Where an execution came from; shown and used to deduplicate imports.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ExecutionSource {
+    #[default]
+    Local,
+    Github {
+        repository: String,
+        run_id: u64,
+        run_attempt: u32,
+        url: String,
+        release_control_execution_id: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum WorkerSource {
+    Package,
+    Path,
+}
+
+/// One worker of the stack an execution ran on.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct StackWorker {
+    pub name: String,
+    pub source: WorkerSource,
+    pub requested: Option<String>,
+    pub observed: Option<String>,
+    pub commit: Option<String>,
+    pub dirty: Option<bool>,
+    /// Groups that ran this version, listed only when groups disagree.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
 }
 
 pub(crate) fn validate_saved_plan(plan: &SavedPlan) -> Result<()> {
@@ -138,7 +178,7 @@ pub(crate) fn validate_saved_plan(plan: &SavedPlan) -> Result<()> {
 pub(crate) fn validate_saved_plan_execution(execution: &PlanExecution) -> Result<()> {
     ensure!(
         !execution.id.is_empty()
-            && !execution.plan_id.is_empty()
+            && execution.plan_id.as_ref().is_none_or(|id| !id.is_empty())
             && !execution.idempotency_key.is_empty(),
         "Unsupported plan execution identity"
     );
@@ -159,6 +199,10 @@ trait Runner: Send + Sync {
     async fn submit(&self, owner: &str, request: RunRequest) -> Result<String>;
     async fn record(&self, id: &str) -> Option<ExecutionRecord>;
     async fn cancel(&self, id: &str) -> Result<()>;
+    /// Retain a terminal native run produced elsewhere.
+    async fn install(&self, record: ExecutionRecord) -> Result<()>;
+    /// Delete a terminal native run and its evidence.
+    async fn remove(&self, id: &str) -> Result<()>;
 }
 #[async_trait]
 impl Runner for ControlPlane {
@@ -253,6 +297,12 @@ impl Runner for ControlPlane {
         ControlPlane::cancel(self, id).await?;
         Ok(())
     }
+    async fn install(&self, record: ExecutionRecord) -> Result<()> {
+        self.install_terminal(record).await
+    }
+    async fn remove(&self, id: &str) -> Result<()> {
+        self.delete(id).await
+    }
 }
 
 pub(crate) struct PlanStore {
@@ -291,6 +341,7 @@ impl PlanStore {
             .as_ref()
             .context("Execution is unavailable in this dashboard.")
     }
+    #[cfg(not(test))]
     fn persistence(&self) -> Result<&Persistence> {
         self.persistence
             .as_ref()
@@ -385,7 +436,7 @@ impl PlanStore {
             .executions()
             .await?
             .into_iter()
-            .filter(|e| e.plan_id == plan_id)
+            .filter(|e| e.plan_id.as_deref() == Some(plan_id))
             .collect();
         history.sort_by(|a, b| b.started_at.cmp(&a.started_at));
         Ok(history)
@@ -511,231 +562,6 @@ impl PlanStore {
         self.write_plan(&prepared).await?;
         self.canonical(&prepared).await
     }
-    async fn reproduce_reference(
-        &self,
-        reference_execution_id: String,
-        label: String,
-        subject: ReferenceModel,
-        materialized: Value,
-        shards: Vec<Value>,
-    ) -> Result<LocalPlan> {
-        ensure!(
-            !reference_execution_id.trim().is_empty()
-                && reference_execution_id.len() <= 200
-                && !reference_execution_id.chars().any(char::is_control),
-            "A bounded Release Control execution id is required."
-        );
-        let _guard = self.lock.lock().await;
-        let id = format!("plan-rc-{}", uuid::Uuid::new_v4().simple());
-
-        let profile = materialized["profile"]
-            .as_object()
-            .context("Release Control materialization is missing its profile")?;
-        let profile_id = profile
-            .get("id")
-            .and_then(Value::as_str)
-            .context("Release Control materialization is missing its profile id")?;
-        let repetitions = profile
-            .get("repetitions")
-            .and_then(Value::as_u64)
-            .context("Release Control materialization is missing repetitions")?;
-        let technical_retries = profile
-            .get("technical_retries")
-            .and_then(Value::as_u64)
-            .context("Release Control materialization is missing technical retries")?;
-        ensure!(
-            (1..=20).contains(&repetitions) && technical_retries <= 3,
-            "Release Control materialization has an unsupported execution policy."
-        );
-        let campaigns = materialized["campaigns"]
-            .as_array()
-            .filter(|campaigns| !campaigns.is_empty())
-            .context("Release Control materialization has no campaigns")?
-            .clone();
-        ensure!(
-            campaigns.len() as u64 == repetitions,
-            "Release Control campaign count differs from its repetitions."
-        );
-
-        let mut scenario_ids = Vec::new();
-        let mut expected_scope = None;
-        for campaign in &campaigns {
-            let groups = campaign["groups"]
-                .as_array()
-                .filter(|groups| !groups.is_empty())
-                .context("Release Control campaign has no groups")?;
-            let mut campaign_scope = BTreeSet::new();
-            let mut group_ids = BTreeSet::new();
-            for group in groups {
-                let group_id = group["id"]
-                    .as_str()
-                    .context("Release Control group is missing its id")?;
-                ensure!(
-                    group_ids.insert(group_id),
-                    "Release Control campaign repeats a group id."
-                );
-                let scenarios = group["scenarios"]
-                    .as_array()
-                    .filter(|scenarios| scenarios.len() == 1)
-                    .context("Local plan execution requires one scenario per group")?;
-                let scenario_id = scenarios[0]
-                    .as_str()
-                    .context("Release Control group has an invalid scenario")?;
-                ensure!(
-                    group["runs"].as_u64() == Some(1)
-                        && group["technical_retries"]
-                            .as_u64()
-                            .is_some_and(|value| value <= 3),
-                    "Release Control group has an unsupported local execution policy."
-                );
-                let first_in_campaign = campaign_scope.insert(scenario_id.to_owned());
-                ensure!(
-                    first_in_campaign,
-                    "Release Control campaign repeats a scenario."
-                );
-                if expected_scope.is_none() {
-                    scenario_ids.push(scenario_id.to_owned());
-                }
-            }
-            if let Some(expected) = &expected_scope {
-                ensure!(
-                    expected == &campaign_scope,
-                    "Release Control campaigns do not repeat the same scenario scope."
-                );
-            } else {
-                expected_scope = Some(campaign_scope);
-            }
-        }
-        let mut reference_cases: BTreeMap<String, (u64, Option<String>, Option<String>)> =
-            BTreeMap::new();
-        for run in shards
-            .iter()
-            .filter_map(|shard| shard["runs"].as_array())
-            .flatten()
-        {
-            let Some(scenario_id) = run["scenario_id"].as_str() else {
-                continue;
-            };
-            let seed = run["seed"]
-                .as_u64()
-                .or_else(|| run["seed"].as_str().and_then(|seed| seed.parse().ok()))
-                .with_context(|| {
-                    format!("Release Control run for '{scenario_id}' is missing its seed")
-                })?;
-            let observed = (
-                seed,
-                run["behavior_sha256"].as_str().map(str::to_owned),
-                run["case_id"].as_str().map(str::to_owned),
-            );
-            if let Some(previous) = reference_cases.insert(scenario_id.to_owned(), observed.clone())
-            {
-                ensure!(
-                    previous == observed,
-                    "Release Control reports multiple case identities for '{scenario_id}'."
-                );
-            }
-        }
-        ensure!(
-            scenario_ids
-                .iter()
-                .all(|scenario_id| reference_cases.contains_key(scenario_id)),
-            "Release Control shards do not contain a seed for every materialized scenario."
-        );
-
-        let request: super::PlanCreateRequest = serde_json::from_value(json!({
-            "label": if label.trim().is_empty() { format!("RC · {}", profile.get("label").and_then(Value::as_str).unwrap_or(profile_id)) } else { label },
-            "purpose": format!("Local reproduction of Release Control execution {reference_execution_id}."),
-            "url": self.url,
-            "model": subject.model,
-            "provider": subject.provider,
-            "scenarios": scenario_ids,
-            "runs": repetitions,
-            "technical_retries": technical_retries,
-        }))?;
-        let mut plan = super::new_plan(&request, id)?;
-        for scenario in &mut plan.scenarios {
-            let (seed, reference_definition, reference_case_id) =
-                &reference_cases[&scenario.scenario_id];
-            *scenario =
-                super::resolve_scope(std::slice::from_ref(&scenario.scenario_id), Some(*seed))?
-                    .remove(0);
-            if reference_definition
-                .as_ref()
-                .is_some_and(|digest| digest != &scenario.behavior_sha256)
-            {
-                plan.reference_differences.push(format!(
-                    "{}: scenario definition differs from the Release Control reference",
-                    scenario.scenario_id
-                ));
-            }
-            if reference_case_id
-                .as_ref()
-                .is_some_and(|case_id| case_id != &scenario.case_id)
-            {
-                plan.reference_differences.push(format!(
-                    "{}: case identity differs from the Release Control reference",
-                    scenario.scenario_id
-                ));
-            }
-        }
-        plan.scope_hash = super::scope_hash(&request, &plan.scenarios)?;
-        plan.locked = true;
-        plan.reference_execution_id = Some(reference_execution_id);
-        let profile = crate::test_plan::Profile {
-            id: profile_id.to_owned(),
-            label: profile
-                .get("label")
-                .and_then(Value::as_str)
-                .unwrap_or(profile_id)
-                .to_owned(),
-            purpose: plan.purpose.clone(),
-            metrics: Vec::new(),
-            modules: Vec::new(),
-            scenarios: plan.scenario_ids.clone(),
-            scenario_groups: Vec::new(),
-            repetitions: repetitions as u32,
-            technical_retries: technical_retries as u8,
-            lane: campaigns[0]["lane"]
-                .as_str()
-                .context("Release Control campaign is missing its lane")?
-                .to_owned(),
-        };
-        let cases = plan
-            .scenarios
-            .iter()
-            .map(|scenario| {
-                let mut value = serde_json::to_value(scenario)?;
-                value["requirements"] = json!([]);
-                Ok(value)
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let definition_sha256 = test_plan::embedded()?.digest()?;
-        let profile_sha256 = artifact::sha256_value(&json!({
-            "definition_sha256": definition_sha256,
-            "profile": profile,
-            "cases": cases,
-        }))?;
-        let snapshot = ProfileSnapshot {
-            schema: "harness-e2e-profile-snapshot".into(),
-            plan_id: "release-control-reference".into(),
-            definition_sha256,
-            profile_sha256,
-            profile,
-            scenario_ids: plan.scenario_ids.clone(),
-            cases,
-            campaigns,
-            budget: materialized
-                .get("budget")
-                .cloned()
-                .context("Release Control materialization is missing its budget")?,
-            interpretation: "descriptive_only".into(),
-        };
-        let prepared = prepared_plan(plan, Some(snapshot))?;
-        validate_config(&prepared.plan, &self.url)?;
-        materialize_slots(&prepared, "reference-validation")?;
-        self.write_plan(&prepared).await?;
-        self.canonical(&prepared).await
-    }
     pub(crate) async fn update_local(
         &self,
         id: &str,
@@ -818,33 +644,26 @@ impl PlanStore {
         self.get_local(id).await
     }
 
+    /// Name any execution; an empty label restores the default name.
+    pub(crate) async fn rename(&self, id: &str, label: &str) -> Result<PlanExecution> {
+        let label = label.trim();
+        ensure!(
+            label.chars().count() <= 80,
+            "execution label must be at most 80 characters"
+        );
+        ensure!(
+            !label.chars().any(char::is_control),
+            "execution label must not contain control characters"
+        );
+        let _guard = self.lock.lock().await;
+        let mut execution = self.read_execution(id).await?;
+        execution.label = (!label.is_empty()).then(|| label.to_owned());
+        self.write_execution(&execution).await?;
+        Ok(execution)
+    }
+
     pub(crate) async fn handle(self: &Arc<Self>, request: Request) -> Result<Value> {
         match request {
-            Request::ImportHistory { history } => self.persistence()?.import_history(history).await,
-            Request::RenameImportedExecution {
-                execution_id,
-                label,
-            } => {
-                self.persistence()?
-                    .rename_imported_execution(&execution_id, &label)
-                    .await
-            }
-            Request::ReproduceReference {
-                reference_execution_id,
-                label,
-                subject,
-                materialized,
-                shards,
-            } => Ok(serde_json::to_value(
-                self.reproduce_reference(
-                    reference_execution_id,
-                    label,
-                    subject,
-                    materialized,
-                    shards,
-                )
-                .await?,
-            )?),
             Request::Requirements { plan_id } => {
                 self.requirements(&self.read_plan(&plan_id).await?).await
             }
@@ -953,9 +772,9 @@ impl PlanStore {
         let existing = self.persistence()?.saved_plan_execution(&id).await?;
         if let Some(existing) = existing {
             ensure!(
-                existing.plan_id == plan_id
+                existing.plan_id.as_deref() == Some(plan_id)
                     && existing.configuration_sha256 == plan.configuration_sha256
-                    && existing.role == role,
+                    && existing.role == Some(role),
                 "Idempotency key already belongs to a different plan request."
             );
             return Ok(json!({"execution_id": id, "duplicate": true, "execution": existing}));
@@ -976,12 +795,25 @@ impl PlanStore {
         }
         let runner = self.runner()?;
         runner.reserve(&id).await?;
+        let config = &plan.plan;
         let mut execution = PlanExecution {
             id: id.clone(),
-            plan_id: plan_id.into(),
+            plan_id: Some(plan_id.into()),
             idempotency_key: key.into(),
             configuration_sha256: plan.configuration_sha256.clone(),
-            role,
+            role: Some(role),
+            label: None,
+            parameters: Some(ExecutionParameters {
+                scenarios: config.scenario_ids.clone(),
+                runs: config.runs,
+                technical_retries: config.technical_retries,
+                seed: config.seed,
+                model: config.model.clone(),
+                provider: config.provider.clone(),
+                agent: None,
+            }),
+            source: ExecutionSource::Local,
+            stack: Vec::new(),
             state: "running".into(),
             started_at: now(),
             updated_at: now(),
@@ -1043,7 +875,7 @@ impl PlanStore {
                 if execution.cancel_requested {
                     break;
                 }
-                let plan = self.read_plan(&execution.plan_id).await?;
+                let plan = self.execution_plan(&execution).await?;
                 verify_snapshot(&plan)?;
                 ensure!(
                     plan.configuration_sha256 == execution.configuration_sha256,
@@ -1079,7 +911,7 @@ impl PlanStore {
                 {
                     let _guard = self.lock.lock().await;
                     let mut execution = self.read_execution(id).await?;
-                    let plan = self.read_plan(&execution.plan_id).await?;
+                    let plan = self.execution_plan(&execution).await?;
                     if let Some(report) = record.report.as_ref().filter(|_| terminal) {
                         verify_system_identity(&mut execution.system_under_test, report)?;
                     }
@@ -1088,7 +920,7 @@ impl PlanStore {
                         .iter_mut()
                         .filter(|slot| slot.execution_id == child)
                     {
-                        update_slot(slot, &record, &plan, &self.root)?;
+                        update_slot(slot, &record, Some(&plan), &self.root)?;
                     }
                     execution.updated_at = now();
                     self.write_execution(&execution).await?;
@@ -1173,10 +1005,10 @@ impl PlanStore {
         if let Ok(latest) = self.read_execution(id).await {
             execution = latest;
         }
-        if let Ok(plan) = self.read_plan(&execution.plan_id).await {
+        if let Ok(plan) = self.execution_plan(&execution).await {
             for slot in &mut execution.slots {
                 if let Some(record) = runner.record(&slot.execution_id).await {
-                    let _ = update_slot(slot, &record, &plan, &self.root);
+                    let _ = update_slot(slot, &record, Some(&plan), &self.root);
                 }
             }
         }
@@ -1191,8 +1023,27 @@ impl PlanStore {
         }
         runner.release(id).await;
     }
+    /// The saved plan an execution ran; an imported execution has none.
+    async fn execution_plan(&self, execution: &PlanExecution) -> Result<SavedPlan> {
+        self.read_plan(
+            execution
+                .plan_id
+                .as_deref()
+                .context("This execution has no saved plan")?,
+        )
+        .await
+    }
     async fn reconcile(&self) -> Result<()> {
         for mut execution in self.executions().await? {
+            if execution.state == "importing" {
+                execution.state = "failed".into();
+                execution.error =
+                    Some("The worker stopped before this import finished. Import it again.".into());
+                execution.updated_at = now();
+                execution.finished_at = Some(now());
+                self.write_execution(&execution).await?;
+                continue;
+            }
             let was_active = execution.active();
             if !was_active
                 && (execution.measurements.is_some()
@@ -1201,7 +1052,10 @@ impl PlanStore {
                 continue;
             }
             let finished_at = execution.finished_at.clone();
-            let plan = self.read_plan(&execution.plan_id).await?;
+            let plan = match execution.plan_id {
+                Some(_) => Some(self.execution_plan(&execution).await?),
+                None => None,
+            };
             if let Some(runner) = &self.runner {
                 for slot in &mut execution.slots {
                     if let Some(record) = runner.record(&slot.execution_id).await {
@@ -1209,7 +1063,7 @@ impl PlanStore {
                             record.phase.terminal(),
                             "Native child is still active during plan recovery"
                         );
-                        if let Err(error) = update_slot(slot, &record, &plan, &self.root) {
+                        if let Err(error) = update_slot(slot, &record, plan.as_ref(), &self.root) {
                             slot.error = Some(error.to_string());
                         }
                     }
@@ -1262,7 +1116,10 @@ fn read_json_directory<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Ve
     }
     Ok(result)
 }
-fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<SavedPlan> {
+pub(crate) fn prepared_plan(
+    plan: LocalPlan,
+    snapshot: Option<ProfileSnapshot>,
+) -> Result<SavedPlan> {
     let snapshot = snapshot
         .map(Ok)
         .unwrap_or_else(|| snapshot_for_plan(&plan, None))?;
@@ -1309,8 +1166,10 @@ fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<Str
         "scenarios": config.scenarios, "scenario_ids": config.scenario_ids,
         "runs": config.runs, "technical_retries": config.technical_retries, "seed": config.seed,
         "template_id": config.template_id, "scope_hash": config.scope_hash,
-        "reference_execution_id": config.reference_execution_id,
-        "reference_differences": config.reference_differences,
+        // Retired fields, kept constant so the digests of plans saved before
+        // they were retired still match.
+        "reference_execution_id": null,
+        "reference_differences": [],
         "snapshot_sha256": snapshot_digest,
     });
     artifact::sha256_value(&value)
@@ -1391,10 +1250,12 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
     );
     Ok(slots)
 }
+/// Project one terminal native run into its slot. With a saved plan, the run
+/// must also match the plan's model and pinned cases.
 fn update_slot(
     slot: &mut Slot,
     record: &ExecutionRecord,
-    plan: &SavedPlan,
+    plan: Option<&SavedPlan>,
     root: &Path,
 ) -> Result<()> {
     ensure!(
@@ -1427,11 +1288,13 @@ fn update_slot(
         report.execution.execution_id == slot.execution_id,
         "Native artifact belongs to a different execution"
     );
-    let config = &plan.plan;
-    ensure!(
-        report.subject.model == config.model && report.subject.provider == config.provider,
-        "Execution model identity differs"
-    );
+    if let Some(plan) = plan {
+        ensure!(
+            report.subject.model == plan.plan.model
+                && report.subject.provider == plan.plan.provider,
+            "Execution model identity differs"
+        );
+    }
     let requested: Vec<_> = slot.request["scenarios"]
         .as_array()
         .context("Native request scenarios are absent")?
@@ -1451,27 +1314,29 @@ fn update_slot(
         .iter()
         .find(|scenario| scenario.scenario_id == slot.scenario_id)
         .context("Native report omitted the planned scenario")?;
-    let expected = plan
-        .snapshot
-        .cases
-        .iter()
-        .find(|c| c["scenario_id"] == slot.scenario_id)
-        .context("Case absent from pinned profile")?;
-    ensure!(
-        scenario.scenario_id == slot.scenario_id && scenario.case_id == expected["case_id"],
-        "Native case identity differs from the pinned profile"
-    );
-    let case = scenario
-        .case
-        .as_ref()
-        .context("Native materialized case is absent")?;
-    ensure!(
-        case.seed == expected["seed"].as_u64().context("Pinned seed missing")?
-            && case.inputs_sha256 == expected["inputs_sha256"]
-            && crate::scenarios::scenario_contract_sha256(case, scenario.execution_policy)?
-                == expected["contract_sha256"],
-        "Native scenario contract or seed differs from the pinned profile"
-    );
+    if let Some(plan) = plan {
+        let expected = plan
+            .snapshot
+            .cases
+            .iter()
+            .find(|c| c["scenario_id"] == slot.scenario_id)
+            .context("Case absent from pinned profile")?;
+        ensure!(
+            scenario.scenario_id == slot.scenario_id && scenario.case_id == expected["case_id"],
+            "Native case identity differs from the pinned profile"
+        );
+        let case = scenario
+            .case
+            .as_ref()
+            .context("Native materialized case is absent")?;
+        ensure!(
+            case.seed == expected["seed"].as_u64().context("Pinned seed missing")?
+                && case.inputs_sha256 == expected["inputs_sha256"]
+                && crate::scenarios::scenario_contract_sha256(case, scenario.execution_policy)?
+                    == expected["contract_sha256"],
+            "Native scenario contract or seed differs from the pinned profile"
+        );
+    }
     let aggregate = &scenario.aggregate;
     ensure!(
         aggregate.planned_runs == 1,
@@ -1800,6 +1665,24 @@ mod tests {
             }
             Ok(())
         }
+        async fn install(&self, record: ExecutionRecord) -> Result<()> {
+            self.records
+                .lock()
+                .await
+                .insert(record.execution_id.clone(), record);
+            Ok(())
+        }
+        async fn remove(&self, id: &str) -> Result<()> {
+            ensure!(
+                self.records.lock().await.remove(id).is_some(),
+                "unknown E2E execution {id}"
+            );
+            let evidence = self.root.join(id);
+            if evidence.exists() {
+                fs::remove_dir_all(evidence)?;
+            }
+            Ok(())
+        }
     }
     fn request(profile: &str) -> super::super::PlanCreateRequest {
         let snapshot = test_plan::embedded().unwrap().materialize(profile).unwrap();
@@ -1954,177 +1837,6 @@ mod tests {
             .is_empty());
         client.shutdown_async().await;
     }
-    fn reference_import(execution_kind: &str) -> Value {
-        let scenario_id = crate::scenarios::ScenarioId::ContextPressure.as_str();
-        let seed = crate::scenarios::ScenarioId::ContextPressure.canonical_seed();
-        let group = json!({
-            "id": "remote-context",
-            "execution_kind": execution_kind,
-            "runs": 1,
-            "technical_retries": 0,
-            "scenarios": [scenario_id],
-        });
-        json!({
-            "action": "reproduce_reference",
-            "reference_execution_id": "1b8e60cc-7818-4dcb-8cbc-c76790c271af",
-            "label": "RC smoke reference",
-            "subject": {"model": "model", "provider": "provider"},
-            "materialized": {
-                "profile": {
-                    "id": "smoke",
-                    "label": "Smoke",
-                    "repetitions": 2,
-                    "technical_retries": 1,
-                    "profile_sha256": "remote-profile",
-                    "definition_sha256": "remote-definition"
-                },
-                "campaigns": [
-                    {"campaign_id": "smoke-r01", "lane": "local-smoke", "groups": [group.clone()]},
-                    {"campaign_id": "smoke-r02", "lane": "local-smoke", "groups": [group]}
-                ],
-                "budget": {"planned_runs": 2},
-                "identity": {"runner_revision": "reference-only"}
-            },
-            "shards": [{"runs": [{
-                "scenario_id": scenario_id,
-                "behavior_sha256": format!("sha256:{}", "0".repeat(64)),
-                "case_id": "remote-case",
-                "seed": seed.to_string()
-            }]}]
-        })
-    }
-
-    #[tokio::test]
-    async fn imports_a_fresh_frozen_reference_for_each_reproduction() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner.clone());
-        let request: Request = serde_json::from_value(reference_import("harness_turn")).unwrap();
-        let plan: LocalPlan =
-            serde_json::from_value(manager.handle(request).await.unwrap()).unwrap();
-
-        assert!(plan.locked);
-        assert_eq!(
-            plan.reference_execution_id.as_deref(),
-            Some("1b8e60cc-7818-4dcb-8cbc-c76790c271af")
-        );
-        assert_eq!(plan.scenario_ids, vec!["context_pressure"]);
-        assert_eq!(plan.runs, 2);
-        assert_eq!(plan.technical_retries, 1);
-        assert_eq!(
-            plan.scenarios[0].seed,
-            crate::scenarios::ScenarioId::ContextPressure.canonical_seed()
-        );
-        let saved = manager.read_plan(&plan.id).await.unwrap();
-        assert_eq!(
-            saved.snapshot.campaigns[0]["groups"][0]["id"],
-            "remote-context"
-        );
-        assert_eq!(
-            saved.snapshot.campaigns[0]["groups"][0]["technical_retries"],
-            0
-        );
-        assert_ne!(saved.snapshot.profile_sha256, "remote-profile");
-        assert_ne!(saved.snapshot.definition_sha256, "remote-definition");
-        assert!(plan
-            .reference_differences
-            .iter()
-            .any(|difference| difference.contains("scenario definition")));
-        assert!(plan
-            .reference_differences
-            .iter()
-            .any(|difference| difference.contains("case identity")));
-
-        let repeated: LocalPlan = serde_json::from_value(
-            manager
-                .handle(serde_json::from_value(reference_import("harness_turn")).unwrap())
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        assert_ne!(repeated.id, plan.id);
-        assert_eq!(manager.list_local().await.unwrap().len(), 2);
-
-        let started = manager
-            .start_local(&plan.id, "reference-baseline", Role::Baseline)
-            .await
-            .unwrap();
-        let baseline = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
-        assert!(baseline.baseline_eligible);
-        assert_eq!(baseline.slots.len(), 2);
-        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn reimport_preserves_an_incompatible_historical_snapshot() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner.clone());
-        let request = || serde_json::from_value(reference_import("harness_turn")).unwrap();
-        let original: LocalPlan =
-            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
-        let mut historical = manager.read_plan(&original.id).await.unwrap();
-        historical.snapshot.cases[0]["behavior_sha256"] =
-            json!(format!("sha256:{}", "9".repeat(64)));
-        historical.snapshot.cases[0]["contract_sha256"] = json!("historical-contract");
-        historical.snapshot_sha256 = artifact::sha256_value(&historical.snapshot).unwrap();
-        historical.configuration_sha256 =
-            configuration_digest(&historical.plan, &historical.snapshot_sha256).unwrap();
-        let historical_snapshot = serde_json::to_value(&historical.snapshot).unwrap();
-        manager.write_plan(&historical).await.unwrap();
-
-        assert!(!manager.get_local(&original.id).await.unwrap().compatible);
-        let refreshed: LocalPlan =
-            serde_json::from_value(manager.handle(request()).await.unwrap()).unwrap();
-        assert_ne!(refreshed.id, original.id);
-        assert!(refreshed.compatible);
-        let preserved = manager.read_plan(&original.id).await.unwrap();
-        assert_eq!(
-            serde_json::to_value(&preserved.snapshot).unwrap(),
-            historical_snapshot
-        );
-        assert_eq!(preserved.snapshot_sha256, historical.snapshot_sha256);
-        assert_eq!(
-            preserved.configuration_sha256,
-            historical.configuration_sha256
-        );
-
-        let started = manager
-            .start_local(&refreshed.id, "refreshed-reference", Role::Baseline)
-            .await
-            .unwrap();
-        let execution = terminal(&manager, started.last_attempt_id.as_deref().unwrap()).await;
-        assert!(execution.baseline_eligible);
-        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
-    }
-
-    #[tokio::test]
-    async fn imported_registry_planning_preserves_its_evaluator() {
-        let root = tempfile::tempdir().unwrap();
-        let runner = Arc::new(FakeRunner::new(root.path().into()));
-        let manager = manager(root.path(), runner);
-        let mut request = reference_import("harness_turn");
-        for campaign in request["materialized"]["campaigns"].as_array_mut().unwrap() {
-            campaign["groups"][0]["scenarios"] = json!(["registry_planning"]);
-        }
-        request["shards"][0]["runs"][0]["scenario_id"] = json!("registry_planning");
-        let plan: LocalPlan = serde_json::from_value(
-            manager
-                .handle(serde_json::from_value(request).unwrap())
-                .await
-                .unwrap(),
-        )
-        .unwrap();
-        let saved = manager.read_plan(&plan.id).await.unwrap();
-        let slots = materialize_slots(&saved, "reference-evaluator").unwrap();
-        assert!(
-            slots
-                .iter()
-                .all(|slot| slot.request["model"] == "model"
-                    && slot.request["provider"] == "provider")
-        );
-    }
-
     #[test]
     fn native_measurements_count_retry_consumption_once_and_reject_reused_attempts() {
         let root = tempfile::tempdir().unwrap();
@@ -2267,6 +1979,238 @@ mod tests {
         );
     }
 
+    /// A campaign bundle as the exact-stack workflow uploads it: one group
+    /// with its native run, one that left only `failure.json`.
+    fn exact_stack_bundle(root: &Path, key: &str, observed: &str) -> (PathBuf, PathBuf, String) {
+        let campaign = root.join("bundle/smoke-r01");
+        let group = campaign.join("groups/case-context");
+        fs::create_dir_all(group.join("stack")).unwrap();
+        let request: RunRequest = serde_json::from_value(json!({
+            "idempotency_key": key, "label": "Smoke · case-context", "lane": "local",
+            "model": "model", "provider": "provider", "agent": "tech-lead",
+            "scenarios": ["context_pressure"], "runs": 1, "technical_retries": 0,
+        }))
+        .unwrap();
+        let native = FakeRunner::new(group.join("native"))
+            .native_record(request.clone())
+            .unwrap();
+        fs::write(
+            group.join("run-request.json"),
+            serde_json::to_vec(&request).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            group.join("stack/worker-compose.lock"),
+            "containers:\n  harness:\n    worker: package://harness\n    requested: latest\n    resolved:\n      version: 1.8.31\n",
+        )
+        .unwrap();
+        fs::write(
+            group.join("stack/workers.json"),
+            json!({"workers": [
+                {"name": "harness", "version": observed, "runtime": "rust"},
+                {"name": "configuration", "version": "0.24.2", "runtime": "engine"},
+            ]})
+            .to_string(),
+        )
+        .unwrap();
+        let failed = campaign.join("groups/case-registry");
+        fs::create_dir_all(&failed).unwrap();
+        fs::write(
+            failed.join("failure.json"),
+            json!({"phase": "workflow_artifact_download", "error": "group observation artifact was not available"})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            campaign.join("stack-lock.json"),
+            json!({"suite": {"groups": [
+                {"id": "case-context", "scenarios": ["context_pressure"]},
+                {"id": "case-registry", "scenarios": ["registry_planning"]},
+            ]}})
+            .to_string(),
+        )
+        .unwrap();
+        let contract = root.join("contract");
+        fs::create_dir_all(&contract).unwrap();
+        fs::write(
+            contract.join("plan.json"),
+            json!({"profile": {"id": "smoke"}, "subject": {"provider": "provider", "model": "model"}, "agent_profile": "tech-lead"})
+                .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            contract.join("profile.json"),
+            json!({"profile": {"label": "Smoke"}}).to_string(),
+        )
+        .unwrap();
+        (root.join("bundle"), contract, native.execution_id)
+    }
+
+    #[tokio::test]
+    async fn github_bundle_becomes_one_execution_whose_runs_a_new_attempt_replaces() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let manager = manager(&data, runner.clone());
+        let id = github::import_id("iii-hq/harness-e2e", 42);
+        assert_eq!(id, github::import_id("iii-hq/harness-e2e", 42));
+        assert_ne!(id, github::import_id("iii-hq/other", 42));
+        let mut execution = PlanExecution {
+            id: id.clone(),
+            plan_id: None,
+            idempotency_key: "github:iii-hq/harness-e2e#42".into(),
+            configuration_sha256: String::new(),
+            role: None,
+            label: None,
+            parameters: None,
+            source: ExecutionSource::Github {
+                repository: "iii-hq/harness-e2e".into(),
+                run_id: 42,
+                run_attempt: 1,
+                url: "https://github.com/iii-hq/harness-e2e/actions/runs/42".into(),
+                release_control_execution_id: Some("rc-execution".into()),
+            },
+            stack: Vec::new(),
+            state: "importing".into(),
+            started_at: "2026-09-20T10:00:00Z".into(),
+            updated_at: now(),
+            finished_at: Some("2026-09-20T11:00:00Z".into()),
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: false,
+            slots: Vec::new(),
+            measurements: None,
+            system_under_test: None,
+        };
+        manager.write_execution(&execution).await.unwrap();
+
+        let (bundle, contract, first) =
+            exact_stack_bundle(&root.path().join("attempt-1"), "rc:e2e:first", "1.8.8");
+        manager
+            .install_bundle(&mut execution, &bundle, &contract)
+            .await
+            .unwrap();
+        let installed = manager.read_execution(&id).await.unwrap();
+        assert_eq!(installed.state, "completed");
+        assert_eq!(
+            installed.finished_at.as_deref(),
+            Some("2026-09-20T11:00:00Z")
+        );
+        assert_eq!(installed.label.as_deref(), Some("Smoke"));
+        assert_eq!(
+            installed.parameters,
+            Some(ExecutionParameters {
+                scenarios: vec!["context_pressure".into(), "registry_planning".into()],
+                runs: 1,
+                technical_retries: 0,
+                seed: None,
+                model: "model".into(),
+                provider: "provider".into(),
+                agent: Some("tech-lead".into()),
+            })
+        );
+        assert_eq!(
+            installed.stack,
+            vec![StackWorker {
+                name: "harness".into(),
+                source: WorkerSource::Package,
+                requested: Some("1.8.31".into()),
+                observed: Some("1.8.8".into()),
+                commit: None,
+                dirty: None,
+                groups: Vec::new(),
+            }]
+        );
+        let [run, failure] = installed.slots.as_slice() else {
+            panic!("one slot per group scenario: {:?}", installed.slots);
+        };
+        assert_eq!(
+            (run.execution_id.as_str(), run.state.as_str()),
+            (first.as_str(), "finished")
+        );
+        assert_eq!(
+            (run.observed, run.completed, run.error.as_deref()),
+            (1, 1, None)
+        );
+        assert_eq!(run.request["idempotency_key"], "rc:e2e:first");
+        assert!(failure.execution_id.is_empty());
+        assert_eq!(failure.state, "not_run");
+        assert_eq!(
+            failure.error.as_deref(),
+            Some("group observation artifact was not available")
+        );
+        // The native run is an ordinary retained run: installed through the
+        // runner and read back from the data directory.
+        assert!(runner.record(&first).await.is_some());
+        assert!(data.join(&first).join("results.json").is_file());
+        assert!(installed.measurements.is_some());
+
+        // Importing the run again takes its highest attempt: the runs the first
+        // import installed are replaced, the name is kept and nothing doubles.
+        let mut execution = installed;
+        execution.label = Some("Mine".into());
+        let (bundle, contract, second) =
+            exact_stack_bundle(&root.path().join("attempt-2"), "rc:e2e:second", "1.8.9");
+        manager
+            .install_bundle(&mut execution, &bundle, &contract)
+            .await
+            .unwrap();
+        let replaced = manager.read_execution(&id).await.unwrap();
+        assert_eq!(replaced.slots[0].execution_id, second);
+        assert_eq!(replaced.label.as_deref(), Some("Mine"));
+        assert_eq!(replaced.stack[0].observed.as_deref(), Some("1.8.9"));
+        assert!(runner.record(&first).await.is_none());
+        assert!(!data.join(&first).exists());
+        assert!(runner.record(&second).await.is_some());
+        assert_eq!(manager.executions().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_bundle_that_holds_only_a_failure_fails_the_import() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        let bundle = root.path().join("bundle");
+        fs::create_dir_all(&bundle).unwrap();
+        fs::write(
+            bundle.join("failure.json"),
+            json!({"phase": "artifact_packaging", "error": "Root artifact validation failed"})
+                .to_string(),
+        )
+        .unwrap();
+        let mut execution = import_stub();
+        let error = manager
+            .install_bundle(&mut execution, &bundle, &root.path().join("contract"))
+            .await
+            .unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Root artifact validation failed"));
+    }
+
+    fn import_stub() -> PlanExecution {
+        PlanExecution {
+            id: "plan-stub".into(),
+            plan_id: None,
+            idempotency_key: "github:owner/repo#1".into(),
+            configuration_sha256: String::new(),
+            role: None,
+            label: None,
+            parameters: None,
+            source: ExecutionSource::Local,
+            stack: Vec::new(),
+            state: "importing".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: false,
+            slots: Vec::new(),
+            measurements: None,
+            system_under_test: None,
+        }
+    }
+
     #[tokio::test]
     async fn deletes_drafts_and_admitted_plans() {
         let root = tempfile::tempdir().unwrap();
@@ -2328,10 +2272,14 @@ mod tests {
         let saved = manager.read_plan(&plan.id).await.unwrap();
         let execution = PlanExecution {
             id: "plan-good".into(),
-            plan_id: plan.id.clone(),
+            plan_id: Some(plan.id.clone()),
             idempotency_key: "good".into(),
             configuration_sha256: saved.configuration_sha256,
-            role: Role::Baseline,
+            role: Some(Role::Baseline),
+            label: None,
+            parameters: None,
+            source: ExecutionSource::Local,
+            stack: Vec::new(),
             state: "running".into(),
             started_at: "2026-09-11T00:00:00Z".into(),
             updated_at: "2026-09-11T00:00:00Z".into(),
@@ -2369,7 +2317,7 @@ mod tests {
         .unwrap();
         let missing = PlanExecution {
             id: "plan-missing".into(),
-            plan_id: "missing-plan".into(),
+            plan_id: Some("missing-plan".into()),
             ..execution
         };
         manager.write_execution(&missing).await.unwrap();

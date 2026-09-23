@@ -42,6 +42,7 @@ mod tests {
                 "data_dir": "~/.iii/data/harness-e2e",
                 "control_database": "harness_e2e",
                 "control_namespace": "harness-e2e-control",
+                "github_repository": "iii-hq/harness-e2e",
             })
         );
         assert_eq!(manifest.supported_targets, [env!("TARGET")]);

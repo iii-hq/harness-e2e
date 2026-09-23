@@ -165,7 +165,7 @@ Fontes principais por grupo: [CLI](../src/main.rs), [defaults da execução ráp
 | `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, `III_CONFIG` | Contrato de inicialização injetado pelo Compose. Manter; não são perguntas do onboarding. |
 | `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN` em `redaction.rs` | Leitura para ocultar valores sensíveis. Essa ocorrência não os torna credenciais obrigatórias do E2E. Credenciais dos workers e do CI seguem seus próprios contratos. |
 | `TARGET`, `CARGO_MANIFEST_DIR`, `SKIP_CONSOLE_UI_BUILD`, `PNPM` | Build a partir do código. O binário publicado incorpora os assets da Console; essas opções não devem aparecer na instalação de usuário. |
-| `UPDATE_HISTORY_SCHEMA`, `HISTORY_EXPORT_ARTIFACT`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
+| `UPDATE_PROFILE_SNAPSHOT_SCHEMA`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |
 | `HOME`, `PATH`, `TMPDIR`, `RUST_LOG` e ambiente do sistema | Convenções de runtime e diagnóstico. A meta elimina configuração manual do E2E, não o uso de ambiente pelo sistema operacional. |
 
 ## Limites da auditoria

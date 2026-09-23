@@ -16,6 +16,7 @@ use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
     ScenariosListRequest, ScenariosListResponse,
 };
+use crate::plans::store::{GithubRunImportRequest, GithubRunsListRequest};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 use crate::scenarios::ScenarioId;
 
@@ -28,6 +29,7 @@ struct ControllerState {
 
 pub(super) struct Controller {
     pub(super) plan_store: Arc<crate::plans::store::PlanStore>,
+    github_repository: String,
     runs_dir: PathBuf,
     defaults: Defaults,
     control: Option<ControlPlane>,
@@ -37,22 +39,12 @@ pub(super) struct Controller {
 }
 
 impl Controller {
-    pub(super) async fn open_history_evidence(
-        &self,
-        request: crate::history::evidence::EvidenceRequest,
-    ) -> Result<Value> {
-        self.control
-            .as_ref()
-            .context("E2E control database is unavailable")?
-            .persistence()
-            .open_history_evidence(request)
-            .await
-    }
     pub(super) async fn new(
         url: String,
         runs_dir: PathBuf,
         events: Option<Arc<DashboardEvents>>,
         control: Option<ControlPlane>,
+        github_repository: String,
     ) -> Result<Arc<Self>> {
         validate_stack_url(&url)?;
         fs::create_dir_all(&runs_dir).with_context(|| format!("create {}", runs_dir.display()))?;
@@ -77,6 +69,7 @@ impl Controller {
                 .await?;
         let controller = Arc::new(Self {
             plan_store,
+            github_repository,
             runs_dir,
             defaults: Defaults {
                 url,
@@ -119,9 +112,6 @@ impl Controller {
             .control
             .as_ref()
             .context("the E2E control plane is not available")?;
-        if let Some(detail) = control.persistence().imported_execution_detail(id).await? {
-            return Ok(detail);
-        }
         let record = control.stored_record(id).await?;
         let metadata = metadata_from_record(&record);
         let (hydrated, evidence_error) = match control.hydrate_native_evidence(record.clone()) {
@@ -223,9 +213,6 @@ impl Controller {
             }
         }
         summaries.extend(parents);
-        if let Some(control) = &self.control {
-            summaries.extend(control.persistence().imported_execution_summaries().await?);
-        }
         summaries.sort_by(|a, b| b["started_at"].as_str().cmp(&a["started_at"].as_str()));
         Ok(Arc::new(summaries))
     }
@@ -281,35 +268,56 @@ impl Controller {
         self.read_model.write().await.take();
     }
 
-    pub(super) async fn list_plans(&self) -> Result<Vec<Value>> {
-        let mut plans = self
-            .plan_store
-            .list_local()
-            .await?
-            .into_iter()
-            .map(|plan| {
-                let mut value = serde_json::to_value(plan)?;
-                value["origin"] = json!("local");
-                Ok(value)
-            })
-            .collect::<Result<Vec<Value>>>()?;
-        if let Some(control) = &self.control {
-            plans.extend(control.persistence().imported_plans().await?);
-        }
-        plans.sort_by(|a, b| b["updated_at"].as_str().cmp(&a["updated_at"].as_str()));
-        Ok(plans)
+    pub(super) async fn list_plans(&self) -> Result<Vec<LocalPlan>> {
+        self.plan_store.list_local().await
     }
 
-    pub(super) async fn get_plan(&self, id: &str) -> Result<Value> {
+    pub(super) async fn get_plan(&self, id: &str) -> Result<LocalPlan> {
         validate_plan_id(id)?;
-        if let Some(control) = &self.control {
-            if let Some(plan) = control.persistence().imported_plan(id).await? {
-                return Ok(plan);
-            }
+        self.plan_store.get_local(id).await
+    }
+
+    pub(super) async fn rename_execution(&self, id: &str, label: &str) -> Result<Value> {
+        let execution = self.plan_store.rename(id, label).await?;
+        self.emit_change("renamed", id).await;
+        Ok(serde_json::to_value(execution)?)
+    }
+
+    pub(super) async fn github_runs(&self, request: GithubRunsListRequest) -> Result<Value> {
+        let repository = request
+            .repository
+            .unwrap_or_else(|| self.github_repository.clone());
+        self.plan_store
+            .github_runs(&repository, request.page.unwrap_or(1))
+            .await
+    }
+
+    /// Answers with the execution at once; the download and installation
+    /// continue in the background and end in `completed` or `failed`.
+    pub(super) async fn github_run_import(
+        self: &Arc<Self>,
+        request: GithubRunImportRequest,
+    ) -> Result<Value> {
+        let repository = request
+            .repository
+            .unwrap_or_else(|| self.github_repository.clone());
+        let (execution, started) = self
+            .plan_store
+            .begin_github_import(&repository, request.run_id)
+            .await?;
+        if started {
+            self.emit_change("started", &execution.id).await;
+            let controller = Arc::clone(self);
+            let id = execution.id.clone();
+            tokio::spawn(async move {
+                if let Err(error) = controller.plan_store.finish_github_import(&id).await {
+                    tracing::error!(execution_id = %id, error = %format!("{error:#}"), "record the GitHub import outcome");
+                }
+                controller.invalidate_summaries().await;
+                controller.emit_change("finished", &id).await;
+            });
         }
-        let mut plan = serde_json::to_value(self.plan_store.get_local(id).await?)?;
-        plan["origin"] = json!("local");
-        Ok(plan)
+        Ok(json!({"execution_id": execution.id, "state": execution.state}))
     }
 
     pub(super) async fn create_plan(&self, request: PlanCreateRequest) -> Result<LocalPlan> {

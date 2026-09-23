@@ -37,14 +37,41 @@ impl PlanStore {
         };
         for execution in executions {
             let id = &execution.id;
-            let plan = match self.read_plan(&execution.plan_id).await {
-                Ok(plan) => plan,
-                Err(error) => {
-                    tracing::warn!(execution_id = %id, plan_id = %execution.plan_id, error = %error,
-                        "ignoring a local E2E plan execution without a readable plan");
-                    continue;
-                }
+            let plan = match &execution.plan_id {
+                Some(plan_id) => match self.read_plan(plan_id).await {
+                    Ok(plan) => Some(plan),
+                    Err(error) => {
+                        tracing::warn!(execution_id = %id, %plan_id, error = %error,
+                            "ignoring a local E2E plan execution without a readable plan");
+                        continue;
+                    }
+                },
+                None => None,
             };
+            let config = plan.as_ref().map(|plan| &plan.plan);
+            let parameters = execution.parameters.as_ref();
+            let model = parameters
+                .map(|p| p.model.as_str())
+                .or(config.map(|c| c.model.as_str()))
+                .unwrap_or_default();
+            let provider = parameters
+                .map(|p| p.provider.as_str())
+                .or(config.map(|c| c.provider.as_str()))
+                .unwrap_or_default();
+            let label = execution
+                .label
+                .as_deref()
+                .or(config.map(|c| c.label.as_str()))
+                .unwrap_or(id);
+            let lane = plan
+                .as_ref()
+                .map(|plan| json!(plan.snapshot.profile.lane))
+                .or_else(|| {
+                    execution
+                        .slots
+                        .first()
+                        .map(|slot| slot.request["lane"].clone())
+                });
             let summary = execution_summary(&execution);
             for slot in &execution.slots {
                 children.insert(slot.execution_id.clone(), execution.id.clone());
@@ -69,12 +96,13 @@ impl PlanStore {
                 "completed" | "interrupted" => "incomplete",
                 other => other,
             };
-            let mut value = json!({"id": execution.id, "label": plan.plan.label, "run_id": execution.id,
-                "kind": "plan", "plan_id": plan.plan.id, "template_id": plan.plan.template_id, "plan_execution": summary,
-                "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null, "event": "local", "actor": "local",
+            let mut value = json!({"id": execution.id, "label": label, "run_id": execution.id,
+                "kind": "plan", "plan_id": execution.plan_id, "template_id": config.and_then(|c| c.template_id.as_deref()), "plan_execution": summary,
+                "state": execution.state, "parameters": execution.parameters, "source": execution.source, "stack": execution.stack,
+                "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null,
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
-                "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": plan.snapshot.profile.lane,
-                "subjects": [{"id": plan.plan.model, "model": plan.plan.model, "provider": plan.plan.provider, "scenarios": []}],
+                "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": lane,
+                "subjects": [{"id": model, "model": model, "provider": provider, "scenarios": []}],
                 "requested_runs": execution.slots.len(), "scenario_metrics": [], "execution": {"id": execution.id},
                 "totals": {"expected_reports": execution.slots.len(), "received_reports": summary["observed"], "missing_reports": execution.slots.len() as u64 - summary["observed"].as_u64().unwrap_or(0),
                     "report_coverage": summary["observed"].as_f64().map(|observed| observed / execution.slots.len().max(1) as f64), "passed_scenarios": summary["passed"], "total_tokens": null, "total_cost_usd": null},

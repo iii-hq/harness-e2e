@@ -606,4 +606,22 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    #[test]
+    fn published_profile_snapshot_schema_matches_the_worker_contract() {
+        let schema = serde_json::to_value(schemars::schema_for!(ProfileSnapshot)).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("schemas/e2e-profile-snapshot.json");
+        if std::env::var_os("UPDATE_PROFILE_SNAPSHOT_SCHEMA").is_some() {
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&schema).unwrap()),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(path).unwrap()).unwrap(),
+            schema
+        );
+    }
 }
