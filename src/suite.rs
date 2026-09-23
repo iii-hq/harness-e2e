@@ -2170,6 +2170,7 @@ fn populate_composite_report(
                     .then(|| (score.clamp(0.0, 1.0) * f64::from(criterion.weight)).round() as u8)
             }),
             reason: criterion.summary.clone(),
+            gate: false,
         })
         .collect();
     report.score = crate::report::criteria_score(&report.criteria);
@@ -3234,6 +3235,7 @@ fn criterion_reports(spec: &ScenarioSpec, awards: Vec<CriterionAward>) -> Vec<Cr
                 reason: award
                     .map(|(_, reason)| reason)
                     .unwrap_or_else(|| "not evaluated".into()),
+                gate: criterion.gate,
             }
         })
         .collect()
@@ -4319,6 +4321,7 @@ mod tests {
                 possible: 70,
                 awarded: Some(35),
                 reason: "required behavior was incomplete".into(),
+                gate: false,
             },
             CriterionReport {
                 id: "signal".into(),
@@ -4326,6 +4329,7 @@ mod tests {
                 possible: 30,
                 awarded: Some(12),
                 reason: "partial efficiency evidence".into(),
+                gate: false,
             },
         ];
         let results = materialize_assessment_results(&spec, &criteria);
@@ -4570,6 +4574,17 @@ mod tests {
 
         assert_eq!(reports[0].description.as_deref(), Some("objective"));
         assert_eq!(reports[0].reason, "measured evidence");
+        assert!(!reports[0].gate);
+    }
+
+    #[test]
+    fn criterion_reports_say_which_criteria_are_gates() {
+        let mut spec = spec();
+        spec.criteria[0] = spec.criteria[0].clone().with_gate(true);
+        let reports = criterion_reports(&spec, Vec::new());
+        assert!(reports[0].gate);
+        // An unevaluated gate is still named as one: that is the case a reader needs explained.
+        assert_eq!(reports[0].awarded, None);
     }
 
     #[test]

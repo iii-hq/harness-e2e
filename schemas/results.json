@@ -669,6 +669,11 @@
             "null"
           ]
         },
+        "gate": {
+          "description": "A gate criterion decides completion: the task counts as completed only when every gate passed. Always written, so a reader can tell \"no gate\" from a report older than the field.",
+          "default": false,
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },

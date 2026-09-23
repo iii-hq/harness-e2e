@@ -173,6 +173,10 @@ pub struct CriterionSpec {
     pub kind: AssessmentKind,
     pub policy: AssessmentPolicy,
     pub dimension: crate::report::EvaluationDimension,
+    /// The task counts as completed only when every gate criterion passed;
+    /// the others only move the score. Reported so a reader can say which
+    /// criterion left a task incomplete.
+    pub gate: bool,
 }
 
 impl CriterionSpec {
@@ -189,7 +193,12 @@ impl CriterionSpec {
             kind: AssessmentKind::Signal,
             policy: AssessmentPolicy::Advisory,
             dimension,
+            gate: false,
         }
+    }
+
+    pub const fn with_gate(self, gate: bool) -> Self {
+        Self { gate, ..self }
     }
 }
 

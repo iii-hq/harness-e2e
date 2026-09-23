@@ -147,6 +147,11 @@ pub struct CriterionReport {
     pub possible: u8,
     pub awarded: Option<u8>,
     pub reason: String,
+    /// A gate criterion decides completion: the task counts as completed only
+    /// when every gate passed. Always written, so a reader can tell "no gate"
+    /// from a report older than the field.
+    #[serde(default)]
+    pub gate: bool,
 }
 
 /// The run score is the plain sum of the points the evaluated criteria
@@ -3714,6 +3719,7 @@ mod tests {
             possible: 100,
             awarded: Some(50),
             reason: "only half of the expected result was present".into(),
+            gate: false,
         });
         let report = report(vec![aggregate(vec![failed])]);
 
@@ -3860,6 +3866,7 @@ mod tests {
             possible,
             awarded,
             reason: "observed".into(),
+            gate: false,
         };
         // An unevaluated criterion adds nothing and does not null the score.
         assert_eq!(
