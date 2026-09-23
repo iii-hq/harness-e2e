@@ -76,6 +76,7 @@ pub(super) fn execution_summary(
         &metadata.completed_at
     };
     let execution = execution_identity(metadata, report);
+    let parameters = request_parameters(metadata, report);
     let Some(report) = report else {
         let status = match metadata.status {
             JobStatus::Cancelled => "cancelled",
@@ -83,7 +84,7 @@ pub(super) fn execution_summary(
             JobStatus::Completed => "incomplete",
             JobStatus::Failed => "infra_failed",
         };
-        return Ok(json!({
+        let mut summary = json!({
             "id": metadata.id,
             "label": metadata.label,
             "run_id": metadata.id,
@@ -111,7 +112,9 @@ pub(super) fn execution_summary(
             "assessment_summary": AssessmentSummary::default(),
             "totals": {},
             "first_failure": if metadata.error.is_empty() { Value::Null } else { json!({"kind":"runner", "message": metadata.error}) },
-        }));
+        });
+        summary["parameters"] = parameters;
+        return Ok(summary);
     };
 
     let subject_id = slug(&format!(
@@ -260,12 +263,32 @@ pub(super) fn execution_summary(
         "workflow_duration_seconds": wall_time_seconds,
         "first_failure": first_failure(report),
     });
+    summary["parameters"] = parameters;
     summary["persistence_errors"] = json!(report.persistence_errors);
     summary["slot_start_deadline_seconds"] = json!(report.slot_start_deadline_seconds);
     if !report.persistence_errors.is_empty() {
         summary["baseline_comparable"] = json!(false);
     }
     Ok(summary)
+}
+
+/// What the run was requested with, in the vocabulary of an execution's
+/// parameters, so running it again starts from its own request.
+fn request_parameters(metadata: &RunMetadata, report: Option<&E2eReport>) -> Value {
+    let request = &metadata.request;
+    json!(crate::plans::store::ExecutionParameters {
+        scenarios: request.scenarios.clone(),
+        runs: request.runs,
+        technical_retries: request.technical_retries,
+        seed: request.seed,
+        model: request.model.clone(),
+        provider: request.provider.clone(),
+        agent: report.and_then(|report| report
+            .subject
+            .agent
+            .as_ref()
+            .map(|agent| agent.id.clone())),
+    })
 }
 
 /// Build the detail payload even when the runner has not persisted a final

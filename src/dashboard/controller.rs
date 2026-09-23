@@ -340,19 +340,22 @@ impl Controller {
 
     pub(super) async fn delete_execution(&self, id: &str) -> Result<()> {
         super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
-        if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            bail!("only native control-plane executions can be deleted");
+        if id.starts_with("plan-") {
+            self.plan_store.delete_execution(id).await?;
+        } else {
+            if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("only native runs and executions can be deleted");
+            }
+            self.control
+                .as_ref()
+                .context("the E2E control plane is not available")?
+                .delete(id)
+                .await?;
+            let mut state = self.state.lock().await;
+            if state.job.as_ref().is_some_and(|job| job.id == id) {
+                state.job = None;
+            }
         }
-        let control = self
-            .control
-            .as_ref()
-            .context("the E2E control plane is not available")?;
-        control.delete(id).await?;
-        let mut state = self.state.lock().await;
-        if state.job.as_ref().is_some_and(|job| job.id == id) {
-            state.job = None;
-        }
-        drop(state);
         self.invalidate_summaries().await;
         self.emit_change("deleted", id).await;
         Ok(())

@@ -3,7 +3,7 @@
 //! and the commit of every `path://` checkout. Whatever cannot be read becomes
 //! a warning on the execution, never an error.
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{ensure, Context, Result};
@@ -56,7 +56,7 @@ pub(super) async fn current(
             BTreeMap::new()
         }
     };
-    let containers = async {
+    let (containers, directory) = async {
         let compose = compose?;
         let file = compose["projects"]
             .as_array()
@@ -77,12 +77,17 @@ pub(super) async fn current(
         let source = std::fs::read_to_string(&file).with_context(|| format!("read {file}"))?;
         let document: Value =
             serde_yaml::from_str(&source).with_context(|| format!("decode {file}"))?;
-        Ok::<_, anyhow::Error>(document["containers"].clone())
+        // Compose reads a relative `path://` from the file's directory.
+        let directory = Path::new(&file).parent().map(Path::to_path_buf);
+        Ok::<_, anyhow::Error>((
+            document["containers"].clone(),
+            directory.unwrap_or_default(),
+        ))
     }
     .await
     .unwrap_or_else(|error| {
         warnings.push(format!("Worker sources were not recorded: {error:#}"));
-        Value::Null
+        (Value::Null, PathBuf::new())
     });
     let mut stack = rows(
         &containers,
@@ -99,7 +104,7 @@ pub(super) async fn current(
         else {
             continue;
         };
-        match checkout(Path::new(path)).await {
+        match checkout(&directory.join(path)).await {
             Ok((commit, dirty)) => {
                 row.commit = Some(commit);
                 row.dirty = Some(dirty);
@@ -170,10 +175,16 @@ pub(super) fn rows(
     workers
 }
 
-/// The commit a checkout is at and whether it has local changes.
+/// The commit of the repository a worker's path is in, and whether that
+/// path (not the rest of the repository) has local changes.
 async fn checkout(path: &Path) -> Result<(String, bool)> {
     let commit = git(path, &["rev-parse", "HEAD"]).await?;
-    let status = git(path, &["status", "--porcelain"]).await?;
+    // Read-only: no `index.lock` taken while a developer works in the tree.
+    let status = git(
+        path,
+        &["--no-optional-locks", "status", "--porcelain", "--", "."],
+    )
+    .await?;
     Ok((commit.trim().to_owned(), !status.trim().is_empty()))
 }
 
@@ -234,11 +245,13 @@ mod tests {
     async fn records_package_and_path_workers_with_the_checkout_commit() {
         let root = tempfile::tempdir().unwrap();
         let checkout = root.path().join("workers");
-        std::fs::create_dir_all(checkout.join("queue")).unwrap();
+        for worker in ["queue", "state"] {
+            std::fs::create_dir_all(checkout.join(worker)).unwrap();
+            std::fs::write(checkout.join(worker).join("lib.rs"), "fn main() {}\n").unwrap();
+        }
         run_git(&checkout, &["init", "--quiet"]);
-        std::fs::write(checkout.join("queue/lib.rs"), "fn main() {}\n").unwrap();
         run_git(&checkout, &["add", "."]);
-        run_git(&checkout, &["commit", "--quiet", "-m", "queue"]);
+        run_git(&checkout, &["commit", "--quiet", "-m", "workers"]);
         let head = std::process::Command::new("git")
             .arg("-C")
             .arg(&checkout)
@@ -246,12 +259,16 @@ mod tests {
             .output()
             .unwrap();
         let head = String::from_utf8(head.stdout).unwrap().trim().to_owned();
+        // Only queue changes; a change elsewhere in the repository is no
+        // worker's.
         std::fs::write(checkout.join("queue/lib.rs"), "fn main() { todo() }\n").unwrap();
+        std::fs::write(checkout.join("README.md"), "notes\n").unwrap();
         let compose = root.path().join("worker-compose.yaml");
+        // `state` is relative: compose reads it from the file's directory.
         std::fs::write(
             &compose,
             format!(
-                "namespace: my-project\ncontainers:\n  queue:\n    worker: path://{}\n  storage:\n    worker: package://api.workers.iii.dev/storage\n    version: \"0.1.20\"\n  {WORKER_NAME}:\n    worker: path://{}\n",
+                "namespace: my-project\ncontainers:\n  queue:\n    worker: path://{}\n  state:\n    worker: path://workers/state\n  storage:\n    worker: package://api.workers.iii.dev/storage\n    version: \"0.1.20\"\n  {WORKER_NAME}:\n    worker: path://{}\n",
                 checkout.join("queue").display(),
                 root.path().join("missing").display(),
             ),
@@ -274,13 +291,18 @@ mod tests {
                 .iter()
                 .map(|row| row.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["harness", WORKER_NAME, "queue", "storage"]
+            vec!["harness", WORKER_NAME, "queue", "state", "storage"]
         );
         let queue = row("queue");
         assert_eq!(queue.source, WorkerSource::Path);
         assert_eq!(queue.observed.as_deref(), Some("0.4.1"));
         assert_eq!(queue.commit.as_deref(), Some(head.as_str()));
         assert_eq!(queue.dirty, Some(true));
+        // Same repository and commit, no change under its own path.
+        let state = row("state");
+        assert_eq!(state.source, WorkerSource::Path);
+        assert_eq!(state.commit.as_deref(), Some(head.as_str()));
+        assert_eq!(state.dirty, Some(false));
         let storage = row("storage");
         assert_eq!(storage.source, WorkerSource::Package);
         assert_eq!(
@@ -303,9 +325,11 @@ mod tests {
             warning.starts_with(&format!("{WORKER_NAME}: ")) && warning.contains("Git checkout"),
             "{warning}"
         );
+        // Reading the status took no lock a developer's git could trip on.
+        assert!(!checkout.join(".git/index.lock").exists());
 
-        // A clean checkout is not dirty.
-        run_git(&checkout, &["checkout", "--quiet", "--", "."]);
+        // A clean worker path is not dirty.
+        run_git(&checkout, &["checkout", "--quiet", "--", "queue"]);
         let (stack, _) = current(
             "my-project",
             Ok(json!({"workers": []})),

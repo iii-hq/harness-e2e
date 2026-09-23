@@ -43,7 +43,6 @@ pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
 pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
 pub(super) const PLAN_DELETE: &str = "e2e::dashboard::plan-delete";
 pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
-pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -166,12 +165,6 @@ pub(super) struct CatalogResponse {
     url: String,
     models: Vec<CatalogModel>,
     scenarios: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-pub(super) struct RunStatusRequest {
-    #[serde(default)]
-    pub after: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -315,7 +308,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_DELETE,
-        "Delete one terminal local E2E execution.",
+        "Delete one finished native run, or one finished execution without a saved plan together with its native runs.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionGetRequest| {
@@ -600,23 +593,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 let iii = iii.clone();
                 async move {
                     catalog(&controller, request, Some(&iii))
-                        .await
-                        .map_err(handler_error)
-                }
-            })
-        },
-    );
-    register(
-        iii,
-        RUN_STATUS,
-        "Read local execution state and only the unread log suffix.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |request: RunStatusRequest| {
-                let controller = controller.clone();
-                async move {
-                    controller
-                        .snapshot(request.after)
                         .await
                         .map_err(handler_error)
                 }
