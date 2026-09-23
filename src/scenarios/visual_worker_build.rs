@@ -28,7 +28,7 @@ pub const STATE_MACHINE_ID: &str = "state_machine_canvas_build";
 pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with deterministic bug and feature fields, live editing and preview, and a flowchart projection stored through Canvas.";
 pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with deterministic simulation, live transition editing, and a stateDiagram-v2 projection stored through Canvas.";
 
-const EVIDENCE_LIMIT: u64 = 12 * 1024 * 1024;
+const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
 const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
@@ -344,15 +344,22 @@ fn scenario_spec(kind: Kind, run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: kind.id(),
         prompt: format!(
-            r#"Build the {title} Worker inside `{root}`. Read README.md first.
+            r#"Build the {title} Worker inside `{root}`. Read README.md first. Read
+`harness/ade-worker-design/index` through `directory::skills::get`, then its scoped
+`console-injectable-ui` and `console-design` references. Inspect the installed
+`@iii-dev/console-ui` types before using components or host APIs. The pinned UI
+package, React, icons, TypeScript, and build driver are already installed.
 
 Declare exactly one run-scoped Compose container named `{worker}` with `worker: path://.`,
 `scripts.run: npm start`, no `engine:`, no sibling containers, and no external services. The
-Harness already installed the pinned iii-sdk; do not change dependencies or start the Worker
-yourself. Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
+Harness already installed pinned dependencies; do not change them or start the Worker yourself.
+You may add build scripts to package.json while keeping dependency versions fixed.
+Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
 schemas. Register console:script and console:style Message-path triggers backed by `{ui}` at
-`{script}` and `{style}`. The ESM asset must default-export setup(host), register page id `{page}`,
-and call Worker functions through host.iii.trigger. Scope CSS under `[data-iii-ui="{worker}"]`.
+`{script}` and `{style}`. Build the ESM asset with `buildWorkerUi`; it must default-export
+setup(host), register page id `{page}`, and call Worker functions through host.iii.trigger. Use
+PageShell, PageHeader, PageMain, and appropriate shared controls. Scope CSS under
+`[data-iii-ui="{worker}"]`; the Console manifest must have no asset warnings.
 
 The Worker owns all domain decisions. Canvas is only the stored visual projection. `{canvas}`
 accepts only optional `{{canvas_id: string, edit: string}}`; it must derive Mermaid from its domain
@@ -366,13 +373,15 @@ without `edit` and a browser reload must still reflect it. In-memory state is su
 
 {task}
 
-Create a polished, responsive 1280x900 Console page with a real live preview. Show Canvas source in
-an element carrying `data-testid="canvas-source"`, domain output in `data-testid="domain-result"`,
-and failures in `data-testid="error"`. The page must remain usable after multiple interactions and
-must use no external assets. The page is evaluated in a split Console workspace beside chat, so
-keep the preview and source visible within that panel. Add a `data-testid="open-canvas"` button carrying the active id in
+Create a Console page with a clear editing surface and live preview. Keep the primary action
+usable in a wide pane, a narrow split pane, and on a phone; adapt to pane width, support both
+themes and keyboard navigation, and avoid horizontal overflow. Show Canvas source in an element
+carrying `data-testid="canvas-source"` (a disclosure is fine), domain output in
+`data-testid="domain-result"`, and failures in `data-testid="error"`. Preserve the domain edit
+and Canvas id after page reload. The page must remain usable after multiple interactions and must
+use no external assets. Add a `data-testid="open-canvas"` button carrying the active id in
 `data-canvas-id`; it must call `host.panels.open({{ pageId: 'canvas', context: {{ canvasId }} }})`.
-Add focused local tests for domain behavior before reporting completion."#,
+Add focused local tests for domain behavior and verify the UI build before reporting completion."#,
             title = if kind == Kind::Form {
                 "Form Flow Builder"
             } else {
@@ -408,11 +417,15 @@ and `expected_behavior`; feature reveals required `user_story` and `acceptance_c
 `add_environment` adds required `environment` to the bug branch. Return ordered `visible_fields`,
 ordered `missing_required`, and `can_submit`. Reject unknown work types, edits, and non-object values.
 
-The page starts with title and work type controls. It must exercise both branches and provide an
+The page is an issue-form design tool: edit field rules and fill a working preview. Start with
+title and work type controls. Switching branches hides irrelevant fields without losing the
+selected branch. Show which required fields are missing; incomplete input must not appear ready
+to submit, and clearing a required value must disable readiness again. Provide an
 `add_environment` editor control that changes the live preview and updates the same Canvas id.
 Use `data-testid="work-type"`, `user-story`, `acceptance-criteria`, `reproduction`,
 `expected-behavior`, `environment`, and `title`, plus `data-edit="add_environment"` on the edit
-control. Put `data-can-submit="true|false"` on `domain-result` as its preview changes.
+control. Put `data-can-submit="true|false"` on `domain-result` as its preview changes and put
+the visible missing-field explanation in `data-testid="validation-message"`.
 Persist this default flowchart
 through `{canvas}`:
 `flowchart TD\n  Intake --> Type{{Work item}}\n  Type -->|bug| Bug\n  Type -->|feature| Feature\n  Bug --> Ready\n  Feature --> Ready`.
@@ -429,9 +442,11 @@ fn machine_task(contract: &WorkerContract) -> String {
 passed; running + fail -> failed; failed + retry -> queued. The edit `add_cancel` adds running +
 cancel -> cancelled. Reject every other pair and unknown edits.
 
-The page starts at queued with Start, Pass, Fail, Retry, and a transition editor. Exercise the pass
-and fail/retry paths. Applying `add_cancel` must update the simulator and the same Canvas id. Show
-state in `data-testid="current-state"` and retain visible history.
+The page is a CI state-machine workbench: edit transition rules, run a simulator, and inspect
+history. Start at queued with Start, Pass, Fail, Retry, and a transition editor. Invalid events
+must be visibly unavailable without changing state or history. Exercise the pass and fail/retry
+paths. Applying `add_cancel` must update the simulator and the same Canvas id. Show state in
+`data-testid="current-state"` and retain visible history.
 Use `data-event` for event buttons, `data-testid="reset"`, `data-testid="history"`, and
 `data-edit="add_cancel"` on the edit control.
 Persist this default diagram through `{canvas}`:
@@ -602,8 +617,6 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
             kind,
             console_port.context("Console delivery omitted HTTP port")?,
             &identity,
-            source,
-            updated_source,
         )
         .await?
     } else {
@@ -665,7 +678,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
             &json!({"identity":identity,"viewport":{"width":1280,"height":900},"captures":browser["captures"],"url":browser["url"]}),
         )?,
     );
-    for name in ["before", "after", "canvas"] {
+    for name in ["before", "after", "canvas", "narrow_dark"] {
         if let Some(data) = browser[name]["data"].as_str() {
             insert_binary_file(
                 &mut files,
@@ -678,6 +691,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         && files.contains_key("screenshots/before.png")
         && files.contains_key("screenshots/after.png")
         && files.contains_key("screenshots/canvas.png")
+        && files.contains_key("screenshots/narrow_dark.png")
         && source_sha256.is_some()
         && compose_sha256.is_some();
     checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser prerequisites failed"} else if evidence_ok {"Worker and Canvas graph screenshots show the full Console workspace and are identity-bound"} else {"full Console screenshot or identity evidence is incomplete"}}));
@@ -852,22 +866,12 @@ async fn inspect_console(
         .as_ref()
         .ok()
         .and_then(|value| value["content"].as_str())
-        .is_some_and(|text| {
-            text.contains("export default")
-                && text.contains("host.pages.register")
-                && text.contains("host.iii.trigger")
-                && text.contains("host.panels.open")
-                && text.contains("pageId")
-                && text.contains("canvas")
-        })
+        .is_some_and(|text| !text.is_empty())
         && style
             .as_ref()
             .ok()
             .and_then(|value| value["content"].as_str())
-            .is_some_and(|text| {
-                text.contains(&format!("[data-iii-ui=\"{}\"]", contract.worker))
-                    || text.contains(&format!("[data-iii-ui='{}']", contract.worker))
-            });
+            .is_some_and(|text| !text.is_empty());
     Ok((
         port.is_some() && console_assets_ok(&manifest, contract) && content_ok,
         port,
@@ -918,8 +922,6 @@ async fn capture_browser(
     kind: Kind,
     port: u16,
     identity: &Value,
-    initial_source: &str,
-    updated_source: &str,
 ) -> Result<Value> {
     let screen = format!("ext:{}", kind.page_id());
     context
@@ -949,16 +951,7 @@ async fn capture_browser(
         .as_str()
         .context("browser session omitted session_id")?
         .to_string();
-    let result = capture_browser_session(
-        context,
-        kind,
-        &session,
-        &url,
-        &identity,
-        initial_source,
-        updated_source,
-    )
-    .await;
+    let result = capture_browser_session(context, kind, &session, &url, &identity).await;
     let stopped = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
@@ -980,8 +973,6 @@ async fn capture_browser_session(
     session: &str,
     url: &str,
     identity: &Value,
-    initial_source: &str,
-    updated_source: &str,
 ) -> Result<Value> {
     context
         .trigger_value(
@@ -1001,14 +992,65 @@ async fn capture_browser_session(
         );
     }
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
-    let before_state = inspect_ui(context, kind, session, initial_source, false).await?;
+    let before_state = inspect_ui(context, kind, session, "initial").await?;
     let before = screenshot_png(context, session).await?;
     let interaction_code = match kind {
         Kind::Form => {
-            r#"return await (async()=>{const wait=async f=>{for(let i=0;i<100;i++){const v=f();if(v)return v;await new Promise(r=>setTimeout(r,50))}return null};const set=(e,v)=>{const p=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e),'value');p.set.call(e,v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}))};const pick=document.querySelector('[data-testid="work-type"]');if(!pick)return {error:'missing work type'};set(pick,'feature');const feature=await wait(()=>document.querySelector('[data-testid="user-story"]')&&document.querySelector('[data-testid="acceptance-criteria"]'));set(pick,'bug');const bug=await wait(()=>document.querySelector('[data-testid="reproduction"]')&&document.querySelector('[data-testid="expected-behavior"]'));document.querySelector('[data-edit="add_environment"]')?.click();const environment=await wait(()=>document.querySelector('[data-testid="environment"]'));const fields=[['title','Login crashes'],['reproduction','Open login'],['expected-behavior','Dashboard opens'],['environment','Chrome']];for(const [id,value] of fields){const field=document.querySelector(`[data-testid="${id}"]`);if(!field)return {error:`missing ${id}`};set(field,value)}const submit=await wait(()=>document.querySelector('[data-testid="domain-result"]')?.dataset.canSubmit==='true');return feature&&bug&&environment&&submit?{feature:true,bug:true,edited:true,can_submit:true}:{error:'branch, edited field, or valid preview missing'};})();"#
+            r#"return await (async()=>{
+const wait=async f=>{for(let i=0;i<100;i++){const v=f();if(v)return v;await new Promise(r=>setTimeout(r,50))}return null};
+const visible=e=>!!e&&e.getBoundingClientRect().width>20&&getComputedStyle(e).visibility!=='hidden'&&getComputedStyle(e).display!=='none';
+const result=()=>document.querySelector('[data-testid="domain-result"]');
+const ready=v=>result()?.dataset.canSubmit===String(v);
+const set=(e,v)=>{const p=Object.getOwnPropertyDescriptor(Object.getPrototypeOf(e),'value');if(!p?.set)return false;p.set.call(e,v);e.dispatchEvent(new Event('input',{bubbles:true}));e.dispatchEvent(new Event('change',{bubbles:true}));return true};
+const choose=async value=>{
+  const pick=document.querySelector('[data-testid="work-type"]');if(!pick)return false;
+  if(pick.tagName==='SELECT')set(pick,value);
+  else {
+    const segment=[...pick.querySelectorAll('button,[role="radio"]')].find(e=>e.textContent.trim().toLowerCase()===value);
+    if(segment)segment.click();
+    else {
+      pick.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',isPrimary:true,button:0,buttons:1}));
+      const option=await wait(()=>[...document.querySelectorAll('[role="option"],[role="menuitemradio"]')].find(e=>e.textContent.trim().toLowerCase().startsWith(value)));
+      if(!option)return false;
+      option.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',isPrimary:true,button:0}));
+      option.click();
+    }
+  }
+  return !!await wait(()=>value==='feature'?visible(document.querySelector('[data-testid="user-story"]')):visible(document.querySelector('[data-testid="reproduction"]')));
+};
+const feature=await choose('feature')&&!visible(document.querySelector('[data-testid="reproduction"]'))&&visible(document.querySelector('[data-testid="acceptance-criteria"]'));
+const partial=!!await wait(()=>ready(false)&&visible(document.querySelector('[data-testid="validation-message"]'))&&document.querySelector('[data-testid="validation-message"]')?.textContent?.trim());
+const bug=await choose('bug')&&!visible(document.querySelector('[data-testid="user-story"]'))&&visible(document.querySelector('[data-testid="expected-behavior"]'));
+document.querySelector('[data-edit="add_environment"]')?.click();
+const environment=await wait(()=>visible(document.querySelector('[data-testid="environment"]')));
+const fields=[['title','Login crashes'],['reproduction','Open login'],['expected-behavior','Dashboard opens'],['environment','Chrome']];
+for(const [id,value] of fields){const field=document.querySelector(`[data-testid="${id}"]`);if(!field||!set(field,value))return {error:`missing editable ${id}`}}
+const complete=!!await wait(()=>ready(true));
+const field=document.querySelector('[data-testid="environment"]');set(field,'');
+const cleared=!!await wait(()=>ready(false));set(field,'Chrome');
+const restored=!!await wait(()=>ready(true));
+return feature&&partial&&bug&&environment&&complete&&cleared&&restored?{feature,partial,bug,edited:true,complete,cleared,restored}:{error:'branch visibility, validation, edited field, or recovery failed',feature,partial,bug,environment:!!environment,complete,cleared,restored};
+})();"#
         }
         Kind::Machine => {
-            r#"return await (async()=>{const wait=async expected=>{for(let i=0;i<100;i++){await new Promise(r=>setTimeout(r,50));if(document.querySelector('[data-testid="current-state"]')?.textContent?.trim()===expected)return true}return false};const click=async(event,expected)=>{const b=document.querySelector(`[data-event="${event}"]`);if(!b)return false;b.click();return wait(expected)};const pass=await click('start','running')&&await click('pass','passed');document.querySelector('[data-testid="reset"]')?.click();await wait('queued');const retry=await click('start','running')&&await click('fail','failed')&&await click('retry','queued');document.querySelector('[data-edit="add_cancel"]')?.click();const cancel=await click('start','running')&&await click('cancel','cancelled');const history=!!document.querySelector('[data-testid="history"]')?.textContent?.trim();return pass&&retry&&cancel&&history?{pass,retry,cancel,history}:{error:'CI paths, edit, or history failed'};})();"#
+            r#"return await (async()=>{
+const state=()=>document.querySelector('[data-testid="current-state"]')?.textContent?.trim();
+const history=()=>document.querySelector('[data-testid="history"]')?.textContent?.trim()||'';
+const wait=async expected=>{for(let i=0;i<100;i++){if(state()===expected)return true;await new Promise(r=>setTimeout(r,50))}return false};
+const click=async(event,expected)=>{const b=document.querySelector(`[data-event="${event}"]`);if(!b)return false;b.click();return wait(expected)};
+const invalid=document.querySelector('[data-event="pass"]');const before=history();invalid?.click();
+const guarded=!!invalid&&(invalid.disabled||invalid.getAttribute('aria-disabled')==='true')&&state()==='queued'&&history()===before;
+const pass=await click('start','running')&&await click('pass','passed')&&history()!==before;
+document.querySelector('[data-testid="reset"]')?.click();await wait('queued');
+const retry=await click('start','running')&&await click('fail','failed')&&await click('retry','queued');
+document.querySelector('[data-edit="add_cancel"]')?.click();
+const edited=!!await (async()=>{for(let i=0;i<100;i++){if(document.querySelector('[data-event="cancel"]'))return true;await new Promise(r=>setTimeout(r,50))}return false})();
+const started=edited&&await click('start','running');
+const enabled=started&&!!await (async()=>{for(let i=0;i<100;i++){const b=document.querySelector('[data-event="cancel"]');if(b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true')return true;await new Promise(r=>setTimeout(r,50))}return false})();
+const cancel=enabled&&await click('cancel','cancelled');
+const recorded=history().toLowerCase().includes('cancel');
+return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorded}:{error:'transition guard, CI paths, edit, or history failed',guarded,pass,retry,cancel,recorded};
+})();"#
         }
     };
     let interaction = context
@@ -1017,7 +1059,7 @@ async fn capture_browser_session(
             json!({"session_id":session,"timeout_ms":30000,"code":interaction_code}),
         )
         .await?;
-    let after_state = inspect_ui(context, kind, session, updated_source, true).await?;
+    let after_state = inspect_ui(context, kind, session, "edited").await?;
     let after = screenshot_png(context, session).await?;
     let expected_canvas_id = serde_json::to_string(&identity["canvas_id"])?;
     let open_canvas = context
@@ -1045,9 +1087,35 @@ return {{visible,same_id:sameId,rendered_graph:false}};
         .await?;
     let canvas = screenshot_png(context, session).await?;
     context
+        .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
+        .await?;
+    let reload = context
+        .trigger_value(
+            "browser::navigate",
+            json!({"session_id":session,"url":url,"timeout_ms":30000}),
+        )
+        .await?;
+    let reloaded_state = if reload["ok"] == true && reload["timed_out"] != true {
+        inspect_ui(context, kind, session, "reloaded").await?
+    } else {
+        json!({"passed":false,"reason":"Console page did not reload"})
+    };
+    let persisted_canvas_id = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!("return document.querySelector('[data-testid=\"open-canvas\"]')?.dataset.canvasId === {}", expected_canvas_id)}),
+        )
+        .await?;
+    context
         .trigger_value(
             "browser::resize",
             json!({"session_id":session,"width":480,"height":900}),
+        )
+        .await?;
+    context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":"document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark';return document.documentElement.dataset.theme"}),
         )
         .await?;
     let mobile = context
@@ -1055,64 +1123,53 @@ return {{visible,same_id:sameId,rendered_graph:false}};
             "browser::execute",
             json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{
 const domain=document.querySelector('[data-testid="domain-result"]');
-const source=document.querySelector('[data-testid="canvas-source"]');
 const control=document.querySelector('[data-testid="work-type"],[data-event="start"]');
 const pane=domain?.closest('[data-workspace-pane-id]');
 pane?.scrollIntoView({block:'nearest',inline:'nearest'});
 await new Promise(requestAnimationFrame);
 const bounds=pane?.getBoundingClientRect();
 const fits=e=>{if(!e||!bounds)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.left>=bounds.left-1&&r.right<=bounds.right+1&&s.display!=='none'&&s.visibility!=='hidden'};
-return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentElement.scrollWidth<=document.documentElement.clientWidth+1&&[domain,source,control].every(fits),viewport_width:innerWidth,pane_width:pane?.clientWidth,pane_scroll_width:pane?.scrollWidth};
+return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentElement.scrollWidth<=document.documentElement.clientWidth+1&&[domain,control].every(fits)&&document.documentElement.dataset.theme==='dark',viewport_width:innerWidth,pane_width:pane?.clientWidth,pane_scroll_width:pane?.scrollWidth,theme:document.documentElement.dataset.theme};
 })();"#}),
         )
         .await?;
+    let narrow_dark = screenshot_png(context, session).await?;
     let workspace_evidence = before_state["passed"] == true
         && after_state["passed"] == true
         && before["data"].is_string()
         && after["data"].is_string()
         && canvas["data"].is_string()
+        && narrow_dark["data"].is_string()
         && open_canvas["result"]["visible"] == true
         && open_canvas["result"]["same_id"] == true
-        && open_canvas["result"]["rendered_graph"] == true;
-    let passed = workspace_evidence
-        && interaction["result"].get("error").is_none()
+        && open_canvas["result"]["rendered_graph"] == true
+        && reloaded_state["passed"] == true
+        && persisted_canvas_id["result"] == true
         && mobile["result"]["passed"] == true;
+    let passed = workspace_evidence && interaction["result"].get("error").is_none();
     let captures = json!([
         {"id":"before","caption":format!("{} in the full Console workspace before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
         {"id":"after","caption":format!("{} in the full Console workspace after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
-        {"id":"canvas","caption":"The edited graph rendered by Canvas beside the Worker in the full Console workspace","url":url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]}
+        {"id":"canvas","caption":"The edited graph rendered by Canvas beside the Worker in the full Console workspace","url":url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]},
+        {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console workspace",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker and edited Canvas graph rendered in the full Console workspace"} else {"Full Console layout, Worker interaction, Canvas graph, or mobile check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
     )
 }
 
-async fn inspect_ui(
-    context: &E2eContext,
-    kind: Kind,
-    session: &str,
-    source: &str,
-    after: bool,
-) -> Result<Value> {
-    let expected_source = serde_json::to_string(source)?;
-    let expected_state = if kind == Kind::Machine && after {
-        "cancelled"
-    } else if kind == Kind::Machine {
-        "queued"
-    } else {
-        ""
-    };
+async fn inspect_ui(context: &E2eContext, kind: Kind, session: &str, phase: &str) -> Result<Value> {
     let code = format!(
-        r#"const expectedSource={expected_source};const expectedState={};const after={after};
+        r#"const phase={};
 const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>20&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'}};
-const domain=document.querySelector('[data-testid="domain-result"]'),canvas=document.querySelector('[data-testid="canvas-source"]'),error=document.querySelector('[data-testid="error"]');
+const domain=document.querySelector('[data-testid="domain-result"]'),error=document.querySelector('[data-testid="error"]');
 const workspaceOk=location.hash==='#/'&&!!domain?.closest('[data-workspace-pane-id]')&&document.querySelectorAll('[data-workspace-pane-id]').length>=2;
 const state=document.querySelector('[data-testid="current-state"]')?.textContent?.trim()||'';
 const environment=document.querySelector('[data-testid="environment"]');
-const branchOk={} ? (after ? visible(environment) : !environment) : state===expectedState;
+const branchOk={} ? (phase==='initial' ? !environment : phase==='edited' ? visible(environment) : true) : (phase==='initial' ? state==='queued' : phase==='edited' ? state==='cancelled' : state==='queued'||state==='cancelled');
 const noOverflow=document.documentElement.scrollWidth<=document.documentElement.clientWidth+1;
-return {{passed:workspaceOk&&visible(domain)&&visible(canvas)&&canvas.textContent.trim()===expectedSource&&branchOk&&noOverflow&&(!error||!error.textContent.trim()),workspace_ok:workspaceOk,state,canvas_source:canvas?.textContent?.trim(),branch_ok:branchOk,no_horizontal_overflow:noOverflow}};"#,
-        serde_json::to_string(expected_state)?,
+return {{passed:workspaceOk&&visible(domain)&&branchOk&&noOverflow&&(!error||!error.textContent.trim()),workspace_ok:workspaceOk,state,branch_ok:branchOk,no_horizontal_overflow:noOverflow}};"#,
+        serde_json::to_string(phase)?,
         if kind == Kind::Form { "true" } else { "false" },
     );
     let mut observed = Value::Null;
@@ -1185,20 +1242,13 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
     fs::create_dir_all(root.join("src"))?;
     let contract = WorkerContract::new(kind, run_id);
     fs::write(root.join("README.md"), format!(
-        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness starts and stops Compose.\n",
+        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness starts and stops Compose.\n\nFor Console UI, read `harness/ade-worker-design/index` with `directory::skills::get`, then its authoring and design references. The installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
         if kind == Kind::Form { "Form Flow Builder" } else { "State Machine Canvas" }, contract.worker
     ))?;
-    fs::write(
-        root.join("package.json"),
-        serde_json::to_vec_pretty(&json!({
-            "name":format!("harness-{}",kind.id()),"private":true,"type":"module",
-            "scripts":{"start":"node src/index.mjs"},"dependencies":{"iii-sdk":"0.23.1-rc.6"}
-        }))?,
-    )?;
-    fs::copy(
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/chess-worker/package-lock.json"),
-        root.join("package-lock.json"),
-    )?;
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/visual-worker");
+    for name in ["package.json", "package-lock.json"] {
+        fs::copy(fixture.join(name), root.join(name))?;
+    }
     let mut install = Command::new("npm");
     install
         .args([
@@ -1212,10 +1262,10 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
         .kill_on_drop(true);
     let output = tokio::time::timeout(Duration::from_secs(120), install.output())
         .await
-        .context("materialize pinned iii-sdk timed out after 120 seconds")??;
+        .context("materialize pinned Worker dependencies timed out after 120 seconds")??;
     if !output.status.success() {
         bail!(
-            "could not materialize pinned iii-sdk: {}",
+            "could not materialize pinned Worker dependencies: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
