@@ -37,7 +37,12 @@ export type PlanMetricId =
   | 'turns'
 
 export type PlanMetricComparison = {
-  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`
+  id:
+    | PlanMetricId
+    | 'score'
+    | 'completed'
+    | `workflow:${string}`
+    | `criterion:${string}`
   label: string
   baseline: number | null
   candidate: number | null
@@ -124,8 +129,8 @@ function scenarioMetricTotal(
   return total
 }
 
-function comparisonMetric(
-  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
+export function comparisonMetric(
+  id: PlanMetricComparison['id'],
   label: string,
   baseline: number | null,
   candidate: number | null,
