@@ -63,6 +63,15 @@ pub(crate) struct LocalPlan {
     pub last_attempt_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub template_id: Option<String>,
+    /// Legacy: set on plans that reproduced a Release Control reference.
+    /// Kept only so their configuration digest still matches; never shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(skip)]
+    pub reference_execution_id: Option<String>,
+    /// Legacy, as `reference_execution_id`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(skip)]
+    pub reference_differences: Vec<String>,
     pub compatible: bool,
 }
 
@@ -160,6 +169,8 @@ pub(crate) fn new_plan(request: &PlanCreateRequest, id: String) -> Result<LocalP
         incomplete_execution_ids: Vec::new(),
         last_attempt_id: None,
         template_id: request.template_id.clone(),
+        reference_execution_id: None,
+        reference_differences: Vec::new(),
         compatible: true,
     })
 }

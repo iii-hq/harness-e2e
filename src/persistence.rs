@@ -36,9 +36,12 @@ const SCHEMA: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS runs_execution_scenario_idx ON runs(execution_id, scenario_id, case_id)",
     "CREATE TABLE IF NOT EXISTS artifacts (execution_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT NOT NULL, available INTEGER NOT NULL CHECK (available IN (0, 1)), archive_uri TEXT NULL, PRIMARY KEY (execution_id, artifact_id, sha256))",
     "CREATE TABLE IF NOT EXISTS archives (execution_id TEXT PRIMARY KEY, archive_id TEXT NOT NULL UNIQUE, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, expires_at TEXT NULL, payload_json TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS saved_plans (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
+    // ponytail: `origin` is read by no code here; it exists only so an older
+    // build opened on this database keeps the local plans and executions
+    // instead of dropping every row without it. Drop it with those builds.
+    "CREATE TABLE IF NOT EXISTS saved_plans (id TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT 'local', updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS saved_plans_updated_idx ON saved_plans(updated_at DESC)",
-    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, plan_id TEXT NULL, idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, plan_id TEXT NULL, origin TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS saved_plan_executions_plan_started_idx ON saved_plan_executions(plan_id, started_at DESC)",
 ];
 
@@ -871,6 +874,11 @@ mod tests {
         }
         let runs = layouts.iter().find(|layout| layout.name == "runs").unwrap();
         assert_eq!(runs.statements.len(), 2);
+        // Older builds drop plan rows without `origin`; keep it for them.
+        for table in ["saved_plans", "saved_plan_executions"] {
+            let layout = layouts.iter().find(|layout| layout.name == table).unwrap();
+            assert!(layout.statements[0].contains("origin TEXT NOT NULL DEFAULT 'local'"));
+        }
         assert!(runs.fingerprint().starts_with("sha256:"));
     }
 

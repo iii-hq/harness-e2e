@@ -1581,13 +1581,24 @@ impl ControlPlane {
     }
 
     /// Retain a terminal native run produced elsewhere (an imported bundle)
-    /// through the persistence a finished local run uses.
+    /// through the persistence a finished local run uses. It is not
+    /// announced as a run update: it never becomes the current local job.
     pub(crate) async fn install_terminal(&self, record: ExecutionRecord) -> Result<()> {
         anyhow::ensure!(
             record.phase.terminal(),
             "only terminal executions can be installed"
         );
-        self.persist_record(record).await
+        self.inner
+            .persistence
+            .save_terminal_projection(&record)
+            .await
+            .context("persist an imported terminal execution")?;
+        self.inner
+            .records
+            .write()
+            .await
+            .remove(&record.execution_id);
+        Ok(())
     }
 
     async fn persist_record(&self, record: ExecutionRecord) -> Result<()> {

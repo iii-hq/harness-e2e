@@ -212,6 +212,7 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, native_sum
         .slots
         .iter()
         .map(|slot| &slot.execution_id)
+        .filter(|id| !id.is_empty())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|id| native_summaries.iter().find(|summary| summary["id"] == *id))

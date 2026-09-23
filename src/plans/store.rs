@@ -1,7 +1,6 @@
 //! One saved-plan lifecycle with durable orchestration receipts and native Results.
 //! Every planned child and its idempotency key is durable before admission.
 use std::collections::BTreeSet;
-#[cfg(test)]
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -310,6 +309,7 @@ pub(crate) struct PlanStore {
     url: String,
     persistence: Option<Persistence>,
     runner: Option<Arc<dyn Runner>>,
+    github: github::GithubCli,
     // Serializes receipt transitions against cancellation and admission.
     lock: Mutex<()>,
 }
@@ -329,6 +329,7 @@ impl PlanStore {
             url,
             persistence: control.as_ref().map(ControlPlane::persistence),
             runner: control.map(|c| Arc::new(c) as Arc<dyn Runner>),
+            github: github::GithubCli::default(),
             lock: Mutex::new(()),
         });
         if manager.runner.is_some() {
@@ -1034,6 +1035,13 @@ impl PlanStore {
         .await
     }
     async fn reconcile(&self) -> Result<()> {
+        // No import runs at start: drop whatever an interrupted one left.
+        let imports = self.root.join(".imports");
+        if let Err(error) = fs::remove_dir_all(&imports) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(path = %imports.display(), %error, "cannot clear interrupted imports");
+            }
+        }
         for mut execution in self.executions().await? {
             if execution.state == "importing" {
                 execution.state = "failed".into();
@@ -1166,10 +1174,8 @@ fn configuration_digest(config: &LocalPlan, snapshot_digest: &str) -> Result<Str
         "scenarios": config.scenarios, "scenario_ids": config.scenario_ids,
         "runs": config.runs, "technical_retries": config.technical_retries, "seed": config.seed,
         "template_id": config.template_id, "scope_hash": config.scope_hash,
-        // Retired fields, kept constant so the digests of plans saved before
-        // they were retired still match.
-        "reference_execution_id": null,
-        "reference_differences": [],
+        "reference_execution_id": config.reference_execution_id,
+        "reference_differences": config.reference_differences,
         "snapshot_sha256": snapshot_digest,
     });
     artifact::sha256_value(&value)
@@ -1693,6 +1699,13 @@ mod tests {
             "template_id": profile})).unwrap()
     }
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
+        manager_with_gh(root, runner, github::GithubCli::default())
+    }
+    fn manager_with_gh(
+        root: &Path,
+        runner: Arc<FakeRunner>,
+        github: github::GithubCli,
+    ) -> Arc<PlanStore> {
         fs::create_dir_all(root.join("plan-store/plans")).unwrap();
         fs::create_dir_all(root.join("plan-store/executions")).unwrap();
         Arc::new(PlanStore {
@@ -1700,8 +1713,21 @@ mod tests {
             url: request("pr").url,
             persistence: None,
             runner: Some(runner),
+            github,
             lock: Mutex::new(()),
         })
+    }
+    /// A stand-in `gh`: a shell script, with a short deadline.
+    fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
+        use std::os::unix::fs::PermissionsExt;
+        let program = directory.join("gh");
+        fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        github::GithubCli {
+            program,
+            api_timeout: Duration::from_millis(500),
+            download_timeout: Duration::from_millis(500),
+        }
     }
     async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
         tokio::time::timeout(Duration::from_secs(120), async {
@@ -1749,6 +1775,7 @@ mod tests {
             url: request("pr").url,
             persistence: Some(db.clone()),
             runner: Some(runner),
+            github: github::GithubCli::default(),
             lock: Mutex::new(()),
         });
         let key = uuid::Uuid::new_v4().to_string();
@@ -2148,7 +2175,7 @@ mod tests {
         // Importing the run again takes its highest attempt: the runs the first
         // import installed are replaced, the name is kept and nothing doubles.
         let mut execution = installed;
-        execution.label = Some("Mine".into());
+        manager.rename(&id, "Mine").await.unwrap();
         let (bundle, contract, second) =
             exact_stack_bundle(&root.path().join("attempt-2"), "rc:e2e:second", "1.8.9");
         manager
@@ -2187,6 +2214,205 @@ mod tests {
             .contains("Root artifact validation failed"));
     }
 
+    #[tokio::test]
+    async fn a_run_being_imported_is_not_imported_twice_and_a_failed_download_fails_it() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // Every call answers with the run; its artifact list then holds no
+        // contract, so the download fails after the import began.
+        let gh = fake_gh(
+            root.path(),
+            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","run_started_at":"2026-09-20T10:00:00Z"}'"#,
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let (first, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(started);
+        assert_eq!(first.state, "importing");
+        assert_eq!(first.id, github::import_id("o/r", 42));
+        let (second, started) = manager.begin_github_import("o/r", 42).await.unwrap();
+        assert!(!started);
+        assert_eq!(second.id, first.id);
+
+        manager.finish_github_import(&first.id).await.unwrap();
+        let failed = manager.read_execution(&first.id).await.unwrap();
+        assert_eq!(failed.state, "failed");
+        assert!(failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no e2e-contract artifact"));
+        // A failed import can be started again.
+        assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
+    }
+
+    #[tokio::test]
+    async fn gh_runs_with_its_temporary_files_in_the_data_directory_and_a_deadline() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let failing = manager_with_gh(
+            &data,
+            runner.clone(),
+            fake_gh(
+                root.path(),
+                r#"echo "HTTP 404 with TMPDIR=$TMPDIR" >&2; exit 1"#,
+            ),
+        );
+        let error = failing
+            .begin_github_import("o/r", 42)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("HTTP 404"), "{error}");
+        assert!(error.contains(&format!("TMPDIR={}", data.join(".imports").display())));
+        assert!(error.contains("gh auth login"));
+
+        let mut execution = import_stub();
+        execution.source = ExecutionSource::Github {
+            repository: "o/r".into(),
+            run_id: 42,
+            run_attempt: 1,
+            url: String::new(),
+            release_control_execution_id: None,
+        };
+        let slow = manager_with_gh(&data, runner, fake_gh(root.path(), "sleep 5"));
+        slow.write_execution(&execution).await.unwrap();
+        slow.finish_github_import(&execution.id).await.unwrap();
+        let failed = slow.read_execution(&execution.id).await.unwrap();
+        assert_eq!(failed.state, "failed");
+        assert!(failed
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("did not finish within 500ms"));
+    }
+
+    #[tokio::test]
+    async fn restart_fails_an_interrupted_import_and_clears_its_files() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        let execution = import_stub();
+        manager.write_execution(&execution).await.unwrap();
+        let leftover = root.path().join(".imports/github-left/bundle");
+        fs::create_dir_all(&leftover).unwrap();
+        fs::write(leftover.join("results.json"), b"{}").unwrap();
+        manager.reconcile().await.unwrap();
+        let failed = manager.read_execution(&execution.id).await.unwrap();
+        assert_eq!(failed.state, "failed");
+        assert!(failed.error.as_deref().unwrap().contains("Import it again"));
+        assert!(!root.path().join(".imports").exists());
+    }
+
+    #[tokio::test]
+    async fn a_rename_during_the_import_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let manager = manager(&data, Arc::new(FakeRunner::new(data.clone())));
+        let mut snapshot = import_stub();
+        manager.write_execution(&snapshot).await.unwrap();
+        manager.rename(&snapshot.id, "  Mine  ").await.unwrap();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.path().join("bundle"), "rc:e2e:renamed", "1.8.8");
+        manager
+            .install_bundle(&mut snapshot, &bundle, &contract)
+            .await
+            .unwrap();
+        let installed = manager.read_execution(&snapshot.id).await.unwrap();
+        assert_eq!(installed.label.as_deref(), Some("Mine"));
+        assert_eq!(installed.state, "completed");
+        manager.rename(&snapshot.id, "").await.unwrap();
+        assert!(manager
+            .read_execution(&snapshot.id)
+            .await
+            .unwrap()
+            .label
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_new_attempt_without_a_readable_group_keeps_the_previous_import() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let manager = manager(&data, runner.clone());
+        let mut execution = import_stub();
+        manager.write_execution(&execution).await.unwrap();
+        let (bundle, contract, first) =
+            exact_stack_bundle(&root.path().join("attempt-1"), "rc:e2e:first", "1.8.8");
+        manager
+            .install_bundle(&mut execution, &bundle, &contract)
+            .await
+            .unwrap();
+        let before = manager.read_execution(&execution.id).await.unwrap();
+
+        let failed = root
+            .path()
+            .join("attempt-2/bundle/smoke-r01/groups/case-context");
+        fs::create_dir_all(&failed).unwrap();
+        fs::write(
+            failed.join("failure.json"),
+            json!({"error": "group observation artifact was not available"}).to_string(),
+        )
+        .unwrap();
+        let error = manager
+            .install_bundle(
+                &mut execution.clone(),
+                &root.path().join("attempt-2/bundle"),
+                &contract,
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No group of this run"), "{error}");
+        let after = manager.read_execution(&execution.id).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(&after.slots).unwrap(),
+            serde_json::to_value(&before.slots).unwrap()
+        );
+        assert!(runner.record(&first).await.is_some());
+        assert!(data.join(&first).join("results.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn native_runs_need_an_execution_id_and_never_replace_another_executions_evidence() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let manager = manager(&data, runner.clone());
+        let mut execution = import_stub();
+        manager.write_execution(&execution).await.unwrap();
+
+        let (bundle, contract, id) =
+            exact_stack_bundle(&root.path().join("renamed"), "rc:e2e:renamed", "1.8.8");
+        let natives = bundle.join("smoke-r01/groups/case-context/native");
+        fs::rename(natives.join(&id), natives.join("not-an-id")).unwrap();
+        let error = manager
+            .install_bundle(&mut execution, &bundle, &contract)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("not an E2E execution id"), "{error}");
+
+        let (bundle, contract, id) =
+            exact_stack_bundle(&root.path().join("taken"), "rc:e2e:taken", "1.8.8");
+        fs::create_dir_all(data.join(&id)).unwrap();
+        fs::write(data.join(&id).join("marker"), b"another execution").unwrap();
+        let error = manager
+            .install_bundle(&mut execution, &bundle, &contract)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("already retained by another execution"),
+            "{error}"
+        );
+        assert_eq!(
+            fs::read(data.join(&id).join("marker")).unwrap(),
+            b"another execution"
+        );
+        assert!(runner.record(&id).await.is_none());
+    }
+
     fn import_stub() -> PlanExecution {
         PlanExecution {
             id: "plan-stub".into(),
@@ -2209,6 +2435,29 @@ mod tests {
             measurements: None,
             system_under_test: None,
         }
+    }
+
+    #[test]
+    fn plans_that_reproduced_a_reference_keep_validating() {
+        let mut plan = super::super::new_plan(&request("pr"), "plan-rc-legacy".into()).unwrap();
+        plan.reference_execution_id = Some("1b8e60cc-7818-4dcb-8cbc-c76790c271af".into());
+        plan.reference_differences = vec!["context_pressure: case identity differs".into()];
+        let saved = prepared_plan(plan, None).unwrap();
+        let stored: SavedPlan =
+            serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+        validate_saved_plan(&stored).unwrap();
+        assert_eq!(stored.configuration_sha256, saved.configuration_sha256);
+        let fresh = prepared_plan(
+            super::super::new_plan(&request("pr"), "plan-new".into()).unwrap(),
+            None,
+        )
+        .unwrap();
+        assert!(serde_json::to_value(&fresh.plan)
+            .unwrap()
+            .get("reference_execution_id")
+            .is_none());
+        let schema = serde_json::to_value(schemars::schema_for!(LocalPlan)).unwrap();
+        assert!(schema["properties"].get("reference_execution_id").is_none());
     }
 
     #[tokio::test]
@@ -2287,21 +2536,39 @@ mod tests {
             cancel_requested: false,
             error: None,
             baseline_eligible: false,
-            slots: vec![Slot {
-                round: 1,
-                group_id: "group".into(),
-                scenario_id: "direct_answer".into(),
-                execution_id: "native-good".into(),
-                request: json!({}),
-                state: "pending".into(),
-                result_path: None,
-                error: None,
-                observed: 0,
-                completed: 0,
-                passed: 0,
-                technical_valid: 0,
-                eligible: false,
-            }],
+            slots: vec![
+                Slot {
+                    round: 1,
+                    group_id: "group".into(),
+                    scenario_id: "direct_answer".into(),
+                    execution_id: "native-good".into(),
+                    request: json!({}),
+                    state: "pending".into(),
+                    result_path: None,
+                    error: None,
+                    observed: 0,
+                    completed: 0,
+                    passed: 0,
+                    technical_valid: 0,
+                    eligible: false,
+                },
+                // A group that failed before it had a native run.
+                Slot {
+                    round: 1,
+                    group_id: "failed-group".into(),
+                    scenario_id: "context_pressure".into(),
+                    execution_id: String::new(),
+                    request: Value::Null,
+                    state: "not_run".into(),
+                    result_path: None,
+                    error: Some("group observation artifact was not available".into()),
+                    observed: 0,
+                    completed: 0,
+                    passed: 0,
+                    technical_valid: 0,
+                    eligible: false,
+                },
+            ],
             measurements: Some(json!({"cohorts": [{
                 "scenario_id": "direct_answer", "identity": {},
                 "aggregate": {"observed_runs": 1, "planned_runs": 1, "completed_runs": 1,
@@ -2340,6 +2607,7 @@ mod tests {
             children.get("native-good").map(String::as_str),
             Some("plan-good")
         );
+        assert!(!children.contains_key(""));
     }
 
     #[tokio::test]
