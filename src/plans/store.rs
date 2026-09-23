@@ -746,10 +746,12 @@ impl PlanStore {
         let mut plan = self.canonical(&saved).await?;
         let old_scope = plan.scope_hash.clone();
         super::apply_update(&mut plan, &update)?;
-        let prepared = prepared_plan(
-            plan.clone(),
-            (old_scope == plan.scope_hash).then_some(saved.snapshot),
-        )?;
+        let snapshot = if old_scope == plan.scope_hash {
+            saved.snapshot
+        } else {
+            snapshot_for_plan(&plan, Some(saved.snapshot.profile))?
+        };
+        let prepared = prepared_plan(plan.clone(), Some(snapshot))?;
         validate_config(&prepared.plan, &self.url)?;
         self.write_plan(&prepared).await?;
         self.canonical(&prepared).await
@@ -1263,7 +1265,7 @@ fn read_json_directory<T: serde::de::DeserializeOwned>(path: &Path) -> Result<Ve
 fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<SavedPlan> {
     let snapshot = snapshot
         .map(Ok)
-        .unwrap_or_else(|| snapshot_for_plan(&plan))?;
+        .unwrap_or_else(|| snapshot_for_plan(&plan, None))?;
     let snapshot_sha256 = artifact::sha256_value(&snapshot)?;
     Ok(SavedPlan {
         configuration_sha256: configuration_digest(&plan, &snapshot_sha256)?,
@@ -1272,14 +1274,20 @@ fn prepared_plan(plan: LocalPlan, snapshot: Option<ProfileSnapshot>) -> Result<S
         snapshot_sha256,
     })
 }
-fn snapshot_for_plan(plan: &super::LocalPlan) -> Result<ProfileSnapshot> {
+fn snapshot_for_plan(
+    plan: &super::LocalPlan,
+    base: Option<test_plan::Profile>,
+) -> Result<ProfileSnapshot> {
     let master = test_plan::embedded()?;
-    let mut profile = master
-        .profiles
-        .iter()
-        .find(|profile| profile.id == plan.template_id.as_deref().unwrap_or("smoke"))
-        .context("Unknown plan template")?
-        .clone();
+    let mut profile = base
+        .or_else(|| {
+            master
+                .profiles
+                .iter()
+                .find(|profile| profile.id == plan.template_id.as_deref().unwrap_or("pr"))
+                .cloned()
+        })
+        .context("Unknown plan template")?;
     profile.id = "saved-plan".into();
     profile.label = plan.label.clone();
     profile.purpose = plan.purpose.clone();
@@ -1806,7 +1814,7 @@ mod tests {
         fs::create_dir_all(root.join("plan-store/executions")).unwrap();
         Arc::new(PlanStore {
             root: root.into(),
-            url: request("smoke").url,
+            url: request("pr").url,
             persistence: None,
             runner: Some(runner),
             lock: Mutex::new(()),
@@ -1855,13 +1863,13 @@ mod tests {
         .unwrap();
         let manager = Arc::new(PlanStore {
             root: root.path().into(),
-            url: request("smoke").url,
+            url: request("pr").url,
             persistence: Some(db.clone()),
             runner: Some(runner),
             lock: Mutex::new(()),
         });
         let key = uuid::Uuid::new_v4().to_string();
-        let (plan_id, baseline_id) = admitted(&manager, "smoke", &key).await;
+        let (plan_id, baseline_id) = admitted(&manager, "pr", &key).await;
         let baseline = terminal(&manager, &baseline_id).await;
         let candidate_id = manager
             .start(&plan_id, &format!("{key}-candidate"), Role::Candidate)
@@ -1876,7 +1884,7 @@ mod tests {
         // A plan written under another layout: its row hash matches, its
         // snapshot digest does not.
         let foreign_id = manager
-            .create_local(request("smoke"))
+            .create_local(request("pr"))
             .await
             .unwrap()
             .id
@@ -2175,14 +2183,15 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let request = serde_json::from_value(json!({"label": "Edited Smoke", "purpose": "Custom scope from a template", "url": request("smoke").url,
+        let request = serde_json::from_value(json!({"label": "Edited PR", "purpose": "Custom scope from a template", "url": request("pr").url,
             "model": "model", "provider": "provider",
-            "scenarios": ["minimal_path", "persistent_state"], "runs": 2, "technical_retries": 0, "template_id": "smoke"})).unwrap();
+            "scenarios": ["minimal_path", "persistent_state"], "runs": 2, "technical_retries": 0, "template_id": "pr"})).unwrap();
         let plan = manager.create_local(request).await.unwrap();
         assert_eq!(plan.scenario_ids.len(), 2);
-        assert_eq!(plan.template_id.as_deref(), Some("smoke"));
+        assert_eq!(plan.template_id.as_deref(), Some("pr"));
         let mut saved = manager.read_plan(&plan.id).await.unwrap();
-        // A starting template's revision is provenance, not an execution dependency.
+        // A removed template remains provenance for a saved plan.
+        saved.plan.template_id = Some("smoke".into());
         saved.snapshot.definition_sha256 = "historical-template-revision".into();
         saved.snapshot_sha256 = artifact::sha256_value(&saved.snapshot).unwrap();
         saved.configuration_sha256 =
@@ -2263,11 +2272,11 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
-        let draft = manager.create_local(request("smoke")).await.unwrap();
+        let draft = manager.create_local(request("pr")).await.unwrap();
         manager.delete_local(&draft.id).await.unwrap();
         assert!(manager.get_local(&draft.id).await.is_err());
 
-        let (id, execution_id) = admitted(&manager, "smoke", "delete-locked").await;
+        let (id, execution_id) = admitted(&manager, "pr", "delete-locked").await;
         terminal(&manager, &execution_id).await;
         manager.delete_local(&id).await.unwrap();
         assert!(manager.get_local(&id).await.is_err());
@@ -2287,7 +2296,7 @@ mod tests {
         manager.reconcile().await.unwrap();
         assert!(manager.list_local().await.unwrap().is_empty());
         assert!(manager.executions().await.unwrap().is_empty());
-        let plan = manager.create_local(request("smoke")).await.unwrap();
+        let plan = manager.create_local(request("pr")).await.unwrap();
         let saved = manager.read_plan(&plan.id).await.unwrap();
         let encoded = serde_json::to_value(&saved).unwrap();
         assert!(encoded.get("base").is_none());
@@ -2315,7 +2324,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
-        let plan = manager.create_local(request("smoke")).await.unwrap();
+        let plan = manager.create_local(request("pr")).await.unwrap();
         let saved = manager.read_plan(&plan.id).await.unwrap();
         let execution = PlanExecution {
             id: "plan-good".into(),
@@ -2423,19 +2432,17 @@ mod tests {
             assert!(!manager.get_local(id).await.unwrap().compatible);
             assert!(export(&plan).is_ok());
         }
-        let mut missing = request("smoke");
+        let mut missing = request("pr");
         missing.model.clear();
         assert!(manager.create_local(missing).await.is_err());
     }
     #[tokio::test]
-    async fn native_coordination_covers_all_slots_including_capability_and_evolution() {
+    async fn native_coordination_covers_all_profile_slots() {
         for (profile, expected_slots, expected_submissions) in [
-            ("smoke", 5, 5),
             ("regression", 9, 9),
-            ("capability", 46, 46),
-            ("evolution", 54, 51),
-            ("endurance", 4, 4),
             ("software-engineering", 13, 12),
+            ("pr", 4, 4),
+            ("after-release", 5, 5),
         ] {
             let root = tempfile::tempdir().unwrap();
             let runner = Arc::new(FakeRunner::new(root.path().into()));
@@ -2472,11 +2479,6 @@ mod tests {
                     .scenario_ids
                     .len()
             );
-            if profile == "evolution" {
-                assert!(cohorts.iter().all(|c| c["aggregate"]["observed_runs"] == 3));
-                let paths = result_paths(&execution, root.path());
-                assert!(test_plan::measure(&[paths[0].clone(), paths[0].clone()]).is_err());
-            }
             let repeated = manager
                 .start(&plan_id, profile, Role::Baseline)
                 .await
@@ -2510,7 +2512,7 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
         let registry_request = || {
-            let mut request = request("evolution");
+            let mut request = request("software-engineering");
             request.scenarios = vec![
                 "registry_planning".into(),
                 "registry_implementation".into(),
@@ -2602,7 +2604,7 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         runner.hold.store(true, Ordering::SeqCst);
         let manager = manager(root.path(), runner.clone());
-        let (plan, id) = admitted(&manager, "smoke", "cancel").await;
+        let (plan, id) = admitted(&manager, "pr", "cancel").await;
         let duplicate = manager
             .start(&plan, "cancel", Role::Baseline)
             .await
@@ -2640,14 +2642,14 @@ mod tests {
                 .lose_artifact
                 .store(!wrong_identity, Ordering::SeqCst);
             let manager = manager(root.path(), runner.clone());
-            let (plan, id) = admitted(&manager, "evolution", "missing").await;
+            let (plan, id) = admitted(&manager, "software-engineering", "missing").await;
             let execution = terminal(&manager, &id).await;
             assert_eq!(execution.state, "interrupted");
             assert!(!execution.baseline_eligible);
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id, &[]).await.unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 54);
+            assert_eq!(reports.len(), 13);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);
@@ -2667,7 +2669,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let plan = manager.create_local(request("smoke")).await.unwrap();
+        let plan = manager.create_local(request("pr")).await.unwrap();
         runner.fail_receipt.store(true, Ordering::SeqCst);
         assert!(manager
             .start(plan.id.as_str(), "fail-write", Role::Baseline)
@@ -2681,7 +2683,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
-        let (plan, id) = admitted(&manager, "smoke", "restart").await;
+        let (plan, id) = admitted(&manager, "pr", "restart").await;
         let mut receipt = terminal(&manager, &id).await;
         receipt.state = "running".into();
         receipt.baseline_eligible = false;
