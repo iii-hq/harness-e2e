@@ -22,6 +22,7 @@ use crate::report::{E2eReport, ReportState};
 use crate::test_plan::{self, ProfileSnapshot};
 
 mod github;
+mod stack;
 
 pub(crate) use github::{GithubRunImportRequest, GithubRunsListRequest};
 
@@ -98,6 +99,9 @@ pub(crate) struct PlanExecution {
     pub source: ExecutionSource,
     #[serde(default)]
     pub stack: Vec<StackWorker>,
+    /// What could not be recorded about the stack; shown, never blocking.
+    #[serde(default)]
+    pub warnings: Vec<String>,
     /// `running`, `cancelling` or `importing` while active; `completed`,
     /// `interrupted`, `cancelled` or `failed` once done.
     pub state: String,
@@ -202,6 +206,8 @@ trait Runner: Send + Sync {
     async fn install(&self, record: ExecutionRecord) -> Result<()>;
     /// Delete a terminal native run and its evidence.
     async fn remove(&self, id: &str) -> Result<()>;
+    /// The stack runs start on now, and what could not be read about it.
+    async fn stack(&self) -> (Vec<StackWorker>, Vec<String>);
 }
 #[async_trait]
 impl Runner for ControlPlane {
@@ -301,6 +307,9 @@ impl Runner for ControlPlane {
     }
     async fn remove(&self, id: &str) -> Result<()> {
         self.delete(id).await
+    }
+    async fn stack(&self) -> (Vec<StackWorker>, Vec<String>) {
+        stack::observe(self.client()).await
     }
 }
 
@@ -645,20 +654,93 @@ impl PlanStore {
         self.get_local(id).await
     }
 
+    /// Start an execution from its parameters alone, on this stack: no saved
+    /// plan, no role. A scenario this runner does not know gets a slot that
+    /// says so; every other slot runs.
+    pub(crate) async fn start_execution(
+        self: &Arc<Self>,
+        mut parameters: ExecutionParameters,
+        label: &str,
+    ) -> Result<PlanExecution> {
+        let label = clean_label(label)?;
+        parameters.model = parameters.model.trim().into();
+        parameters.provider = parameters.provider.trim().into();
+        parameters.agent = parameters
+            .agent
+            .map(|agent| agent.trim().to_owned())
+            .filter(|agent| !agent.is_empty());
+        let mut scenarios = Vec::new();
+        for scenario in parameters.scenarios {
+            if !scenarios.contains(&scenario) {
+                scenarios.push(scenario);
+            }
+        }
+        parameters.scenarios = scenarios;
+        ensure!(
+            !parameters.model.is_empty() && !parameters.provider.is_empty(),
+            "Select an execution model."
+        );
+        ensure!(
+            !parameters.scenarios.is_empty() && parameters.scenarios.len() <= 256,
+            "Select between 1 and 256 scenarios."
+        );
+        ensure!(
+            parameters.scenarios.iter().all(|id| !id.is_empty()
+                && id.len() <= 100
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))),
+            "Scenario ids hold only letters, digits, '_', '.' and '-'."
+        );
+        ensure!(
+            (1..=20).contains(&parameters.runs),
+            "runs must be between 1 and 20"
+        );
+        ensure!(
+            parameters.technical_retries <= 3,
+            "technical_retries must be between 0 and 3"
+        );
+        let key = format!("execution:{}", uuid::Uuid::new_v4().simple());
+        let id = format!("plan-{}", &artifact::sha256_bytes(key.as_bytes())[7..39]);
+        let execution = PlanExecution {
+            slots: parameter_slots(&parameters, &id, label.as_deref())?,
+            id,
+            plan_id: None,
+            idempotency_key: key,
+            configuration_sha256: artifact::sha256_value(&parameters)?,
+            role: None,
+            label,
+            parameters: Some(parameters),
+            source: ExecutionSource::Local,
+            stack: Vec::new(),
+            warnings: Vec::new(),
+            state: "running".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: false,
+            measurements: None,
+            system_under_test: None,
+        };
+        let _guard = self.lock.lock().await;
+        let runner = self.runner()?;
+        runner.reserve(&execution.id).await?;
+        if let Err(error) = self.write_execution(&execution).await {
+            runner.release(&execution.id).await;
+            return Err(error);
+        }
+        self.spawn_drive(&execution.id);
+        Ok(execution)
+    }
+
     /// Name any execution; an empty label restores the default name.
     pub(crate) async fn rename(&self, id: &str, label: &str) -> Result<PlanExecution> {
-        let label = label.trim();
-        ensure!(
-            label.chars().count() <= 80,
-            "execution label must be at most 80 characters"
-        );
-        ensure!(
-            !label.chars().any(char::is_control),
-            "execution label must not contain control characters"
-        );
+        let label = clean_label(label)?;
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
-        execution.label = (!label.is_empty()).then(|| label.to_owned());
+        execution.label = label;
         self.write_execution(&execution).await?;
         Ok(execution)
     }
@@ -815,6 +897,7 @@ impl PlanStore {
             }),
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "running".into(),
             started_at: now(),
             updated_at: now(),
@@ -846,27 +929,43 @@ impl PlanStore {
             runner.release(&id).await;
             return Err(error);
         }
+        self.spawn_drive(&id);
+        Ok(json!({"execution_id": id, "duplicate": false, "execution": execution}))
+    }
+    fn spawn_drive(self: &Arc<Self>, id: &str) {
         let manager = self.clone();
-        let worker_id = id.clone();
+        let id = id.to_owned();
         tokio::spawn(async move {
-            if let Err(error) = manager.drive(&worker_id).await {
-                tracing::error!(execution_id = %worker_id, error = %error, "plan coordinator stopped");
+            if let Err(error) = manager.drive(&id).await {
+                tracing::error!(execution_id = %id, error = %error, "plan coordinator stopped");
                 // Keep admission until the active child has actually terminated.
                 manager
-                    .interrupt_after_error(&worker_id, &format!("{error:#}"))
+                    .interrupt_after_error(&id, &format!("{error:#}"))
                     .await;
             }
         });
-        Ok(json!({"execution_id": id, "duplicate": false, "execution": execution}))
     }
     async fn drive(&self, id: &str) -> Result<()> {
         let runner = self.runner()?;
-        let count = self.read_execution(id).await?.slots.len();
+        // The stack is recorded before the first slot; what cannot be read
+        // is a warning on the execution.
+        let (stack, warnings) = runner.stack().await;
+        let count = {
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            execution.stack = stack;
+            execution.warnings.extend(warnings);
+            self.write_execution(&execution).await?;
+            execution.slots.len()
+        };
         for index in 0..count {
             let execution = self.read_execution(id).await?;
-            if execution.slots[..index]
-                .iter()
-                .any(|slot| slot.execution_id == execution.slots[index].execution_id)
+            // A slot without a native run (an unknown scenario) has nothing
+            // to admit; a grouped slot shares its group's run.
+            if execution.slots[index].execution_id.is_empty()
+                || execution.slots[..index]
+                    .iter()
+                    .any(|slot| slot.execution_id == execution.slots[index].execution_id)
             {
                 continue;
             }
@@ -876,12 +975,13 @@ impl PlanStore {
                 if execution.cancel_requested {
                     break;
                 }
-                let plan = self.execution_plan(&execution).await?;
-                verify_snapshot(&plan)?;
-                ensure!(
-                    plan.configuration_sha256 == execution.configuration_sha256,
-                    "Plan identity changed during execution."
-                );
+                if let Some(plan) = self.execution_plan(&execution).await? {
+                    verify_snapshot(&plan)?;
+                    ensure!(
+                        plan.configuration_sha256 == execution.configuration_sha256,
+                        "Plan identity changed during execution."
+                    );
+                }
                 // This write must succeed before invoking native admission.
                 let execution_id = execution.slots[index].execution_id.clone();
                 for slot in execution
@@ -921,7 +1021,18 @@ impl PlanStore {
                         .iter_mut()
                         .filter(|slot| slot.execution_id == child)
                     {
-                        update_slot(slot, &record, Some(&plan), &self.root)?;
+                        if terminal && record.result_path.is_none() {
+                            // The run ended without results: its slots keep
+                            // the reason and the next slots still run.
+                            slot.state = "finished".into();
+                            slot.error = Some(if record.error.is_empty() {
+                                "The native run ended without results.".into()
+                            } else {
+                                record.error.clone()
+                            });
+                        } else {
+                            update_slot(slot, &record, plan.as_ref(), &self.root)?;
+                        }
                     }
                     execution.updated_at = now();
                     self.write_execution(&execution).await?;
@@ -929,21 +1040,8 @@ impl PlanStore {
                         runner.cancel(&child).await?;
                     }
                 }
+                // A failed or technically invalid run fails only its slots.
                 if terminal {
-                    // Objective failures with a complete native report continue.
-                    ensure!(
-                        record
-                            .report
-                            .as_ref()
-                            .is_some_and(|report| report.report_state == ReportState::Complete
-                                && report.scenarios.iter().all(|s| s
-                                    .aggregate
-                                    .technical_invalid_runs
-                                    == 0
-                                    && s.aggregate.undetermined_runs == 0)),
-                        "Native execution cannot continue safely: {}",
-                        record.error
-                    );
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1009,7 +1107,7 @@ impl PlanStore {
         if let Ok(plan) = self.execution_plan(&execution).await {
             for slot in &mut execution.slots {
                 if let Some(record) = runner.record(&slot.execution_id).await {
-                    let _ = update_slot(slot, &record, Some(&plan), &self.root);
+                    let _ = update_slot(slot, &record, plan.as_ref(), &self.root);
                 }
             }
         }
@@ -1024,15 +1122,12 @@ impl PlanStore {
         }
         runner.release(id).await;
     }
-    /// The saved plan an execution ran; an imported execution has none.
-    async fn execution_plan(&self, execution: &PlanExecution) -> Result<SavedPlan> {
-        self.read_plan(
-            execution
-                .plan_id
-                .as_deref()
-                .context("This execution has no saved plan")?,
-        )
-        .await
+    /// The saved plan an execution ran, if it ran one.
+    async fn execution_plan(&self, execution: &PlanExecution) -> Result<Option<SavedPlan>> {
+        match &execution.plan_id {
+            Some(plan_id) => Ok(Some(self.read_plan(plan_id).await?)),
+            None => Ok(None),
+        }
     }
     async fn reconcile(&self) -> Result<()> {
         // No import runs at start: drop whatever an interrupted one left.
@@ -1060,10 +1155,7 @@ impl PlanStore {
                 continue;
             }
             let finished_at = execution.finished_at.clone();
-            let plan = match execution.plan_id {
-                Some(_) => Some(self.execution_plan(&execution).await?),
-                None => None,
-            };
+            let plan = self.execution_plan(&execution).await?;
             if let Some(runner) = &self.runner {
                 for slot in &mut execution.slots {
                     if let Some(record) = runner.record(&slot.execution_id).await {
@@ -1092,6 +1184,19 @@ impl PlanStore {
     }
 }
 
+/// A label as typed: trimmed, at most 80 characters; empty means none.
+fn clean_label(label: &str) -> Result<Option<String>> {
+    let label = label.trim();
+    ensure!(
+        label.chars().count() <= 80,
+        "execution label must be at most 80 characters"
+    );
+    ensure!(
+        !label.chars().any(char::is_control),
+        "execution label must not contain control characters"
+    );
+    Ok((!label.is_empty()).then(|| label.to_owned()))
+}
 fn safe_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -1211,8 +1316,91 @@ fn verify_snapshot(plan: &SavedPlan) -> Result<()> {
     Ok(())
 }
 fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
+    let c = &plan.plan;
+    campaign_slots(
+        &plan.snapshot,
+        owner,
+        &c.label,
+        &c.model,
+        &c.provider,
+        None,
+        c.seed,
+    )
+}
+/// Slots of an execution without a saved plan: its scenarios materialized
+/// like a plan's (the master plan's sequential groups kept together), then
+/// one slot per round for each scenario this runner does not know, carrying
+/// the reason instead of a native run.
+fn parameter_slots(
+    parameters: &ExecutionParameters,
+    owner: &str,
+    label: Option<&str>,
+) -> Result<Vec<Slot>> {
+    let (known, unknown): (Vec<_>, Vec<_>) = parameters
+        .scenarios
+        .iter()
+        .cloned()
+        .partition(|id| id.parse::<crate::scenarios::ScenarioId>().is_ok());
     let mut slots = Vec::new();
-    for (round, campaign) in plan.snapshot.campaigns.iter().enumerate() {
+    if !known.is_empty() {
+        let master = test_plan::embedded()?;
+        let scenario_groups = master
+            .profiles
+            .iter()
+            .flat_map(|profile| &profile.scenario_groups)
+            .filter(|group| group.iter().all(|id| known.contains(id)))
+            .cloned()
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        let label = label.unwrap_or("Execution");
+        let profile = test_plan::Profile {
+            id: "execution".into(),
+            label: label.into(),
+            purpose: String::new(),
+            metrics: Vec::new(),
+            modules: Vec::new(),
+            scenarios: known,
+            scenario_groups,
+            repetitions: parameters.runs,
+            technical_retries: parameters.technical_retries,
+            lane: "local".into(),
+        };
+        let snapshot = master.materialize_scope(profile, parameters.seed)?;
+        slots = campaign_slots(
+            &snapshot,
+            owner,
+            label,
+            &parameters.model,
+            &parameters.provider,
+            parameters.agent.as_deref(),
+            parameters.seed,
+        )?;
+    }
+    for round in 1..=parameters.runs {
+        for scenario in &unknown {
+            let mut slot = github::slot(round, scenario, scenario);
+            slot.state = "not_run".into();
+            slot.error = Some(format!(
+                "This runner does not know the scenario '{scenario}'."
+            ));
+            slots.push(slot);
+        }
+    }
+    Ok(slots)
+}
+/// One slot per scenario of every campaign group.
+fn campaign_slots(
+    snapshot: &ProfileSnapshot,
+    owner: &str,
+    label: &str,
+    model: &str,
+    provider: &str,
+    agent: Option<&str>,
+    seed: Option<u64>,
+) -> Result<Vec<Slot>> {
+    let mut slots = Vec::new();
+    for (round, campaign) in snapshot.campaigns.iter().enumerate() {
         for group in campaign["groups"]
             .as_array()
             .context("Missing campaign groups")?
@@ -1222,10 +1410,10 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
                 .as_array()
                 .context("Native scenarios required")?;
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
-            let c = &plan.plan;
             let request: RunRequest = serde_json::from_value(
-                json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, group_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
-                "scenarios": scenario_ids, "runs": 1, "seed": c.seed, "technical_retries": group["technical_retries"]}),
+                json!({"idempotency_key": key, "label": format!("{label} · round {} · {group_id}", round + 1), "lane": campaign["lane"],
+                "model": model, "provider": provider, "agent": agent,
+                "scenarios": scenario_ids, "runs": 1, "seed": seed, "technical_retries": group["technical_retries"]}),
             )?;
             crate::control::validate_run_request(&request)?;
             for scenario_id in scenario_ids {
@@ -1251,7 +1439,7 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
         }
     }
     ensure!(
-        Some(slots.len() as u64) == plan.snapshot.budget["planned_runs"].as_u64(),
+        Some(slots.len() as u64) == snapshot.budget["planned_runs"].as_u64(),
         "Materialized slot coverage differs"
     );
     Ok(slots)
@@ -1469,6 +1657,7 @@ mod tests {
         lose_artifact: AtomicBool,
         wrong_identity: AtomicBool,
         fail_next: AtomicBool,
+        crash_next: AtomicBool,
         fail_receipt: AtomicBool,
     }
     impl FakeRunner {
@@ -1482,6 +1671,7 @@ mod tests {
                 lose_artifact: AtomicBool::new(false),
                 wrong_identity: AtomicBool::new(false),
                 fail_next: AtomicBool::new(false),
+                crash_next: AtomicBool::new(false),
                 fail_receipt: AtomicBool::new(false),
             }
         }
@@ -1653,7 +1843,13 @@ mod tests {
                 "child was not persisted before dispatch"
             );
             self.submitted.fetch_add(1, Ordering::SeqCst);
-            let record = self.native_record(request)?;
+            let mut record = self.native_record(request)?;
+            if self.crash_next.swap(false, Ordering::SeqCst) {
+                // The native run failed before it had results.
+                record.phase = ExecutionPhase::Failed;
+                record.error = "fixture repository unavailable".into();
+                (record.report, record.manifest, record.result_path) = (None, None, None);
+            }
             self.records.lock().await.insert(id.clone(), record);
             Ok(if self.wrong_identity.load(Ordering::SeqCst) {
                 "different-child".into()
@@ -1688,6 +1884,20 @@ mod tests {
                 fs::remove_dir_all(evidence)?;
             }
             Ok(())
+        }
+        async fn stack(&self) -> (Vec<StackWorker>, Vec<String>) {
+            (
+                vec![StackWorker {
+                    name: "queue".into(),
+                    source: WorkerSource::Path,
+                    requested: None,
+                    observed: Some("0.4.1".into()),
+                    commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                    dirty: Some(true),
+                    groups: Vec::new(),
+                }],
+                vec!["Worker sources were not recorded: compose is unavailable".into()],
+            )
         }
     }
     fn request(profile: &str) -> super::super::PlanCreateRequest {
@@ -2098,6 +2308,7 @@ mod tests {
                 release_control_execution_id: Some("rc-execution".into()),
             },
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "importing".into(),
             started_at: "2026-09-20T10:00:00Z".into(),
             updated_at: now(),
@@ -2424,6 +2635,7 @@ mod tests {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "importing".into(),
             started_at: now(),
             updated_at: now(),
@@ -2529,6 +2741,7 @@ mod tests {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "running".into(),
             started_at: "2026-09-11T00:00:00Z".into(),
             updated_at: "2026-09-11T00:00:00Z".into(),
@@ -2925,5 +3138,125 @@ mod tests {
             .unwrap()
             .baseline_execution_id
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn an_execution_starts_from_parameters_and_records_the_stack() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        runner.crash_next.store(true, Ordering::SeqCst);
+        let parameters = ExecutionParameters {
+            scenarios: vec![
+                "context_pressure".into(),
+                "retired_scenario".into(),
+                "minimal_path".into(),
+                "context_pressure".into(),
+            ],
+            runs: 1,
+            technical_retries: 0,
+            seed: None,
+            model: " model ".into(),
+            provider: "provider".into(),
+            agent: Some("tech-lead".into()),
+        };
+        let started = manager
+            .start_execution(parameters, "  Again  ")
+            .await
+            .unwrap();
+        assert_eq!(started.state, "running");
+        let execution = terminal(&manager, &started.id).await;
+
+        assert_eq!(execution.plan_id, None);
+        assert_eq!(execution.role, None);
+        assert_eq!(execution.source, ExecutionSource::Local);
+        assert_eq!(execution.label.as_deref(), Some("Again"));
+        let parameters = execution.parameters.as_ref().unwrap();
+        assert_eq!(parameters.model, "model");
+        assert_eq!(
+            parameters.scenarios,
+            vec!["context_pressure", "retired_scenario", "minimal_path"]
+        );
+        // The stack is recorded before the first slot, with what could not be.
+        assert_eq!(execution.stack[0].name, "queue");
+        assert_eq!(execution.stack[0].dirty, Some(true));
+        assert_eq!(
+            execution.warnings,
+            vec!["Worker sources were not recorded: compose is unavailable"]
+        );
+        // The unknown scenario and the run that failed without results fail
+        // only their slots; the other scenario still runs.
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+        assert_eq!(execution.state, "completed", "{:?}", execution.error);
+        let slot = |id: &str| {
+            execution
+                .slots
+                .iter()
+                .find(|slot| slot.scenario_id == id)
+                .unwrap()
+        };
+        let crashed = slot("context_pressure");
+        assert_eq!(
+            crashed.error.as_deref(),
+            Some("fixture repository unavailable")
+        );
+        assert_eq!(crashed.observed, 0);
+        let unknown = slot("retired_scenario");
+        assert!(unknown.execution_id.is_empty());
+        assert_eq!(unknown.state, "not_run");
+        assert!(unknown
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("does not know the scenario 'retired_scenario'"));
+        let ran = slot("minimal_path");
+        assert_eq!((ran.state.as_str(), ran.observed), ("finished", 1));
+        assert_eq!(ran.request["agent"], "tech-lead");
+        assert!(ran.request["seed"].is_null());
+        assert!(!execution.baseline_eligible);
+        assert!(execution.measurements.is_some());
+        assert!(runner.owner.lock().await.is_none());
+
+        // Nothing without a model or a scenario starts.
+        for (model, scenarios) in [("", vec!["minimal_path".into()]), ("model", vec![])] {
+            let parameters = ExecutionParameters {
+                scenarios,
+                runs: 1,
+                technical_retries: 0,
+                seed: None,
+                model: model.into(),
+                provider: "provider".into(),
+                agent: None,
+            };
+            assert!(manager.start_execution(parameters, "").await.is_err());
+        }
+    }
+
+    #[test]
+    fn parameters_keep_the_sequential_groups_of_the_master_plan() {
+        let parameters = ExecutionParameters {
+            scenarios: vec![
+                "registry_implementation".into(),
+                "registry_verification".into(),
+                "minimal_path".into(),
+            ],
+            runs: 2,
+            technical_retries: 1,
+            seed: Some(7),
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let slots = parameter_slots(&parameters, "plan-grouped", None).unwrap();
+        assert_eq!(slots.len(), 6);
+        for round in [1, 2] {
+            let ids = slots
+                .iter()
+                .filter(|slot| slot.round == round)
+                .map(|slot| slot.execution_id.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(ids.len(), 2, "one run for the group, one for minimal_path");
+        }
+        assert!(slots.iter().all(|slot| slot.request["seed"] == 7));
     }
 }

@@ -18,16 +18,16 @@ use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
-use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::plans::store::{GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::store::{ExecutionParameters, GithubRunImportRequest, GithubRunsListRequest};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
+pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
@@ -44,7 +44,6 @@ pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
 pub(super) const PLAN_DELETE: &str = "e2e::dashboard::plan-delete";
 pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
 pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
-pub(super) const RUN_START: &str = "e2e::dashboard::run-start";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -95,6 +94,15 @@ pub(super) struct ExecutionGetRequest {
 pub(super) struct ExecutionRenameRequest {
     pub execution_id: String,
     /// Empty restores the default name.
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct ExecutionStartRequest {
+    /// What to run; a previous execution's parameters run it again.
+    pub parameters: ExecutionParameters,
+    /// Empty or absent uses the default name.
+    #[serde(default)]
     pub label: String,
 }
 
@@ -336,6 +344,24 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .await
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(execution).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_START,
+        "Start an execution on this stack from its parameters; answers with its id and runs in the background.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionStartRequest| {
+                let controller = controller.clone();
+                async move {
+                    let started = controller
+                        .start_execution(request.parameters, &request.label)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
                 }
             })
         },
@@ -597,16 +623,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
-    register(iii, RUN_START, "Start one local E2E execution.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: RunRequest| {
-            let controller = controller.clone();
-            async move {
-                controller.start(request).await.map_err(handler_error)?;
-                controller.snapshot(Some(0)).await.map_err(handler_error)
-            }
-        })
-    });
     register(iii, RUN_CANCEL, "Cancel the active local E2E execution.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {

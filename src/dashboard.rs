@@ -115,7 +115,6 @@ pub(crate) mod tests {
 
     use serde_json::json;
 
-    use super::controller::{control_request, validate_request};
     use super::presenter::{
         contract_fingerprint, execution_detail_value_optional, execution_summary,
         load_execution_summaries,
@@ -128,7 +127,7 @@ pub(crate) mod tests {
         CostReport, E2eManifest, E2eReport, E2eRunReport, E2eScenarioReport, ModelArtifact,
         RunStatus,
     };
-    use crate::scenarios::{ExecutionPolicy, ScenarioId};
+    use crate::scenarios::ExecutionPolicy;
     use crate::wire::{
         ControlPlaneEvidence, FunctionContractEvidence, Observed, SessionMetricsPayload,
         SessionUsageTotals,
@@ -249,23 +248,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn validates_and_normalizes_run_requests() {
-        let mut value = request();
-        validate_request(&mut value).unwrap();
-        assert_eq!(value.label, "first run");
-        value.url = "https://example.com".into();
-        assert!(validate_request(&mut value).is_err());
-    }
-
-    #[test]
-    fn local_requests_allow_rust_defined_composite_scenarios() {
-        let mut value = request();
-        value.scenarios = vec!["incident_response".into(), "context_pressure".into()];
-        value.technical_retries = 0;
-        validate_request(&mut value).expect("local plans must start composite scenarios");
-    }
-
-    #[test]
     fn accepts_engine_caller_metadata_without_persisting_it() {
         let mut value = serde_json::to_value(request()).expect("request should serialize");
         value["_caller_worker_id"] = serde_json::json!("browser-worker");
@@ -277,15 +259,6 @@ pub(crate) mod tests {
         assert!(serialized.get("_caller_worker_id").is_none());
         serialized["plan_context"] = serde_json::json!({"plan_id": "old-plan"});
         assert!(serde_json::from_value::<RunRequest>(serialized).is_err());
-    }
-
-    #[test]
-    fn local_requests_are_mapped_to_the_shared_control_plane() {
-        let converted = control_request(&request()).expect("request should map");
-        assert_eq!(converted.label, " first run ");
-        assert_eq!(converted.lane, "local");
-        assert_eq!(converted.scenarios, vec![ScenarioId::ContextPressure]);
-        assert!(converted.idempotency_key.starts_with("dashboard:"));
     }
 
     #[test]

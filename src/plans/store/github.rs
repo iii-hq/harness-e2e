@@ -17,7 +17,7 @@ use tokio::process::Command;
 
 use super::{
     finish, now, update_slot, ExecutionParameters, ExecutionSource, PlanExecution, PlanStore,
-    Runner, Slot, StackWorker, WorkerSource,
+    Runner, Slot, StackWorker,
 };
 use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
@@ -230,6 +230,7 @@ impl PlanStore {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: String::new(),
             started_at: now(),
             updated_at: now(),
@@ -748,53 +749,17 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
         .ok()
         .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
         .unwrap_or(Value::Null);
-    let mut observed = read_json(&directory.join("stack/workers.json"))
-        .ok()
-        .and_then(|value| value["workers"].as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|worker| worker["runtime"] != "engine")
-        .filter_map(|worker| {
-            Some((
-                worker["name"].as_str()?.to_owned(),
-                worker["version"].as_str().map(str::to_owned),
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut workers = Vec::new();
-    for (name, container) in lock["containers"].as_object().into_iter().flatten() {
-        workers.push(StackWorker {
-            name: name.clone(),
-            source: if container["worker"]
-                .as_str()
-                .is_some_and(|worker| worker.starts_with("path:"))
-            {
-                WorkerSource::Path
-            } else {
-                WorkerSource::Package
-            },
-            requested: container["resolved"]["version"]
+    let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
+    super::stack::rows(
+        &lock["containers"],
+        |container| {
+            container["resolved"]["version"]
                 .as_str()
                 .or(container["requested"].as_str())
-                .map(str::to_owned),
-            observed: observed.remove(name).flatten(),
-            commit: None,
-            dirty: None,
-            groups: Vec::new(),
-        });
-    }
-    for (name, version) in observed {
-        workers.push(StackWorker {
-            name,
-            source: WorkerSource::Package,
-            requested: None,
-            observed: version,
-            commit: None,
-            dirty: None,
-            groups: Vec::new(),
-        });
-    }
-    workers
+                .map(str::to_owned)
+        },
+        super::stack::observed_versions(&workers, None),
+    )
 }
 
 /// One row per distinct worker version; groups are listed only for a worker
@@ -830,7 +795,7 @@ fn merge_stacks(groups: Vec<(String, Vec<StackWorker>)>) -> Vec<StackWorker> {
     rows
 }
 
-fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
+pub(super) fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
     Slot {
         round,
         group_id: group_id.into(),
@@ -896,6 +861,7 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::WorkerSource;
     use super::*;
 
     #[test]
