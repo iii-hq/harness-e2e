@@ -66,6 +66,7 @@ describe('execution comparison page', () => {
         comparison={compareExecutions(a, b)}
         sides={{ a, b }}
         onToggleCounted={() => undefined}
+        onRunAgain={() => undefined}
         onTranscript={() => undefined}
       />,
     )

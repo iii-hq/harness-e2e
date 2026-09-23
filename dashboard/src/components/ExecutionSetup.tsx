@@ -10,7 +10,6 @@ import {
   Input,
   Textarea,
 } from '@/design-system'
-import { hashForWorkspace } from '@/hooks/use-hash-route'
 import '@/design-system/styles.css'
 
 export type ExecutionSetupMode = 'quick' | 'plan'
@@ -23,19 +22,6 @@ export function requestQuickExecution(scenarioIds: string[] = []) {
     QUICK_EXECUTION_INTENT_KEY,
     JSON.stringify(scenarioIds),
   )
-}
-
-/**
- * "Run again" for one execution with some of its scenarios, the one entry
- * the comparison's "Rerun selected" calls. Until the run-again form takes the
- * execution's parameters, this opens the local runner with the scope only.
- */
-export function requestRunAgain(request: {
-  executionId: string
-  scenarios: string[]
-}) {
-  requestQuickExecution(request.scenarios)
-  window.location.hash = hashForWorkspace('executions')
 }
 
 /** Returns the requested scope (possibly empty) or null when nothing asked. */

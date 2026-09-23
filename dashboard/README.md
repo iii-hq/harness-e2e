@@ -89,7 +89,8 @@ could not measure (missing, redefined `case.inputs_sha256`, technically
 invalid, undetermined, unscored) leaves both totals until the reader counts it
 again. Screenshots a run's deliverables declare are read on demand through
 `e2e::dashboard::evidence-read`, which serves only files the run's report
-declares, inside that execution's directory, up to 10 MB.
+declares, inside that execution's directory, up to 10 MB. **Rerun selected**
+opens Run again with B's parameters and only the ticked scenarios.
 
 The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable

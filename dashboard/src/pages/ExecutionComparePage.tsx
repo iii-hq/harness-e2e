@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
-import { requestRunAgain } from '@/components/ExecutionSetup'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { ScenarioMatrix } from '@/components/ScenarioMatrix'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
@@ -30,6 +30,7 @@ import type { AssessmentRunView } from '@/lib/assessment-view'
 import {
   type DashboardDataBridge,
   type DashboardExecutionDetail,
+  type ExecutionParameters,
   getDashboardDataBridge,
   type JsonObject,
 } from '@/lib/dashboard-data-source'
@@ -42,7 +43,9 @@ import {
   exclusionPhrase,
   type ScenarioComparison,
 } from '@/lib/execution-comparison'
+import { buildExecutionPresentation } from '@/lib/execution-view'
 import { formatPlanMetricDelta } from '@/lib/plan-comparison'
+import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
 
 type Choice = { include: string[]; exclude: string[] }
@@ -382,11 +385,14 @@ export function ComparisonView({
   comparison,
   sides,
   onToggleCounted,
+  onRunAgain,
   onTranscript,
 }: {
   comparison: ExecutionComparison
   sides: Sides
   onToggleCounted: (scenario: ScenarioComparison) => void
+  /** Run execution B again with only these scenarios. */
+  onRunAgain: (scenarios: string[]) => void
   onTranscript: (run: AssessmentRunView, title: string) => void
 }) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
@@ -512,12 +518,7 @@ export function ComparisonView({
               size: 'compact',
             })}
             disabled={selected.size === 0}
-            onClick={() =>
-              requestRunAgain({
-                executionId: comparison.b.id,
-                scenarios: [...selected],
-              })
-            }
+            onClick={() => onRunAgain([...selected].sort())}
           >
             <RotateCcw size={13} aria-hidden="true" />
             rerun selected{selected.size > 0 ? ` (${selected.size})` : ''}
@@ -747,6 +748,12 @@ export function ExecutionComparePage({
     run: AssessmentRunView
     title: string
   } | null>(null)
+  const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
+  // Run again for B: its parameters with only the ticked scenarios.
+  const [rerun, setRerun] = useState<{
+    parameters: ExecutionParameters
+    scenarios: string[]
+  } | null>(null)
 
   useEffect(() => {
     if (!left || !right) return
@@ -754,6 +761,7 @@ export function ExecutionComparePage({
     void (async () => {
       try {
         const bridge = await getDashboardDataBridge()
+        if (!cancelled) setBridge(bridge)
         const pair = await loadExecutionPair(
           (id) => bridge.getExecution(id),
           left,
@@ -851,7 +859,24 @@ export function ExecutionComparePage({
         onToggleCounted={(scenario) =>
           setChoice((current) => toggleCounted(current, scenario))
         }
+        onRunAgain={(scenarios) =>
+          setRerun({
+            parameters: rerunParameters(
+              sides.b,
+              sides.b.reports.map((record) => record.scenario_id),
+              buildExecutionPresentation(sides.b).subjects[0],
+            ),
+            scenarios,
+          })
+        }
         onTranscript={(run, title) => setTranscript({ run, title })}
+      />
+      <LocalRunnerDialog
+        bridge={bridge}
+        open={rerun !== null}
+        parameters={rerun?.parameters ?? null}
+        initialScenarios={rerun?.scenarios}
+        onClose={() => setRerun(null)}
       />
       {transcript ? (
         <TranscriptDialog
