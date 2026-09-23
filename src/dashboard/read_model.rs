@@ -1931,7 +1931,7 @@ mod tests {
         assert_eq!(spec.execution.max_turns, Some(64));
         assert_eq!(
             spec.denied_functions,
-            ["http::*", "browser::*", "github::*"]
+            ["http::*", "browser::*", "compose::*", "github::*"]
         );
     }
 

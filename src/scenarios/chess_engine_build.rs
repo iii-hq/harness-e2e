@@ -160,7 +160,7 @@ impl Scenario for ChessEngineBuild {
         ScenarioSpec {
             id: ID,
             prompt: format!(
-                r#"Build and start a playable chess Worker inside `{root}`. Read its `README.md`
+                r#"Build a playable chess Worker inside `{root}`. Read its `README.md`
 first for the pinned SDK bootstrap and registration shape.
 
 The frozen chess fixture in that directory is reference material. Replace its CLI-only delivery
@@ -173,7 +173,8 @@ services are forbidden. The runner supplies the relative `/api/play` transport a
 The Harness has already materialized `iii-sdk@0.23.1-rc.6` and its lockfile in this workspace solely
 for iii integration. Do not change dependencies. Set `scripts.run` to exactly `npm start`; the
 supplied start script runs `src/index.mjs`.
-Start and stop the Worker only through Compose; do not launch `npm`, `node`, or the Worker directly.
+Do not launch `npm`, `node`, or the Worker directly. The Harness starts and stops it through Compose
+after you finish.
 
 Register these exact functions with non-empty descriptions and JSON request/response schemas:
   - `{legal}`: `{{"fen": string}} -> {{"moves": sorted UCI string[]}}`
@@ -192,9 +193,9 @@ POST `{{"fen": currentFen, "move": source + destination}}` to `/api/play`, repla
 the returned `html`, remain interactive for the next move, and show failures in an element with `data-testid="error"`. The page must be
 usable at 1280x900 without external assets.
 
-Validate the Compose file, start the Worker, inspect all four registered functions, exercise the
-rules, and inspect the generated view HTML and interaction contract before reporting completion.
-The runner will proxy and drive the page after you finish."#,
+Run local chess-logic tests and inspect the generated view HTML and interaction contract before
+reporting completion. The Harness will validate Compose, inspect the live functions, proxy the
+page, and drive the browser after you finish."#,
                 root = root.display(),
                 compose = root.join("worker-compose.yaml").display(),
                 worker = contract.worker,
@@ -211,7 +212,7 @@ The runner will proxy and drive the page after you finish."#,
                 stuck_timeout_seconds: 900,
                 max_validation_retries: None,
             },
-            denied_functions: &["http::*", "browser::*", "github::*"],
+            denied_functions: &["http::*", "browser::*", "compose::*", "github::*"],
             criteria: assessment::criteria(ASSESSMENTS),
         }
     }
@@ -1181,7 +1182,7 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
     fs::write(
         &original_readme,
         format!(
-            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker and playable HTML board. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\n```\n",
+            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker and playable HTML board. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section. Harness validates, starts, and stops the Worker after completion; run local logic tests without launching it manually.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\n```\n",
             contract.worker, contract.functions["legal_moves"]
         ),
     )?;
