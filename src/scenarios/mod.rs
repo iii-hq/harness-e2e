@@ -13,6 +13,7 @@ use crate::context::E2eContext;
 use crate::report::CompletionState;
 use crate::wire::SessionMetricsResponse;
 
+pub mod alertmanager_route_match;
 mod assessment;
 pub mod browser_cross_site;
 pub mod chess_engine;
@@ -194,7 +195,9 @@ impl CriterionSpec {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ExecutionPolicy {
-    pub max_turns: u32,
+    /// Subject turn ceiling. `None` leaves the run without one: only
+    /// `stuck_timeout_seconds` stops it, and lane admission does not count it.
+    pub max_turns: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
     /// Shared Harness token budget. `None` leaves the Harness budget
@@ -212,8 +215,8 @@ pub struct ExecutionPolicy {
 
 impl ExecutionPolicy {
     fn validate(self, scenario_id: &str) -> Result<()> {
-        if self.max_turns == 0 {
-            bail!("scenario '{scenario_id}': execution.max_turns=0; expected at least 1");
+        if self.max_turns == Some(0) {
+            bail!("scenario '{scenario_id}': execution.max_turns=0; expected None (unbounded) or at least 1");
         }
         if self.max_output_tokens == Some(0) {
             bail!(
@@ -454,6 +457,7 @@ scenarios! {
     TodoWorkerPlanned = "todo_worker_planned" => todo_worker::TodoWorkerPlanned,
     EngineeringEnduranceLadder = "engineering_endurance_ladder" => engineering_endurance_ladder::EngineeringEnduranceLadder,
     GitRegressionForensics = "git_regression_forensics" => git_regression_forensics::GitRegressionForensics,
+    AlertmanagerRouteMatch = "alertmanager_route_match" => alertmanager_route_match::AlertmanagerRouteMatch,
     MechanicalReaction = "mechanical_reaction" => mechanical_reaction::MechanicalReaction,
     TimerWake = "timer_wake" => timer_wake::TimerWake,
     ReceivingOperation = "receiving_operation" => receiving_operation::ReceivingOperation,
@@ -647,7 +651,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_six_unique_valid_scenarios() {
+    fn registry_contains_fifty_seven_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -656,7 +660,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 56);
+        assert_eq!(ids.len(), 57);
     }
 
     #[test]
@@ -855,8 +859,8 @@ mod tests {
         let cases: [ValidationCase; 5] = [
             (
                 "max_turns",
-                |execution| execution.max_turns = 0,
-                "scenario 'context_pressure': execution.max_turns=0; expected at least 1",
+                |execution| execution.max_turns = Some(0),
+                "scenario 'context_pressure': execution.max_turns=0; expected None (unbounded) or at least 1",
             ),
             (
                 "max_output_tokens",

@@ -1934,7 +1934,12 @@ pub(crate) fn validate_run_request(request: &RunRequest) -> Result<LaneBudget> {
     let turns_per_run = scenarios
         .iter()
         .try_fold(0_u64, |total, scenario| -> Result<u64> {
-            let max_turns = u64::from(scenario.spec("budget").execution.max_turns);
+            // An unbounded scenario declares no turns; its stuck timeout is
+            // the only stop, so the lane budget sums the bounded ones.
+            let Some(max_turns) = scenario.spec("budget").execution.max_turns else {
+                return Ok(total);
+            };
+            let max_turns = u64::from(max_turns);
             let physical_attempts = if scenario.execution_kind().replay_safe() {
                 u64::from(request.technical_retries) + 1
             } else {
@@ -3032,7 +3037,7 @@ mod tests {
             vec![crate::report::E2eScenarioReport::aggregate(
                 "direct_answer",
                 ExecutionPolicy {
-                    max_turns: 1,
+                    max_turns: Some(1),
                     max_output_tokens: Some(10),
                     max_total_tokens: Some(100),
                     stuck_timeout_seconds: 10,

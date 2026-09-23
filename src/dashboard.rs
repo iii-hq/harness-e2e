@@ -198,7 +198,7 @@ pub(crate) mod tests {
             vec![E2eScenarioReport::aggregate(
                 "direct_answer",
                 ExecutionPolicy {
-                    max_turns: 1,
+                    max_turns: Some(1),
                     max_output_tokens: Some(10),
                     max_total_tokens: Some(100),
                     stuck_timeout_seconds: 10,
@@ -523,7 +523,7 @@ pub(crate) mod tests {
             value.scenarios = vec![E2eScenarioReport::aggregate(
                 "direct_answer",
                 ExecutionPolicy {
-                    max_turns: 1,
+                    max_turns: Some(1),
                     max_output_tokens: Some(10),
                     max_total_tokens: Some(100),
                     stuck_timeout_seconds: 10,
@@ -722,7 +722,7 @@ pub(crate) mod tests {
             let mut value = report();
             value.execution.execution_id = format!("execution-contract-{index}");
             value.execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
-            value.scenarios[0].execution_policy.max_turns = max_turns;
+            value.scenarios[0].execution_policy.max_turns = Some(max_turns);
 
             let mut run_metadata = metadata();
             run_metadata.id = format!("local-contract-{index}");

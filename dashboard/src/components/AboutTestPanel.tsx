@@ -62,7 +62,9 @@ export function withInlineCode(text: string) {
 
 function formatBudget(execution: TestSpec['execution']): string {
   return [
-    `${execution.max_turns} turns`,
+    execution.max_turns == null
+      ? 'unbounded turns'
+      : `${execution.max_turns} turns`,
     execution.max_output_tokens
       ? `${execution.max_output_tokens.toLocaleString('en-US')} output`
       : null,

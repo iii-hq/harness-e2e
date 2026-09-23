@@ -40,6 +40,13 @@ a fixture checkout or `HARNESS_E2E_FIXTURE_PATH`. Each attempt uses a private
 workspace, and temporary source checkouts are removed after their contents are
 read.
 
+`chess_engine_build` also needs a Compose daemon, a running iii Console, and an
+interactive browser. It grades a run-scoped chess Worker through live functions,
+the Console injectable-UI manifest, and the playable page at
+`#/worker/<worker>/chess`, then preserves screenshots of the real Console with
+the functional evidence. Setup installs the pinned iii SDK with npm before the
+run; a cold npm cache needs Registry access.
+
 `typescript_chat_service` carries its own frozen skeleton. It needs Node 22.6
 or newer on the runner host: the subject's TypeScript application runs through
 Node type stripping, both in the public suite and in the runner-owned

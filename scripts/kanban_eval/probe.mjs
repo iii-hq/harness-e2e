@@ -456,6 +456,15 @@ export async function ticketEditor(page, expectedTitle) {
   return forms
 }
 
+// The prompt asks for an author without naming its label, so find it beside the
+// comment body instead of requiring the reference's "Your name".
+export function commentAuthor(page) {
+  return page.locator('form')
+    .filter({ has: page.getByRole('textbox', { name: 'Comment', exact: true }) })
+    .getByRole('textbox', { name: /\b(?:name|author)\b/i })
+    .filter({ visible: true })
+}
+
 export function commentParentAction(entry) {
   const name = /first|parent|reference|in reply|replying.*go to.*comment|show.*comment|comment.*reply answers/i
   return entry.getByRole('button', { name }).or(entry.getByRole('link', { name })).first()
@@ -1141,7 +1150,7 @@ export const PROBES = {
       stage('discussion_post')
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
-      await page.getByLabel('Your name').fill('Alice')
+      await commentAuthor(page).fill('Alice')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('<img src=x onerror=alert(1)> first')
       await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       const safeComment = page.getByText('<img src=x onerror=alert(1)> first', { exact: true })
@@ -1150,7 +1159,7 @@ export const PROBES = {
       expect(await safeComment.isVisible() && await page.locator('img[src="x"]').count() === 0, 'comment body did not render markup as visible literal text')
       const entry = (body) => page.getByText(body, { exact: true }).locator('xpath=ancestor::*[self::li or self::article or @role="listitem"][1]')
       await entry('<img src=x onerror=alert(1)> first').getByRole('button', { name: /^reply/i }).click()
-      await page.getByLabel('Your name').fill('Bob')
+      await commentAuthor(page).fill('Bob')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('second')
       await page.getByRole('button', { name: /^post (comment|reply)$/i }).click()
       await expectText(page.getByText('second', { exact: true }), /second/)
@@ -1227,7 +1236,7 @@ export const PROBES = {
       requireEvidence(ticket && other, 'Discussion fixtures were not created.')
       const { context, page } = await openTicket(browser, baseUrl, ticket, { width: 390, height: 844 })
       stage('discussion_draft_failure')
-      const author = page.getByLabel('Your name')
+      const author = commentAuthor(page)
       const body = page.getByRole('textbox', { name: 'Comment', exact: true })
       await author.fill('Draft author')
       await body.fill('Draft during edit')
@@ -1252,7 +1261,7 @@ export const PROBES = {
       stage('discussion_draft_navigation')
       await openTicketFromBoard(page, other)
       await expectText(page.getByRole('heading', { name: other.title }), /Other discussion/)
-      await page.getByLabel('Your name').fill('Other author')
+      await commentAuthor(page).fill('Other author')
       await page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Other ticket draft')
       await openTicketFromBoard(page, ticket)
       await expectText(page.getByRole('heading', { name: ticket.title }), /Discussion probe/)
@@ -1376,7 +1385,7 @@ export const PROBES = {
       expect((await trigger('kanban::tickets::get', { id: ticket.id })).priority === 'urgent', 'saving overwrote untouched remote priority')
       stage('live_comment_draft')
       const preservedDraft = sessions[0].page.getByRole('textbox', { name: 'Comment', exact: true })
-      await sessions[0].page.getByLabel('Your name').fill('Draft author')
+      await commentAuthor(sessions[0].page).fill('Draft author')
       await preservedDraft.fill('Ordinary update draft')
       await preservedDraft.focus()
       await trigger('kanban::tickets::update', { id: ticket.id, changes: { description: 'Remote description' } })
@@ -1384,7 +1393,7 @@ export const PROBES = {
       expect(await sessions[0].page.evaluate(() => document.activeElement?.tagName === 'TEXTAREA'), 'ordinary live update lost textarea focus')
 
       stage('live_replies')
-      await sessions[1].page.getByLabel('Your name').fill('Remote author')
+      await commentAuthor(sessions[1].page).fill('Remote author')
       await sessions[1].page.getByRole('textbox', { name: 'Comment', exact: true }).fill('Live comment')
       const [posted] = await Promise.all([
         sessions[1].page.waitForResponse((response) => response.url().endsWith('/comments') && response.request().method() === 'POST'),

@@ -395,6 +395,38 @@ console.log(JSON.stringify({{
         self.assertFalse(result["console"])
         self.assertTrue(result["unavailable"])
 
+    def test_run_35757281109_comment_author_accepts_the_subjects_own_label(self):
+        if not PLAYWRIGHT.exists():
+            self.skipTest("dashboard Playwright is not installed")
+        script = f"""
+import {{ chromium }} from {json.dumps(PLAYWRIGHT.as_uri())}
+import {{ commentAuthor }} from {json.dumps(PROBE.as_uri())}
+const browser = await chromium.launch({{headless:true}})
+const comment = (author, id = 'author') => `<form>${{author ? `<label for="${{id}}">${{author}}</label><input id="${{id}}">` : ''}}<label for="${{id}}-body">Comment</label><textarea id="${{id}}-body"></textarea></form>`
+try {{
+  const page = await browser.newPage()
+  const matches = []
+  for (const markup of [
+    comment('Your name'), comment('Name'), comment('Author'),
+    '<form><label for="assignee">Assignee name</label><input id="assignee"></form>' + comment('Name'),
+    '<div hidden>' + comment('Name', 'stale') + '</div>' + comment('Name'),
+    '<form><label for="name">Name</label><input id="name"></form>' + comment(''),
+  ]) {{
+    await page.setContent(markup)
+    matches.push(await commentAuthor(page).evaluateAll(nodes => nodes.map(node => node.id)))
+  }}
+  console.log(JSON.stringify(matches))
+}} finally {{ await browser.close() }}
+"""
+        completed = subprocess.run(
+            ["node", "--input-type=module", "--eval", script],
+            cwd=ROOT, text=True, capture_output=True, check=False, timeout=20,
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(json.loads(completed.stdout), [
+            ["author"], ["author"], ["author"], ["author"], ["author"], [],
+        ])
+
     def test_parent_navigation_does_not_accept_the_back_reference_label(self):
         if not PLAYWRIGHT.exists():
             self.skipTest("dashboard Playwright is not installed")

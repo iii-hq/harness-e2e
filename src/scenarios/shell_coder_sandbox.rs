@@ -298,7 +298,7 @@ baseline, green public suite, and host demo results."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: 56,
+                max_turns: Some(56),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(1_000_000),
                 stuck_timeout_seconds: 900,

@@ -176,7 +176,7 @@ success."#,
             ),
             filesystem_root: None,
             execution: ExecutionPolicy {
-                max_turns: 10,
+                max_turns: Some(10),
                 max_output_tokens: Some(8_192),
                 max_total_tokens: Some(150_000),
                 stuck_timeout_seconds: 300,

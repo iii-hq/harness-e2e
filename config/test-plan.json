@@ -71,7 +71,8 @@
         "performance_regression",
         "chess_engine_build",
         "git_regression_forensics",
-        "typescript_chat_service"
+        "typescript_chat_service",
+        "alertmanager_route_match"
       ]
     },
     {
@@ -126,7 +127,9 @@
       "Pinned shared engineering fixture"
     ],
     "chess_engine_build": [
-      "Pinned shared engineering fixture"
+      "Pinned shared engineering fixture",
+      "Compose daemon, running iii Console, writable run-scoped worker project, and interactive browser",
+      "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
     ],
     "trend_blog": [
       "Pinned shared engineering fixture"
@@ -154,6 +157,9 @@
     ],
     "typescript_chat_service": [
       "Node 22.6+ on the runner host for direct TypeScript execution"
+    ],
+    "alertmanager_route_match": [
+      "Pinned Alertmanager Git bundle"
     ],
     "registry_planning": [
       "Linux amd64 with Docker and access to the pinned Registry source",

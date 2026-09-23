@@ -301,7 +301,7 @@ measure yourself."#,
             ),
             filesystem_root: Some(root),
             execution: ExecutionPolicy {
-                max_turns: 32,
+                max_turns: Some(32),
                 max_output_tokens: Some(16_384),
                 max_total_tokens: Some(400_000),
                 stuck_timeout_seconds: 600,
