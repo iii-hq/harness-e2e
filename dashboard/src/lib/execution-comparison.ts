@@ -662,8 +662,13 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
     if (rc) parts.push(`RC ${rc.slice(0, 8)}`)
   } else parts.push('local')
   const stack = stackOf(detail)
-  const harness = stack.find((worker) => worker.name === 'harness-e2e')
-  if (harness?.observed) parts.push(`harness ${harness.observed}`)
+  // The application under test and the runner that measured it are different
+  // workers; a path checkout of either is described with the others below.
+  const harness = stack.find((worker) => worker.name === 'harness')
+  if (harness?.observed && harness.source !== 'path')
+    parts.push(`harness ${harness.observed}`)
+  const runner = stack.find((worker) => worker.name === 'harness-e2e')
+  if (runner?.observed) parts.push(`runner ${runner.observed}`)
   const paths = new Map<string, string[]>()
   for (const worker of stack.filter((entry) => entry.source === 'path')) {
     const state = worker.commit

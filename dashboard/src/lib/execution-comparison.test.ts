@@ -380,10 +380,10 @@ describe('comparing two executions', () => {
     const comparison = compareExecutions(imported(), local())
 
     expect(comparison.a.origin).toBe(
-      'GitHub run 35823421664 · RC 366030b3 · harness 0.9.3',
+      'GitHub run 35823421664 · RC 366030b3 · runner 0.9.3',
     )
     expect(comparison.b.origin).toBe(
-      'local · harness 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+      'local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
     )
     expect(comparison.parameters).toEqual([])
     // The requested version is not a difference; source, observed version,
@@ -518,8 +518,8 @@ describe('comparison summary', () => {
       [
         '### deepseek/flash · no profile',
         '',
-        'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · harness 0.9.3',
-        'B: smoke · local · harness 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+        'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · runner 0.9.3',
+        'B: smoke · local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
         '',
         'What changed:',
         '- llm-router: package 1.2.0 → path 1.3.0-dev @ a1b2c3d (uncommitted changes)',
