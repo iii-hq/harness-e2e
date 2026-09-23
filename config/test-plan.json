@@ -182,30 +182,9 @@
   },
   "profiles": [
     {
-      "id": "smoke",
-      "label": "Smoke",
-      "purpose": "Verify essential behavior in the published stack.",
-      "metrics": [
-        "execution_reliability",
-        "completion_rate",
-        "score_coverage"
-      ],
-      "modules": [],
-      "scenarios": [
-        "minimal_path",
-        "tool_contract_recovery",
-        "persistent_state",
-        "timer_wake",
-        "shell_coder_sandbox"
-      ],
-      "repetitions": 1,
-      "technical_retries": 0,
-      "lane": "local-smoke"
-    },
-    {
       "id": "regression",
       "label": "Regression",
-      "purpose": "Detect broken behavior across representative capabilities.",
+      "purpose": "Detect regressions in core runtime behavior, recovery, context and safety.",
       "metrics": [
         "execution_reliability",
         "completion_rate",
@@ -213,110 +192,24 @@
       ],
       "modules": [],
       "scenarios": [
-        "minimal_path",
-        "tool_contract_recovery",
         "persistent_state",
+        "tool_contract_recovery",
         "timer_wake",
         "shell_coder_sandbox",
-        "performance_regression",
-        "git_regression_forensics",
         "database_migration_recovery",
-        "contention_ledger"
+        "contention_ledger",
+        "validation_self_repair",
+        "context_pressure",
+        "prompt_injection_resilience"
       ],
       "repetitions": 1,
       "technical_retries": 1,
       "lane": "local-regression"
     },
     {
-      "id": "capability",
-      "label": "Capability",
-      "purpose": "Measure coverage, repeatability and difficulty across capability domains.",
-      "metrics": [
-        "deliverable_success",
-        "structural_integrity",
-        "completion_evidence_coverage"
-      ],
-      "modules": [
-        "m1",
-        "m2",
-        "m3",
-        "m4",
-        "m5",
-        "m6",
-        "m7",
-        "m8",
-        "m10"
-      ],
-      "scenarios": [],
-      "repetitions": 1,
-      "technical_retries": 0,
-      "lane": "local-capability"
-    },
-    {
-      "id": "evolution",
-      "label": "Evolution",
-      "purpose": "Compare quality and resource use across fixed Harness versions.",
-      "metrics": [
-        "completion_rate",
-        "tokens_per_completion",
-        "p50_total_tokens",
-        "p50_function_calls"
-      ],
-      "modules": [],
-      "scenarios": [
-        "minimal_path",
-        "tool_contract_recovery",
-        "persistent_state",
-        "timer_wake",
-        "context_pressure",
-        "validation_self_repair",
-        "contention_ledger",
-        "quorum_fan_in",
-        "shell_coder_sandbox",
-        "performance_regression",
-        "cross_app_transaction",
-        "prompt_injection_resilience",
-        "incident_response",
-        "trending_topics_build",
-        "registry_planning",
-        "registry_implementation",
-        "registry_environment",
-        "registry_verification"
-      ],
-      "repetitions": 3,
-      "technical_retries": 0,
-      "lane": "local-evolution",
-      "scenario_groups": [
-        [
-          "registry_implementation",
-          "registry_verification"
-        ]
-      ]
-    },
-    {
-      "id": "endurance",
-      "label": "Endurance",
-      "purpose": "Measure sustained correct work and the accepted capability boundary.",
-      "metrics": [
-        "max_accepted_rung",
-        "accepted_tickets",
-        "time_to_boundary_ms"
-      ],
-      "modules": [],
-      "scenarios": [
-        "engineering_endurance_ladder",
-        "wake_chain_soak",
-        "fanout_ladder",
-        "depth_ladder"
-      ],
-      "repetitions": 1,
-      "technical_retries": 0,
-      "lane": "local-endurance"
-    },
-    {
       "id": "software-engineering",
       "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build and the Linkly agentic tutorial.",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, the Linkly agentic tutorial, Alertmanager route migration and a playable chess Worker in the Console.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -326,12 +219,12 @@
         "m10"
       ],
       "scenarios": [
-        "registry_planning",
         "registry_implementation",
-        "registry_environment",
         "registry_verification",
         "trending_topics_build",
-        "linkly_tutorial"
+        "linkly_tutorial",
+        "alertmanager_route_match",
+        "chess_engine_build"
       ],
       "repetitions": 1,
       "technical_retries": 0,
@@ -342,6 +235,47 @@
           "registry_verification"
         ]
       ]
+    },
+    {
+      "id": "pr",
+      "label": "PR",
+      "purpose": "Check essential behavior on a candidate stack before merging a change.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success"
+      ],
+      "modules": [],
+      "scenarios": [
+        "minimal_path",
+        "persistent_state",
+        "tool_contract_recovery",
+        "shell_coder_sandbox"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-pr"
+    },
+    {
+      "id": "after-release",
+      "label": "After release",
+      "purpose": "Check essential behavior in the published stack after a release.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "score_coverage"
+      ],
+      "modules": [],
+      "scenarios": [
+        "minimal_path",
+        "persistent_state",
+        "tool_contract_recovery",
+        "shell_coder_sandbox",
+        "timer_wake"
+      ],
+      "repetitions": 1,
+      "technical_retries": 0,
+      "lane": "local-after-release"
     }
   ]
 }

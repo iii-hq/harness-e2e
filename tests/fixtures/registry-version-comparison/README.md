@@ -21,9 +21,9 @@ Registry starts at `662eb87c1bdbb395f36264d5d26bf823e2ace783`. Dependency instal
 
 ## Release Control and Console plans
 
-The existing `evolution` profile includes all four Registry cases alongside its other eighteen cases, with three repetitions per case. Planning and environment construction have separate groups. Implementation and verification run sequentially in one ordinary group, with four individual scenario results retained. The existing plan summary weights groups; use each scenario's criteria to assess its specific task.
+The `software-engineering` profile includes implementation and verification, run sequentially in one group with one repetition. Planning and environment construction remain available as standalone scenarios. Use each scenario's criteria to assess its specific task.
 
-Release Control's existing `harness-evolution` plan selects this profile through the existing executor. Publish the updated runner to include the expanded scope. No additional workflow or scheduler is required.
+Release Control's `harness-software-engineering` plan selects this profile through the existing executor.
 
 Within the shared execution, implementation publishes its delivery for verification. A new repetition clears that input, and a missing delivery fails verification rather than selecting an older file. Concurrent executions cannot exchange deliveries. Verification applies the patch to a fresh pinned Registry checkout and starts a fresh environment.
 
@@ -33,7 +33,7 @@ Configure `HARNESS_E2E_RUN_DIR` on the E2E worker to a writable directory on the
 
 For standalone verification of a previously delivered implementation, configure `HARNESS_E2E_REGISTRY_IMPLEMENTATION` on the worker with the explicit `delivery/` directory containing `implementation.patch` and `manifest.json`. Reconcile the worker while it has no active executions. The paired profile does not use this external input. Delivery files also remain in normal captured evidence after cleanup.
 
-Use the Evolution profile template in the Console and select the four Registry cases with one repetition to exercise the same grouping locally. On a disk-constrained executor, run the Docker builds sequentially. The profile is explicit; existing plan scopes and schedules remain unchanged.
+Use the Software engineering profile template in the Console and add planning and environment if all four Registry cases are needed locally. Keep one repetition and run the Docker builds sequentially on a disk-constrained executor.
 
 ## Run
 

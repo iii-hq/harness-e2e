@@ -56,7 +56,7 @@ enum TestPlanCommand {
     Catalog,
     /// Print the immutable snapshot of one profile: its digests, cases and campaigns.
     Materialize {
-        /// Profile id of the master test plan (`smoke`, `regression`, ...).
+        /// Profile id from the master test plan.
         #[arg(long)]
         profile: String,
     },
