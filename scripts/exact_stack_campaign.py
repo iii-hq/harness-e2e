@@ -456,6 +456,7 @@ def project_scaffold(
     template_packages: dict[str, str] | None = None,
     profile_root: Path | None = None,
     base: dict[str, Any] | None = None,
+    group_id: str | None = None,
 ) -> dict[str, Any]:
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
@@ -491,6 +492,15 @@ def project_scaffold(
     manifest = copy.deepcopy(template if template is not None else (declared_base() if base is None else base))
     containers = manifest.setdefault("containers", {})
     containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}"})
+    if group_id is not None:
+        group = next((group for group in contract["suite"]["groups"] if group["id"] == group_id), None)
+        if group is None:
+            raise ValueError(f"unknown campaign group: {group_id}")
+        if {"form_flow_build", "state_machine_canvas_build"} & set(group["scenarios"]):
+            if not any(item.get("worker") == "package://canvas" for item in containers.values()):
+                if "canvas" in containers:
+                    raise ValueError("container canvas is already used by another worker")
+                containers["canvas"] = {"worker": "package://canvas"}
     provider = contract["suite"]["subject"]["provider"]
     if not re.fullmatch(r"[a-z][a-z0-9-]*", provider):
         raise ValueError("suite.subject.provider must be a provider package name")
@@ -729,6 +739,7 @@ def main() -> int:
     template.add_argument("--group-id", required=True)
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
+    project.add_argument("--group-id")
     project.add_argument("--namespace", required=True)
     project.add_argument("--data-dir", type=Path, required=True)
     project.add_argument("--env-file", type=Path)
@@ -818,6 +829,7 @@ def main() -> int:
                 assignments(args.template_package, "template-package"),
                 args.profile_root,
                 base,
+                args.group_id,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"

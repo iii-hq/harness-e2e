@@ -70,6 +70,15 @@ def runner_selector(plan: dict[str, Any], pinned: dict[str, Any]) -> str:
     return version
 
 
+def resolve_canvas_version(selector: str) -> str:
+    response = get_json(f"{REGISTRY_API_URL}/resolve", {"worker": "canvas", "version": selector})
+    root = response.get("root") if isinstance(response, dict) else None
+    version = root.get("version") if isinstance(root, dict) else None
+    if not isinstance(version, str) or not EXACT_VERSION.fullmatch(version):
+        raise ResolutionError("Registry did not resolve canvas to an exact version")
+    return version
+
+
 def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
@@ -219,6 +228,12 @@ def main() -> int:
     # stack pin still wins. Either way it is a selector, so it travels with the
     # others and the scaffold lays it over the declaration.
     pinned[RUNNER_ROOT] = runner_selector(plan, pinned)
+    if any(
+        {"form_flow_build", "state_machine_canvas_build"} & set(group.get("scenarios") or [])
+        for campaign in snapshot["campaigns"]
+        for group in campaign["groups"]
+    ):
+        pinned["canvas"] = resolve_canvas_version(pinned.get("canvas", "latest"))
     template = resolve_template(plan.get("template"), token)
     cli = resolve_cli(args.cli_version, token)
 

@@ -264,6 +264,28 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "worker": "package://provider-anthropic", "version": "latest", "env_file": ["/private/.env"],
         })
 
+    def test_visual_worker_groups_include_canvas_only_for_their_shards(self):
+        contract = campaign_contract()
+        contract["runtime"]["stack"] = {"canvas": "0.4.0"}
+        contract["suite"]["groups"].extend([
+            {"id": "case-form-flow-build", "scenarios": ["form_flow_build"]},
+            {"id": "case-state-machine-canvas-build", "scenarios": ["state_machine_canvas_build"]},
+        ])
+        ordinary = MODULE.project_scaffold(
+            contract, "project-one", Path("/data"), None, {}, group_id="daily-core",
+        )
+        self.assertNotIn("canvas", ordinary["containers"])
+        for group_id in ("case-form-flow-build", "case-state-machine-canvas-build"):
+            visual = MODULE.project_scaffold(
+                contract, "project-one", Path("/data"), None, {}, group_id=group_id,
+            )
+            self.assertEqual(visual["containers"]["canvas"]["version"], "0.4.0")
+            self.assertEqual(visual["containers"]["canvas"]["worker"], "package://canvas")
+        with self.assertRaisesRegex(ValueError, "unknown campaign group"):
+            MODULE.project_scaffold(
+                contract, "project-one", Path("/data"), None, {}, group_id="unknown",
+            )
+
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
         start = source.index('if [[ "$profile_assets" == true ]]; then', source.index('failure_phase=project_start'))

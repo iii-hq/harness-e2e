@@ -70,6 +70,8 @@
         "shell_coder_sandbox",
         "performance_regression",
         "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build",
         "git_regression_forensics",
         "typescript_chat_service",
         "alertmanager_route_match"
@@ -129,6 +131,14 @@
     "chess_engine_build": [
       "Pinned shared engineering fixture",
       "Compose daemon, running iii Console, writable run-scoped worker project, and interactive browser",
+      "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
+    ],
+    "form_flow_build": [
+      "Compose daemon with Canvas Worker, running iii Console, writable run-scoped worker project, and interactive browser",
+      "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
+    ],
+    "state_machine_canvas_build": [
+      "Compose daemon with Canvas Worker, running iii Console, writable run-scoped worker project, and interactive browser",
       "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
     ],
     "trend_blog": [
@@ -209,7 +219,7 @@
     {
       "id": "software-engineering",
       "label": "Software engineering",
-      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, the Linkly agentic tutorial, Alertmanager route migration and a playable chess Worker in the Console.",
+      "purpose": "Evaluate real application engineering through incremental Kanban tasks, Registry development, a trending-topics blog build, the Linkly agentic tutorial, Alertmanager route migration, and visual chess, form-flow, and state-machine Workers in the Console.",
       "metrics": [
         "deliverable_success",
         "completion_evidence_coverage",
@@ -224,7 +234,9 @@
         "trending_topics_build",
         "linkly_tutorial",
         "alertmanager_route_match",
-        "chess_engine_build"
+        "chess_engine_build",
+        "form_flow_build",
+        "state_machine_canvas_build"
       ],
       "repetitions": 1,
       "technical_retries": 0,

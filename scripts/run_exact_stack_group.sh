@@ -331,6 +331,7 @@ done
 
 project_args=(
   --contract "$contract_path"
+  --group-id "$campaign_group_id"
   --env-file "$env_file"
   --base-compose "$base_compose"
   --namespace "$namespace"
