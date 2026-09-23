@@ -17,6 +17,8 @@ use base64::Engine as _;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
+use shakmaty::fen::Fen;
+use shakmaty::{CastlingMode, Chess, EnPassantMode};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio::sync::{oneshot, Mutex};
@@ -165,11 +167,13 @@ The frozen chess fixture in that directory is reference material. Replace its CL
 with a run-scoped iii Worker declared in `{compose}`. The Compose worker and container name must be
 `{worker}`, its `worker` URI must be exactly `path://.`, and `scripts.run` must be exactly
 `npm start`. Declare no sibling containers, `start_after`, or external working directory.
+Do not declare `engine:`; the run-scoped project uses the existing iii Engine.
 Keep all chess logic and application HTML in this Worker. Chess libraries and external network
 services are forbidden. The runner supplies the relative `/api/play` transport after completion.
 The Harness has already materialized `iii-sdk@0.23.1-rc.6` and its lockfile in this workspace solely
 for iii integration. Do not change dependencies. Set `scripts.run` to exactly `npm start`; the
 supplied start script runs `src/index.mjs`.
+Start and stop the Worker only through Compose; do not launch `npm`, `node`, or the Worker directly.
 
 Register these exact functions with non-empty descriptions and JSON request/response schemas:
   - `{legal}`: `{{"fen": string}} -> {{"moves": sorted UCI string[]}}`
@@ -304,10 +308,34 @@ The runner will proxy and drive the page after you finish."#,
         let root = workspace_root(run_id);
         let compose = root.join("worker-compose.yaml");
         if compose.is_file() {
-            context
-                .trigger_value("compose::down", json!({"file": compose}))
+            match context
+                .trigger_value("compose::validate", json!({"file": compose}))
                 .await
-                .context("stop run-scoped chess Worker before removing its workspace")?;
+            {
+                Ok(_) => {
+                    context
+                        .trigger_value("compose::down", json!({"file": compose}))
+                        .await
+                        .context("stop run-scoped chess Worker before removing its workspace")?;
+                }
+                Err(error) if is_remote_failure(&error) => {
+                    let functions = context
+                        .trigger_value(
+                            "engine::functions::info",
+                            json!({"function_ids":worker_contract(run_id).functions.values().collect::<Vec<_>>()}),
+                        )
+                        .await
+                        .context("inspect chess functions after invalid Compose delivery")?;
+                    if functions["functions"].as_array().is_some_and(|registered| {
+                        registered.iter().any(|item| item.get("error").is_none())
+                    }) {
+                        bail!("invalid chess Compose file has live functions that cannot be safely stopped");
+                    }
+                }
+                Err(error) => {
+                    return Err(error.context("validate chess Compose file before cleanup"));
+                }
+            }
         }
         remove_workspace(&root)
     }
@@ -386,8 +414,10 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     let local_contract = fs::read_to_string(&compose)
         .ok()
         .and_then(|text| serde_yaml::from_str::<Value>(&text).ok())
-        .and_then(|yaml| yaml["containers"].as_object().cloned())
-        .is_some_and(|containers| {
+        .is_some_and(|yaml| {
+            let Some(containers) = yaml["containers"].as_object() else {
+                return false;
+            };
             containers.len() == 1
                 && containers[&contract.worker]
                     .get("worker")
@@ -399,6 +429,7 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
                     == Some("npm start")
                 && containers[&contract.worker].get("start_after").is_none()
                 && containers[&contract.worker].get("working_dir").is_none()
+                && yaml.get("engine").is_none()
         });
     let validate = if compose_present {
         context
@@ -604,13 +635,47 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
     .await;
     ensure_remote_or_success(&legal_play, "invoke legal play probe")?;
     ensure_remote_or_success(&illegal_play, "invoke illegal play probe")?;
-    let play_ok = legal_play
+    let actual_after = legal_play
         .as_ref()
         .ok()
         .and_then(|value| value["fen"].as_str())
-        == Some(expected_after.as_str())
+        .map(str::to_string);
+    let second_play = if let Some(actual_after) = &actual_after {
+        Some(
+            invoke(
+                context.client(),
+                &contract.functions["play"],
+                json!({"fen":actual_after,"move":"e7e5"}),
+            )
+            .await,
+        )
+    } else {
+        None
+    };
+    if let Some(second_play) = &second_play {
+        ensure_remote_or_success(second_play, "invoke second legal play probe")?;
+    }
+    let actual_final = second_play
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .and_then(|value| value["fen"].as_str())
+        .map(str::to_string);
+    let play_ok = actual_after
+        .as_deref()
+        .is_some_and(|actual| fen_equivalent(actual, &expected_after))
+        && actual_final
+            .as_deref()
+            .is_some_and(|actual| fen_equivalent(actual, &expected_final))
         && illegal_play.as_ref().err().is_some_and(is_remote_failure);
-    checks.insert("play_contract".into(), json!({"passed":play_ok,"reason":if play_ok {"legal move matches oracle and illegal move is rejected"} else {"play contract failed"},"expected_fen":expected_after,"legal":result_value(legal_play),"illegal":result_value(illegal_play)}));
+    checks.insert("play_contract".into(), json!({
+        "passed":play_ok,
+        "reason":if play_ok {"both legal moves are position-equivalent to the oracle and the illegal move is rejected"} else {"play contract failed"},
+        "oracle":{"after_e2e4":expected_after,"after_e7e5":expected_final},
+        "actual":{"after_e2e4":actual_after,"after_e7e5":actual_final},
+        "first":result_value(legal_play),
+        "second":second_play.map(result_value),
+        "illegal":result_value(illegal_play)
+    }));
 
     let invalid_fen = invoke(
         context.client(),
@@ -656,9 +721,24 @@ async fn validate_candidate(context: &E2eContext, run_id: &str) -> Result<Value>
         && healthy;
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid requests were rejected and Worker stayed healthy"} else {"invalid-input rejection or post-rejection health failed"},"observed":[result_value(invalid_fen),result_value(invalid_depth),result_value(invalid_move)],"health_after_rejections":result_value(health_after_rejections)}));
 
-    let identity = json!({"worker":contract.worker,"functions":contract.functions,"source_sha256":source_sha256,"compose_sha256":compose_sha256,"start_fen":START_FEN,"after_e2e4_fen":expected_after,"after_e7e5_fen":expected_final});
+    let identity = json!({
+        "worker":contract.worker,"functions":contract.functions,
+        "source_sha256":source_sha256,"compose_sha256":compose_sha256,
+        "fen":{"start":START_FEN,"oracle":{"after_e2e4":expected_after,"after_e7e5":expected_final},"actual":{"after_e2e4":actual_after,"after_e7e5":actual_final}}
+    });
     let browser = if ready && surface && play_ok {
-        capture_browser(context, &contract, &identity).await?
+        capture_browser(
+            context,
+            &contract,
+            &identity,
+            actual_after
+                .as_deref()
+                .expect("play_ok requires first actual FEN"),
+            actual_final
+                .as_deref()
+                .expect("play_ok requires second actual FEN"),
+        )
+        .await?
     } else {
         json!({"passed":false,"reason":"runtime and play contract are prerequisites","captures":[]})
     };
@@ -704,6 +784,22 @@ fn bounded_value(value: Value) -> Value {
     } else {
         json!({"omitted":"response exceeded 16 KiB","sha256":crate::artifact::sha256_bytes(encoded.as_bytes()),"size_bytes":encoded.len()})
     }
+}
+
+fn normalize_fen(fen: &str) -> Result<String> {
+    let parsed: Fen = fen
+        .parse()
+        .with_context(|| format!("parse candidate FEN `{fen}`"))?;
+    let position: Chess = parsed
+        .into_position(CastlingMode::Standard)
+        .with_context(|| format!("validate candidate FEN `{fen}`"))?;
+    Ok(Fen::from_position(&position, EnPassantMode::Legal).to_string())
+}
+
+fn fen_equivalent(left: &str, right: &str) -> bool {
+    normalize_fen(left)
+        .and_then(|left| normalize_fen(right).map(|right| left == right))
+        .unwrap_or(false)
 }
 
 fn function_schema_matches(operation: &str, function: &Value) -> bool {
@@ -832,6 +928,8 @@ async fn capture_browser(
     context: &E2eContext,
     contract: &WorkerContract,
     identity: &Value,
+    actual_after: &str,
+    actual_final: &str,
 ) -> Result<Value> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let address = listener.local_addr()?;
@@ -864,8 +962,15 @@ async fn capture_browser(
         .as_str()
         .context("browser session omitted session_id")?
         .to_string();
-    let result =
-        capture_browser_session(context, &session, &format!("http://{address}"), identity).await;
+    let result = capture_browser_session(
+        context,
+        &session,
+        &format!("http://{address}"),
+        identity,
+        actual_after,
+        actual_final,
+    )
+    .await;
     let stop = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
@@ -874,18 +979,16 @@ async fn capture_browser(
     stop.context("stop chess evidence browser session")?;
     let mut evidence = result?;
     let calls = audit.lock().await.clone();
-    let expected_after = chess_engine::apply_move(START_FEN, "e2e4")?.new_fen;
-    let expected_final = chess_engine::apply_move(&expected_after, "e7e5")?.new_fen;
     let routed = calls.iter().any(|call| {
         call["request"]["fen"] == START_FEN
             && call["request"]["move"] == "e2e4"
-            && call["play_fen"] == expected_after
+            && call["play_fen"] == actual_after
             && call["view_returned"] == true
     });
     let routed_second = calls.iter().any(|call| {
-        call["request"]["fen"] == expected_after
+        call["request"]["fen"] == actual_after
             && call["request"]["move"] == "e7e5"
-            && call["play_fen"] == expected_final
+            && call["play_fen"] == actual_final
             && call["view_returned"] == true
     });
     evidence["proxy_audit"] = json!(calls);
@@ -902,6 +1005,8 @@ async fn capture_browser_session(
     session: &str,
     url: &str,
     identity: &Value,
+    actual_after: &str,
+    actual_final: &str,
 ) -> Result<Value> {
     context
         .trigger_value(
@@ -922,12 +1027,10 @@ async fn capture_browser_session(
     }
     let before_state = inspect_ui(context, session, START_FEN, false).await?;
     let before = screenshot_png(context, session).await?;
-    let expected_after = chess_engine::apply_move(START_FEN, "e2e4")?.new_fen;
-    let expected_final = chess_engine::apply_move(&expected_after, "e7e5")?.new_fen;
     let interaction_code = format!(
         "const expectedFirst = {}; const expectedFinal = {};\n{}",
-        serde_json::to_string(&expected_after)?,
-        serde_json::to_string(&expected_final)?,
+        serde_json::to_string(actual_after)?,
+        serde_json::to_string(actual_final)?,
         r#"return await (async () => {
           const click = square => {
             const element = document.querySelector(`[data-square="${square}"]`);
@@ -953,16 +1056,16 @@ async fn capture_browser_session(
             json!({"session_id":session,"timeout_ms":30000,"code":interaction_code}),
         )
         .await?;
-    let after_state = inspect_ui(context, session, &expected_final, true).await?;
+    let after_state = inspect_ui(context, session, actual_final, true).await?;
     let after = screenshot_png(context, session).await?;
     let passed = before_state["passed"] == true
         && after_state["passed"] == true
         && before["data"].is_string()
         && after["data"].is_string()
-        && interaction["result"]["fen"] == expected_final;
+        && interaction["result"]["fen"] == actual_final;
     let captures = json!([
         {"id":"before","caption":"Playable chess Worker before e2-e4","url":url,"status":"captured","screenshot":"before.png","session_id":session,"details":before["details"],"identity":identity,"fen":START_FEN,"sha256":before["sha256"]},
-        {"id":"after","caption":"Playable chess Worker after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":expected_final,"transitions":[expected_after,expected_final],"sha256":after["sha256"]}
+        {"id":"after","caption":"Playable chess Worker after e2-e4 and e7-e5","url":url,"status":"captured","screenshot":"after.png","session_id":session,"details":after["details"],"identity":identity,"fen":actual_final,"transitions":[actual_after,actual_final],"sha256":after["sha256"]}
     ]);
     Ok(
         json!({"passed":passed,"reason":if passed {"browser rendered a visible board and completed two moves"} else {"browser interaction, visibility, pieces, or checked FEN failed"},"captures":captures,"before":before,"after":after,"interaction":interaction["result"]}),
@@ -1078,7 +1181,7 @@ async fn prepare_workspace(run_id: &str) -> Result<()> {
     fs::write(
         &original_readme,
         format!(
-            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker and playable HTML board. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start`.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\n```\n",
+            "# Chess Worker task\n\nThe scenario prompt is authoritative. Build a run-scoped iii Worker and playable HTML board. The frozen `engine/` directory contains a CLI skeleton and public tests; the CLI is not scored as a standalone program. Implement chess logic behind the Worker functions. Chess libraries are forbidden. Harness already materialized the exact iii-sdk integration dependency and lockfile; do not change dependencies. Compose must run `npm start` and use the existing Engine without an `engine:` section.\n\nMinimal registration shape:\n\n```js\nimport {{ registerWorker }} from 'iii-sdk'\nconst iii = registerWorker(process.env.III_ENGINE_URL ?? process.env.III_URL, {{ workerName: '{}' }})\niii.registerFunction('{}', async (payload) => {{ /* implement */ }}, {{ description: '...', request_format: {{ type: 'object', properties: {{}} }}, response_format: {{ type: 'object', properties: {{}} }} }})\n```\n",
             contract.worker, contract.functions["legal_moves"]
         ),
     )?;
@@ -1193,7 +1296,7 @@ fn collect_files(root: &Path, directory: &Path, files: &mut Vec<String>) -> Resu
         if entry.file_type()?.is_dir() {
             if !matches!(
                 entry.file_name().to_str(),
-                Some("__pycache__" | "node_modules" | ".git" | "target" | ".harness-e2e")
+                Some("__pycache__" | "node_modules" | ".git" | ".iii" | "target" | ".harness-e2e")
             ) {
                 collect_files(root, &path, files)?;
             }
@@ -1358,5 +1461,19 @@ mod tests {
             .values()
             .filter(|package| package["resolved"].is_string())
             .all(|package| package["integrity"].is_string()));
+    }
+
+    #[test]
+    fn fen_equivalence_accepts_conventional_irrelevant_en_passant_targets() {
+        let oracle_after = chess_engine::apply_move(START_FEN, "e2e4").unwrap().new_fen;
+        let conventional_after = "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq e3 0 1";
+        assert!(fen_equivalent(conventional_after, &oracle_after));
+
+        let oracle_final = chess_engine::apply_move(&oracle_after, "e7e5")
+            .unwrap()
+            .new_fen;
+        let conventional_final = "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e6 0 2";
+        assert!(fen_equivalent(conventional_final, &oracle_final));
+        assert!(!fen_equivalent(START_FEN, conventional_after));
     }
 }
