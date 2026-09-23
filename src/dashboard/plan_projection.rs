@@ -73,7 +73,13 @@ impl PlanStore {
                         .map(|slot| slot.request["lane"].clone())
                 });
             let summary = execution_summary(&execution);
-            for slot in &execution.slots {
+            // A slot without a native run (a group that failed before one
+            // existed) has no child to hide.
+            for slot in execution
+                .slots
+                .iter()
+                .filter(|s| !s.execution_id.is_empty())
+            {
                 children.insert(slot.execution_id.clone(), execution.id.clone());
             }
             let status = match execution.state.as_str() {
@@ -172,6 +178,7 @@ impl PlanStore {
             .slots
             .iter()
             .map(|slot| &slot.execution_id)
+            .filter(|id| !id.is_empty())
             .collect::<BTreeSet<_>>()
             .into_iter()
             .collect::<Vec<_>>());

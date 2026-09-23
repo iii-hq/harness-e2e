@@ -390,13 +390,17 @@ impl PlanStore {
                     }
                     Err(error) => {
                         let error = format!("{error:#}");
+                        // Without the campaign contract the group's scenarios
+                        // are unknown: one slot stands for the group.
+                        for scenario in &declared {
+                            push_unique(&mut scenarios, scenario);
+                        }
                         let declared = if declared.is_empty() {
                             vec![group_id.clone()]
                         } else {
                             declared
                         };
                         for scenario in declared {
-                            push_unique(&mut scenarios, &scenario);
                             let mut slot = slot(round, &group_id, &scenario);
                             slot.state = "not_run".into();
                             slot.error = Some(error.clone());
