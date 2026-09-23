@@ -1,4 +1,5 @@
-// Deterministic browser coverage for Run tests and Run again. No models run.
+// Deterministic browser coverage for Run tests, Run again and the GitHub
+// import list. No models run.
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 import { createConsoleTestHost } from './console-test-host.mjs'
@@ -10,6 +11,7 @@ const imported = {
   plan_id: null,
   status: 'passed',
   state: 'completed',
+  started_at: '2026-09-20T10:00:00Z',
   availability: 'aggregate',
   subjects: [
     {
@@ -43,7 +45,24 @@ const imported = {
       url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
       release_control_execution_id: null,
     },
-    stack: [],
+    stack: [
+      {
+        name: 'harness',
+        source: 'package',
+        requested: '1.8.31',
+        observed: '1.8.8',
+        commit: null,
+        dirty: null,
+      },
+      {
+        name: 'harness-e2e',
+        source: 'package',
+        requested: null,
+        observed: '0.11.28',
+        commit: null,
+        dirty: null,
+      },
+    ],
     warnings: [],
     state: 'completed',
     started_at: '2026-09-20T10:00:00Z',
@@ -54,20 +73,103 @@ const imported = {
     measurements: null,
   },
 }
+const slot = (scenario_id, state) => ({
+  round: 1,
+  group_id: scenario_id,
+  scenario_id,
+  execution_id: `native-${scenario_id}`,
+  state,
+  observed: state === 'finished' ? 1 : 0,
+  completed: state === 'finished' ? 1 : 0,
+  passed: 0,
+  technical_valid: 0,
+  result_path: null,
+  error: null,
+})
+/** A started execution: running, no plan, no role. */
+const running = (id) => ({
+  ...imported,
+  id,
+  label: '',
+  status: 'running',
+  state: 'running',
+  started_at: '2026-09-23T07:51:00Z',
+  completed_at: '',
+  generated_at: '2026-09-23T08:04:00Z',
+  plan_execution: {
+    ...imported.plan_execution,
+    id,
+    label: null,
+    source: { kind: 'local' },
+    state: 'running',
+    slots: [
+      slot('context_pressure', 'finished'),
+      slot('minimal_path', 'running'),
+    ],
+  },
+})
+const runningSummary = {
+  ...running('plan-22222222222222222222222222222222'),
+  plan_execution: { planned: 9, finished: 1 },
+  totals: { expected_reports: 9, received_reports: 1, missing_reports: 8 },
+}
+const githubRuns = [
+  {
+    run_id: 101,
+    run_attempt: 1,
+    title: 'E2E · aaaa1111-2222',
+    created_at: '2026-09-18T10:00:00Z',
+    attempt_started_at: '2026-09-18T10:00:00Z',
+    conclusion: 'success',
+    url: 'https://github.com/iii-hq/harness-e2e/actions/runs/101',
+    release_control_execution_id: 'aaaa1111-2222',
+    execution_id: null,
+    execution_state: null,
+    contract_pending: true,
+  },
+  {
+    run_id: 102,
+    run_attempt: 2,
+    title: 'E2E · bbbb3333-4444',
+    created_at: '2026-09-20T10:00:00Z',
+    attempt_started_at: '2026-09-22T09:00:00Z',
+    conclusion: 'failure',
+    url: 'https://github.com/iii-hq/harness-e2e/actions/runs/102',
+    release_control_execution_id: 'bbbb3333-4444',
+    execution_id: null,
+    execution_state: null,
+    contract_pending: true,
+  },
+]
 const started = []
 const deleted = []
+let executions = []
 let busy = true
 let catalogDown = false
+let releaseContracts
+const contractsRead = new Promise((resolve) => {
+  releaseContracts = resolve
+})
 const server = await createConsoleTestHost()
-const trigger = (name, request = {}) => {
+const trigger = async (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
-  if (id === 'executions-list') return { executions: [imported], total: 1 }
-  if (id === 'execution-get') return { detail: imported }
+  if (id === 'executions-list') {
+    const listed = request.ids?.length
+      ? [...executions, imported].filter((e) => request.ids.includes(e.id))
+      : executions
+    return { executions: listed, total: listed.length }
+  }
+  if (id === 'execution-get')
+    return {
+      detail:
+        request.execution_id === imported.id
+          ? imported
+          : running(request.execution_id),
+    }
   if (id === 'catalog-get') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return {
-      url: 'ws://localhost:49134',
-      scenarios: ['minimal_path', 'context_pressure'],
+      scenarios: ['minimal_path', 'context_pressure', 'trend_blog'],
       models: [{ provider: 'deepseek', model: 'deepseek-v4-flash' }],
     }
   }
@@ -83,46 +185,113 @@ const trigger = (name, request = {}) => {
     deleted.push(request.execution_id)
     return {}
   }
+  if (id === 'github-runs-list')
+    return {
+      repository: 'iii-hq/harness-e2e',
+      page: 1,
+      runs: githubRuns,
+      next_page: null,
+    }
+  if (id === 'github-run-contracts') {
+    await contractsRead
+    return {
+      runs: request.runs.map(({ run_id, run_attempt }) => ({
+        run_id,
+        run_attempt,
+        suite_label: run_id === 101 ? 'Regression' : 'Software engineering',
+        model: 'gpt-5.6-terra',
+        provider: 'openai-codex',
+        agent: null,
+        runner_version: '0.11.28',
+      })),
+    }
+  }
   throw new Error(`Unexpected RPC ${name}`)
 }
 const browser = await chromium.launch({ headless: true })
 try {
-  const page = await browser.newPage({ viewport: { width: 1280, height: 900 } })
+  // A short viewport: the scenario list scrolls under the sticky search.
+  const page = await browser.newPage({ viewport: { width: 1280, height: 720 } })
   await server.install(page, trigger)
   page.setDefaultTimeout(10_000)
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  // Run tests: a busy runner is named in the footer and nothing moves;
-  // the next submit starts an execution and follows it on its page.
+  // An empty ledger offers every way in: run, import, plan.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
-  await page.getByRole('button', { name: 'Run tests', exact: true }).click()
+  await page.getByText('No executions retained yet').waitFor()
+  const empty = page.locator('main, body').first()
+  for (const action of ['run tests', 'import from GitHub'])
+    await empty.getByRole('button', { name: action, exact: true }).waitFor()
+  await empty.getByRole('link', { name: 'new plan', exact: true }).waitFor()
+
+  // Import from GitHub: the runs show at once, oldest creation last, and
+  // each row fills in when its contract is read.
+  await empty
+    .getByRole('button', { name: 'import from GitHub', exact: true })
+    .click()
+  const importDialog = page.getByRole('dialog', { name: 'Import from GitHub' })
+  await importDialog.locator('[data-github-run]').first().waitFor()
+  assert.deepEqual(
+    await importDialog
+      .locator('[data-github-run]')
+      .evaluateAll((rows) => rows.map((row) => row.dataset.githubRun)),
+    ['102', '101'],
+  )
+  assert.ok((await importDialog.getByText('reading…').count()) > 0)
+  await importDialog
+    .getByText('attempt 2 · Sep 22, 2026', { exact: false })
+    .waitFor()
+  await importDialog.getByText('RC bbbb3333', { exact: true }).waitFor()
+  releaseContracts()
+  await importDialog.getByText('Regression', { exact: true }).waitFor()
+  assert.equal(await importDialog.getByText('reading…').count(), 0)
+  assert.equal(await importDialog.getByText('0.11.28').count(), 2)
+  await page.keyboard.press('Escape')
+
+  // Run tests: the box, its name and Space all toggle a test; a bad seed and
+  // a busy runner are named in the footer; the next submit starts an
+  // execution and follows it on its page.
+  executions = [runningSummary]
+  await page.reload()
+  await page.getByText('1 of 9 done', { exact: true }).waitFor()
+  assert.equal(await page.getByText(/inconclusive event/).count(), 0)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
   const runTests = page.getByRole('dialog', { name: 'Run suite' })
-  await runTests.waitFor()
   await runTests.getByText('catalog ready').waitFor()
   assert.equal(await runTests.getByText('Harness endpoint').count(), 0)
-  await runTests.getByRole('checkbox', { name: 'context_pressure' }).check()
+  const box = (name) => runTests.getByRole('checkbox', { name, exact: true })
+  await runTests
+    .locator('label', { hasText: 'trend_blog' })
+    .locator('input[type=checkbox]')
+    .click()
+  assert.ok(await box('trend_blog').isChecked())
+  await runTests.getByText('trend_blog', { exact: true }).click()
+  assert.ok(!(await box('trend_blog').isChecked()))
+  await box('context_pressure').focus()
+  await page.keyboard.press('Space')
+  assert.ok(await box('context_pressure').isChecked())
   await runTests.getByText('Advanced · sampling, retries and seed').click()
   await runTests.locator('#quick-execution-seed').fill('1e5')
-  await runTests
-    .getByRole('button', { name: 'run 1 test', exact: true })
-    .click()
+  const submit = runTests.getByRole('button', {
+    name: 'run 1 test',
+    exact: true,
+  })
+  await submit.click()
   await runTests
     .getByText(/The seed is a whole number/)
     .first()
     .waitFor()
   assert.equal(started.length, 0)
   await runTests.locator('#quick-execution-seed').fill('')
-  await runTests
-    .getByRole('button', { name: 'run 1 test', exact: true })
-    .click()
+  await submit.click()
   await runTests.getByText('plan execution plan-busy is active').waitFor()
   assert.equal(started.length, 0)
-  assert.ok(await runTests.isVisible())
-  await runTests
-    .getByRole('button', { name: 'run 1 test', exact: true })
-    .click()
-  await page.waitForFunction(() => location.hash.includes('/execution/plan-'))
+  await submit.click()
+  await page.waitForFunction(() => location.hash.includes('/execution/plan-f'))
   assert.deepEqual(started[0], {
     label: '',
     parameters: {
@@ -135,19 +304,30 @@ try {
       agent: null,
     },
   })
-  assert.match(
-    await page.evaluate(() => location.hash),
-    /\/execution\/plan-f{31}1$/,
-  )
+  // No plan, no role: just an execution.
+  await page.getByText('Execution · running', { exact: true }).waitFor()
 
-  // Run again: the form holds the execution's parameters, the seed exact,
-  // and sends them unchanged even when the catalog cannot be read.
+  // Run again: the header names what it ran on; the form opens on the tests
+  // that will run, under the execution's name, with its exact seed, and
+  // sends them unchanged even when the catalog cannot be read.
   catalogDown = true
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
+  const band = page.locator('[data-identity-band]')
+  await band.getByText('1.8.8', { exact: true }).waitFor()
+  await band.getByText('0.11.28', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
-  await again.waitFor()
   await again.getByText('catalog unavailable: harness restarting').waitFor()
+  assert.equal(
+    await again.locator('#quick-execution-label').inputValue(),
+    'Software engineering',
+  )
+  for (const scenario of ['minimal_path', 'retired_scenario'])
+    assert.ok(
+      await again
+        .getByRole('checkbox', { name: scenario, exact: true })
+        .isChecked(),
+    )
   await again.getByText('Advanced · sampling, retries and seed').click()
   assert.equal(await again.locator('#quick-execution-runs').inputValue(), '2')
   assert.equal(
@@ -159,18 +339,26 @@ try {
     await again.locator('#quick-execution-agent').inputValue(),
     'tech-lead',
   )
-  for (const scenario of ['minimal_path', 'retired_scenario'])
-    assert.ok(await again.getByRole('checkbox', { name: scenario }).isChecked())
   await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
   await page.waitForFunction(() => !location.hash.includes('0123456789abcdef'))
   assert.deepEqual(started[1], {
-    label: '',
+    label: 'Software engineering',
     parameters: imported.plan_execution.parameters,
   })
 
-  // A finished execution without a plan can be deleted.
+  // With the catalog read, the form still opens on the tests that will run.
   catalogDown = false
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
+  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await again.getByText('catalog ready').waitFor()
+  await again.getByText('2 of 4 shown', { exact: false }).waitFor()
+  assert.equal(
+    await again.getByRole('checkbox', { name: 'trend_blog' }).count(),
+    0,
+  )
+  await page.keyboard.press('Escape')
+
+  // A finished execution without a plan can be deleted.
   await page
     .getByRole('button', { name: 'Delete execution', exact: true })
     .click()
@@ -181,7 +369,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests and Run again browser flow passed: busy runner, seed check, start and follow, prefill with an exact seed and no catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, quick list with contracts read per row, progress, box/label/Space toggles, seed check, busy runner, start and follow, versions, selected-first prefill without a catalog, delete.',
   )
 } finally {
   await browser.close()

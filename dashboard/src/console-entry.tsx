@@ -15,6 +15,7 @@ const runtimeConfig: RuntimeConfig = {
     execution_delete: 'e2e::dashboard::execution-delete',
     execution_rename: 'e2e::dashboard::execution-rename',
     github_runs_list: 'e2e::dashboard::github-runs-list',
+    github_run_contracts: 'e2e::dashboard::github-run-contracts',
     github_run_import: 'e2e::dashboard::github-run-import',
     evaluated_versions_list: 'e2e::dashboard::evaluated-versions-list',
     tests_list: 'e2e::dashboard::tests-list',

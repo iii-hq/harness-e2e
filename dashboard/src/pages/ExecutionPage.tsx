@@ -63,6 +63,7 @@ import {
   executionTitle,
   formatDate,
   formatDuration,
+  workerVersion,
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
 import {
@@ -125,6 +126,22 @@ export function rerunParameters(
       provider: subject?.provider ?? '',
       agent: null,
     }
+  )
+}
+
+/** The Harness and the E2E runner an execution ran on, as its stack
+ *  recorded them; nothing is shown for a run that recorded no stack. */
+export function stackVersions(
+  detail: DashboardExecutionDetail,
+): Array<[string, string]> {
+  const stack = detail.plan_execution?.stack
+  return (
+    [
+      ['harness', workerVersion(stack, 'harness')],
+      ['runner', workerVersion(stack, 'harness-e2e')],
+    ] as const
+  ).flatMap(([label, version]) =>
+    version ? [[label, version] as [string, string]] : [],
   )
 }
 
@@ -634,6 +651,8 @@ export function ExecutionPage({
         'local'
       ),
     ],
+    // What the execution ran on, to compare with another one.
+    ...stackVersions(detail),
     ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
   ]
   const ready = Boolean(bridge)
@@ -972,6 +991,7 @@ export function ExecutionPage({
         bridge={bridge}
         open={rerun !== null}
         parameters={rerun}
+        label={detail.plan_execution?.label ?? detail.label ?? ''}
         onClose={() => setRerun(null)}
       />
       {/* Audit AW-09: the evidence record is a route, so back returns here. */}

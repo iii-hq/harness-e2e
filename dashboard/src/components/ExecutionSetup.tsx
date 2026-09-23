@@ -184,6 +184,8 @@ type ExecutionSetupProps = {
   seed: string
   /** Agent profile; the field shows only where the host can send it. */
   agent?: string
+  /** Open on the "selected" filter (running again: what will run). */
+  initialOnlySelected?: boolean
   disabled?: boolean
   catalogLoading?: boolean
   catalogStatus: { tone: 'ready' | 'loading' | 'unavailable'; text: string }
@@ -256,6 +258,7 @@ export function ExecutionSetup({
   technicalRetries,
   seed,
   agent = '',
+  initialOnlySelected = false,
   disabled = false,
   catalogLoading = false,
   catalogStatus,
@@ -273,7 +276,7 @@ export function ExecutionSetup({
   onSeedChange,
   onAgentChange,
 }: ExecutionSetupProps) {
-  const [onlySelected, setOnlySelected] = useState(false)
+  const [onlySelected, setOnlySelected] = useState(initialOnlySelected)
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const matches = (scenario: string) =>
     (!normalizedQuery ||
@@ -712,8 +715,11 @@ export function ExecutionSetup({
                               : 'cursor-pointer text-ink hover:bg-[var(--surface-fill)]'
                           }`}
                         >
+                          {/* The native control, sized and shown whatever
+                              the host resets: the box, its name and Space all
+                              toggle it. */}
                           <input
-                            className="size-4 shrink-0 accent-[var(--accent)]"
+                            className="m-0 size-4 shrink-0 cursor-pointer appearance-auto accent-[var(--accent)]"
                             type="checkbox"
                             checked={selected}
                             disabled={disabled}

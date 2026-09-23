@@ -162,6 +162,25 @@ describe('execution setup sheet', () => {
     expect(html).toContain('Select at least one test.')
   })
 
+  it('opens on the selected tests when asked, as Run again does', () => {
+    const props = {
+      ...sharedProps,
+      mode: 'quick' as const,
+      availableScenarios: ['minimal_path', 'context_pressure', 'trend_blog'],
+      selectedScenarios: ['minimal_path'],
+    }
+    const all = renderToStaticMarkup(<ExecutionSetup {...props} />)
+    const selected = renderToStaticMarkup(
+      <ExecutionSetup {...props} initialOnlySelected />,
+    )
+    expect(all).toContain('3 of 3 shown')
+    expect(selected).toContain('1 of 3 shown')
+    expect(selected).toContain('>minimal_path<')
+    expect(selected).not.toContain('>trend_blog<')
+    // The native box stays a visible, clickable control.
+    expect(selected).toContain('appearance-auto')
+  })
+
   // Audit RS-07 / PN-20: the review is one sentence plus a detail line.
   it('summarises the setup in one sentence for the footer', () => {
     const summary = executionSetupSummary({

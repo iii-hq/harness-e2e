@@ -4,6 +4,7 @@ import type {
   DashboardSubjectSummary,
   ExecutionTotals,
   JsonObject,
+  StackWorker,
 } from '@/lib/dashboard-data-source'
 
 export type ExecutionAttentionState =
@@ -340,6 +341,40 @@ export function executionOrigin(execution: DashboardExecutionSummary): {
   return { label: 'local', href: null }
 }
 
+/** How far a running execution is, as its slots (or a native run's slots)
+ *  finished of those planned; null when it is not running or has no plan. */
+export function executionProgress(
+  execution: DashboardExecutionSummary,
+): string | null {
+  const status = stringValue(execution.status)
+  if (status !== 'running' && status !== 'cancelling') return null
+  const plan = objectValue(execution.plan_execution)
+  const live = objectValue(execution.live_progress)
+  const done =
+    numberValue(plan.finished) ?? numberValue(live.runs_committed) ?? null
+  const planned =
+    numberValue(plan.planned) ?? numberValue(live.planned_slots) ?? null
+  return done === null || !planned ? null : `${done} of ${planned} done`
+}
+
+/** The version a stack worker ran: its checkout for a `path://` worker,
+ *  else the version the engine reported (or the one asked for). Versions
+ *  that differed between groups are all listed. */
+export function workerVersion(
+  stack: StackWorker[] | undefined,
+  name: string,
+): string | null {
+  const versions = (stack ?? [])
+    .filter((worker) => worker.name === name)
+    .map((worker) =>
+      worker.source === 'path' && worker.commit
+        ? `path @${worker.commit.slice(0, 12)}${worker.dirty ? ' (dirty)' : ''}`
+        : (worker.observed ?? worker.requested),
+    )
+    .filter((version): version is string => Boolean(version))
+  return versions.length > 0 ? [...new Set(versions)].join(', ') : null
+}
+
 /** Mean of the per-scenario mean scores; null unless every scenario has one. */
 export function executionScore(
   execution: DashboardExecutionSummary | null,
@@ -373,8 +408,10 @@ export function executionTitle(presentation: ExecutionPresentation): {
   if (label) return { title: label, detail: workflow || null }
   const subject = presentation.subjects[0]
   if (subject) {
+    // Dated by its creation: the same title while it runs, when it ends and
+    // on every page.
     return {
-      title: `${subject.model} · ${formatDate(presentation.completedAt)}`,
+      title: `${subject.model} · ${formatDate(presentation.startedAt || presentation.completedAt)}`,
       detail: workflow || null,
     }
   }

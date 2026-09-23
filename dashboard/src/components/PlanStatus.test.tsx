@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { validateExecutionSetup } from '@/components/ExecutionSetup'
 import { routeFromHash } from '@/hooks/use-hash-route'
 import type { PlanExecution } from '@/lib/plan-execution'
-import { PlanProgress, Requirements } from './PlanStatus'
+import { executionHeading, PlanProgress, Requirements } from './PlanStatus'
 
 describe('executable plan journey', () => {
   it('requires an explicit execution model', () => {
@@ -97,5 +97,13 @@ describe('executable plan journey', () => {
     expect(html).toContain('Your saved draft is preserved.')
     expect(html).toContain('#/ext/harness-e2e/plans/profile-active')
     expect(html).toContain('Pending')
+  })
+})
+
+describe('execution progress heading', () => {
+  it('names a role only for a plan execution that has one', () => {
+    expect(executionHeading({ role: 'baseline' })).toBe('Baseline execution')
+    expect(executionHeading({ role: 'candidate' })).toBe('Candidate execution')
+    expect(executionHeading({ role: null })).toBe('Execution')
   })
 })

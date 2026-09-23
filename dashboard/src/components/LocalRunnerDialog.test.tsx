@@ -40,6 +40,11 @@ describe('run form', () => {
     ).toBe(seed)
   })
 
+  it('names the new execution after the one it runs again', () => {
+    expect(runnerForm(imported, [], 'Regression').label).toBe('Regression')
+    expect(runnerForm(null, [], 'Regression').label).toBe('')
+  })
+
   it('opens with only a chosen subset of the scenarios marked', () => {
     const form = runnerForm(imported, ['context_pressure'])
     expect(form.scenarios).toEqual(['context_pressure'])

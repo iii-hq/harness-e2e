@@ -110,7 +110,10 @@ export type GithubRun = {
   run_id: number
   run_attempt: number
   title: string
+  /** When the run was created; the list is ordered and dated by it. */
   created_at: string | null
+  /** When its latest attempt started. */
+  attempt_started_at?: string | null
   conclusion: string | null
   url: string
   release_control_execution_id: string | null
@@ -121,6 +124,8 @@ export type GithubRun = {
   agent?: string | null
   runner_version?: string | null
   contract_error?: string
+  /** Listed before its contract was read; the dialog reads it next. */
+  contract_pending?: boolean
   execution_id: string | null
   execution_state: string | null
 }
@@ -564,6 +569,7 @@ export type RuntimeConfig = {
     execution_delete: string
     execution_rename: string
     github_runs_list: string
+    github_run_contracts: string
     github_run_import: string
     evaluated_versions_list: string
     tests_list: string
@@ -598,6 +604,9 @@ export type DashboardDataBridge = {
   deleteExecution(executionId: string): Promise<void>
   renameExecution(executionId: string, label: string): Promise<PlanExecution>
   listGithubRuns(page?: number): Promise<GithubRunsResponse>
+  readGithubRunContracts(
+    runs: Array<Pick<GithubRun, 'run_id' | 'run_attempt'>>,
+  ): Promise<{ runs: Array<Partial<GithubRun> & { run_id: number }> }>
   importGithubRun(
     runId: number,
   ): Promise<{ execution_id: string; state: string }>
@@ -682,6 +691,10 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     listGithubRuns: (page = 1) =>
       call(runtime.functions.github_runs_list, { page }),
+    readGithubRunContracts: (runs) =>
+      call(runtime.functions.github_run_contracts, {
+        runs: runs.map(({ run_id, run_attempt }) => ({ run_id, run_attempt })),
+      }),
     importGithubRun: (runId) =>
       call(runtime.functions.github_run_import, { run_id: runId }),
     listEvaluatedVersions: (input = {}) =>

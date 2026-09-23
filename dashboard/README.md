@@ -62,8 +62,12 @@ read model from retained reports, pools raw run scores, and invalidates it on ru
 changes. There is no alternate HTTP or static-data transport.
 
 Executions offers **Import from GitHub**: completed exact-stack workflow runs of
-the worker's `github_repository`, listed through `e2e::dashboard::github-runs-list`
-with their suite, model, profile and conclusion. `github-run-import` answers with
+the worker's `github_repository`, listed at once through
+`e2e::dashboard::github-runs-list` (one `gh api` call), newest creation first,
+with the latest attempt's date and the Release Control execution beside it.
+Each run's suite, model, profile and runner version then fill in per row from
+its contract artifact through `github-run-contracts`, read once and cached; the
+Harness version is known only once the run is imported. `github-run-import` answers with
 an `importing` execution at once; the worker downloads the run's bundle and
 installs its native runs like finished local runs. An imported execution is the
 same record as one planned here: the list, the report, evidence and

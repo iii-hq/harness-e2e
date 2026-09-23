@@ -8,6 +8,7 @@ import {
   executionOutcome,
   provenanceEntries,
   rerunParameters,
+  stackVersions,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -180,5 +181,46 @@ describe('run again', () => {
       provider: 'deepseek',
       agent: null,
     })
+  })
+})
+
+describe('versions in the header', () => {
+  it('shows the Harness and the runner the stack recorded, and nothing else', () => {
+    const withStack = {
+      ...detail,
+      plan_execution: {
+        stack: [
+          {
+            name: 'harness',
+            source: 'package',
+            requested: null,
+            observed: '1.8.8',
+            commit: null,
+            dirty: null,
+          },
+          {
+            name: 'harness-e2e',
+            source: 'path',
+            requested: null,
+            observed: '0.11.28',
+            commit: 'abcdef0123456789',
+            dirty: false,
+          },
+          {
+            name: 'state',
+            source: 'package',
+            requested: null,
+            observed: '0.22.3',
+            commit: null,
+            dirty: null,
+          },
+        ],
+      },
+    } as unknown as DashboardExecutionDetail
+    expect(stackVersions(withStack)).toEqual([
+      ['harness', '1.8.8'],
+      ['runner', 'path @abcdef012345'],
+    ])
+    expect(stackVersions(detail)).toEqual([])
   })
 })

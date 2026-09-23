@@ -3,9 +3,11 @@ import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
 import {
   attentionState,
   buildExecutionPresentation,
+  executionProgress,
   executionTitle,
   failureBreakdown,
   primaryIssue,
+  workerVersion,
 } from '@/lib/execution-view'
 
 function execution(
@@ -111,5 +113,108 @@ describe('execution identity', () => {
     )
     expect(executionTitle(unlabelled).title).toMatch(/^gpt-5\.6-terra · /)
     expect(executionTitle(unlabelled).detail).toBe('e2e::* control-plane run')
+  })
+})
+
+describe('an execution as it runs', () => {
+  it('keeps one title from start to end, dated by its creation', () => {
+    const titles = [
+      {
+        status: 'running',
+        completed_at: '',
+        generated_at: '2026-09-23T07:52:00Z',
+      },
+      {
+        status: 'running',
+        completed_at: '',
+        generated_at: '2026-09-23T08:04:00Z',
+      },
+      { status: 'passed', completed_at: '2026-09-23T09:30:00Z' },
+    ].map(
+      (moment) =>
+        executionTitle(
+          buildExecutionPresentation(
+            execution({
+              label: '',
+              started_at: '2026-09-23T07:51:00Z',
+              ...moment,
+            }),
+          ),
+        ).title,
+    )
+    expect(new Set(titles).size).toBe(1)
+    expect(titles[0]).toMatch(/^gpt-5\.6-terra · Sep 23, 2026/)
+  })
+
+  it('reads its progress as slots done of those planned', () => {
+    expect(
+      executionProgress(
+        execution({
+          status: 'running',
+          plan_execution: { planned: 9, finished: 1 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBe('1 of 9 done')
+    expect(
+      executionProgress(
+        execution({
+          status: 'running',
+          live_progress: { runs_committed: 2, planned_slots: 4 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBe('2 of 4 done')
+    // Finished, or with nothing planned yet (an import), it says nothing.
+    expect(
+      executionProgress(
+        execution({
+          plan_execution: { planned: 9, finished: 9 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBeNull()
+    expect(
+      executionProgress(
+        execution({
+          status: 'running',
+          plan_execution: { planned: 0, finished: 0 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBeNull()
+  })
+
+  it('names the version each stack worker ran', () => {
+    const stack = [
+      {
+        name: 'harness',
+        source: 'package' as const,
+        requested: '1.8.31',
+        observed: '1.8.8',
+        commit: null,
+        dirty: null,
+        groups: ['a'],
+      },
+      {
+        name: 'harness',
+        source: 'package' as const,
+        requested: '1.8.31',
+        observed: '1.8.9',
+        commit: null,
+        dirty: null,
+        groups: ['b'],
+      },
+      {
+        name: 'harness-e2e',
+        source: 'path' as const,
+        requested: null,
+        observed: '0.11.28',
+        commit: '0123456789abcdef0123',
+        dirty: true,
+      },
+    ]
+    expect(workerVersion(stack, 'harness')).toBe('1.8.8, 1.8.9')
+    expect(workerVersion(stack, 'harness-e2e')).toBe(
+      'path @0123456789ab (dirty)',
+    )
+    expect(workerVersion(stack, 'state')).toBeNull()
+    expect(workerVersion(undefined, 'harness')).toBeNull()
   })
 })

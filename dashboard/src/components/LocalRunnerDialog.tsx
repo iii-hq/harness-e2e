@@ -51,10 +51,13 @@ function modelKey(model: RunnerModel) {
 export function runnerForm(
   parameters: ExecutionParameters | null,
   scenarios: string[] = [],
+  label = '',
 ): RunnerForm {
   if (!parameters) return { ...initialForm, scenarios }
   return {
     ...initialForm,
+    // The name it runs again under, to edit.
+    label,
     subject: modelKey(parameters),
     scenarios: scenarios.length > 0 ? scenarios : parameters.scenarios,
     runs: String(parameters.runs),
@@ -136,6 +139,7 @@ export function LocalRunnerDialog({
   open,
   initialScenarios = NO_SCENARIOS,
   parameters = null,
+  label = '',
   onClose,
 }: {
   bridge: DashboardDataBridge | null
@@ -144,6 +148,8 @@ export function LocalRunnerDialog({
   initialScenarios?: string[]
   /** Parameters of the execution to run again; the form starts from them. */
   parameters?: ExecutionParameters | null
+  /** Name of the execution run again; the new one starts with it. */
+  label?: string
   onClose: () => void
 }) {
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
@@ -153,6 +159,8 @@ export function LocalRunnerDialog({
   const [submitting, setSubmitting] = useState(false)
   const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // A new setup sheet per opening, so its filters start fresh.
+  const [opening, setOpening] = useState(0)
 
   const refreshCatalog = useCallback(async () => {
     if (!bridge) return
@@ -179,7 +187,8 @@ export function LocalRunnerDialog({
 
   useEffect(() => {
     if (!open) return
-    if (parameters) setForm(runnerForm(parameters, initialScenarios))
+    setOpening((count) => count + 1)
+    if (parameters) setForm(runnerForm(parameters, initialScenarios, label))
     else if (initialScenarios.length > 0)
       setForm((current) => ({
         ...current,
@@ -188,7 +197,7 @@ export function LocalRunnerDialog({
           ...initialScenarios.filter((id) => !current.scenarios.includes(id)),
         ],
       }))
-  }, [open, parameters, initialScenarios])
+  }, [open, parameters, initialScenarios, label])
 
   useEffect(() => {
     if (!open || !bridge) return
@@ -335,6 +344,9 @@ export function LocalRunnerDialog({
         noValidate
       >
         <ExecutionSetup
+          key={opening}
+          // Running again shows what will run first.
+          initialOnlySelected={parameters !== null}
           idPrefix="quick-execution"
           mode="quick"
           stickyOffset="dialog"

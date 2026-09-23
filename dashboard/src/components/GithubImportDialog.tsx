@@ -25,6 +25,37 @@ function conclusionStatus(conclusion: string | null) {
   return 'unavailable' as const
 }
 
+/** Newest run first, by when the run was created (a re-run attempt does not
+ *  move it). */
+export function sortGithubRuns(runs: GithubRun[]): GithubRun[] {
+  const created = (run: GithubRun) => Date.parse(run.created_at ?? '') || 0
+  return [...runs].sort(
+    (left, right) =>
+      created(right) - created(left) || right.run_id - left.run_id,
+  )
+}
+
+/** Runs with what their contracts said merged in; a run the answer left out
+ *  stops waiting and says its contract could not be read. */
+export function withContracts(
+  runs: GithubRun[],
+  read: Array<Partial<GithubRun> & { run_id: number }>,
+  asked: number[],
+): GithubRun[] {
+  return runs.map((run) => {
+    if (!asked.includes(run.run_id)) return run
+    const contract = read.find((entry) => entry.run_id === run.run_id)
+    return {
+      ...run,
+      ...contract,
+      contract_pending: false,
+      contract_error:
+        contract?.contract_error ??
+        (contract ? undefined : 'The contract could not be read'),
+    }
+  })
+}
+
 /** What the row offers: import, follow an import in progress, or open (and
  *  import again) an execution this worker already has. */
 export function githubRunAction(run: GithubRun) {
@@ -33,7 +64,9 @@ export function githubRunAction(run: GithubRun) {
 }
 
 /** Completed exact-stack workflow runs, newest first, each importable as an
- *  execution. `gh` errors are shown as they come. */
+ *  execution. The list comes from one quick `gh api` call; each run's suite,
+ *  model, profile and runner fill in once its contract is read. `gh` errors
+ *  are shown as they come. */
 export function GithubImportDialog({
   bridge,
   open,
@@ -57,18 +90,31 @@ export function GithubImportDialog({
       if (!bridge) return
       setLoading(true)
       setError(null)
+      let pending: GithubRun[] = []
       try {
         const response = await bridge.listGithubRuns(page)
         setRepository(response.repository)
         setRuns((current) =>
-          page === 1 ? response.runs : [...current, ...response.runs],
+          sortGithubRuns(
+            page === 1 ? response.runs : [...current, ...response.runs],
+          ),
         )
         setNextPage(response.next_page)
+        pending = response.runs.filter((run) => run.contract_pending)
       } catch (cause) {
         setError(errorText(cause))
       } finally {
         setLoading(false)
       }
+      if (pending.length === 0) return
+      const asked = pending.map((run) => run.run_id)
+      const read = await bridge
+        .readGithubRunContracts(pending)
+        .then((answer) => answer.runs)
+        .catch((cause) =>
+          asked.map((run_id) => ({ run_id, contract_error: errorText(cause) })),
+        )
+      setRuns((current) => withContracts(current, read, asked))
     },
     [bridge],
   )
@@ -182,6 +228,7 @@ export function GithubRunsTable({
           <th scope="col">suite</th>
           <th scope="col">model</th>
           <th scope="col">profile</th>
+          <th scope="col">runner</th>
           <th scope="col">conclusion</th>
           <th scope="col">
             <span className="ds-visually-hidden">Import</span>
@@ -191,8 +238,22 @@ export function GithubRunsTable({
       <tbody>
         {runs.map((run) => {
           const action = githubRunAction(run)
+          const pending = Boolean(run.contract_pending)
+          // Until the contract is read, its cells say so instead of "—".
+          const contract = (value: string | null | undefined, empty = '—') =>
+            pending ? (
+              <span className="text-ink-muted" role="status">
+                reading…
+              </span>
+            ) : (
+              value || empty
+            )
           return (
-            <tr key={run.run_id} data-github-run={run.run_id}>
+            <tr
+              key={run.run_id}
+              data-github-run={run.run_id}
+              aria-busy={pending || undefined}
+            >
               <td data-label="run">
                 <a
                   className="inline-flex items-center gap-1 font-mono text-xs text-ink"
@@ -201,15 +262,30 @@ export function GithubRunsTable({
                   rel="noreferrer"
                 >
                   #{run.run_id}
-                  {run.run_attempt > 1 ? ` · attempt ${run.run_attempt}` : ''}
                   <ExternalLink size={12} aria-hidden="true" />
                 </a>
                 <span className="block font-mono text-label text-ink-muted">
                   {run.created_at ? formatDate(run.created_at) : '—'}
                 </span>
+                {run.run_attempt > 1 ? (
+                  <span className="block font-mono text-label text-ink-muted">
+                    attempt {run.run_attempt}
+                    {run.attempt_started_at
+                      ? ` · ${formatDate(run.attempt_started_at)}`
+                      : ''}
+                  </span>
+                ) : null}
+                {run.release_control_execution_id ? (
+                  <span
+                    className="block font-mono text-label text-ink-muted"
+                    title={`Release Control execution ${run.release_control_execution_id}`}
+                  >
+                    RC {run.release_control_execution_id.slice(0, 8)}
+                  </span>
+                ) : null}
               </td>
               <td data-label="suite" className="font-mono text-xs">
-                {run.suite_label || run.suite || '—'}
+                {contract(run.suite_label || run.suite)}
                 {run.contract_error ? (
                   <span
                     className="block text-label text-warning"
@@ -220,13 +296,16 @@ export function GithubRunsTable({
                 ) : null}
               </td>
               <td data-label="model" className="font-mono text-xs">
-                {run.model ?? '—'}
+                {contract(run.model)}
                 <span className="block text-label text-ink-muted">
-                  {run.provider ?? ''}
+                  {pending ? '' : (run.provider ?? '')}
                 </span>
               </td>
               <td data-label="profile" className="font-mono text-xs">
-                {run.agent ?? 'default'}
+                {contract(run.agent, run.contract_error ? '—' : 'default')}
+              </td>
+              <td data-label="runner" className="font-mono text-xs">
+                {contract(run.runner_version)}
               </td>
               <td data-label="conclusion">
                 <StatusBadge
