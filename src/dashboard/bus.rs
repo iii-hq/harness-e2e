@@ -20,7 +20,9 @@ use super::read_model::{
 };
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::plans::store::{ExecutionParameters, GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::store::{
+    ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
@@ -29,6 +31,7 @@ pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
 pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
+pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
@@ -362,13 +365,31 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         GITHUB_RUNS_LIST,
-        "List completed exact-stack workflow runs on GitHub with their suite, subject and local import.",
+        "List completed exact-stack workflow runs on GitHub with their local import; suites and subjects already read come along.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: GithubRunsListRequest| {
                 let controller = controller.clone();
                 async move {
                     let runs = controller.github_runs(request).await.map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        GITHUB_RUN_CONTRACTS,
+        "Read the suite, subject, profile and runner of listed GitHub runs from their contract artifacts.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: GithubRunContractsRequest| {
+                let controller = controller.clone();
+                async move {
+                    let runs = controller
+                        .github_run_contracts(request)
+                        .await
+                        .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
                 }
             })

@@ -15,7 +15,9 @@ use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, ScenariosListRequest, ScenariosListResponse,
 };
-use crate::plans::store::{ExecutionParameters, GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::store::{
+    ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
@@ -287,6 +289,18 @@ impl Controller {
             .unwrap_or_else(|| self.github_repository.clone());
         self.plan_store
             .github_runs(&repository, request.page.unwrap_or(1))
+            .await
+    }
+
+    pub(super) async fn github_run_contracts(
+        &self,
+        request: GithubRunContractsRequest,
+    ) -> Result<Value> {
+        let repository = request
+            .repository
+            .unwrap_or_else(|| self.github_repository.clone());
+        self.plan_store
+            .github_run_contracts(&repository, &request.runs)
             .await
     }
 

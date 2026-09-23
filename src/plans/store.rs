@@ -24,7 +24,7 @@ use crate::test_plan::{self, ProfileSnapshot};
 mod github;
 mod stack;
 
-pub(crate) use github::{GithubRunImportRequest, GithubRunsListRequest};
+pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct SavedPlan {
@@ -3606,5 +3606,61 @@ mod tests {
             let error = parameters(invalid).unwrap_err().to_string();
             assert!(error.contains("seed must be a whole number"), "{error}");
         }
+    }
+
+    #[tokio::test]
+    async fn runs_list_with_one_call_and_contracts_are_read_apart_and_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let gh = fake_gh(
+            root.path(),
+            r#"echo "$*" >> "$(dirname "$0")/calls"
+case "$1" in
+  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  run) echo "no valid artifacts found to download" >&2; exit 1 ;;
+esac"#,
+        );
+        let calls = || fs::read_to_string(root.path().join("calls")).unwrap();
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        let run = &listed["runs"][0];
+        // Dated by the run's creation; the latest attempt's start apart.
+        assert_eq!(run["created_at"], "2026-09-20T10:00:00Z");
+        assert_eq!(run["attempt_started_at"], "2026-09-21T09:00:00Z");
+        assert_eq!(run["release_control_execution_id"], "366030b3-5f55");
+        assert_eq!(run["contract_pending"], true);
+        assert_eq!(calls().lines().count(), 1, "only the list: {}", calls());
+
+        let read = manager
+            .github_run_contracts(
+                "o/r",
+                &[github::GithubRunAttempt {
+                    run_id: 41,
+                    run_attempt: 2,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["runs"][0]["run_id"], 41);
+        assert!(read["runs"][0]["contract_error"]
+            .as_str()
+            .unwrap()
+            .contains("90 days"));
+
+        // Read once: the next list carries it and downloads nothing.
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        assert!(listed["runs"][0].get("contract_pending").is_none());
+        assert_eq!(
+            listed["runs"][0]["contract_error"],
+            read["runs"][0]["contract_error"]
+        );
+        assert_eq!(
+            calls()
+                .lines()
+                .filter(|call| call.starts_with("run download"))
+                .count(),
+            1
+        );
     }
 }
