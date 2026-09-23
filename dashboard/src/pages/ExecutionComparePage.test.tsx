@@ -2,9 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { compareExecutions } from '@/lib/execution-comparison'
 import {
+  ComparisonPlaceholder,
   ComparisonView,
   choiceFromParams,
   choiceToParams,
+  ExecutionComparePage,
+  loadExecutionPair,
   toggleCounted,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
@@ -73,5 +76,42 @@ describe('execution comparison page', () => {
     expect(html).toContain('+ answer cites the source')
     expect(html).toContain('rerun selected')
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
+  })
+
+  it('loads both executions and names the side that failed', async () => {
+    const a = imported()
+    const b = local()
+    const get = (id: string) =>
+      id === a.id
+        ? Promise.resolve(a)
+        : id === b.id
+          ? Promise.resolve(b)
+          : Promise.reject(new Error('Execution not found'))
+    await expect(loadExecutionPair(get, a.id, b.id)).resolves.toEqual({ a, b })
+    await expect(loadExecutionPair(get, a.id, 'gone')).rejects.toThrow(
+      'B (gone) could not be loaded: Execution not found',
+    )
+    await expect(loadExecutionPair(get, 'gone', 'lost')).rejects.toThrow(
+      'A (gone) could not be loaded: Execution not found · B (lost) could not be loaded: Execution not found',
+    )
+  })
+
+  it('asks for two executions, shows loading, then the error', () => {
+    expect(
+      renderToStaticMarkup(<ExecutionComparePage left="a" right={null} />),
+    ).toContain('Choose two executions')
+    const loading = renderToStaticMarkup(
+      <ExecutionComparePage left="a" right="b" />,
+    )
+    expect(loading).toContain('aria-busy="true"')
+    expect(loading).toContain('Loading both executions')
+    const failed = renderToStaticMarkup(
+      <ComparisonPlaceholder
+        missing={false}
+        error="B (gone) could not be loaded: Execution not found"
+      />,
+    )
+    expect(failed).toContain('The comparison could not be loaded')
+    expect(failed).toContain('B (gone) could not be loaded')
   })
 })

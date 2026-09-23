@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import {
   automaticExclusions,
-  type CompareRun,
   compareExecutions,
   compareRuns,
   comparisonMarkdown,
@@ -10,8 +10,54 @@ import {
   execution,
   imported,
   local,
+  reportRun,
 } from '@/test-fixtures/execution-comparison'
 import ledger from '@/test-fixtures/rc-ledger-runs.json'
+
+type LedgerRow = (typeof ledger)['execution-4'][number]
+
+/** A recorded Release Control execution as reports: one per run, the run's
+ *  ledger columns written back into the fields the ledger reads them from. */
+function ledgerExecution(id: keyof typeof ledger): DashboardExecutionDetail {
+  return {
+    id,
+    status: 'passed',
+    subjects: [],
+    reports: (ledger[id] as LedgerRow[]).map((row) => ({
+      subject_id: 'subject',
+      scenario_id: row.scenario_id,
+      available: true,
+      report: {
+        scenarios: [
+          {
+            scenario_id: row.scenario_id,
+            case: { seed: row.seed, inputs_sha256: row.inputs_sha256 },
+            runs: [
+              {
+                run_id: row.run_id,
+                technical: row.technical,
+                completion: row.completion,
+                score: row.score,
+                wall_time_ms: row.wall_time_ms,
+                efficiency: {
+                  total_tokens: row.total_tokens,
+                  root_turns: row.turns,
+                  function_calls: row.function_calls,
+                  technical_attempts: row.attempts_complete ? 1 : 2,
+                },
+                metrics: {
+                  complete: true,
+                  totals: { cache_read_tokens: 0, cache_write_tokens: 0 },
+                },
+                cost: { subject_usd: row.cost_subject_usd },
+              },
+            ],
+          },
+        ],
+      },
+    })),
+  } as unknown as DashboardExecutionDetail
+}
 
 function total(
   comparison: ReturnType<typeof compareExecutions>,
@@ -126,17 +172,206 @@ describe('fair comparison', () => {
     ).toEqual(['test_0'])
   })
 
-  it('names the gaps in the recorded executions', () => {
-    const runs = ledger as Record<string, CompareRun[]>
-    const reasons = (left: CompareRun[], right: CompareRun[]) =>
-      [...automaticExclusions(left, right).values()].map(({ reason }) => reason)
-    // The fixtures' two moved definitions (4 → 5), and the invalid and unplanned runs of 5 → 6.
-    expect(reasons(runs['execution-4'], runs['execution-5'])).toContain(
-      'redefined',
+  it('names the gaps in the recorded executions and consolidates them as Release Control does', () => {
+    // Release Control's own output for these ledgers: `automaticExclusions`
+    // and `compareFairly(...).consolidated` run on api/tests/fixtures/ledger.
+    const four = ledgerExecution('execution-4')
+    const five = ledgerExecution('execution-5')
+    const six = ledgerExecution('execution-6')
+    const reasons = (
+      left: DashboardExecutionDetail,
+      right: DashboardExecutionDetail,
+    ) => [
+      ...automaticExclusions(compareRuns(left), compareRuns(right)).values(),
+    ]
+    expect(reasons(four, five)).toEqual([
+      { scenario_id: 'minimal_path', reason: 'redefined', sides: ['a', 'b'] },
+      {
+        scenario_id: 'persistent_state',
+        reason: 'redefined',
+        sides: ['a', 'b'],
+      },
+      {
+        scenario_id: 'swe_cache_invalidation',
+        reason: 'technical_invalid',
+        sides: ['a', 'b'],
+      },
+      {
+        scenario_id: 'swe_config_isolation',
+        reason: 'technical_invalid',
+        sides: ['a', 'b'],
+      },
+      { scenario_id: 'swe_replay_recovery', reason: 'missing', sides: ['b'] },
+      {
+        scenario_id: 'database_migration_recovery',
+        reason: 'missing',
+        sides: ['a'],
+      },
+    ])
+    expect(reasons(five, six)).toEqual([
+      { scenario_id: 'persistent_state', reason: 'undetermined', sides: ['b'] },
+      {
+        scenario_id: 'swe_cache_invalidation',
+        reason: 'missing',
+        sides: ['b'],
+      },
+      { scenario_id: 'swe_config_isolation', reason: 'missing', sides: ['b'] },
+      {
+        scenario_id: 'tool_contract_recovery',
+        reason: 'technical_invalid',
+        sides: ['b'],
+      },
+    ])
+    const figures = (comparison: ReturnType<typeof compareExecutions>) =>
+      Object.fromEntries(
+        comparison.totals.map((metric) => [
+          metric.id,
+          [metric.baseline, metric.candidate],
+        ]),
+      )
+    const fourFive = figures(compareExecutions(four, five))
+    expect(fourFive.completed).toEqual([6, 5])
+    expect(fourFive.score[0]).toBeCloseTo(46.666666666666664)
+    expect(fourFive.score[1]).toBe(30)
+    expect(fourFive.tokens).toEqual([181135, 181974])
+    expect(fourFive.turns).toEqual([105, 110])
+    expect(fourFive.duration).toEqual([609.092, 594.593])
+    expect(fourFive.cost[0]).toBeCloseTo(0.0408912672)
+    expect(fourFive.cost[1]).toBeCloseTo(0.0414897784)
+    expect(fourFive.function_calls).toEqual([131, 125])
+    const fiveSix = figures(compareExecutions(five, six))
+    expect(fiveSix.completed).toEqual([7, 7])
+    expect(fiveSix.score[0]).toBeCloseTo(42.142857142857146)
+    expect(fiveSix.score[1]).toBeCloseTo(63.57142857142857)
+    expect(fiveSix.tokens).toEqual([178204, 189979])
+    expect(fiveSix.turns).toEqual([103, 105])
+    expect(fiveSix.duration).toEqual([678.723, 764.022])
+    expect(fiveSix.function_calls).toEqual([120, 124])
+  })
+})
+
+describe('pairing', () => {
+  it('pairs by scenario, case seed and the runner repetition, never by case id', () => {
+    const a = execution('a', [{ scenario: 'minimal_path', seed: 7 }])
+    const b = execution('b', [{ scenario: 'minimal_path', seed: 7 }])
+    // Before 0.11 the case id carried the scenario version.
+    const scenario = a.reports[0].report?.scenarios[0]
+    if (scenario) scenario.case_id = 'minimal_path:v2:seed-0000000000000007'
+    expect(compareRuns(a)[0].slotId).toBe(compareRuns(b)[0].slotId)
+    expect(compareExecutions(a, b).exclusions).toEqual([])
+    const reseeded = execution('b', [{ scenario: 'minimal_path', seed: 8 }])
+    expect(compareRuns(reseeded)[0].slotId).not.toBe(compareRuns(a)[0].slotId)
+  })
+
+  it('reads the definition from case.inputs_sha256, not the behavior digest', () => {
+    const a = execution('a', [{ scenario: 'minimal_path' }])
+    const b = execution('b', [{ scenario: 'minimal_path' }])
+    const scenario = b.reports[0].report?.scenarios[0]
+    if (scenario) scenario.behavior_sha256 = 'sha256:another-behavior'
+    expect(compareExecutions(a, b).exclusions).toEqual([])
+    const redefined = execution('b', [
+      { scenario: 'minimal_path', definition: 'other-inputs' },
+    ])
+    expect(compareExecutions(a, redefined).exclusions).toEqual([
+      {
+        scenario_id: 'minimal_path',
+        reason: 'redefined',
+        sides: ['a', 'b'],
+        applied: true,
+      },
+    ])
+  })
+
+  it('keeps plan rounds on the runner slot and repetitions apart', () => {
+    // A plan runs each round as its own native run, repetition 0, like
+    // Release Control's campaigns; a plain run numbers its repetitions.
+    const rounds = execution('rounds', [
+      { scenario: 'minimal_path', round: 1 },
+      { scenario: 'minimal_path', round: 2 },
+    ])
+    const plain = execution('plain', [{ scenario: 'minimal_path' }])
+    const report = plain.reports[0].report
+    if (report)
+      report.scenarios[0].runs.push(
+        reportRun('plain-1', { scenario: 'minimal_path' }) as never,
+      )
+    const [first, second] = compareRuns(rounds)
+    const [zero, one] = compareRuns(plain)
+    expect(first.slotId).toBe(second.slotId)
+    expect(first.slotId).toBe(zero.slotId)
+    expect(one.slotId).not.toBe(zero.slotId)
+    // A round measuring another definition redefines the shared slot.
+    const moved = execution('rounds', [
+      { scenario: 'minimal_path', round: 1 },
+      { scenario: 'minimal_path', round: 2, definition: 'other-inputs' },
+    ])
+    expect([
+      ...automaticExclusions(compareRuns(moved), compareRuns(plain)).values(),
+    ]).toEqual([
+      { scenario_id: 'minimal_path', reason: 'redefined', sides: ['a', 'b'] },
+    ])
+  })
+
+  it('keeps an unavailable report out of the runs and narrows the plan once a test is out', () => {
+    const a = execution('a', [
+      { scenario: 'minimal_path', round: 1 },
+      { scenario: 'persistent_state', round: 1 },
+    ])
+    a.reports.push({
+      subject_id: 'subject',
+      scenario_id: 'minimal_path',
+      round: 2,
+      available: false,
+      report: undefined,
+    } as never)
+    const b = execution('b', [
+      { scenario: 'minimal_path', round: 1 },
+      { scenario: 'persistent_state', round: 1 },
+    ])
+    expect(compareRuns(a)).toHaveLength(2)
+    // Nothing out: A planned three runs and observed two.
+    const whole = compareExecutions(a, b)
+    expect(whole.exclusions).toEqual([])
+    expect(whole.totals.find((metric) => metric.id === 'score')).toMatchObject({
+      baseline: null,
+      candidate: 80,
+      delta: null,
+    })
+    expect(whole.totals.find((metric) => metric.id === 'tokens')).toMatchObject(
+      {
+        baseline: 220,
+        partial: { baseline: true, candidate: false },
+        delta: null,
+      },
     )
-    expect(reasons(runs['execution-5'], runs['execution-6'])).toEqual(
-      expect.arrayContaining(['missing', 'undetermined']),
-    )
+    // A test out of the totals narrows the plan to the runs kept.
+    const narrowed = compareExecutions(a, b, { exclude: ['persistent_state'] })
+    expect(
+      narrowed.totals.find((metric) => metric.id === 'score'),
+    ).toMatchObject({ baseline: 80, candidate: 80, delta: 0 })
+  })
+
+  it('takes a scenario neither side observed out as missing on both', () => {
+    const a = execution('a', [{ scenario: 'minimal_path' }])
+    const b = execution('b', [{ scenario: 'minimal_path' }])
+    for (const detail of [a, b])
+      detail.reports.push({
+        subject_id: 'subject',
+        scenario_id: 'timer_wake',
+        available: false,
+      } as never)
+    const comparison = compareExecutions(a, b)
+    expect(comparison.exclusions).toEqual([
+      {
+        scenario_id: 'timer_wake',
+        reason: 'missing',
+        sides: ['a', 'b'],
+        applied: true,
+      },
+    ])
+    expect(
+      comparison.totals.find((metric) => metric.id === 'score'),
+    ).toMatchObject({ baseline: 80, candidate: 80 })
   })
 })
 
@@ -187,7 +422,7 @@ describe('comparing two executions', () => {
     ).toMatchObject({ baseline: 91, candidate: 78, delta: -13 })
     expect(
       comparison.totals.find((metric) => metric.id === 'tokens'),
-    ).toMatchObject({ baseline: 2100, candidate: 1900, delta: -200 })
+    ).toMatchObject({ baseline: 2310, candidate: 2090, delta: -220 })
     expect(
       comparison.totals.find((metric) => metric.id === 'completed'),
     ).toMatchObject({ baseline: 2, candidate: 2, delta: 0 })
@@ -267,21 +502,23 @@ describe('comparison summary', () => {
   it('writes a pull-request-ready markdown summary without a verdict', () => {
     const a = imported()
     const b = local()
-    // A scenario that moved nowhere lands on the "no difference" line.
-    for (const detail of [a, b]) {
-      detail.reports.push(
-        ...execution(detail.id, [{ scenario: 'timer_wake', score: 70 }])
-          .reports,
-      )
-      const record = detail.reports.at(-1)
-      const run = record?.report?.scenarios[0].runs[0]
-      if (run) run.run_id = `${detail.id}-timer`
-    }
-    expect(comparisonMarkdown(compareExecutions(a, b))).toBe(
+    a.label = 'smoke\r\nnightly'
+    // Scenarios that moved nowhere: one counted, one the reader left out.
+    for (const detail of [a, b])
+      for (const scenario of ['timer_wake', 'quiet_path']) {
+        detail.reports.push(
+          ...execution(detail.id, [{ scenario, score: 70 }]).reports,
+        )
+        const run = detail.reports.at(-1)?.report?.scenarios[0].runs[0]
+        if (run) run.run_id = `${detail.id}-${scenario}`
+      }
+    expect(
+      comparisonMarkdown(compareExecutions(a, b, { exclude: ['quiet_path'] })),
+    ).toBe(
       [
-        '### smoke · deepseek/flash · no profile',
+        '### deepseek/flash · no profile',
         '',
-        'A (base): smoke · GitHub run 35823421664 · RC 366030b3 · harness 0.9.3',
+        'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · harness 0.9.3',
         'B: smoke · local · harness 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
         '',
         'What changed:',
@@ -290,17 +527,17 @@ describe('comparison summary', () => {
         '',
         '| Metric | A | B | Difference |',
         '| --- | --- | --- | --- |',
-        '| Mean score | 84 | 75.3 | -8.7 pts |',
-        '| Completed | 3 | 3 | No change |',
-        '| Coverage | 100% | 100% | No change |',
-        '| Technical failures | 0 | 0 | No change |',
-        '| Tokens | 2.2K | 2K | -200 (-9.1%) |',
-        '| Tokens per completion | 733 | 667 | -66.7 (-9.1%) |',
-        '| Cost | $0.0300 | $0.0300 | No change |',
-        '| Duration | 6.0s | 6.0s | No change |',
-        '| Turns | 6 | 6 | No change |',
+        '| Score | 84 | 75.3 | -8.7 pts |',
+        '| Completed tasks | 3 | 3 | No change |',
+        '| Observed / planned runs | 100% | 100% | No change |',
+        '| Technically invalid runs | 0 | 0 | No change |',
+        '| Tokens (incl. cache) | 2.42K | 2.2K | -220 (-9.1%) |',
+        '| Tokens per completed task | 807 | 733 | -73.3 (-9.1%) |',
+        '| Subject cost | $0.0300 | $0.0300 | No change |',
+        '| Total run duration | 6.0s | 6.0s | No change |',
+        '| Total turns | 9 | 9 | No change |',
         '| Function calls | 9 | 9 | No change |',
-        '| Function errors | 0 | 0 | No change |',
+        '| Function call errors | 0 | 0 | No change |',
         '',
         '| Scenario | Score A → B | Criteria that changed |',
         '| --- | --- | --- |',
@@ -310,9 +547,23 @@ describe('comparison summary', () => {
         '',
         'No difference: timer_wake.',
         '',
-        'Out of the totals: shell_coder_sandbox (technical_invalid in A).',
+        'Out of the totals: quiet_path (left out by the reader), shell_coder_sandbox (technical_invalid in A).',
         '',
       ].join('\n'),
+    )
+  })
+
+  it('states no profile difference when a side did not record its parameters', () => {
+    const b = local()
+    b.parameters = null
+    delete b.plan_execution
+    const comparison = compareExecutions(imported(), b)
+    expect(comparison.b.profile).toBeNull()
+    expect(comparison.parameters.map((change) => change.field)).not.toContain(
+      'profile',
+    )
+    expect(comparisonMarkdown(comparison).split('\n')[0]).toBe(
+      '### smoke · deepseek/flash',
     )
   })
 })

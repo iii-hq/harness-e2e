@@ -33,17 +33,15 @@ import {
   type JsonObject,
 } from '@/lib/dashboard-data-source'
 import {
+  type ComparedMetric,
+  comparedValue,
   compareExecutions,
   comparisonMarkdown,
   type ExecutionComparison,
   exclusionPhrase,
   type ScenarioComparison,
 } from '@/lib/execution-comparison'
-import {
-  formatPlanMetricDelta,
-  formatPlanMetricValue,
-  type PlanMetricComparison,
-} from '@/lib/plan-comparison'
+import { formatPlanMetricDelta } from '@/lib/plan-comparison'
 import '@/design-system/styles.css'
 
 type Choice = { include: string[]; exclude: string[] }
@@ -137,7 +135,7 @@ function MetricTable({
   metrics,
 }: {
   caption: string
-  metrics: PlanMetricComparison[]
+  metrics: ComparedMetric[]
 }) {
   return (
     <DataTable caption={caption} collapse data-comparison-metrics>
@@ -165,10 +163,10 @@ function MetricTable({
               {metric.label}
             </th>
             <td data-label="A" className={numericCellClassName}>
-              {formatPlanMetricValue(metric, 'baseline')}
+              {comparedValue(metric, 'baseline', 'Not reported')}
             </td>
             <td data-label="B" className={numericCellClassName}>
-              {formatPlanMetricValue(metric, 'candidate')}
+              {comparedValue(metric, 'candidate', 'Not reported')}
             </td>
             <td
               data-label="Difference"
@@ -488,10 +486,10 @@ export function ComparisonView({
                       </button>
                     </th>
                     <td data-label="Score A" className={numericCellClassName}>
-                      {formatPlanMetricValue(score, 'baseline')}
+                      {comparedValue(score, 'baseline', 'Not reported')}
                     </td>
                     <td data-label="Score B" className={numericCellClassName}>
-                      {formatPlanMetricValue(score, 'candidate')}
+                      {comparedValue(score, 'candidate', 'Not reported')}
                     </td>
                     <td
                       data-label="Difference"
@@ -547,6 +545,90 @@ export function ComparisonView({
   )
 }
 
+/** Both executions, or an error that names the side that failed. */
+export async function loadExecutionPair(
+  getExecution: (id: string) => Promise<DashboardExecutionDetail>,
+  left: string,
+  right: string,
+): Promise<Sides> {
+  const [a, b] = await Promise.allSettled([
+    getExecution(left),
+    getExecution(right),
+  ])
+  if (a.status === 'fulfilled' && b.status === 'fulfilled')
+    return { a: a.value, b: b.value }
+  const reason = (result: PromiseSettledResult<unknown>) =>
+    result.status === 'rejected'
+      ? result.reason instanceof Error
+        ? result.reason.message
+        : String(result.reason)
+      : null
+  throw new Error(
+    (
+      [
+        ['A', left, reason(a)],
+        ['B', right, reason(b)],
+      ] as const
+    )
+      .flatMap(([side, id, message]) =>
+        message === null
+          ? []
+          : [`${side} (${id}) could not be loaded: ${message}`],
+      )
+      .join(' · '),
+  )
+}
+
+/** What the page shows before a comparison: a choice to make, an error or
+ *  the loading skeleton. */
+export function ComparisonPlaceholder({
+  missing,
+  error,
+}: {
+  missing: boolean
+  error: string | null
+}) {
+  const back = (
+    <a
+      className={buttonClassName({
+        variant: 'secondary',
+        className: 'no-underline',
+      })}
+      href={hashForWorkspace('executions')}
+    >
+      back to executions
+    </a>
+  )
+  if (missing)
+    return (
+      <EmptyState
+        title="Choose two executions"
+        description="Tick two executions in the list, then compare. The first one ticked is A, the base."
+        actions={back}
+      />
+    )
+  if (error)
+    return (
+      <EmptyState
+        tone="error"
+        title="The comparison could not be loaded"
+        description={error}
+        actions={back}
+      />
+    )
+  return (
+    <div className="grid gap-4" aria-busy="true" role="status">
+      <span className="ds-visually-hidden">Loading both executions</span>
+      {['sides', 'totals', 'scenarios'].map((placeholder) => (
+        <div
+          key={placeholder}
+          className="h-32 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
+        />
+      ))}
+    </div>
+  )
+}
+
 export function ExecutionComparePage({
   left,
   right,
@@ -573,11 +655,12 @@ export function ExecutionComparePage({
     void (async () => {
       try {
         const bridge = await getDashboardDataBridge()
-        const [a, b] = await Promise.all([
-          bridge.getExecution(left),
-          bridge.getExecution(right),
-        ])
-        if (!cancelled) setSides({ a, b })
+        const pair = await loadExecutionPair(
+          (id) => bridge.getExecution(id),
+          left,
+          right,
+        )
+        if (!cancelled) setSides(pair)
       } catch (cause) {
         if (!cancelled)
           setError(cause instanceof Error ? cause.message : String(cause))
@@ -613,56 +696,9 @@ export function ExecutionComparePage({
     </div>
   )
 
-  if (!left || !right)
+  if (!left || !right || error || !sides || !comparison)
     return shell(
-      <EmptyState
-        title="Choose two executions"
-        description="Tick two executions in the list, then compare. The first one ticked is A, the base."
-        actions={
-          <a
-            className={buttonClassName({
-              variant: 'secondary',
-              className: 'no-underline',
-            })}
-            href={hashForWorkspace('executions')}
-          >
-            back to executions
-          </a>
-        }
-      />,
-    )
-
-  if (error)
-    return shell(
-      <EmptyState
-        tone="error"
-        title="The executions could not be loaded"
-        description={error}
-        actions={
-          <a
-            className={buttonClassName({
-              variant: 'secondary',
-              className: 'no-underline',
-            })}
-            href={hashForWorkspace('executions')}
-          >
-            back to executions
-          </a>
-        }
-      />,
-    )
-
-  if (!sides || !comparison)
-    return shell(
-      <div className="grid gap-4" aria-busy="true" role="status">
-        <span className="ds-visually-hidden">Loading both executions</span>
-        {['sides', 'totals', 'scenarios'].map((placeholder) => (
-          <div
-            key={placeholder}
-            className="h-32 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-          />
-        ))}
-      </div>,
+      <ComparisonPlaceholder missing={!left || !right} error={error} />,
     )
 
   const counted = comparison.scenarios.filter((scenario) => scenario.counted)

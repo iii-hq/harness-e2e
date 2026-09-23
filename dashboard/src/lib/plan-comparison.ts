@@ -697,10 +697,12 @@ export function formatPlanMetricValue(
       return compactNumber(value)
     case 'tokens':
       return compactNumber(value)
-    case 'seconds':
-      return value < 60
-        ? `${value.toFixed(value < 10 ? 1 : 0)}s`
-        : `${Math.floor(value / 60)}m ${Math.round(value % 60)}s`
+    case 'seconds': {
+      if (value < 59.5) return `${value.toFixed(value < 10 ? 1 : 0)}s`
+      // Round the total first, so 119.6s reads "2m 0s", never "1m 60s".
+      const total = Math.round(value)
+      return `${Math.floor(total / 60)}m ${total % 60}s`
+    }
     case 'milliseconds':
       return value < 1_000
         ? `${compactNumber(value)} ms`

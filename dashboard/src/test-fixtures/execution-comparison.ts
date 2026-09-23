@@ -8,7 +8,11 @@ export type Row = {
   technical?: string
   completion?: string
   score?: number | null
+  /** The case definition, `case.inputs_sha256`. */
   definition?: string
+  seed?: number | string
+  round?: number
+  /** Input and output tokens; a tenth more is read from cache. */
   tokens?: number
   criteria?: Array<{
     id: string
@@ -17,6 +21,31 @@ export type Row = {
     reason: string
     description?: string
   }>
+}
+
+/** One run of a report, with the fields Release Control's ledger reads. */
+export function reportRun(id: string, row: Row = {}) {
+  const tokens = row.tokens ?? 100
+  return {
+    run_id: id,
+    technical: row.technical ?? 'valid',
+    completion: row.completion ?? 'completed',
+    score: row.score === undefined ? 80 : row.score,
+    wall_time_ms: 2000,
+    efficiency: {
+      total_tokens: tokens,
+      root_turns: 2,
+      child_turns: 1,
+      function_calls: 3,
+      function_call_errors: 0,
+    },
+    metrics: {
+      complete: true,
+      totals: { cache_read_tokens: tokens / 10, cache_write_tokens: 0 },
+    },
+    cost: { subject_usd: 0.01, total_usd: 0.012 },
+    criteria: row.criteria ?? [],
+  }
 }
 
 /** One execution, one report per row, one run per report. */
@@ -34,43 +63,28 @@ export function execution(
     ],
     reports: rows.map((row, index) => {
       const scenario = row.scenario ?? `test_${index}`
-      const tokens = row.tokens ?? 100
       return {
         subject_id: 'subject',
         scenario_id: scenario,
         available: true,
+        ...(row.round === undefined ? {} : { round: row.round }),
         report: {
           result_contract_sha256: 'contract',
           scenarios: [
             {
               scenario_id: scenario,
-              behavior_sha256: row.definition ?? `definition-${scenario}`,
+              behavior_sha256: `behavior-${scenario}`,
               case_id: `${scenario}:seed-1`,
+              case: {
+                seed: row.seed ?? 1,
+                inputs_sha256: row.definition ?? `definition-${scenario}`,
+              },
               aggregate: {
                 planned_runs: 1,
                 observed_runs: 1,
                 deferred_runs: 0,
               },
-              runs: [
-                {
-                  run_id: `${id}-${index}`,
-                  technical: row.technical ?? 'valid',
-                  completion: row.completion ?? 'completed',
-                  score: row.score === undefined ? 80 : row.score,
-                  wall_time_ms: 2000,
-                  metrics: {
-                    totals: {
-                      input_tokens: tokens - 10,
-                      output_tokens: 10,
-                      turns: 2,
-                      function_calls: 3,
-                      function_call_errors: 0,
-                    },
-                  },
-                  cost: { total_usd: 0.01 },
-                  criteria: row.criteria ?? [],
-                },
-              ],
+              runs: [reportRun(`${id}-${index}`, row)],
             },
           ],
         },
