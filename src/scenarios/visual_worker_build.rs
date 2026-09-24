@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use base64::Engine as _;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
@@ -28,7 +29,8 @@ pub const STATE_MACHINE_ID: &str = "state_machine_canvas_build";
 pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with deterministic bug and feature fields, live editing and preview, and a flowchart projection stored through Canvas.";
 pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with deterministic simulation, live transition editing, and a stateDiagram-v2 projection stored through Canvas.";
 
-const EVIDENCE_LIMIT: u64 = 8 * 1024 * 1024;
+const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
+const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
 
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
@@ -185,6 +187,7 @@ macro_rules! scenario_impl {
                     "canvas_update",
                     "console_delivery",
                     "browser_interaction",
+                    "browser_screenshots",
                     "worker_trace",
                 ]
                 .into_iter()
@@ -309,8 +312,8 @@ fn deliverable_contract(kind: Kind) -> DeliverableContract {
             media_type: "application/json".into(),
             schema: json!({
                 "type":"object",
-                "required":["identity","checks","session"],
-                "properties":{"identity":{"type":"object"},"checks":{"type":"object"},"session":{"type":"object"}}
+                "required":["identity","checks","session","files"],
+                "properties":{"identity":{"type":"object"},"checks":{"type":"object"},"session":{"type":"object"},"files":{"type":"object"}}
             }),
             max_size_bytes: EVIDENCE_LIMIT,
         }],
@@ -331,6 +334,10 @@ fn deliverable_contract(kind: Kind) -> DeliverableContract {
             (
                 "browser_interaction",
                 "The live preview responds to a real browser interaction.",
+            ),
+            (
+                "browser_screenshots",
+                "Browser captures show the Worker UI before and after interaction.",
             ),
             (
                 "worker_trace",
@@ -668,7 +675,32 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     checks.insert("domain_branch".into(), json!({"passed":branch_ok,"reason":if branch_ok {"edited domain path matches the oracle"} else {"edited domain path differs from the oracle"},"observed":result_value(branch)}));
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid input was rejected and the domain edit persisted into a later call"} else {"invalid-input rejection or edited-state persistence failed"},"observed":{"invalid":result_value(invalid),"health":result_value(health)}}));
 
-    Ok(json!({"identity":identity,"checks":checks}))
+    let mut files = serde_json::Map::new();
+    insert_text_file(
+        &mut files,
+        "screenshots/captures.json",
+        &serde_json::to_string_pretty(
+            &json!({"identity":{"scenario":identity["scenario"],"worker":identity["worker"],"source_sha256":identity["source_sha256"]},"viewport":{"width":1280,"height":900},"captures":browser["captures"],"browser_url":browser["url"]}),
+        )?,
+    );
+    for name in ["before", "after", "narrow_dark"] {
+        if let Some(data) = browser[name]["data"].as_str() {
+            insert_binary_file(
+                &mut files,
+                &format!("screenshots/{name}.png"),
+                &base64::engine::general_purpose::STANDARD.decode(data)?,
+            );
+        }
+    }
+    let screenshots_ok = ["before", "after", "narrow_dark"]
+        .iter()
+        .all(|name| files.contains_key(&format!("screenshots/{name}.png")));
+    checks.insert("browser_screenshots".into(), json!({
+        "passed":screenshots_ok,
+        "reason":if screenshots_ok {"browser screenshots of the Worker UI were saved with session and source identity"} else {"one or more browser screenshots are missing"},
+        "observed":{"capture_count":browser["captures"].as_array().map_or(0, Vec::len),"files":files.keys().collect::<Vec<_>>()}
+    }));
+    Ok(json!({"identity":identity,"checks":checks,"files":files}))
 }
 
 fn worker_trace(observation: &ScenarioObservation, kind: Kind, run_id: &str) -> Value {
@@ -956,6 +988,13 @@ async fn capture_browser(
     let mut identity = identity.clone();
     identity["workspace"] = workspace;
     let url = format!("http://127.0.0.1:{port}/#/");
+    let worker = identity["worker"]
+        .as_str()
+        .context("visual Worker identity omitted its id")?;
+    let browser_url = format!(
+        "http://127.0.0.1:{port}/#/worker/{worker}/{}",
+        kind.page_id()
+    );
     let started = context
         .trigger_value(
             "browser::sessions::start",
@@ -966,7 +1005,8 @@ async fn capture_browser(
         .as_str()
         .context("browser session omitted session_id")?
         .to_string();
-    let result = capture_browser_session(context, kind, &session, &url, &identity).await;
+    let result =
+        capture_browser_session(context, kind, &session, &url, &browser_url, &identity).await;
     let stopped = context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
         .await;
@@ -987,6 +1027,7 @@ async fn capture_browser_session(
     kind: Kind,
     session: &str,
     url: &str,
+    browser_url: &str,
     identity: &Value,
 ) -> Result<Value> {
     context
@@ -998,12 +1039,30 @@ async fn capture_browser_session(
     let navigation = context
         .trigger_value(
             "browser::navigate",
+            json!({"session_id":session,"url":browser_url,"timeout_ms":30000}),
+        )
+        .await?;
+    if navigation["ok"] != true || navigation["timed_out"] == true {
+        return Ok(
+            json!({"passed":false,"status":"blocked","reason":format!("Standalone Worker browser page could not be rendered: {navigation}"),"url":browser_url}),
+        );
+    }
+    if !wait_for_worker_page(context, session).await? {
+        return Ok(
+            json!({"passed":false,"status":"blocked","reason":"Standalone Worker browser page did not expose the app" ,"url":browser_url}),
+        );
+    }
+    context.trigger_value("browser::execute", json!({"session_id":session,"code":"document.documentElement.dataset.theme='light';document.documentElement.style.colorScheme='light';return true"})).await?;
+    let before = screenshot_png(context, session).await?;
+    let navigation = context
+        .trigger_value(
+            "browser::navigate",
             json!({"session_id":session,"url":url,"timeout_ms":30000}),
         )
         .await?;
     if navigation["ok"] != true || navigation["timed_out"] == true {
         return Ok(
-            json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"url":url}),
+            json!({"passed":false,"status":"blocked","reason":format!("Console workspace could not be rendered for interaction checks: {navigation}"),"url":url}),
         );
     }
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
@@ -1145,6 +1204,49 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
 })();"#}),
         )
         .await?;
+    context
+        .trigger_value(
+            "browser::resize",
+            json!({"session_id":session,"width":1280,"height":900}),
+        )
+        .await?;
+    let standalone_navigation = context
+        .trigger_value(
+            "browser::navigate",
+            json!({"session_id":session,"url":browser_url,"timeout_ms":30000}),
+        )
+        .await?;
+    let standalone_ready = standalone_navigation["ok"] == true
+        && standalone_navigation["timed_out"] != true
+        && wait_for_worker_page(context, session).await?;
+    let after = if standalone_ready {
+        context.trigger_value("browser::execute", json!({"session_id":session,"code":"document.documentElement.dataset.theme='light';document.documentElement.style.colorScheme='light';return true"})).await?;
+        screenshot_png(context, session).await?
+    } else {
+        json!({"unavailable":true})
+    };
+    let narrow_dark = if standalone_ready {
+        context
+            .trigger_value(
+                "browser::resize",
+                json!({"session_id":session,"width":480,"height":900}),
+            )
+            .await?;
+        context
+            .trigger_value(
+                "browser::execute",
+                json!({"session_id":session,"code":"document.documentElement.dataset.theme='dark';document.documentElement.style.colorScheme='dark';return true"}),
+            )
+            .await?;
+        screenshot_png(context, session).await?
+    } else {
+        json!({"unavailable":true})
+    };
+    let captures = json!([
+        {"id":"before","caption":"Worker app in its standalone browser route before editing","status":if before["data"].is_string() {"captured"} else {"unavailable"},"screenshot":"before.png","url":browser_url,"session_id":session,"identity":{"scenario":identity["scenario"],"worker":identity["worker"],"source_sha256":identity["source_sha256"]},"sha256":before["sha256"],"details":before["details"]},
+        {"id":"after","caption":"Worker app in its standalone browser route after editing","status":if after["data"].is_string() {"captured"} else {"unavailable"},"screenshot":"after.png","url":browser_url,"session_id":session,"identity":{"scenario":identity["scenario"],"worker":identity["worker"],"source_sha256":identity["source_sha256"]},"sha256":after["sha256"],"details":after["details"]},
+        {"id":"narrow_dark","caption":"Worker app in the standalone browser route at a narrow dark viewport","status":if narrow_dark["data"].is_string() {"captured"} else {"unavailable"},"screenshot":"narrow_dark.png","url":browser_url,"session_id":session,"identity":{"scenario":identity["scenario"],"worker":identity["worker"],"source_sha256":identity["source_sha256"]},"sha256":narrow_dark["sha256"],"details":narrow_dark["details"]}
+    ]);
     let ui_contract = before_state["passed"] == true
         && after_state["passed"] == true
         && open_canvas["result"]["visible"] == true
@@ -1155,7 +1257,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && mobile["result"]["passed"] == true;
     let passed = ui_contract && interaction["result"].get("error").is_none();
     Ok(
-        json!({"passed":passed,"reason":if passed {"Worker UI edits domain state and Canvas, restores state after reload, and adapts to a narrow dark pane"} else {"Console UI interaction, Canvas update, reload persistence, or narrow dark layout failed"},"url":url,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]},"layout":{"initial":before_state,"edited":after_state,"ui_contract":ui_contract}}),
+        json!({"passed":passed,"reason":if passed {"Worker UI edits domain state and Canvas, restores state after reload, and adapts to a narrow dark pane"} else {"Console UI interaction, Canvas update, reload persistence, or narrow dark layout failed"},"url":browser_url,"captures":captures,"before":before,"after":after,"narrow_dark":narrow_dark,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]},"layout":{"initial":before_state,"edited":after_state,"ui_contract":ui_contract}}),
     )
 }
 
@@ -1188,6 +1290,46 @@ return {{passed:workspaceOk&&visible(domain)&&branchOk&&noOverflow&&(!error||!er
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(observed)
+}
+
+async fn wait_for_worker_page(context: &E2eContext, session: &str) -> Result<bool> {
+    let value = context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(location.hash.startsWith('#/worker/')&&document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#}),
+        )
+        .await?;
+    Ok(value["result"] == true)
+}
+
+async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
+    let value = context
+        .trigger_value(
+            "browser::screenshot",
+            json!({"session_id":session,"full_page":true,"format":"png"}),
+        )
+        .await?;
+    if value["details"]["session_id"] != session {
+        bail!("browser screenshot session identity mismatch");
+    }
+    let block = value["content"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["type"] == "image" && item["mime"] == "image/png")
+        })
+        .context("browser screenshot omitted PNG")?;
+    let data = block["data"].as_str().context("browser PNG data missing")?;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
+    if bytes.len() > MAX_SCREENSHOT_BYTES {
+        return Ok(
+            json!({"oversized":true,"size_bytes":bytes.len(),"maximum_bytes":MAX_SCREENSHOT_BYTES,"details":value["details"]}),
+        );
+    }
+    Ok(
+        json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
+    )
 }
 
 fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
@@ -1420,6 +1562,15 @@ fn reason(evidence: &Value, id: &str) -> String {
         .as_str()
         .unwrap_or("check did not produce a reason")
         .into()
+}
+
+fn insert_text_file(files: &mut serde_json::Map<String, Value>, name: &str, text: &str) {
+    let bytes = text.as_bytes();
+    files.insert(name.into(), json!({"encoding":"utf8","content":text,"size_bytes":bytes.len(),"sha256":crate::artifact::sha256_bytes(bytes)}));
+}
+
+fn insert_binary_file(files: &mut serde_json::Map<String, Value>, name: &str, bytes: &[u8]) {
+    files.insert(name.into(), json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(bytes),"size_bytes":bytes.len(),"sha256":crate::artifact::sha256_bytes(bytes)}));
 }
 
 #[cfg(test)]
