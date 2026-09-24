@@ -130,6 +130,9 @@ pub(crate) struct ExecutionParameters {
     pub provider: String,
     /// Agent profile the subject ran under.
     pub agent: Option<String>,
+    /// Suite of the master plan an imported GitHub execution ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suite: Option<String>,
 }
 
 /// Where an execution came from; shown and used to deduplicate imports.
@@ -984,6 +987,7 @@ impl PlanStore {
             role: Some(role),
             label: None,
             parameters: Some(ExecutionParameters {
+                suite: None,
                 scenarios: config.scenario_ids.clone(),
                 runs: config.runs,
                 technical_retries: config.technical_retries,
@@ -2484,6 +2488,7 @@ mod tests {
         assert_eq!(
             installed.parameters,
             Some(ExecutionParameters {
+                suite: Some("smoke".into()),
                 scenarios: vec!["context_pressure".into(), "registry_planning".into()],
                 runs: 1,
                 technical_retries: 0,
@@ -3292,6 +3297,7 @@ mod tests {
         let manager = manager(root.path(), runner.clone());
         runner.crash_next.store(true, Ordering::SeqCst);
         let parameters = ExecutionParameters {
+            suite: None,
             scenarios: vec![
                 "context_pressure".into(),
                 "retired_scenario".into(),
@@ -3402,6 +3408,7 @@ mod tests {
             ),
         ] {
             let parameters = ExecutionParameters {
+                suite: None,
                 scenarios,
                 runs: 1,
                 technical_retries: 0,
@@ -3421,6 +3428,7 @@ mod tests {
     #[test]
     fn parameters_keep_the_sequential_groups_of_the_master_plan() {
         let parameters = ExecutionParameters {
+            suite: None,
             scenarios: vec![
                 "registry_implementation".into(),
                 "registry_verification".into(),
@@ -3453,6 +3461,7 @@ mod tests {
         runner.hold.store(true, Ordering::SeqCst);
         let manager = manager(root.path(), runner.clone());
         let parameters = ExecutionParameters {
+            suite: None,
             scenarios: vec!["minimal_path".into()],
             runs: 1,
             technical_retries: 0,
@@ -3480,6 +3489,7 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
         let parameters = ExecutionParameters {
+            suite: None,
             scenarios: vec!["registry_verification".into(), "minimal_path".into()],
             runs: 1,
             technical_retries: 0,
@@ -3552,6 +3562,7 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner.clone());
         let parameters = ExecutionParameters {
+            suite: None,
             scenarios: vec!["minimal_path".into(), "retired_scenario".into()],
             runs: 1,
             technical_retries: 0,
