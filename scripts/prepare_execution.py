@@ -11,8 +11,8 @@ reports go to. Everything else is resolved here, once for the whole execution:
                (plan, stack policy, runner_sha, cli_version) are translated
                first, so there is one path after this.
     contracts  one contract per materialized campaign and the group matrix.
-               `iii: latest` becomes the newest iii release and a template one
-               commit.
+               `iii: latest` becomes the newest iii release candidate and a
+               template one commit.
     lock       the stack as Compose assembled it once, with its
                worker-compose.lock, into every contract. Each group starts it
                frozen, so all of them run the same versions.
@@ -46,7 +46,8 @@ CLI_ASSET = f"iii-{CLI_TARGET}.tar.gz"
 EXECUTOR_KEYS = ("iii", "template")
 #: The runner executing the scenarios inside the declared stack.
 RUNNER = "harness-e2e"
-SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z.-]+))?$")
+#: A release candidate tag of iii-hq/iii, as Release Control's release grammar reads one.
+RELEASE_CANDIDATE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.([1-9]\d*)$")
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
 
 
@@ -176,23 +177,16 @@ def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def release_key(version: str) -> tuple[Any, ...] | None:
-    """Semver precedence: a pre-release sorts before its release, and its
-    identifiers compare numerically when they are numbers."""
-    match = SEMVER.fullmatch(version)
-    if not match:
-        return None
-    major, minor, patch, pre = match.groups()
-    identifiers = tuple(
-        (0, int(part), "") if part.isdigit() else (1, 0, part) for part in (pre or "").split(".") if part
-    )
-    return int(major), int(minor), int(patch), 0 if pre else 1, identifiers
-
-
-def newest_release(versions: list[str]) -> str | None:
-    """What `iii: latest` means: the highest semver among the `iii/v*` tags,
-    pre-releases included, so a release candidate is picked up as it is cut."""
-    ranked = [(key, version) for version in versions if (key := release_key(version))]
+def newest_release_candidate(versions: list[str]) -> str | None:
+    """What `iii: latest` means: the newest `X.Y.Z-rc.N` among the `iii/v*`
+    tags, the rule Release Control dispatches with
+    (`resolveNewestCliReleaseCandidate`). Stable releases and other
+    pre-releases are not candidates; candidates order by core, then N."""
+    ranked = [
+        (tuple(int(part) for part in match.groups()), version)
+        for version in versions
+        if (match := RELEASE_CANDIDATE.fullmatch(version))
+    ]
     return max(ranked)[1] if ranked else None
 
 
@@ -201,9 +195,10 @@ def resolve_cli(selector: str, token: str | None) -> dict[str, str]:
     version = str(selector).strip()
     if version == "latest":
         refs = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v", token=token)
-        version = newest_release([str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs]) or ""
+        tags = [str(ref.get("ref", "")).removeprefix("refs/tags/iii/v") for ref in refs]
+        version = newest_release_candidate(tags) or ""
         if not version:
-            raise ResolutionError(f"{III_REPOSITORY} has no iii/v* release tag")
+            raise ResolutionError(f"{III_REPOSITORY} has no release candidate")
     release = get_json(f"{GITHUB_API_URL}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}", token=token)
     for asset in release.get("assets") or []:
         if asset.get("name") == CLI_ASSET:

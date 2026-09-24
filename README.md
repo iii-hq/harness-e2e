@@ -192,7 +192,8 @@ A dispatch names what to test, where, and with whom:
 | `execution_id` | Optional Release Control execution. Without it the run only produces artifacts. |
 
 A stack is an iii Compose project plus `iii` (a release, or `latest` for the
-newest `iii/v*` tag, pre-releases included) and an optional `template`
+newest `iii/v*` release candidate, as Release Control resolves it) and an
+optional `template`
 (`<id>` or `<id>@<revision>` of `iii-hq/templates`). Credentials never go in a
 stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.

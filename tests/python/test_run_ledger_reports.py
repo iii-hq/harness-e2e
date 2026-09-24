@@ -345,13 +345,15 @@ class DispatchTests(unittest.TestCase):
 
 
 class StackResolutionTests(unittest.TestCase):
-    def test_latest_iii_is_the_newest_tag_pre_releases_included(self):
-        newest = prepare_execution.newest_release
-        self.assertEqual(newest(["0.24.1", "0.24.2-rc.2", "0.24.2-rc.10", "0.24.0"]), "0.24.2-rc.10")
-        self.assertEqual(newest(["0.24.2-rc.2", "0.24.2", "0.23.9"]), "0.24.2")
-        self.assertEqual(newest(["0.24.2", "0.25.0-rc.1"]), "0.25.0-rc.1")
-        self.assertEqual(newest(["0.24.2-alpha.1", "0.24.2-rc.1", "0.24.2-beta"]), "0.24.2-rc.1")
-        self.assertIsNone(newest(["main", "v1", ""]))
+    def test_latest_iii_is_the_newest_release_candidate_as_release_control_reads_it(self):
+        newest = prepare_execution.newest_release_candidate
+        # Today's iii-hq/iii: a stable 0.24.2 does not displace its candidate.
+        self.assertEqual(newest(["0.24.0", "0.24.1", "0.24.2", "0.24.2-rc.1", "0.24.2-rc.2"]), "0.24.2-rc.2")
+        self.assertEqual(newest(["0.24.2-rc.2", "0.24.2-rc.10", "0.24.1"]), "0.24.2-rc.10")
+        self.assertEqual(newest(["0.24.2-rc.9", "0.25.0-rc.1", "0.26.0"]), "0.25.0-rc.1")
+        # Only X.Y.Z-rc.N counts: not alpha, beta, next, rc.0 or a leading zero.
+        self.assertIsNone(newest(["0.24.2", "0.24.2-alpha.1", "0.24.2-beta", "0.25.0-next.1",
+                                  "0.24.2-rc.0", "01.2.3-rc.1", "0.24.2-rc.1.1", "main", ""]))
 
     def test_iii_resolves_to_a_release_and_the_digest_the_groups_check(self):
         urls = []
@@ -359,7 +361,7 @@ class StackResolutionTests(unittest.TestCase):
         def get(url, token=None):
             urls.append(url)
             if url.endswith("/git/matching-refs/tags/iii/v"):
-                return [{"ref": "refs/tags/iii/v0.24.1"}, {"ref": "refs/tags/iii/v0.24.2-rc.2"}]
+                return [{"ref": f"refs/tags/iii/v{tag}"} for tag in ("0.24.1", "0.24.2", "0.24.2-rc.2")]
             return {"assets": [{"name": prepare_execution.CLI_ASSET, "digest": "sha256:" + "c" * 64}]}
 
         with patch.object(prepare_execution, "get_json", side_effect=get):
