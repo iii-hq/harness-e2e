@@ -200,9 +200,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Mint private Registry source token
-        id: registry_source_token
-        if: startsWith(matrix.group_id, 'case-registry-')
+      # The private sources the Registry and trending topics fixtures read.
+      - name: Mint private fixture token
+        id: fixture_token
+        if: startsWith(matrix.group_id, 'case-registry-') || matrix.group_id == 'case-trending-topics-build'
         uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
         with:
           app-id: ${{ secrets.III_CI_APP_ID }}
@@ -212,72 +213,6 @@ jobs:
             registry
             e2e-fixture
           permission-contents: read
-
-      - name: Checkout pinned Registry source
-        if: startsWith(matrix.group_id, 'case-registry-')
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/registry
-          ref: 662eb87c1bdbb395f36264d5d26bf823e2ace783
-          token: ${{ steps.registry_source_token.outputs.token }}
-          persist-credentials: false
-          path: .registry-sources/registry
-
-      - name: Checkout latest E2E fixture
-        if: startsWith(matrix.group_id, 'case-registry-')
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/e2e-fixture
-          token: ${{ steps.registry_source_token.outputs.token }}
-          persist-credentials: false
-          path: .registry-sources/e2e-fixture
-
-      # The group runs in the executor image, where git reads this routing
-      # from the environment (GIT_CONFIG_COUNT) the wrapper passes through.
-      - name: Route Registry fixture clones to prepared sources
-        if: startsWith(matrix.group_id, 'case-registry-')
-        run: |
-          set -euo pipefail
-          test "$(git -C .registry-sources/registry rev-parse HEAD)" = 662eb87c1bdbb395f36264d5d26bf823e2ace783
-          {
-            echo "GIT_CONFIG_COUNT=2"
-            echo "GIT_CONFIG_KEY_0=url.file://${GITHUB_WORKSPACE}/.registry-sources/registry.insteadOf"
-            echo "GIT_CONFIG_VALUE_0=https://github.com/iii-hq/registry.git"
-            echo "GIT_CONFIG_KEY_1=url.file://${GITHUB_WORKSPACE}/.registry-sources/e2e-fixture.insteadOf"
-            echo "GIT_CONFIG_VALUE_1=https://github.com/iii-hq/e2e-fixture.git"
-          } >>"$GITHUB_ENV"
-
-      - name: Mint private trending topics fixture token
-        id: trending_fixture_token
-        if: matrix.group_id == 'case-trending-topics-build'
-        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
-        with:
-          app-id: ${{ secrets.III_CI_APP_ID }}
-          private-key: ${{ secrets.III_CI_APP_PRIVATE_KEY }}
-          owner: iii-hq
-          repositories: e2e-fixture
-          permission-contents: read
-
-      - name: Checkout pinned trending topics fixture
-        if: matrix.group_id == 'case-trending-topics-build'
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/e2e-fixture
-          ref: 3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
-          token: ${{ steps.trending_fixture_token.outputs.token }}
-          persist-credentials: false
-          path: .trending-topics-fixture
-
-      - name: Route trending topics fixture fetch to the pinned checkout
-        if: matrix.group_id == 'case-trending-topics-build'
-        run: |
-          set -euo pipefail
-          test "$(git -C .trending-topics-fixture rev-parse HEAD)" = 3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
-          {
-            echo "GIT_CONFIG_COUNT=1"
-            echo "GIT_CONFIG_KEY_0=url.file://${GITHUB_WORKSPACE}/.trending-topics-fixture.insteadOf"
-            echo "GIT_CONFIG_VALUE_0=git@github.com:iii-hq/e2e-fixture.git"
-          } >>"$GITHUB_ENV"
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -298,33 +233,15 @@ jobs:
           printf 'lock_sha256=sha256:%s\n' \
             "$(sha256sum target/harness-e2e-contract/worker-compose.lock | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
 
-      - name: Checkout Kanban fixture
-        if: startsWith(matrix.group_id, 'case-kanban-')
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/kanban-e2e-fixture
-          ref: main
-          path: target/kanban-fixture
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Checkout pinned Linkly template
-        if: matrix.group_id == 'case-linkly-tutorial'
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/templates
-          ref: ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
-          path: target/linkly-templates
-          persist-credentials: false
-
-      - name: Checkout the stack's template
-        if: matrix.template_revision != ''
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-        with:
-          repository: iii-hq/templates
-          ref: ${{ matrix.template_revision }}
-          path: target/execution-template
-          persist-credentials: false
+      # What the group starts from and no package brings (the Kanban fixture,
+      # the Linkly templates, the stack's template, the Registry sources and
+      # the trending topics fixture), checked out below target/ in the
+      # executor image, where the group then clones them from; see
+      # scripts/executor.sh. Only this step holds the fixture token.
+      - name: Check out the group's fixtures
+        env:
+          GITHUB_TOKEN: ${{ steps.fixture_token.outputs.token }}
+        run: scripts/run_in_image.sh prepare fixtures
 
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for
@@ -515,36 +432,10 @@ jobs:
           path: ${{ steps.group_artifacts.outputs.download_path }}
           merge-multiple: false
 
-      - name: Restore deterministic group paths
-        if: always()
-        run: |
-          set -euo pipefail
-          rm -rf target/harness-e2e-campaign
-          while IFS= read -r contract; do
-            campaign=$(basename "$contract" .json)
-            root="target/harness-e2e-campaign/$campaign"
-            mkdir -p "$root/groups"
-            cp "$contract" "$root/stack-lock.json"
-            while IFS= read -r group; do
-              artifact_name=""
-              if [[ -f target/selected-group-artifacts.json ]]; then
-                artifact_name=$(jq -r --arg job "$campaign · $group" '.[$job].name // empty' target/selected-group-artifacts.json)
-              fi
-              source="target/downloaded-groups/$artifact_name"
-              destination="$root/groups/$group"
-              if [[ -n "$artifact_name" && -d "$source" ]]; then
-                mv "$source" "$destination"
-              else
-                mkdir -p "$destination"
-                jq -n --arg group_id "$group" --arg campaign_id "$campaign" \
-                  '{phase:"workflow_artifact_download",outcome:"infra_failed",campaign_id:$campaign_id,group_id:$group_id,error:"group observation artifact was not available"}' \
-                  >"$destination/failure.json"
-              fi
-            done < <(python3 scripts/exact_stack_campaign.py groups --contract "$contract")
-          done < <(find target/harness-e2e-contract/contracts -name '*.json' ! -name resolution.json | sort)
-
-      # Aggregated in the executor image by the runner the stack ran, as the
-      # suite was materialized by it: one release scores what it executed.
+      # In the executor image: each campaign's groups laid out from the
+      # bundles selected above (a group without one reads as never observed),
+      # then aggregated by the runner the stack ran, as the suite was
+      # materialized by it: one release scores what it executed.
       - name: Aggregate with exact Harness scoring implementation
         id: aggregate
         continue-on-error: true
@@ -569,6 +460,7 @@ jobs:
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
         run: |
           set -euo pipefail
+          mkdir -p target/harness-e2e-campaign
           test -f target/harness-e2e-campaign/execution-summary.json \
             || jq -n '{campaigns:[],unavailable:"the finalizer produced no summary"}' \
                  >target/harness-e2e-campaign/execution-summary.json

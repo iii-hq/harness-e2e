@@ -763,7 +763,8 @@ fail() {
         workflow = WORKFLOW.read_text()
         root_upload = workflow.split("- name: Upload root observation bundle", 1)[1]
         self.assertIn("if: always()", root_upload.split("- name:", 1)[0])
-        self.assertIn("group observation artifact was not available", workflow)
+        self.assertIn("group observation artifact was not available",
+                      (WORKFLOW.parents[2] / "scripts/executor.sh").read_text())
 
     def test_a_field_this_version_does_not_know_is_carried_not_rejected(self):
         value = campaign_contract()

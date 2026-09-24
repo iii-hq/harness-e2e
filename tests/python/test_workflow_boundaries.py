@@ -145,7 +145,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
                      if step.get("id") == "common")
         self.assertEqual(group["env"]["HARNESS_E2E_DOCKER_NETWORK"], "host")
-        self.assertIn("group) exec bash scripts/run_exact_stack_group.sh",
+        self.assertIn("    route_fixtures\n    exec bash scripts/run_exact_stack_group.sh",
                       (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
@@ -197,8 +197,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # The stack a run reports is the lock, not the per-execution contract.
         self.assertIn("sha256sum target/harness-e2e-contract/worker-compose.lock", workflow)
         self.assertIn("--stack-lock-sha256", workflow)
-        self.assertIn("exact_stack_campaign.py groups", workflow)
-        self.assertIn("exact_stack_campaign.py validate", (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
+        executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
+        self.assertIn("exact_stack_campaign.py groups", executor)
+        self.assertIn("exact_stack_campaign.py validate", executor)
 
     def test_a_dispatch_names_suite_stack_model_and_profile(self):
         """What to test, where, with whom, and optionally for which Release
@@ -328,24 +329,18 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("exact_stack_campaign.py admit", workflow)
 
     def test_finalizer_aggregates_only_campaigns_from_the_current_execution(self):
+        import shutil
         import subprocess
         import tempfile
-        import textwrap
 
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         finalizer = workflow.split("\n  finalize:", 1)[1]
-        # The executor image aggregates what the restored paths hold.
+        # The executor image lays the selected groups out, then aggregates.
         self.assertLess(
-            finalizer.index("Restore deterministic group paths"),
+            finalizer.index("steps.group_artifacts.outputs.download_path"),
             finalizer.index("scripts/run_in_image.sh finalize"),
         )
-        restore = finalizer.split("- name: Restore deterministic group paths", 1)[
-            1
-        ].split("\n      - ", 1)[0]
-        command = textwrap.dedent(restore.split("run: |\n", 1)[1])
-        command = command.replace(
-            "${{ inputs.execution_id }}", "execution-1"
-        ).replace("${{ github.run_attempt }}", "1")
+        self.assertNotIn("Restore deterministic group paths", finalizer)
 
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -361,6 +356,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
             contracts.mkdir(parents=True)
             scripts = root / "scripts"
             scripts.mkdir()
+            shutil.copy(ROOT / "scripts/executor.sh", scripts)
             (scripts / "exact_stack_campaign.py").write_text(
                 "import sys\nassert sys.argv[1] == 'groups'\nprint('case-minimal-path\\ncase-missing')\n"
             )
@@ -380,7 +376,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 (stale_group / "result.json").write_text('{"status":"old_success"}')
             (root / "target/selected-group-artifacts.json").write_text(json.dumps(selected))
 
-            subprocess.run(["bash", "-c", command], cwd=root, check=True)
+            subprocess.run(["bash", "scripts/executor.sh", "finalize", "restore"], cwd=root, check=True)
 
             self.assertEqual(
                 sorted(path.name for path in campaign_root.iterdir()),
@@ -403,6 +399,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 missing = campaign_root / campaign / "groups/case-missing"
                 self.assertEqual(json.loads((missing / "failure.json").read_text())["outcome"], "infra_failed")
                 self.assertFalse((missing / "result.json").exists())
+                # The selected bundle stays where the next attempt looks for it.
+                self.assertTrue((root / "target/downloaded-groups" /
+                                 f"e2e-observation-execution-1-{campaign}-case-minimal-path-gh-1/result.json").is_file())
             self.assertFalse(
                 (campaign_root / "regression-r01/campaign-summary.json").exists()
             )
@@ -459,43 +458,44 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("cleanup --lease-id", launcher)
         self.assertNotIn("git commit", launcher)
 
-    def test_registry_groups_prepare_private_sources_without_persisting_credentials(self):
-        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
-        source_block = workflow.split("Mint private Registry source token", 1)[1].split(
-            "Mint private trending topics fixture token", 1
-        )[0]
-        self.assertEqual(source_block.count("startsWith(matrix.group_id, 'case-registry-')"), 4)
-        self.assertIn("repository: iii-hq/registry", source_block)
-        self.assertIn("ref: 662eb87c1bdbb395f36264d5d26bf823e2ace783", source_block)
-        self.assertIn("repository: iii-hq/e2e-fixture", source_block)
-        fixture_checkout = source_block.split("Checkout latest E2E fixture", 1)[1].split(
-            "Route Registry fixture clones", 1
-        )[0]
-        self.assertNotIn("ref:", fixture_checkout)
-        self.assertEqual(source_block.count("persist-credentials: false"), 2)
-        self.assertIn("actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349", source_block)
-        self.assertIn("permission-contents: read", source_block)
-        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", source_block)
-        self.assertNotIn("token@github.com", source_block)
+    def test_fixture_groups_check_out_private_sources_without_persisting_credentials(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())
+        steps = workflow["jobs"]["groups"]["steps"]
+        token = next(step for step in steps if step.get("id") == "fixture_token")
+        self.assertEqual(token["if"], "startsWith(matrix.group_id, 'case-registry-') || "
+                                      "matrix.group_id == 'case-trending-topics-build'")
+        self.assertEqual(token["uses"], "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2"
+                         .split(" #")[0])
+        self.assertEqual(token["with"]["repositories"].split(), ["registry", "e2e-fixture"])
+        self.assertEqual(token["with"]["permission-contents"], "read")
+        # Only the fixtures phase holds the token, and it runs before the group.
+        names = [step.get("name") for step in steps]
+        fixtures = steps[names.index("Check out the group's fixtures")]
+        self.assertEqual(fixtures["env"], {"GITHUB_TOKEN": "${{ steps.fixture_token.outputs.token }}"})
+        self.assertEqual(fixtures["run"], "scripts/run_in_image.sh prepare fixtures")
+        self.assertLess(names.index("Check out the group's fixtures"), names.index("Execute common campaign group"))
+        for step in steps:
+            if step is not fixtures:
+                self.assertNotIn("fixture_token.outputs.token", json.dumps(step))
+        executor = (ROOT / "scripts/executor.sh").read_text()
+        self.assertIn("REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783", executor)
+        self.assertIn("checkout iii-hq/e2e-fixture \"\" target/registry-sources/e2e-fixture", executor)
+        self.assertIn('PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "', executor)
+        # The token travels in the git calls' environment, never a URL or file.
+        self.assertIn("GIT_CONFIG_KEY_0=http.https://github.com/.extraheader", executor)
+        self.assertNotIn("token@github.com", executor)
+        self.assertNotIn("git config", executor)
+        self.assertNotIn("E2E_FIXTURE_GITHUB_TOKEN", executor)
 
     def test_trending_topics_group_fetches_only_the_pinned_fixture_without_credentials(self):
-        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text()
-        source_block = workflow.split("Mint private trending topics fixture token", 1)[1].split(
-            "- uses: actions/download-artifact", 1
-        )[0]
-        self.assertEqual(source_block.count("matrix.group_id == 'case-trending-topics-build'"), 3)
-        self.assertIn("repositories: e2e-fixture", source_block)
-        self.assertIn("permission-contents: read", source_block)
-        self.assertIn("persist-credentials: false", source_block)
+        executor = (ROOT / "scripts/executor.sh").read_text()
         lifecycle = (ROOT / "tests/fixtures/trending-topics-build/lifecycle.py").read_text()
         revision = lifecycle.split('FIXTURE_SHA = "', 1)[1].split('"', 1)[0]
-        self.assertIn(f"ref: {revision}", source_block)
-        # The group runs in the executor image, which reads this routing from
-        # the environment.
-        self.assertIn('.trending-topics-fixture.insteadOf"', source_block)
-        self.assertIn('GIT_CONFIG_VALUE_0=git@github.com:iii-hq/e2e-fixture.git"', source_block)
-        self.assertIn('>>"$GITHUB_ENV"', source_block)
-        self.assertNotIn("token@github.com", source_block)
+        self.assertIn(f"TRENDING_TOPICS_REVISION={revision}", executor)
+        # The group runs in the executor image, which routes the fixture's
+        # URL to that checkout through git's environment.
+        self.assertIn("routes=(target/trending-topics-fixture git@github.com:iii-hq/e2e-fixture.git)", executor)
+        self.assertNotIn("token@github.com", executor)
 
 if __name__ == "__main__":
     unittest.main()

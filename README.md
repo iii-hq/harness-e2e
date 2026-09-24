@@ -255,7 +255,13 @@ Dockerfile is one set of tools. It holds no scripts:
 checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
 with `no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
-[materialize|assemble]`, `group` or `finalize` there. Only `group` gets the
+[materialize|assemble|fixtures]`, `group`, `package` or `finalize
+[restore|aggregate]` there. `prepare fixtures` checks out what the groups
+start from and no package brings (the Kanban fixture, the Linkly templates,
+the stack's template, the Registry sources and the trending topics fixture)
+below `target/`, and `group` routes the fixture repositories a scenario clones
+to those checkouts; `finalize` lays each campaign's groups out from the group
+bundles the execution selected before aggregating them. Only `group` gets the
 host's Docker socket, and only `prepare` a `GITHUB_TOKEN`: a group's subject
 has a shell. Interrupted, the wrapper stops its container; a group whose
 image or container never started still writes its `failure.json`.
@@ -265,9 +271,10 @@ network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
 host networking for their screenshots: the fixture publishes the application
 on the host's loopback, where only a phase on the host's network reaches it.
 The workflow runs every group on its runner's network, since each job owns
-its runner, and keeps on the runner what needs it: checkouts, artifacts, the
-OIDC reports, `gh`, and removing a cancelled phase's container before
-anything is reported or packaged.
+its runner, and keeps on the runner what needs it: the GitHub App token for
+the private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
+removing a cancelled phase's container before anything is reported or
+packaged.
 
 [`executor-image.yml`](.github/workflows/executor-image.yml) publishes a tag
 from `main` when the Dockerfile changes (or by hand) and never rebuilds an
