@@ -1,6 +1,6 @@
 [package]
 name = "harness-e2e"
-version = "0.12.6"
+version = "0.12.7"
 edition = "2021"
 description = "Longitudinal capability and complexity evaluation for Harness stacks"
 license = "Apache-2.0"
