@@ -315,40 +315,70 @@ class DispatchTests(unittest.TestCase):
                 prepare_execution.read_dispatch(inputs)
 
     def test_an_older_dispatch_becomes_the_execution_it_stands_for(self):
-        plan = {**PLAN, "agent_profile": "console-ui", "template": "harness",
-                "runner": {"revision": "a" * 40, "version": "0.12.2"}}
-        versions = {"harness": "1.9.3", "canvas": "0.4.0", "provider-anthropic": "2.0.1", "ade": "1.9.35"}
-        dispatch = prepare_execution.read_dispatch({
-            "plan": json.dumps(plan), "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-            "stack": json.dumps({"versions": versions}),
-            "runner_sha": "a" * 40, "cli_version": "0.24.2-rc.2",
-            # Ignored: an older dispatch states all of it in its plan.
-            "suite": "after-release",
-        })
+        plan = {**PLAN, "subject": {"provider": "anthropic", "model": "claude"}, "agent_profile": "console-ui",
+                "template": "harness", "runner": {"revision": "a" * 40, "version": "0.12.3"}}
+        versions = {"harness": "1.9.3", "canvas": "0.4.0", "provider-anthropic": "2.0.1",
+                    "ade": "1.9.35", "llm-router": "1.4.0", "harness-e2e": "0.12.0"}
+        with patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
+            dispatch = prepare_execution.read_dispatch({
+                "plan": json.dumps(plan), "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
+                "stack": json.dumps({"versions": versions}),
+                "runner_sha": "a" * 40, "cli_version": "0.24.2-rc.2",
+                # Ignored: an older dispatch states all of it in its plan.
+                "suite": "after-release",
+            })
         self.assertEqual(dispatch["execution"], {
             "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83", "suite": "regression",
-            "stack": "default", "model": "deepseek/deepseek-v4-flash", "profile": "console-ui",
-            # Every pin applied, the runner's release among them.
-            "stack_overrides": {**versions, "harness-e2e": "0.12.2"},
+            "stack": "default", "model": "anthropic/claude", "profile": "console-ui",
+            # Every pin is reported; the plan's runner release is the runner.
+            "stack_overrides": {**versions, "harness-e2e": "0.12.3"},
+            "runner_sha": "a" * 40,
         })
         self.assertEqual(dispatch["plan"], plan)
         stack = dispatch["stack"]
         self.assertEqual(list(stack)[:2], ["iii", "template"])
         self.assertEqual((stack["iii"], stack["template"]), ("0.24.2-rc.2", "harness"))
         containers = stack["containers"]
-        # The policy pins what the stack declares; the plan's runner release is
-        # the runner's version; a pinned worker it does not declare (Canvas, the
-        # subject's provider, a template package) is declared with its pin.
+        # The policy pins what the stack declares, and the plan's runner
+        # release wins over a policy pin on the runner.
         self.assertEqual(containers["harness"]["version"], "1.9.3")
-        self.assertEqual(containers["harness-e2e"]["version"], "0.12.2")
+        self.assertEqual(containers["harness-e2e"]["version"], "0.12.3")
         self.assertEqual(containers["fp"]["version"], "latest")
-        for worker in ("canvas", "provider-anthropic", "ade"):
+        # What the executor adds anyway is declared with its pin.
+        for worker in ("canvas", "provider-anthropic"):
             self.assertEqual(containers[worker], {"worker": f"package://{worker}", "version": versions[worker]})
+        # A dependency Harness's graph pins itself is never a second spec: it
+        # is said out loud (and reaches the template's worker of that name).
+        self.assertNotIn("llm-router", containers)
+        self.assertNotIn("ade", containers)
+        for worker in ("llm-router@1.4.0", "ade@1.9.35"):
+            self.assertIn(f"::warning::{worker} is not a worker the default stack declares", printed.getvalue())
+
+        # Without a runner release in the plan, the policy's pin (or latest)
+        # runs and the runner is named by the revision it reports, not runner_sha.
+        unpinned = {**plan, "runner": {"revision": "a" * 40}}
         pinned = prepare_execution.read_dispatch({
-            "plan": json.dumps(plan), "stack": json.dumps({"versions": {"harness-e2e": "0.12.0"}}),
+            "plan": json.dumps(unpinned), "stack": json.dumps({"versions": {"harness-e2e": "0.12.0"}}),
+            "runner_sha": "a" * 40,
         })
         self.assertEqual(pinned["stack"]["containers"]["harness-e2e"]["version"], "0.12.0")
+        self.assertNotIn("runner_sha", pinned["execution"])
         self.assertEqual(pinned["stack"]["iii"], "latest")
+
+    def test_template_packages_take_the_dispatch_pins_before_the_lock(self):
+        spec = importlib.util.spec_from_file_location("exact_stack_campaign", ROOT / "scripts/exact_stack_campaign.py")
+        campaign = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(campaign)
+        contract = {"suite": {"groups": [{"id": "g", "scenarios": ["minimal_path"]}],
+                              "subject": {"provider": "deepseek", "model": "m"}},
+                    "runtime": {"stack_overrides": {"ade": "1.9.35"}, "lock": {"containers": {
+                        "ade": {"worker": "package://api.workers.iii.dev/ade", "resolved": {"version": "1.9.41"}},
+                        "harness": {"worker": "package://api.workers.iii.dev/harness", "resolved": {"version": "1.8.31"}},
+                    }}}}
+        template = {"containers": {"console": {"worker": "package://ade"}, "harness": {"worker": "package://harness"}}}
+        project = campaign.project_scaffold(contract, "e2e-group", pathlib.Path("/data"), None, {}, template)
+        self.assertEqual(project["containers"]["console"]["version"], "1.9.35")
+        self.assertEqual(project["containers"]["harness"]["version"], "1.8.31")
 
 
 class StackResolutionTests(unittest.TestCase):
@@ -440,6 +470,50 @@ class StackResolutionTests(unittest.TestCase):
             self.assertEqual(pinned["containers"]["harness"]["version"], "latest")
             self.assertEqual(json.loads((contract / "runner.json").read_text()),
                              {"name": "harness-e2e", "version": "0.12.3", "revision": "c" * 40})
+            # The reports name the runner by the revision it reports ...
+            self.assertEqual(json.loads((contract / "execution.json").read_text())["runner_revision"], "c" * 40)
+            # ... or, for an older dispatch with a runner release, by runner_sha.
+            (contract / "execution.json").write_text(json.dumps({"cli": {}, "runner_sha": "a" * 40}))
+            with patch.object(prepare_execution, "install_cli", return_value=iii), \
+                 patch.object(prepare_execution, "fetch_runner", return_value=runner), \
+                 patch("sys.stdout", new_callable=__import__("io").StringIO):
+                prepare_execution.command_runner(args)
+            self.assertEqual(json.loads((contract / "execution.json").read_text())["runner_revision"], "a" * 40)
+
+    def test_a_download_survives_a_transient_failure_but_never_a_wrong_digest(self):
+        import hashlib
+        import io
+        import urllib.error
+
+        body = b"archive"
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        answers = [urllib.error.HTTPError("u", 502, "bad gateway", {}, None), OSError("reset"), Response(body)]
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("urllib.request.urlopen", side_effect=answers), \
+                patch("time.sleep"):
+            path = prepare_execution.download("https://example.invalid/a", hashlib.sha256(body).hexdigest(),
+                                              pathlib.Path(directory) / "a")
+            self.assertEqual(path.read_bytes(), body)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("urllib.request.urlopen", side_effect=urllib.error.HTTPError("u", 404, "missing", {}, None)), \
+                self.assertRaises(urllib.error.HTTPError):
+            prepare_execution.download("https://example.invalid/a", "0" * 64, pathlib.Path(directory) / "a")
+
+    def test_yaml_integers_are_read_as_compose_reads_them(self):
+        import yaml
+
+        text = "octal_looking: 010\nclock: 1:30\nseparated: 1_000\nhex: 0x1f\noctal: 0o17\nplain: -3\n"
+        values = prepare_execution.load_yaml(text)
+        self.assertEqual(values, {"octal_looking": 10, "clock": "1:30", "separated": "1_000",
+                                  "hex": 31, "octal": 15, "plain": -3})
+        self.assertEqual(prepare_execution.load_yaml(yaml.safe_dump(values)), values)
 
     def test_the_runner_a_lock_resolved_is_fetched_by_name_and_checked_against_its_digest(self):
         import hashlib

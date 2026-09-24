@@ -87,7 +87,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
                     "FIXTURE_DIR": str(root), "GITHUB_OUTPUT": str(output),
                     "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77",
                     "GITHUB_RUN_ATTEMPT": "3", "CONTRACT_ATTEMPT": str(contract_attempt),
-                    "EXECUTION_ID": "execution-1",
+                    "EXECUTION_KEY": "execution-1",
                 }, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
@@ -178,7 +178,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # interpolated into the script.
         for job in yaml.safe_load(workflow)["jobs"].values():
             for step in job["steps"]:
-                self.assertNotIn("${{ inputs.", step.get("run", ""), step.get("name"))
+                for expression in ("${{ inputs.", "${{ env."):
+                    self.assertNotIn(expression, step.get("run", ""), step.get("name"))
         # A suite stated whole is named "custom suite" in the run title.
         self.assertIn("startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite", workflow)
         # The runner the stack runs materializes the suite, with the flag every
@@ -190,7 +191,15 @@ class WorkflowBoundaryTests(unittest.TestCase):
         # Scripts come from the dispatched ref, and anyone who may dispatch may
         # run it: the identity that matters is the OIDC token of the reports.
         self.assertNotIn("ref: ${{ inputs.runner_sha }}", workflow)
-        self.assertNotIn("RELEASE_CONTROL_BOT_LOGIN", workflow)
+        # Identity stays a gate: a dispatch that reports to Release Control
+        # comes from its bot, with the ids it issues.
+        gate = next(step for step in yaml.safe_load(workflow)["jobs"]["prepare"]["steps"]
+                    if step.get("name") == "Validate a Release Control dispatch")
+        self.assertEqual(gate["if"], "inputs.execution_id != ''")
+        for check in ('test "$GITHUB_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"',
+                      '[[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]',
+                      '[[ -z "$RUNNER_SHA" || "$RUNNER_SHA" =~ ^[0-9a-f]{40}$ ]]'):
+            self.assertIn(check, gate["run"])
 
     def test_the_dispatched_plan_reaches_disk_as_the_plan(self):
         """An older dispatch keeps its plan verbatim for the readers of
@@ -230,14 +239,25 @@ class WorkflowBoundaryTests(unittest.TestCase):
         for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
             self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
         self.assertIn("for attempt in 1 2; do", assemble["run"])
-        # Its evidence passes the group packaging checks before upload.
+        # Its evidence passes the group packaging checks before upload, and
+        # never fails a prepared execution.
         self.assertIn("exact_stack_campaign.py package", steps["Package the stack assembly evidence"]["run"])
+        self.assertTrue(steps["Package the stack assembly evidence"]["continue-on-error"])
+        # A preparation that fails after the materialized report still closes
+        # the execution in Release Control.
+        failed = workflow["jobs"]["report_preparation_failure"]
+        self.assertEqual(failed["needs"], "prepare")
+        self.assertEqual(failed["if"], "always() && needs.prepare.result != 'success' && needs.prepare.outputs.materialized == 'true'")
+        self.assertIn("report_execution.py summary", failed["steps"][-1]["run"])
+        self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["materialized"], "${{ steps.materialized.outputs.posted }}")
+        self.assertIn('echo "posted=true"', steps["Report the materialized suite"]["run"])
         report = steps["Report the materialized suite"]["run"]
         self.assertIn("--cli-version", report)
         self.assertIn('--runner-sha "$RUNNER_REVISION"', report)
         # The runner's identity: an older dispatch's runner_sha, otherwise the
         # revision of the runner the stack ran, never this workflow's commit.
-        self.assertIn("${RUNNER_SHA:-$(jq -r '.revision // .version'", steps["Fetch the stack's runner"]["run"])
+        self.assertIn("jq -r '.runner_revision'", steps["Fetch the stack's runner"]["run"])
+        self.assertNotIn("RUNNER_SHA", steps["Fetch the stack's runner"].get("env", {}))
         self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["runner_revision"], "${{ steps.stack_runner.outputs.revision }}")
         for job, step in (("groups", "Report this shard's runs"), ("finalize", "Report the campaign summary")):
             env = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == step)["env"]
@@ -259,8 +279,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         for step in ("Report this shard's runs", "Report the campaign summary"):
             condition = workflow.split(step, 1)[1].lstrip().split("\n", 1)[0]
             self.assertEqual(condition, "if: always() && inputs.execution_id != ''")
-        materialized = workflow.split("Report the materialized suite", 1)[1].lstrip().split("\n", 1)[0]
-        self.assertEqual(materialized, "if: inputs.execution_id != ''")
+        materialized = next(step for step in yaml.safe_load(workflow)["jobs"]["prepare"]["steps"]
+                            if step.get("name") == "Report the materialized suite")
+        self.assertEqual(materialized["if"], "inputs.execution_id != ''")
         # Admission is gone with the campaign it admitted; the reports carry
         # the OIDC identity now, and the first one binds the run.
         self.assertNotIn("/admit", workflow)

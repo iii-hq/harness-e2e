@@ -118,10 +118,15 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
     The suite is the plan's profile, the model its subject, the profile its
     agent. The stack is the default one with the policy's versions on the
     workers it declares, the plan's runner release as the runner's version
-    unless the policy pins it, the plan's template, and `cli_version` as iii.
-    A pinned worker the default stack does not declare (Canvas, the subject's
-    provider, a template's package) is declared with its pin: a pin is never
-    dropped. The applied pins travel as `stack_overrides`.
+    (it is the runner Release Control resolved and reports, so it wins over a
+    policy pin), the plan's template, and `cli_version` as iii.
+
+    A pinned worker the default stack does not declare is declared with its
+    pin when the executor would add it anyway: Canvas and the subject's
+    provider. A pin on anything else, such as a dependency Harness's graph
+    pins itself, would be a second spec Compose refuses: it is said out loud,
+    applied to a template's worker of that name, and still reported. Every
+    pin travels as `stack_overrides`.
     """
     plan = json.loads(inputs["plan"])
     policy = json.loads(inputs.get("stack") or "{}")
@@ -129,7 +134,8 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
     pins = {str(worker): str(version) for worker, version in ((policy.get("versions") or {}).items())}
     runner = (plan.get("runner") or {}).get("version")
     if runner:
-        pins.setdefault(RUNNER, str(runner))
+        pins[RUNNER] = str(runner)
+    subject = plan.get("subject") or {}
     containers = stack.setdefault("containers", {})
     left = dict(pins)
     for container in containers.values():
@@ -137,13 +143,15 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
         if package in left:
             container["version"] = left.pop(package)
     for worker, version in sorted(left.items()):
-        if worker in containers:
-            raise ResolutionError(f"container {worker} is already used by another worker; cannot pin {worker}@{version}")
-        containers[worker] = {"worker": f"package://{worker}", "version": version}
+        if worker in ("canvas", f"provider-{subject.get('provider')}") and worker not in containers:
+            containers[worker] = {"worker": f"package://{worker}", "version": version}
+            continue
+        where = "the template's worker of that name" if plan.get("template") else "nothing"
+        # A workflow command: GitHub reads it from standard output.
+        print(f"::warning::{worker}@{version} is not a worker the default stack declares; the pin applies to {where}")
     head = {"iii": inputs.get("cli_version") or "latest"}
     if plan.get("template"):
         head["template"] = plan["template"]
-    subject = plan.get("subject") or {}
     execution = {
         "execution_id": inputs.get("execution_id") or None,
         "suite": (plan.get("profile") or {}).get("id"),
@@ -152,6 +160,9 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
         "profile": plan.get("agent_profile"),
         "stack_overrides": dict(sorted(pins.items())),
     }
+    if runner and inputs.get("runner_sha"):
+        # The runner Release Control resolved, by the commit it reports.
+        execution["runner_sha"] = inputs["runner_sha"]
     return {"execution": execution, "stack": {**head, **compose_of(stack)}}, plan
 
 
@@ -243,10 +254,22 @@ def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
 
 
 def download(url: str, sha256: str, destination: Path) -> Path:
-    """Fetch `url` and check it against the digest the release or lock states."""
+    """Fetch `url` and check it against the digest the release or lock states.
+    Tried three times, as the groups' `curl --retry 3`; a digest that does not
+    match is an answer, not a blip, and is never retried."""
     destination.parent.mkdir(parents=True, exist_ok=True)
-    with urllib.request.urlopen(url, timeout=300) as response:
-        payload = response.read()
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(url, timeout=300) as response:
+                payload = response.read()
+            break
+        except urllib.error.HTTPError as error:
+            if error.code != 429 and error.code < 500 or attempt == 2:
+                raise
+        except OSError:
+            if attempt == 2:
+                raise
+        time.sleep(5 * (attempt + 1))
     observed = hashlib.sha256(payload).hexdigest()
     if observed != sha256.removeprefix("sha256:"):
         raise ResolutionError(f"{url} does not match its digest {sha256}")
@@ -326,6 +349,7 @@ def build_contract(
     oidc_audience: str,
     template: dict[str, str] | None = None,
     lock: dict[str, Any] | None = None,
+    stack_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     provider, _, model = execution["model"].partition("/")
     suite = {
@@ -345,6 +369,8 @@ def build_contract(
         runtime["template"] = template
     if lock:
         runtime["lock"] = lock
+    if stack_overrides:
+        runtime["stack_overrides"] = stack_overrides
     return seal(
         {
             "schema": CONTRACT_SCHEMA,
@@ -384,7 +410,7 @@ def write_json(path: Path, value: Any) -> None:
 def command_dispatch(args: argparse.Namespace) -> None:
     import yaml
 
-    names = ("suite", "stack", "model", "profile", "execution_id", "plan", "cli_version")
+    names = ("suite", "stack", "model", "profile", "execution_id", "plan", "runner_sha", "cli_version")
     dispatch = read_dispatch({name: os.environ.get(f"DISPATCH_{name.upper()}", "") for name in names})
     write_json(args.contract_dir / "execution.json", dispatch["execution"])
     write_json(args.contract_dir / "plan.json", dispatch["plan"])
@@ -426,8 +452,12 @@ def command_runner(args: argparse.Namespace) -> None:
     (directory / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
     binary = fetch_runner(lock, work)
     catalog = subprocess.run([str(binary), "catalog"], capture_output=True, text=True, check=True).stdout
-    identity = json.loads(catalog).get("runner") or {}
-    write_json(directory / "runner.json", {"name": RUNNER, "version": version, **identity})
+    identity = {"name": RUNNER, "version": version, **(json.loads(catalog).get("runner") or {})}
+    write_json(directory / "runner.json", identity)
+    # What the reports name as the runner: the commit Release Control
+    # resolved for an older dispatch, else the one this runner was built from.
+    execution["runner_revision"] = execution.get("runner_sha") or identity.get("revision") or version
+    write_json(directory / "execution.json", execution)
     print(binary)
 
 
@@ -449,6 +479,7 @@ def command_contracts(args: argparse.Namespace) -> None:
             compose=compose_of(stack),
             oidc_audience=args.oidc_audience,
             template=template,
+            stack_overrides=execution.get("stack_overrides"),
         )
         write_json(directory / "contracts" / f"{campaign['campaign_id']}.json", contract)
         for group in contract["suite"]["groups"]:
