@@ -505,14 +505,8 @@ impl Persistence {
     /// Remove one execution and every row that projects it. SQLite foreign-key
     /// cascades are deliberately not relied on by the control plane.
     pub async fn delete_execution(&self, execution_id: &str) -> Result<()> {
-        self.transaction(vec![
-            json!({"sql": "DELETE FROM attempts WHERE execution_id = ?", "params": [execution_id]}),
-            json!({"sql": "DELETE FROM runs WHERE execution_id = ?", "params": [execution_id]}),
-            json!({"sql": "DELETE FROM artifacts WHERE execution_id = ?", "params": [execution_id]}),
-            json!({"sql": "DELETE FROM archives WHERE execution_id = ?", "params": [execution_id]}),
-            json!({"sql": "DELETE FROM executions WHERE execution_id = ?", "params": [execution_id]}),
-        ])
-        .await
+        self.transaction(delete_execution_statements(execution_id))
+            .await
     }
 
     pub async fn execution(&self, execution_id: &str) -> Result<Option<ExecutionRecord>> {
@@ -530,7 +524,7 @@ impl Persistence {
 
     pub async fn executions(&self) -> Result<Vec<ExecutionRecord>> {
         self.records_query(
-            "SELECT record_json, record_sha256 FROM executions ORDER BY requested_at DESC",
+            "SELECT execution_id, record_json, record_sha256 FROM executions ORDER BY requested_at DESC",
             json!([]),
         )
         .await
@@ -538,7 +532,7 @@ impl Persistence {
 
     pub async fn active_executions(&self) -> Result<Vec<ExecutionRecord>> {
         self.records_query(
-            "SELECT record_json, record_sha256 FROM executions WHERE terminal = 0 ORDER BY requested_at DESC",
+            "SELECT execution_id, record_json, record_sha256 FROM executions WHERE terminal = 0 ORDER BY requested_at DESC",
             json!([]),
         ).await
     }
@@ -588,12 +582,32 @@ impl Persistence {
             .transpose()
     }
 
+    /// Decode the records this runner can read. A record it cannot read
+    /// (one naming a removed scenario, say) is deleted with a warning, as
+    /// plans are, so it never fails the start or a list.
     async fn records_query(&self, sql: &str, params: Value) -> Result<Vec<ExecutionRecord>> {
-        self.query(sql, params)
-            .await?
-            .iter()
-            .map(decode_record)
-            .collect()
+        let mut records = Vec::new();
+        let mut discarded = Vec::new();
+        for row in self.query(sql, params).await? {
+            match decode_record(&row) {
+                Ok(record) => records.push(record),
+                Err(error) => {
+                    let execution_id = row["execution_id"].as_str().unwrap_or_default();
+                    let error = format!("{error:#}");
+                    let reason = error.split(", expected").next().unwrap_or_default();
+                    tracing::warn!(
+                        execution_id,
+                        reason,
+                        "deleting an execution record this runner cannot read"
+                    );
+                    discarded.extend(delete_execution_statements(execution_id));
+                }
+            }
+        }
+        if !discarded.is_empty() {
+            self.transaction(discarded).await?;
+        }
+        Ok(records)
     }
 
     pub(crate) async fn query(&self, sql: &str, params: Value) -> Result<Vec<Value>> {
@@ -671,6 +685,16 @@ fn terminal_projection_statements(record: &ExecutionRecord) -> Result<Vec<Value>
         }));
     }
     Ok(statements)
+}
+
+fn delete_execution_statements(execution_id: &str) -> Vec<Value> {
+    vec![
+        json!({"sql": "DELETE FROM attempts WHERE execution_id = ?", "params": [execution_id]}),
+        json!({"sql": "DELETE FROM runs WHERE execution_id = ?", "params": [execution_id]}),
+        json!({"sql": "DELETE FROM artifacts WHERE execution_id = ?", "params": [execution_id]}),
+        json!({"sql": "DELETE FROM archives WHERE execution_id = ?", "params": [execution_id]}),
+        json!({"sql": "DELETE FROM executions WHERE execution_id = ?", "params": [execution_id]}),
+    ]
 }
 
 fn delete_plan_statements(id: &str) -> Vec<Value> {
@@ -989,6 +1013,41 @@ mod tests {
         .await
         .unwrap();
         (client, server)
+    }
+
+    #[tokio::test]
+    async fn a_record_of_a_removed_scenario_is_deleted_and_the_rest_listed() {
+        let record = |id: &str, scenario: &str| {
+            let body = json!({
+                "execution_id": id, "idempotency_key": id, "phase": "completed",
+                "requested_at": "2026-09-20T12:00:00Z", "updated_at": "2026-09-20T12:00:02Z",
+                "request": {"idempotency_key": id, "model": "model", "provider": "provider", "scenarios": [scenario]},
+                "lane_budget": {"max_cases": 1, "max_runs_per_case": 1, "max_technical_retries": 0, "max_declared_turns": 1},
+                "transitions": [], "cancel_requested": false,
+            })
+            .to_string();
+            json!({"execution_id": id, "record_sha256": crate::artifact::sha256_bytes(body.as_bytes()), "record_json": body})
+        };
+        let rows = json!([
+            record("current", "context_pressure"),
+            record("removed", "security_review")
+        ]);
+        let (client, server) = fake_database(move |_| rows.clone()).await;
+        let records = Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
+            .executions()
+            .await
+            .unwrap();
+        let statements = server.await.unwrap();
+        client.shutdown_async().await;
+
+        assert_eq!(
+            records
+                .iter()
+                .map(|record| record.execution_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["current"]
+        );
+        assert_eq!(statements, delete_execution_statements("removed"));
     }
 
     #[tokio::test]
