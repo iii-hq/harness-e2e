@@ -288,6 +288,8 @@ fn request_parameters(metadata: &RunMetadata, report: Option<&E2eReport>) -> Val
             .agent
             .as_ref()
             .map(|agent| agent.id.clone())),
+        r#where: Default::default(),
+        stack: None,
     })
 }
 

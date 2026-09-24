@@ -90,10 +90,11 @@ struct RunSnapshot {
 
 /// Register the dashboard read, suite, run, status, and cancellation functions
 /// against an already registered E2E control plane.
-pub async fn register_worker_functions(
+pub(crate) async fn register_worker_functions(
     iii: &iii_sdk::IIIClient,
     control: crate::control::ControlPlane,
     github_repository: String,
+    docker: crate::plans::store::DockerSettings,
 ) -> Result<()> {
     let events = Some(bus::DashboardEvents::register(iii));
     let controller = controller::Controller::new(
@@ -102,6 +103,7 @@ pub async fn register_worker_functions(
         events,
         Some(control),
         github_repository,
+        docker,
     )
     .await?;
     bus::register_functions(iii, controller);
@@ -381,6 +383,7 @@ pub(crate) mod tests {
             None,
             None,
             "iii-hq/harness-e2e".into(),
+            Default::default(),
         )
         .await
         .unwrap();

@@ -43,6 +43,7 @@ mod tests {
                 "control_database": "harness_e2e",
                 "control_namespace": "harness-e2e-control",
                 "github_repository": "iii-hq/harness-e2e",
+                "docker_parallel_groups": 2,
             })
         );
         assert_eq!(manifest.supported_targets, [env!("TARGET")]);

@@ -1,4 +1,5 @@
-//! Executions imported from the exact-stack GitHub workflow.
+//! Executions imported from the exact-stack GitHub workflow, and from a
+//! Docker execution's folder, which holds the same artifacts.
 //!
 //! `gh` only lists runs and downloads artifacts. Installing reads an
 //! extracted bundle: every native run in it becomes an ordinary retained run
@@ -16,8 +17,8 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::{
-    finish, now, update_slot, ExecutionParameters, ExecutionSource, ExecutionSuite, PlanExecution,
-    PlanStore, Runner, Slot, StackWorker,
+    finish, now, update_slot, ExecutionParameters, ExecutionSource, ExecutionStack, ExecutionSuite,
+    PlanExecution, PlanStore, Runner, Slot, StackWorker, Where,
 };
 use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
@@ -77,6 +78,96 @@ impl Default for GithubCli {
 
 /// `gh run download` when nothing matches, expired artifacts included.
 const NO_ARTIFACT: &str = "no valid artifacts found to download";
+
+/// Where an import reads an execution's artifacts, each named as the
+/// workflow uploads it (`<stem>-gh-<attempt>`): a GitHub run through `gh`,
+/// or the folder a Docker execution wrote them to.
+pub(super) enum Bundles {
+    Github { repository: String, run_id: u64 },
+    Folder(PathBuf),
+}
+
+impl Bundles {
+    fn of(store: &PlanStore, execution: &PlanExecution) -> Result<Self> {
+        Ok(match &execution.source {
+            ExecutionSource::Github {
+                repository, run_id, ..
+            } => Self::Github {
+                repository: repository.clone(),
+                run_id: *run_id,
+            },
+            ExecutionSource::Docker { .. } => Self::Folder(store.docker_artifacts(&execution.id)),
+            ExecutionSource::Local => {
+                bail!("execution {} has no artifacts to import", execution.id)
+            }
+        })
+    }
+
+    /// The names of the artifacts it keeps; expired ones are not kept.
+    async fn names(&self, store: &PlanStore) -> Result<Vec<String>> {
+        match self {
+            Self::Github { repository, run_id } => {
+                let listing = store
+                    .gh(
+                        store.github.api_timeout,
+                        &[
+                            "api",
+                            "--paginate",
+                            &format!(
+                                "repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100"
+                            ),
+                            "--jq",
+                            ".artifacts[] | select(.expired | not) | .name",
+                        ],
+                    )
+                    .await?;
+                Ok(String::from_utf8_lossy(&listing)
+                    .lines()
+                    .map(str::to_owned)
+                    .collect())
+            }
+            Self::Folder(folder) => Ok(directories(folder)
+                .unwrap_or_default()
+                .iter()
+                .map(|path| file_name(path))
+                .collect()),
+        }
+    }
+
+    /// Put the artifact `name`'s files in `destination`, which it creates.
+    async fn fetch(
+        &self,
+        store: &PlanStore,
+        name: &str,
+        destination: &Path,
+        timeout: Duration,
+    ) -> Result<()> {
+        match self {
+            Self::Github { repository, run_id } => {
+                store
+                    .gh(
+                        timeout,
+                        &[
+                            "run",
+                            "download",
+                            &run_id.to_string(),
+                            "-R",
+                            repository,
+                            "-n",
+                            name,
+                            "-D",
+                            &destination.to_string_lossy(),
+                        ],
+                    )
+                    .await?;
+                Ok(())
+            }
+            // Copied: installing moves its native runs out, and a later
+            // import reads the folder again.
+            Self::Folder(folder) => super::docker::copy_tree(&folder.join(name), destination).await,
+        }
+    }
+}
 /// Contract downloads a listing runs at once.
 const CONTRACT_DOWNLOADS: usize = 4;
 
@@ -316,7 +407,7 @@ impl PlanStore {
     /// `begin_github_import`. The execution always ends terminal: `completed`,
     /// or `failed` with the reason and whatever an earlier import installed.
     pub(crate) async fn finish_github_import(&self, id: &str) -> Result<()> {
-        if let Err(error) = self.download_and_install(id).await {
+        if let Err(error) = self.download_and_install(id, None).await {
             tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "GitHub import failed");
             let _guard = self.lock.lock().await;
             let mut execution = self.read_execution(id).await?;
@@ -328,30 +419,17 @@ impl PlanStore {
         Ok(())
     }
 
-    async fn download_and_install(&self, id: &str) -> Result<()> {
+    /// Install the highest attempt of an execution's root bundle, from where
+    /// its source keeps its artifacts; `stopped` says why it did not run to
+    /// its end.
+    pub(super) async fn download_and_install(
+        &self,
+        id: &str,
+        stopped: Option<String>,
+    ) -> Result<()> {
         let mut execution = self.read_execution(id).await?;
-        let ExecutionSource::Github {
-            repository, run_id, ..
-        } = execution.source.clone()
-        else {
-            bail!("execution {id} was not imported from GitHub");
-        };
-        let listing = self
-            .gh(
-                self.github.api_timeout,
-                &[
-                    "api",
-                    "--paginate",
-                    &format!("repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100"),
-                    "--jq",
-                    ".artifacts[] | select(.expired | not) | .name",
-                ],
-            )
-            .await?;
-        let names = String::from_utf8_lossy(&listing)
-            .lines()
-            .map(str::to_owned)
-            .collect::<Vec<_>>();
+        let bundles = Bundles::of(self, &execution)?;
+        let names = bundles.names(self).await?;
         let (contract, _) = highest_attempt(names.iter().map(String::as_str), |stem| {
             stem.starts_with("e2e-contract-")
         })
@@ -371,46 +449,41 @@ impl PlanStore {
                 })?;
         let scratch = self.scratch()?;
         let installed = async {
-            let run = run_id.to_string();
             for (name, directory, timeout) in [
                 (contract, "contract", self.github.api_timeout),
                 (bundle, "bundle", self.github.download_timeout),
             ] {
-                self.gh(
-                    timeout,
-                    &[
-                        "run",
-                        "download",
-                        &run,
-                        "-R",
-                        &repository,
-                        "-n",
-                        name,
-                        "-D",
-                        &scratch.path().join(directory).to_string_lossy(),
-                    ],
-                )
-                .await?;
+                bundles
+                    .fetch(self, name, &scratch.path().join(directory), timeout)
+                    .await?;
             }
-            if let ExecutionSource::Github {
-                run_attempt,
-                release_control_execution_id,
-                ..
-            } = &mut execution.source
-            {
-                *run_attempt = attempt;
-                // A contract that states its execution says whether Release
-                // Control dispatched it; an older one is always Release Control's.
-                *release_control_execution_id =
-                    match read_json(&scratch.path().join("contract/execution.json")) {
-                        Ok(stated) => stated["execution_id"].as_str().map(str::to_owned),
-                        Err(_) => Some(release_control_id),
-                    };
+            match &mut execution.source {
+                ExecutionSource::Github {
+                    run_attempt,
+                    release_control_execution_id,
+                    ..
+                } => {
+                    *run_attempt = attempt;
+                    // A contract that states its execution says whether Release
+                    // Control dispatched it; an older one is always Release Control's.
+                    *release_control_execution_id =
+                        match read_json(&scratch.path().join("contract/execution.json")) {
+                            Ok(stated) => stated["execution_id"].as_str().map(str::to_owned),
+                            Err(_) => Some(release_control_id),
+                        };
+                }
+                ExecutionSource::Docker {
+                    attempt: current,
+                    phase,
+                    ..
+                } => (*current, *phase) = (attempt, "done".into()),
+                ExecutionSource::Local => {}
             }
             self.install_bundle(
                 &mut execution,
                 &scratch.path().join("bundle"),
                 &scratch.path().join("contract"),
+                stopped,
             )
             .await
         }
@@ -440,12 +513,14 @@ impl PlanStore {
     /// A group without a readable native run becomes a slot with its error;
     /// a bundle with no readable group fails and leaves the execution as it
     /// was. Runs of the previous import that the new one does not carry are
-    /// deleted only once the new execution is written.
+    /// deleted only once the new execution is written. An execution that
+    /// `stopped` before it ran everything ends interrupted, with the reason.
     pub(super) async fn install_bundle(
         &self,
         execution: &mut PlanExecution,
         bundle: &Path,
         contract: &Path,
+        stopped: Option<String>,
     ) -> Result<()> {
         let runner = self.runner()?;
         if let Ok(failure) = read_json(&bundle.join("failure.json")) {
@@ -542,6 +617,26 @@ impl PlanStore {
 
         let first = requests.first();
         let text = |value: &Value| value.as_str().map(str::to_owned);
+        let asked = execution.parameters.as_ref();
+        // The stack as its contract recorded it once assembled, to run it
+        // again as recorded; named as it was asked for.
+        let stack = fs::read_to_string(contract.join("stack.yaml"))
+            .ok()
+            .map(|yaml| ExecutionStack {
+                name: asked
+                    .and_then(|parameters| parameters.stack.as_ref())
+                    .map(|stack| stack.name.clone())
+                    .or_else(|| text(&fields["stack"]))
+                    .unwrap_or_else(|| "inline".into()),
+                sha256: artifact::sha256_bytes(yaml.as_bytes()),
+                yaml,
+            })
+            .or_else(|| asked.and_then(|parameters| parameters.stack.clone()));
+        let r#where = match &execution.source {
+            ExecutionSource::Github { .. } => Where::Github,
+            ExecutionSource::Docker { .. } => Where::Docker,
+            ExecutionSource::Local => asked.map_or(Where::Harness, |parameters| parameters.r#where),
+        };
         let parameters = ExecutionParameters {
             scenarios,
             runs: campaigns.len() as u32,
@@ -563,6 +658,8 @@ impl PlanStore {
                 id: Some(id),
                 sha256: text(&fields["suite_sha256"]).unwrap_or_default(),
             }),
+            r#where,
+            stack,
         };
         let mut next = execution.clone();
         next.parameters = Some(parameters);
@@ -576,7 +673,7 @@ impl PlanStore {
         let finished_at = next.finished_at.take();
         let root = self.root.clone();
         let mut next = tokio::task::spawn_blocking(move || {
-            finish(&mut next, None, &root)?;
+            finish(&mut next, stopped, &root)?;
             Ok::<_, anyhow::Error>(next)
         })
         .await
@@ -741,7 +838,7 @@ impl PlanStore {
     /// Run `gh` with its temporary files in the data directory (it stages
     /// downloads there) and a deadline; a missing binary, a failed call or a
     /// call past its deadline becomes the step the user has to take.
-    async fn gh(&self, timeout: Duration, args: &[&str]) -> Result<Vec<u8>> {
+    pub(super) async fn gh(&self, timeout: Duration, args: &[&str]) -> Result<Vec<u8>> {
         let command = Command::new(&self.github.program)
             .args(args)
             .env("GH_PROMPT_DISABLED", "1")
@@ -929,12 +1026,12 @@ fn validate_repository(repository: &str) -> Result<()> {
     Ok(())
 }
 
-fn read_json(path: &Path) -> Result<Value> {
+pub(super) fn read_json(path: &Path) -> Result<Value> {
     serde_json::from_slice(&fs::read(path).with_context(|| format!("read {}", path.display()))?)
         .with_context(|| format!("decode {}", path.display()))
 }
 
-fn directories(path: &Path) -> Result<Vec<PathBuf>> {
+pub(super) fn directories(path: &Path) -> Result<Vec<PathBuf>> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(path).with_context(|| format!("read {}", path.display()))? {
         let entry = entry?;
@@ -946,7 +1043,7 @@ fn directories(path: &Path) -> Result<Vec<PathBuf>> {
     Ok(entries)
 }
 
-fn file_name(path: &Path) -> String {
+pub(super) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_default()
