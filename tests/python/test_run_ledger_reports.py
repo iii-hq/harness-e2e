@@ -277,10 +277,13 @@ class LedgerDeliveryTests(unittest.TestCase):
             self.assertEqual(report["shard"], "r01/core")
 
     def test_the_report_key_separates_a_retry_from_a_rerun(self):
-        first = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
+        # CI re-runs set GITHUB_RUN_ATTEMPT themselves; pin both attempts.
+        with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "1"}):
+            first = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
+            again = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
         with patch.dict(os.environ, {"GITHUB_RUN_ATTEMPT": "2"}):
             rerun = report_execution.report_key("shard", Args(campaign_id="r01", group_id="core"))
-        self.assertEqual(first, report_execution.report_key("shard", Args(campaign_id="r01", group_id="core")))
+        self.assertEqual(first, again)
         self.assertNotEqual(first, rerun)
         self.assertTrue(rerun.endswith(":2"))
 
