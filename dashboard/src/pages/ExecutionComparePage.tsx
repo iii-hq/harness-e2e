@@ -47,6 +47,7 @@ import {
   type StackComparison,
   scenarioScore,
   stackSummary,
+  yourCodeWorkers,
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { formatPlanMetricDelta } from '@/lib/plan-comparison'
@@ -391,7 +392,7 @@ function StackDetail({ stack }: { stack: StackComparison }) {
   const rows: Array<[string, string]> = [
     ...stack.yourCode.map((group): [string, string] => [
       `your code in ${group.side.toUpperCase()} ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}`,
-      group.workers.join(', '),
+      yourCodeWorkers(group),
     ]),
     ...stack.versions.map((change): [string, string] => [
       `version · ${change.field}`,
@@ -930,6 +931,7 @@ export function ExecutionComparePage({
         open={rerun !== null}
         parameters={rerun?.parameters ?? null}
         initialScenarios={rerun?.scenarios}
+        label={sides.b.plan_execution?.label ?? sides.b.label ?? ''}
         onClose={() => setRerun(null)}
       />
       {transcript ? (

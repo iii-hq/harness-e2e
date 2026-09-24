@@ -88,7 +88,8 @@ describe('execution comparison page', () => {
     expect(html.indexOf('data-comparison-metrics')).toBeLessThan(
       html.indexOf('data-layer="comparison-stack"'),
     )
-    expect(html).toContain('data-stack-group="only in B"')
+    expect(html).toContain('llm-router, session-manager (only in B)</dd>')
+    expect(html).not.toContain('data-stack-group="only in B"')
     // Out of the totals, with the run's own reason, and its state where a
     // score would be.
     expect(html).toContain(

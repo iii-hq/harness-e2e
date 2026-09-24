@@ -304,6 +304,19 @@ try {
   executions = [runningSummary, cancelledSummary]
   await page.reload()
   await page.getByText('1 of 9 done', { exact: true }).waitFor()
+  // One execution: nothing to compare it with, so no hint, button or column.
+  assert.equal(
+    await page.getByText('tick two executions to compare').count(),
+    0,
+  )
+  assert.equal(
+    await page.getByRole('button', { name: 'compare', exact: true }).count(),
+    0,
+  )
+  assert.equal(
+    await page.locator('[data-ledger] input[type=checkbox]').count(),
+    0,
+  )
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
   await stopped.getByText('cancelled', { exact: true }).waitFor()

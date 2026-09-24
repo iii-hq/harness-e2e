@@ -145,9 +145,12 @@ export type StackComparison = {
     commit: string | null
     dirty: boolean
     workers: string[]
+    /** Workers of this group the other side does not run. */
+    onlyHere: string[]
   }>
   /** Workers on both sides, neither from a checkout, whose observed version differs. */
   versions: ComparisonChange[]
+  /** Workers on one side only, other than that side's own code. */
   onlyA: string[]
   onlyB: string[]
 }
@@ -206,7 +209,7 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
   ['cache_read', 'Cache read', 'tokens'],
   ['cache_write', 'Cache written', 'tokens'],
   ['tokens_per_completion', 'Tokens per completed task', 'tokens'],
-  ['cost', 'Subject cost', 'usd'],
+  ['cost', 'Reported cost', 'usd'],
   ['duration', 'Total run duration', 'seconds'],
   ['turns', 'Total turns', 'count'],
   ['function_calls', 'Function calls', 'count'],
@@ -302,7 +305,6 @@ function ledgerColumns(run: DashboardRunProjection) {
       (technicalAttempts === null || technicalAttempts <= 1)
         ? integer(totals.function_call_errors)
         : null),
-    costUsd: finite(objectValue(run.cost).subject_usd),
     wallTimeMs: finite(run.wall_time_ms),
     // Usage counts once every technical attempt left evidence.
     attemptsComplete:
@@ -340,6 +342,8 @@ export function compareRuns(detail: DashboardExecutionDetail): LedgerRun[] {
           subjectTokens: runTotalTokens(run),
           cacheRead: usage.cacheRead,
           cacheWrite: usage.cacheWrite,
+          // The reported cost, as the execution page and its evidence table sum it.
+          costUsd: usage.costUsd,
           scenarioId: scenario.scenario_id,
           slotId: JSON.stringify([scenario.scenario_id, seed, repetition]),
           runId: text(run.run_id),
@@ -777,10 +781,31 @@ function stackComparison(
           entry.dirty === dirty,
       )
       if (group) group.workers = distinct([...group.workers, worker.name])
-      else yourCode.push({ side, commit, dirty, workers: [worker.name] })
+      else
+        yourCode.push({
+          side,
+          commit,
+          dirty,
+          workers: [worker.name],
+          onlyHere: [],
+        })
     }
   const names = (side: 'a' | 'b') =>
     distinct(stacks[side].map((worker) => worker.name))
+  const only = (side: 'a' | 'b') =>
+    names(side)
+      .filter((name) => !names(side === 'a' ? 'b' : 'a').includes(name))
+      .sort()
+  // A worker of your code on one side only stays on its your-code line,
+  // marked there, and is not listed again.
+  for (const group of yourCode)
+    group.onlyHere = group.workers.filter((name) =>
+      only(group.side).includes(name),
+    )
+  const ownCode = (side: 'a' | 'b') =>
+    yourCode
+      .filter((group) => group.side === side)
+      .flatMap((group) => group.workers)
   const versions = (side: 'a' | 'b', name: string) =>
     distinct(
       stacks[side]
@@ -807,13 +832,32 @@ function stackComparison(
         const b = versions('b', name)
         return a === b ? [] : [{ field: name, a, b }]
       }),
-    onlyA: names('a')
-      .filter((name) => !names('b').includes(name))
-      .sort(),
-    onlyB: names('b')
-      .filter((name) => !names('a').includes(name))
-      .sort(),
+    onlyA: only('a').filter((name) => !ownCode('a').includes(name)),
+    onlyB: only('b').filter((name) => !ownCode('b').includes(name)),
   }
+}
+
+/** The workers of a your-code line, each one-side-only worker marked. */
+export function yourCodeWorkers(
+  group: StackComparison['yourCode'][number],
+): string {
+  return group.workers
+    .map((name) =>
+      group.onlyHere.includes(name)
+        ? `${name} (only in ${group.side.toUpperCase()})`
+        : name,
+    )
+    .join(', ')
+}
+
+/** How many workers run on this side only, your code included. */
+function onlyCount(stack: StackComparison, side: 'a' | 'b'): number {
+  return (
+    (side === 'a' ? stack.onlyA : stack.onlyB).length +
+    stack.yourCode
+      .filter((group) => group.side === side)
+      .reduce((count, group) => count + group.onlyHere.length, 0)
+  )
 }
 
 /** "14 workers from your code @852b87e · 2 version differences · 5 only in B". */
@@ -835,8 +879,10 @@ export function stackSummary(stack: StackComparison): string {
           `${stack.versions.length} version difference${stack.versions.length === 1 ? '' : 's'}`,
         ]
       : []),
-    ...(stack.onlyA.length > 0 ? [`${stack.onlyA.length} only in A`] : []),
-    ...(stack.onlyB.length > 0 ? [`${stack.onlyB.length} only in B`] : []),
+    ...SIDES.flatMap((side) => {
+      const count = onlyCount(stack, side)
+      return count > 0 ? [`${count} only in ${side.toUpperCase()}`] : []
+    }),
   ]
   return parts.length > 0 ? parts.join(' · ') : 'same stack'
 }
@@ -1156,7 +1202,7 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
   lines.push('', `Stack: ${cell(stackSummary(stack))}`)
   for (const group of stack.yourCode)
     lines.push(
-      `- Your code in ${group.side.toUpperCase()} ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}: ${group.workers.join(', ')}`,
+      `- Your code in ${group.side.toUpperCase()} ${group.commit ? `@${group.commit}` : '(commit not recorded)'}${group.dirty ? ' (uncommitted changes)' : ''}: ${yourCodeWorkers(group)}`,
     )
   if (stack.versions.length > 0)
     lines.push(

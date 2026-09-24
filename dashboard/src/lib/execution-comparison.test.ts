@@ -10,6 +10,7 @@ import {
   runnerWarning,
   scenarioScore,
   stackSummary,
+  yourCodeWorkers,
 } from '@/lib/execution-comparison'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import {
@@ -242,8 +243,9 @@ describe('fair comparison', () => {
     expect(fourFive.tokens).toEqual([181135, 181974])
     expect(fourFive.turns).toEqual([105, 110])
     expect(fourFive.duration).toEqual([609.092, 594.593])
-    expect(fourFive.cost[0]).toBeCloseTo(0.0408912672)
-    expect(fourFive.cost[1]).toBeCloseTo(0.0414897784)
+    // Cost is the reported total the execution page sums, not Release
+    // Control's subject cost; this ledger carries only the latter.
+    expect(fourFive.cost).toEqual([null, null])
     expect(fourFive.function_calls).toEqual([131, 125])
     const fiveSix = figures(compareExecutions(five, six))
     expect(fiveSix.completed).toEqual([7, 7])
@@ -402,12 +404,17 @@ describe('comparing two executions', () => {
           commit: 'a1b2c3d',
           dirty: true,
           workers: ['llm-router', 'session-manager'],
+          onlyHere: ['session-manager'],
         },
       ],
       versions: [],
+      // session-manager is your code: one line, marked, not listed again.
       onlyA: [],
-      onlyB: ['session-manager'],
+      onlyB: [],
     })
+    expect(yourCodeWorkers(comparison.stack.yourCode[0])).toBe(
+      'llm-router, session-manager (only in B)',
+    )
     expect(stackSummary(comparison.stack)).toBe(
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
     )
@@ -560,7 +567,7 @@ describe('comparing two executions', () => {
     })
   })
 
-  it('counts tokens as the execution page does, per scenario too', () => {
+  it('counts tokens and cost as the execution page does, per scenario too', () => {
     const b = local()
     const run = b.reports[0].report?.scenarios[0].runs[0]
     if (run) {
@@ -586,6 +593,12 @@ describe('comparing two executions', () => {
     expect(figure('tokens')).toBe(page.subjectTokens.total)
     expect(figure('cache_read')).toBe(181_000)
     expect(figure('cache_write')).toBe(400)
+    // Reported cost: the run's total, not its subject share.
+    expect(figure('cost')).toBe(0.012)
+    expect(figure('cost')).toBe(page.cost.total)
+    expect(minimal?.metrics.find((metric) => metric.id === 'cost')?.label).toBe(
+      'Reported cost',
+    )
     expect(comparison.totals.map((metric) => metric.label)).not.toContain(
       'Tokens (incl. cache)',
     )
@@ -656,6 +669,7 @@ describe('comparing two executions', () => {
       { field: 'state', a: '0.22.3', b: '0.22.17' },
     ])
     expect(stack.onlyA).toEqual(['legacy'])
+    expect(stack.onlyB).toEqual([])
     expect(stackSummary(stack)).toBe(
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
     )
@@ -696,8 +710,7 @@ describe('comparison summary', () => {
         '> **Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ. Definitions changed: persistent_state.**',
         '',
         'Stack: 2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
-        '- Your code in B @a1b2c3d (uncommitted changes): llm-router, session-manager',
-        '- Only in B: session-manager',
+        '- Your code in B @a1b2c3d (uncommitted changes): llm-router, session-manager (only in B)',
         '',
         '| Metric | A | B | Difference |',
         '| --- | --- | --- | --- |',
@@ -709,7 +722,7 @@ describe('comparison summary', () => {
         '| Cache read | 220 | 200 | -20 (-9.1%) |',
         '| Cache written | 0 | 0 | No change |',
         '| Tokens per completed task | 733 | 667 | -66.7 (-9.1%) |',
-        '| Subject cost | $0.0300 | $0.0300 | No change |',
+        '| Reported cost | $0.0360 | $0.0360 | No change |',
         '| Total run duration | 6.0s | 6.0s | No change |',
         '| Total turns | 9 | 9 | No change |',
         '| Function calls | 9 | 9 | No change |',

@@ -258,23 +258,24 @@ try {
     await again.locator('#quick-execution-agent').inputValue(),
     'tech-lead',
   )
-  for (const [scenario, checked] of [
-    ['minimal_path', true],
-    ['persistent_state', false],
-    ['timer_wake', true],
-  ])
-    assert.equal(
+  // It opens on what will run: the ticked tests, and only those.
+  for (const scenario of ['minimal_path', 'timer_wake'])
+    assert.ok(
       await again
         .getByRole('checkbox', { name: scenario, exact: true })
         .isChecked(),
-      checked,
-      scenario,
     )
+  assert.equal(
+    await again
+      .getByRole('checkbox', { name: 'persistent_state', exact: true })
+      .count(),
+    0,
+  )
   await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-c'))
   assert.deepEqual(started, [
     {
-      label: '',
+      label: b.label,
       parameters: {
         ...b.parameters,
         scenarios: ['minimal_path', 'timer_wake'],

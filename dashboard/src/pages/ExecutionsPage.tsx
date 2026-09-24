@@ -599,6 +599,8 @@ export function ExecutionsPage() {
     [rows, filters],
   )
   const { running, groups } = useMemo(() => groupLedgerRows(visible), [visible])
+  // Comparing needs two executions; with fewer the hint and the column are noise.
+  const comparable = rows.length >= 2
   const setFilter = <K extends keyof LedgerFilters>(
     key: K,
     value: LedgerFilters[K],
@@ -782,43 +784,45 @@ export function ExecutionsPage() {
                 </FilterChip>
               ))}
             </FilterChipGroup>
-            <span className="ms-auto flex flex-wrap items-center gap-2">
-              <span className="font-mono text-label text-ink-muted">
-                {compared.length === 0
-                  ? 'tick two executions to compare'
-                  : compared.length === 1
-                    ? 'A ticked · tick B'
-                    : 'A and B ticked'}
-              </span>
-              <button
-                className={buttonClassName({
-                  variant: 'primary',
-                  size: 'compact',
-                })}
-                type="button"
-                disabled={compared.length !== 2}
-                onClick={() => {
-                  window.location.hash = hashForComparison(
-                    compared[0],
-                    compared[1],
-                  )
-                }}
-              >
-                compare
-              </button>
-              {compared.length > 0 ? (
+            {comparable ? (
+              <span className="ms-auto flex flex-wrap items-center gap-2">
+                <span className="font-mono text-label text-ink-muted">
+                  {compared.length === 0
+                    ? 'tick two executions to compare'
+                    : compared.length === 1
+                      ? 'A ticked · tick B'
+                      : 'A and B ticked'}
+                </span>
                 <button
                   className={buttonClassName({
-                    variant: 'quiet',
+                    variant: 'primary',
                     size: 'compact',
                   })}
                   type="button"
-                  onClick={() => setCompared([])}
+                  disabled={compared.length !== 2}
+                  onClick={() => {
+                    window.location.hash = hashForComparison(
+                      compared[0],
+                      compared[1],
+                    )
+                  }}
                 >
-                  clear
+                  compare
                 </button>
-              ) : null}
-            </span>
+                {compared.length > 0 ? (
+                  <button
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      size: 'compact',
+                    })}
+                    type="button"
+                    onClick={() => setCompared([])}
+                  >
+                    clear
+                  </button>
+                ) : null}
+              </span>
+            ) : null}
             <output
               className="font-mono text-label text-ink-muted"
               aria-live="polite"
@@ -898,13 +902,17 @@ export function ExecutionsPage() {
           <div className="mt-4 grid min-w-0 gap-6" data-ledger>
             <LedgerTable
               caption={`Executions, ${visible.length} of ${rows.length} loaded`}
-              selection={{
-                ids: compared,
-                onToggle: (id) =>
-                  setCompared((current) =>
-                    toggleComparisonSelection(current, id),
-                  ),
-              }}
+              selection={
+                comparable
+                  ? {
+                      ids: compared,
+                      onToggle: (id) =>
+                        setCompared((current) =>
+                          toggleComparisonSelection(current, id),
+                        ),
+                    }
+                  : undefined
+              }
               groups={
                 running.length > 0
                   ? [
