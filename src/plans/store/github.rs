@@ -292,6 +292,7 @@ impl PlanStore {
             slots: Vec::new(),
             measurements: None,
             system_under_test: None,
+            rerun: None,
         });
         execution.source = ExecutionSource::Github {
             repository: repository.to_owned(),

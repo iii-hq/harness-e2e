@@ -387,8 +387,13 @@ pub(crate) struct DashboardReadModel {
 }
 
 impl DashboardReadModel {
-    pub(super) fn from_records(records: Vec<ExecutionRecord>) -> Result<Self> {
-        Self::from_projections(
+    /// Every record is listed; the runs a later attempt of the same slot
+    /// replaced (`discarded`) are left out of tests, versions and cohorts.
+    pub(crate) fn from_records(
+        records: Vec<ExecutionRecord>,
+        discarded: &BTreeSet<String>,
+    ) -> Result<Self> {
+        Self::indexed(
             records
                 .iter()
                 .map(|record| match record.dashboard_projection.as_ref() {
@@ -397,10 +402,19 @@ impl DashboardReadModel {
                     None => ExecutionProjection::from_record(record),
                 })
                 .collect::<Result<Vec<_>>>()?,
+            discarded,
         )
     }
 
-    pub(crate) fn from_projections(mut projections: Vec<ExecutionProjection>) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn from_projections(projections: Vec<ExecutionProjection>) -> Result<Self> {
+        Self::indexed(projections, &BTreeSet::new())
+    }
+
+    fn indexed(
+        mut projections: Vec<ExecutionProjection>,
+        discarded: &BTreeSet<String>,
+    ) -> Result<Self> {
         for projection in &mut projections {
             if !projection.summary["totals"]["turns"].is_null() {
                 continue;
@@ -452,6 +466,12 @@ impl DashboardReadModel {
             tests: current_tests()?,
         };
         for projection in projections {
+            if projection.summary["id"]
+                .as_str()
+                .is_some_and(|id| discarded.contains(id))
+            {
+                continue;
+            }
             model.index_projection(projection);
         }
         Ok(model)
@@ -1780,6 +1800,55 @@ mod tests {
         assert_eq!(history.total, 1);
         assert_eq!(history.observations[0].mean_score, Some(90.0));
         assert_eq!(history.observations[0].median_tokens, None);
+    }
+
+    #[test]
+    fn a_replaced_attempt_stays_listed_but_out_of_test_history() {
+        let projection = |id: &str| {
+            let mut metadata = super::super::tests::metadata();
+            metadata.id = id.into();
+            ExecutionProjection::from_stored(&StoredRun {
+                metadata,
+                report: Some(super::super::tests::report()),
+                live_progress: None,
+                live_progress_error: None,
+            })
+            .unwrap()
+        };
+        let history = |discarded: &[&str]| {
+            DashboardReadModel::indexed(
+                vec![projection("local-replaced"), projection("local-current")],
+                &discarded.iter().map(|id| (*id).to_owned()).collect(),
+            )
+            .unwrap()
+        };
+        let direct = TestHistoryRequest {
+            test_id: "direct_answer".into(),
+            ..TestHistoryRequest::default()
+        };
+        assert_eq!(history(&[]).test_history(direct.clone()).unwrap().total, 2);
+        let model = history(&["local-replaced"]);
+        // Still listed, so its evidence opens from the attempt it was.
+        assert_eq!(model.summaries.len(), 2);
+        let current = model.test_history(direct).unwrap();
+        assert_eq!(current.total, 1);
+        assert_eq!(current.observations[0].execution_id, "local-current");
+        assert_eq!(current.series[0].execution_count, 1);
+        let row = model
+            .tests_list(TestsListRequest::default())
+            .unwrap()
+            .rows
+            .into_iter()
+            .find(|row| row.test_id == "direct_answer")
+            .unwrap();
+        assert_eq!(row.available_versions[0].execution_count, 1);
+        assert_eq!(
+            model
+                .evaluated_versions(EvaluatedVersionsRequest::default())
+                .versions[0]
+                .execution_count,
+            1
+        );
     }
 
     #[test]

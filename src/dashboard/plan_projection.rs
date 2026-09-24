@@ -135,7 +135,14 @@ impl PlanStore {
         let mut assessments = Vec::new();
         let mut assessed = BTreeSet::new();
         for slot in &execution.slots {
-            let native = if slot.observed > 0 {
+            // A slot running, or waiting to run again, reports nothing yet:
+            // the view recalculates without it until it finishes.
+            let running = matches!(slot.state.as_str(), "admitting" | "running")
+                || execution
+                    .rerun
+                    .as_ref()
+                    .is_some_and(|rerun| rerun.runs.contains(&slot.execution_id));
+            let native = if slot.observed > 0 && !running {
                 super::store::read_stored_run(&self.root.join(&slot.execution_id)).and_then(|run| {
                     run.map(|run| {
                         let detail = super::presenter::stored_execution_detail(&run)?;
@@ -150,13 +157,17 @@ impl PlanStore {
             } else {
                 Ok(None)
             };
-            reports.extend(slot_reports(
+            let mut current = slot_reports(
                 native,
                 slot,
                 &slot.execution_id,
                 slot.error.as_ref(),
                 &subject,
-            ));
+            );
+            if running {
+                current[0]["state"] = json!("running");
+            }
+            reports.extend(current);
             // Earlier attempts are shown with their slot and counted nowhere:
             // not in the assessment, the totals or the measurements.
             for attempt in &slot.previous_attempts {
