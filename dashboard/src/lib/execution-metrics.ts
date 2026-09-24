@@ -239,6 +239,11 @@ function field(value: unknown, key: string): unknown {
     : undefined
 }
 
+/** A run's input and output tokens, retries included: the Console's Total tokens. */
+export function runTotalTokens(run: unknown): number | null {
+  return tokens(run)
+}
+
 function tokens(run: unknown): number | null {
   return cumulativeCounter(run, 'total_tokens')
 }

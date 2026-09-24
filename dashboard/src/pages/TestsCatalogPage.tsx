@@ -17,9 +17,9 @@ import {
   Select,
 } from '@/design-system'
 import {
-  hashForComparison,
   hashForNewPlan,
   hashForTestHistory,
+  hashForVersionComparison,
   replaceRouteParams,
   routeParams,
 } from '@/hooks/use-hash-route'
@@ -317,7 +317,7 @@ export function TestsCatalogActions({ local }: { local: boolean }) {
       ) : null}
       <a
         className={dashboardHeaderActionClassName()}
-        href={hashForComparison()}
+        href={hashForVersionComparison()}
         aria-label="Compare system versions"
       >
         compare versions

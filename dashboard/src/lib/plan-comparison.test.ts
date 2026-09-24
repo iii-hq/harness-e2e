@@ -7,6 +7,7 @@ import type {
 import {
   buildPlanComparison,
   buildScenarioComparisons,
+  formatPlanMetricValue,
   loadExecutionSummaries,
   metricById,
 } from '@/lib/plan-comparison'
@@ -354,6 +355,24 @@ describe('local plan comparison view model', () => {
       candidate: null,
       tone: 'unavailable',
     })
+  })
+
+  it('rounds a duration before splitting it into minutes and seconds', () => {
+    const duration = (baseline: number) =>
+      formatPlanMetricValue(
+        {
+          ...metricById(
+            buildPlanComparison(execution('a'), execution('b')),
+            'duration',
+          ),
+          baseline,
+        } as never,
+        'baseline',
+      )
+    expect(duration(119.6)).toBe('2m 00s')
+    expect(duration(59.7)).toBe('1m 00s')
+    expect(duration(83.2)).toBe('1m 23s')
+    expect(duration(9.96)).toBe('10.0s')
   })
 
   it('loads referenced summaries in bounded batches', async () => {

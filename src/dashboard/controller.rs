@@ -277,6 +277,20 @@ impl Controller {
         self.plan_store.get_local(id).await
     }
 
+    pub(super) async fn read_evidence(
+        &self,
+        request: super::bus::EvidenceReadRequest,
+    ) -> Result<super::store::EvidenceFile> {
+        super::presenter::validate_execution_id(&request.execution_id)
+            .map_err(anyhow::Error::msg)?;
+        let run_dir = self.runs_dir.join(&request.execution_id);
+        tokio::task::spawn_blocking(move || {
+            super::store::read_evidence(&run_dir, &request.path, request.pointer.as_deref())
+        })
+        .await
+        .context("read evidence")?
+    }
+
     pub(super) async fn rename_execution(&self, id: &str, label: &str) -> Result<Value> {
         let execution = self.plan_store.rename(id, label).await?;
         self.emit_change("renamed", id).await;

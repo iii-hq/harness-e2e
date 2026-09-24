@@ -22,6 +22,7 @@ import {
   StatusBadge,
 } from '@/design-system'
 import {
+  hashForComparison,
   hashForExecution,
   hashForNewPlan,
   replaceRouteParams,
@@ -258,7 +259,26 @@ export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
   return { running, groups }
 }
 
-function LedgerRowCells({ row }: { row: LedgerRow }) {
+/** Two executions ticked for comparison, in the order they were ticked: the
+ *  first is A, the base. */
+export type LedgerSelection = {
+  ids: string[]
+  onToggle: (id: string) => void
+}
+
+/** Tick or untick one execution; a third tick waits for one to be cleared. */
+export function toggleComparisonSelection(ids: string[], id: string) {
+  if (ids.includes(id)) return ids.filter((entry) => entry !== id)
+  return ids.length < 2 ? [...ids, id] : ids
+}
+
+function LedgerRowCells({
+  row,
+  selection,
+}: {
+  row: LedgerRow
+  selection?: LedgerSelection
+}) {
   const { presentation, execution, status } = row
   const { title } = executionTitle(presentation)
   const tokens = tokensOf(row)
@@ -368,6 +388,24 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
       <td data-label="Tokens" className={numericCellClassName}>
         {tokens === null ? '—' : tokens.toLocaleString()}
       </td>
+      {selection ? (
+        <td data-label="Compare">
+          <input
+            type="checkbox"
+            aria-label={`Compare ${title}`}
+            checked={selection.ids.includes(execution.id)}
+            disabled={
+              selection.ids.length >= 2 && !selection.ids.includes(execution.id)
+            }
+            onChange={() => selection.onToggle(execution.id)}
+          />
+          {selection.ids.includes(execution.id) ? (
+            <span className="ms-1 font-mono text-label text-ink-muted">
+              {selection.ids[0] === execution.id ? 'A' : 'B'}
+            </span>
+          ) : null}
+        </td>
+      ) : null}
       <td data-label="Open" className="text-right">
         <a
           className={buttonClassName({
@@ -393,9 +431,11 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
 export function LedgerTable({
   caption,
   groups,
+  selection,
 }: {
   caption: string
   groups: LedgerGroup[]
+  selection?: LedgerSelection
 }) {
   return (
     <DataTable
@@ -426,6 +466,7 @@ export function LedgerTable({
           <th scope="col" className={numericCellClassName}>
             tokens
           </th>
+          {selection ? <th scope="col">compare</th> : null}
           <th scope="col">
             <span className="ds-visually-hidden">Open</span>
           </th>
@@ -434,7 +475,11 @@ export function LedgerTable({
       {groups.map((group) => (
         <tbody key={group.key} data-ledger-group={group.key}>
           <tr data-ledger-day>
-            <th className="ds-label" colSpan={9} scope="colgroup">
+            <th
+              className="ds-label"
+              colSpan={selection ? 10 : 9}
+              scope="colgroup"
+            >
               {groupHeading(group)}
             </th>
           </tr>
@@ -445,7 +490,7 @@ export function LedgerTable({
               data-execution-id={row.execution.id}
               data-result={row.status.status}
             >
-              <LedgerRowCells row={row} />
+              <LedgerRowCells row={row} selection={selection} />
             </DataTableRow>
           ))}
         </tbody>
@@ -477,6 +522,7 @@ export function ExecutionsPage() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [compared, setCompared] = useState<string[]>([])
   const beginRequest = useLatestRequest()
   const loaded = useRef(false)
 
@@ -553,6 +599,8 @@ export function ExecutionsPage() {
     [rows, filters],
   )
   const { running, groups } = useMemo(() => groupLedgerRows(visible), [visible])
+  // Comparing needs two executions; with fewer the hint and the column are noise.
+  const comparable = rows.length >= 2
   const setFilter = <K extends keyof LedgerFilters>(
     key: K,
     value: LedgerFilters[K],
@@ -736,8 +784,47 @@ export function ExecutionsPage() {
                 </FilterChip>
               ))}
             </FilterChipGroup>
+            {comparable ? (
+              <span className="ms-auto flex flex-wrap items-center gap-2">
+                <span className="font-mono text-label text-ink-muted">
+                  {compared.length === 0
+                    ? 'tick two executions to compare'
+                    : compared.length === 1
+                      ? 'A ticked · tick B'
+                      : 'A and B ticked'}
+                </span>
+                <button
+                  className={buttonClassName({
+                    variant: 'primary',
+                    size: 'compact',
+                  })}
+                  type="button"
+                  disabled={compared.length !== 2}
+                  onClick={() => {
+                    window.location.hash = hashForComparison(
+                      compared[0],
+                      compared[1],
+                    )
+                  }}
+                >
+                  compare
+                </button>
+                {compared.length > 0 ? (
+                  <button
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      size: 'compact',
+                    })}
+                    type="button"
+                    onClick={() => setCompared([])}
+                  >
+                    clear
+                  </button>
+                ) : null}
+              </span>
+            ) : null}
             <output
-              className="ms-auto font-mono text-label text-ink-muted"
+              className="font-mono text-label text-ink-muted"
               aria-live="polite"
             >
               showing {visible.length} of {rows.length} loaded
@@ -815,6 +902,17 @@ export function ExecutionsPage() {
           <div className="mt-4 grid min-w-0 gap-6" data-ledger>
             <LedgerTable
               caption={`Executions, ${visible.length} of ${rows.length} loaded`}
+              selection={
+                comparable
+                  ? {
+                      ids: compared,
+                      onToggle: (id) =>
+                        setCompared((current) =>
+                          toggleComparisonSelection(current, id),
+                        ),
+                    }
+                  : undefined
+              }
               groups={
                 running.length > 0
                   ? [

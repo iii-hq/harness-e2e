@@ -56,12 +56,13 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
   }
   if (
     route.page === 'execution' ||
+    route.page === 'compare' ||
     (route.page === 'workspace' && route.view === 'executions')
   ) {
     return 'executions'
   }
   if (
-    route.page === 'compare' ||
+    route.page === 'versions' ||
     route.page === 'test-history' ||
     (route.page === 'workspace' && route.view === 'tests')
   ) {

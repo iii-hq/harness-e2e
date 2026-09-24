@@ -30,6 +30,7 @@ pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
 pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
+pub(super) const EVIDENCE_READ: &str = "e2e::dashboard::evidence-read";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
@@ -106,6 +107,17 @@ pub(super) struct ExecutionStartRequest {
     /// Empty or absent uses the default name.
     #[serde(default)]
     pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct EvidenceReadRequest {
+    /// The native execution whose report declares the file.
+    pub execution_id: String,
+    /// A path the report declares for one of its runs (evidence or a deliverable).
+    pub path: String,
+    /// A declared screenshot's JSON Pointer inside that deliverable; only the image is returned.
+    #[serde(default)]
+    pub pointer: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -361,6 +373,18 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
                 }
+            })
+        },
+    );
+    register(
+        iii,
+        EVIDENCE_READ,
+        "Read one evidence file or deliverable screenshot a retained run's report declares, as base64 (10 MB at most).",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: EvidenceReadRequest| {
+                let controller = controller.clone();
+                async move { controller.read_evidence(request).await.map_err(handler_error) }
             })
         },
     );

@@ -1,7 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
+use base64::Engine;
+use schemars::JsonSchema;
+use serde::Serialize;
+use serde_json::Value;
 
 use super::{JobStatus, RunMetadata};
 use crate::report::E2eReport;
@@ -136,6 +140,130 @@ fn observed_metadata(run_dir: &Path, report: &E2eReport) -> Result<RunMetadata> 
     })
 }
 
+/// The largest evidence file the Console reads in one call.
+pub(super) const EVIDENCE_READ_LIMIT: u64 = 10 * 1024 * 1024;
+
+/// One evidence file, or one screenshot inside a deliverable, as base64.
+#[derive(Debug, Serialize, JsonSchema)]
+pub(super) struct EvidenceFile {
+    pub media_type: String,
+    pub base64: String,
+}
+
+/// A file a report declares for one of its runs, with the screenshots
+/// embedded in it.
+pub(super) struct DeclaredEvidence {
+    pub path: String,
+    pub media_type: String,
+    pub screenshots: Vec<crate::screenshot::ScreenshotReference>,
+}
+
+/// Every evidence file and deliverable the report declares, retries included.
+fn declared_evidence(report: &E2eReport) -> Vec<DeclaredEvidence> {
+    let mut declared = Vec::new();
+    let mut attempt = |evidence: &[crate::artifact::ArtifactReference],
+                       deliverables: &[crate::report::DeliverableReport]| {
+        for artifact in evidence {
+            declared.push(DeclaredEvidence {
+                path: artifact.path.clone(),
+                media_type: artifact.media_type.clone(),
+                screenshots: Vec::new(),
+            });
+        }
+        for deliverable in deliverables {
+            if let Some(artifact) = &deliverable.artifact {
+                declared.push(DeclaredEvidence {
+                    path: artifact.path.clone(),
+                    media_type: artifact.media_type.clone(),
+                    screenshots: deliverable.screenshots.clone(),
+                });
+            }
+        }
+    };
+    for scenario in &report.scenarios {
+        for run in &scenario.runs {
+            attempt(&run.evidence, &run.deliverables);
+            for retry in &run.retry_attempts {
+                attempt(&retry.evidence, &retry.deliverables);
+            }
+        }
+    }
+    declared
+}
+
+/// One file the execution's report declares, read from the execution's own
+/// directory; with a pointer, only that declared screenshot inside it.
+pub(super) fn read_evidence(
+    run_dir: &Path,
+    path: &str,
+    pointer: Option<&str>,
+) -> Result<EvidenceFile> {
+    let directory = report_directory(run_dir).context("This execution retained no report")?;
+    let (report, results) = E2eReport::read_from(&directory)?;
+    let root = results
+        .parent()
+        .context("results path has no parent directory")?;
+    read_declared(root, &declared_evidence(&report), path, pointer)
+}
+
+/// The path must be one the report declares, relative, without `..`, and
+/// still inside `root` once symlinks resolve; the file must fit the limit.
+pub(super) fn read_declared(
+    root: &Path,
+    declared: &[DeclaredEvidence],
+    path: &str,
+    pointer: Option<&str>,
+) -> Result<EvidenceFile> {
+    crate::artifact::validate_relative_path(Path::new(path))?;
+    let entry = declared
+        .iter()
+        .find(|entry| entry.path == path)
+        .with_context(|| format!("The report does not declare evidence at '{path}'"))?;
+    let base = fs::canonicalize(root)
+        .with_context(|| format!("read execution directory {}", root.display()))?;
+    let file = fs::canonicalize(root.join(path))
+        .with_context(|| format!("Evidence '{path}' is not on disk"))?;
+    ensure!(
+        file.starts_with(&base) && file.is_file(),
+        "Evidence '{path}' resolves outside its execution directory"
+    );
+    let size = fs::metadata(&file)?.len();
+    ensure!(
+        size <= EVIDENCE_READ_LIMIT,
+        "Evidence '{path}' is {size} bytes; the Console reads at most {EVIDENCE_READ_LIMIT} bytes (10 MB)"
+    );
+    let bytes = fs::read(&file).with_context(|| format!("read evidence '{path}'"))?;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let Some(pointer) = pointer else {
+        return Ok(EvidenceFile {
+            media_type: entry.media_type.clone(),
+            base64: engine.encode(&bytes),
+        });
+    };
+    let screenshot = entry
+        .screenshots
+        .iter()
+        .find(|screenshot| screenshot.pointer == pointer)
+        .with_context(|| format!("'{path}' declares no screenshot at '{pointer}'"))?;
+    let content: Value =
+        serde_json::from_slice(&bytes).with_context(|| format!("decode deliverable '{path}'"))?;
+    let encoded = content
+        .pointer(pointer)
+        .and_then(|file| file["content"].as_str())
+        .with_context(|| format!("'{path}' holds no screenshot at '{pointer}'"))?;
+    let image = engine
+        .decode(encoded)
+        .with_context(|| format!("decode screenshot '{pointer}'"))?;
+    ensure!(
+        crate::artifact::sha256_bytes(&image) == screenshot.sha256,
+        "Screenshot '{pointer}' in '{path}' does not match its digest"
+    );
+    Ok(EvidenceFile {
+        media_type: screenshot.media_type.clone(),
+        base64: encoded.to_owned(),
+    })
+}
+
 #[cfg(test)]
 pub(super) fn load_runs(runs_dir: &Path) -> Result<Vec<StoredRun>> {
     let mut runs = Vec::new();
@@ -177,5 +305,92 @@ mod tests {
             assert!(read_stored_run(&directory).is_err());
         }
         assert!(load_runs(root.path()).unwrap().is_empty());
+    }
+
+    fn screenshot(pointer: &str, image: &[u8]) -> crate::screenshot::ScreenshotReference {
+        crate::screenshot::ScreenshotReference {
+            pointer: pointer.into(),
+            caption: "board".into(),
+            media_type: "image/png".into(),
+            sha256: crate::artifact::sha256_bytes(image),
+            size_bytes: image.len() as u64,
+        }
+    }
+
+    #[test]
+    fn evidence_reads_only_declared_files_inside_the_execution() {
+        let root = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let run = root.path().join("run");
+        let png = b"\x89PNG\r\n\x1a\nimage";
+        let encoded = base64::engine::general_purpose::STANDARD.encode(png);
+        fs::create_dir_all(run.join("deliverables")).unwrap();
+        fs::write(run.join("evidence.json"), b"{}").unwrap();
+        fs::write(
+            run.join("deliverables/board.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "attachments": {"board.png": {"encoding": "base64", "content": encoded}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(outside.path().join("secret.json"), b"secret").unwrap();
+        std::os::unix::fs::symlink(outside.path().join("secret.json"), run.join("link.json"))
+            .unwrap();
+        let declared = |path: &str| DeclaredEvidence {
+            path: path.into(),
+            media_type: "application/json".into(),
+            screenshots: vec![screenshot("/attachments/board.png", png)],
+        };
+        let declared = [
+            declared("evidence.json"),
+            declared("deliverables/board.json"),
+            declared("link.json"),
+            declared("../secret.json"),
+            declared("/etc/passwd"),
+        ];
+        let read =
+            |path: &str, pointer: Option<&str>| read_declared(&run, &declared, path, pointer);
+
+        assert_eq!(read("evidence.json", None).unwrap().base64, "e30=");
+        let image = read("deliverables/board.json", Some("/attachments/board.png")).unwrap();
+        assert_eq!(
+            (image.media_type.as_str(), image.base64.as_str()),
+            ("image/png", encoded.as_str())
+        );
+        for (path, pointer, error) in [
+            ("../secret.json", None, "parent"),
+            ("/etc/passwd", None, "relative"),
+            ("link.json", None, "outside its execution"),
+            ("undeclared.json", None, "does not declare"),
+            (
+                "deliverables/board.json",
+                Some("/attachments/other.png"),
+                "declares no screenshot",
+            ),
+        ] {
+            let message = format!("{:#}", read(path, pointer).unwrap_err());
+            assert!(message.contains(error), "{path}: {message}");
+        }
+    }
+
+    #[test]
+    fn evidence_above_the_limit_is_refused_with_its_size() {
+        let root = tempfile::tempdir().unwrap();
+        let file = fs::File::create(root.path().join("large.json")).unwrap();
+        file.set_len(EVIDENCE_READ_LIMIT + 1).unwrap();
+        let declared = [DeclaredEvidence {
+            path: "large.json".into(),
+            media_type: "application/json".into(),
+            screenshots: Vec::new(),
+        }];
+        let message = format!(
+            "{:#}",
+            read_declared(root.path(), &declared, "large.json", None).unwrap_err()
+        );
+        assert!(message.contains("10485761 bytes"), "{message}");
+        assert!(message.contains("10 MB"), "{message}");
+        file.set_len(EVIDENCE_READ_LIMIT).unwrap();
+        assert!(read_declared(root.path(), &declared, "large.json", None).is_ok());
     }
 }

@@ -7,6 +7,7 @@ import type {
   ExecutionTotals,
   JsonObject,
 } from '@/lib/dashboard-data-source'
+import { formatDuration } from '@/lib/execution-view'
 import {
   generalRunMetrics,
   workflowMetricEntriesFromRecord,
@@ -37,7 +38,14 @@ export type PlanMetricId =
   | 'turns'
 
 export type PlanMetricComparison = {
-  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`
+  id:
+    | PlanMetricId
+    | 'score'
+    | 'completed'
+    | 'cache_read'
+    | 'cache_write'
+    | `workflow:${string}`
+    | `criterion:${string}`
   label: string
   baseline: number | null
   candidate: number | null
@@ -124,8 +132,8 @@ function scenarioMetricTotal(
   return total
 }
 
-function comparisonMetric(
-  id: PlanMetricId | `workflow:${string}` | `criterion:${string}`,
+export function comparisonMetric(
+  id: PlanMetricComparison['id'],
   label: string,
   baseline: number | null,
   candidate: number | null,
@@ -662,8 +670,14 @@ export function metricById(
 }
 
 function compactNumber(value: number) {
+  // Three significant digits in compact notation, so 1,000 and 1,100 do not
+  // both read "1K".
+  if (Math.abs(value) >= 1000)
+    return new Intl.NumberFormat('en-US', {
+      notation: 'compact',
+      maximumSignificantDigits: 3,
+    }).format(value)
   return new Intl.NumberFormat('en-US', {
-    notation: Math.abs(value) >= 1000 ? 'compact' : 'standard',
     maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 1,
   }).format(value)
 }
@@ -687,9 +701,7 @@ export function formatPlanMetricValue(
     case 'tokens':
       return compactNumber(value)
     case 'seconds':
-      return value < 60
-        ? `${value.toFixed(value < 10 ? 1 : 0)}s`
-        : `${Math.floor(value / 60)}m ${Math.round(value % 60)}s`
+      return formatDuration(value)
     case 'milliseconds':
       return value < 1_000
         ? `${compactNumber(value)} ms`

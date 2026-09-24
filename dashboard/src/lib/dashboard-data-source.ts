@@ -566,6 +566,7 @@ export type RuntimeConfig = {
     execution_get: string
     execution_delete: string
     execution_rename: string
+    evidence_read: string
     github_runs_list: string
     github_run_contracts: string
     github_run_import: string
@@ -601,6 +602,12 @@ export type DashboardDataBridge = {
   getExecution(executionId: string): Promise<DashboardExecutionDetail>
   deleteExecution(executionId: string): Promise<void>
   renameExecution(executionId: string, label: string): Promise<PlanExecution>
+  /** One file a run's report declares, or one screenshot inside a deliverable. */
+  readEvidence(input: {
+    execution_id: string
+    path: string
+    pointer?: string
+  }): Promise<{ media_type: string; base64: string }>
   listGithubRuns(page?: number): Promise<GithubRunsResponse>
   readGithubRunContracts(
     runs: Array<Pick<GithubRun, 'run_id' | 'run_attempt'>>,
@@ -687,6 +694,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         execution_id: executionId,
         label,
       }),
+    readEvidence: (input) => call(runtime.functions.evidence_read, input),
     listGithubRuns: (page = 1) =>
       call(runtime.functions.github_runs_list, { page }),
     readGithubRunContracts: (runs) =>
