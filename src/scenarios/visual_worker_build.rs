@@ -344,9 +344,7 @@ fn scenario_spec(kind: Kind, run_id: &str) -> ScenarioSpec {
     ScenarioSpec {
         id: kind.id(),
         prompt: format!(
-            r#"Build the {title} Worker inside `{root}`. Read README.md first. Read
-`harness/ade-worker-design/index` through `directory::skills::get`, then its scoped
-`console-injectable-ui` and `console-design` references. Inspect the installed
+            r#"Build the {title} Worker inside `{root}`. Read README.md first. Inspect the installed
 `@iii-dev/console-ui` types before using components or host APIs. The pinned UI
 package, React, icons, TypeScript, and build driver are already installed.
 
@@ -1287,7 +1285,7 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
         candidate_compose(&contract, &compose_namespace()),
     )?;
     fs::write(root.join("README.md"), format!(
-        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness provided worker-compose.yaml here and owns its lifecycle.\n\nFor Console UI, read `harness/ade-worker-design/index` with `directory::skills::get`, then its authoring and design references. The installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
+        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness provided worker-compose.yaml here and owns its lifecycle.\n\nThe installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
         if kind == Kind::Form { "Form Flow Builder" } else { "State Machine Canvas" }, contract.worker
     ))?;
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/visual-worker");
