@@ -559,12 +559,14 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         fs::create_dir_all(&state_dir)?;
         fs::write(state_dir.join("canvas-id"), canvas_id)?;
     }
+    // A missing canvas_id is the candidate's miss, scored below, not infrastructure.
     let first_get = if let Some(id) = &canvas_id {
-        invoke(context.client(), "canvas::get", json!({"id":id})).await
+        let get = invoke(context.client(), "canvas::get", json!({"id":id})).await;
+        ensure_remote_or_success(&get, "read candidate Canvas record")?;
+        get
     } else {
         Err(anyhow::anyhow!("candidate omitted canvas_id"))
     };
-    ensure_remote_or_success(&first_get, "read candidate Canvas record")?;
     let updated_source = edited_source(kind);
     let canvas_initial_ok = canvas_id.is_some()
         && canvas
@@ -625,11 +627,12 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         );
     } else {
         let second_get = if let Some(id) = &canvas_id {
-            invoke(context.client(), "canvas::get", json!({"id":id})).await
+            let get = invoke(context.client(), "canvas::get", json!({"id":id})).await;
+            ensure_remote_or_success(&get, "read browser-updated Canvas record")?;
+            get
         } else {
             Err(anyhow::anyhow!("candidate omitted canvas_id"))
         };
-        ensure_remote_or_success(&second_get, "read browser-updated Canvas record")?;
         let canvas_update_ok = second_get.as_ref().ok().is_some_and(|value| {
             value["id"] == canvas_id.as_deref().unwrap_or_default()
                 && value["source"] == updated_source
@@ -1260,10 +1263,13 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
     Ok(())
 }
 
+// Compose derives `<namespace>-<container>` as the configuration id and refuses
+// one over 64 characters, which a long campaign group namespace reaches; the
+// run-scoped worker name is already unique and short, so name it explicitly.
 fn candidate_compose(contract: &WorkerContract, namespace: &str) -> String {
     format!(
-        "namespace: {namespace}\ncontainers:\n  {}:\n    worker: path://.\n    scripts:\n      run: npm start\n",
-        contract.worker
+        "namespace: {namespace}\ncontainers:\n  {worker}:\n    worker: path://.\n    config_name: {worker}\n    scripts:\n      run: npm start\n",
+        worker = contract.worker
     )
 }
 
@@ -1466,6 +1472,10 @@ mod tests {
         assert_eq!(yaml["namespace"], "scenario-test");
         assert_eq!(yaml["containers"].as_object().unwrap().len(), 1);
         assert_eq!(yaml["containers"][&contract.worker]["worker"], "path://.");
+        assert_eq!(
+            yaml["containers"][&contract.worker]["config_name"],
+            contract.worker.as_str()
+        );
         assert_eq!(
             yaml["containers"][&contract.worker]["scripts"]["run"],
             "npm start"
