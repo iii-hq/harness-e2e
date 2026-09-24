@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Result};
 pub use async_trait::async_trait;
@@ -568,7 +568,7 @@ pub const CONTRACT_NAMESPACE: &str = "contract";
 /// inputs are excluded so every seed of one definition shares the digest.
 pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
     let spec = id.spec(CONTRACT_NAMESPACE);
-    crate::artifact::sha256_value(&serde_json::json!({
+    let mut definition = serde_json::json!({
         "scenario_id": id.as_str(),
         "prompt": spec.prompt,
         "execution": spec.execution,
@@ -588,7 +588,46 @@ pub fn behavior_sha256(id: ScenarioId, case: &ScenarioCase) -> Result<String> {
         "characterization": case.characterization,
         "required_capabilities": case.required_capabilities,
         "deliverable_contract": case.deliverable_contract,
-    }))
+    });
+    let run_dir = std::env::var_os("HARNESS_E2E_RUN_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    without_run_dir(&mut definition, &run_dir);
+    crate::artifact::sha256_value(&definition)
+}
+
+/// Scenario workspaces live under the host's run directory
+/// (`HARNESS_E2E_RUN_DIR`, else the temp dir), and some prompts name them. The
+/// digest reads that directory as `/tmp`, its value on a host with neither
+/// set, so one definition has one digest on every host.
+fn without_run_dir(value: &mut Value, run_dir: &Path) {
+    let prefixes: Vec<String> = [
+        Some(run_dir.to_path_buf()),
+        std::fs::canonicalize(run_dir).ok(),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|base| {
+        base.to_str()
+            .map(|base| format!("{}/", base.trim_end_matches('/')))
+    })
+    .filter(|prefix| prefix.len() > 1 && prefix != "/tmp/")
+    .collect();
+    fn walk(value: &mut Value, prefixes: &[String]) {
+        match value {
+            Value::String(text) => {
+                for prefix in prefixes {
+                    if text.contains(prefix.as_str()) {
+                        *text = text.replace(prefix.as_str(), "/tmp/");
+                    }
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(|item| walk(item, prefixes)),
+            Value::Object(fields) => fields.values_mut().for_each(|field| walk(field, prefixes)),
+            _ => {}
+        }
+    }
+    walk(value, &prefixes);
 }
 
 pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
@@ -605,6 +644,30 @@ pub fn selected(requested: &[ScenarioId]) -> Vec<ScenarioId> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_definition_reads_the_run_directory_as_tmp() {
+        let run_dir = std::env::temp_dir().join("harness-e2e-run-dir-digest-test");
+        let mut here = serde_json::json!({
+            "prompt": format!("Work in {}/scenario-workspaces/shell-coder-x.", run_dir.display()),
+            "nested": [{"path": format!("{}/kanban-evaluation/y", run_dir.display())}],
+        });
+        super::without_run_dir(&mut here, &run_dir);
+        assert_eq!(
+            here,
+            serde_json::json!({
+                "prompt": "Work in /tmp/scenario-workspaces/shell-coder-x.",
+                "nested": [{"path": "/tmp/kanban-evaluation/y"}],
+            })
+        );
+        let mut on_tmp = serde_json::json!({"prompt": "Work in /tmp/scenario-workspaces/a."});
+        let before = on_tmp.clone();
+        super::without_run_dir(&mut on_tmp, std::path::Path::new("/tmp"));
+        assert_eq!(on_tmp, before);
+        let mut root = serde_json::json!({"prompt": "/etc/hosts"});
+        super::without_run_dir(&mut root, std::path::Path::new("/"));
+        assert_eq!(root, serde_json::json!({"prompt": "/etc/hosts"}));
+    }
+
     use std::collections::HashSet;
 
     use super::*;
