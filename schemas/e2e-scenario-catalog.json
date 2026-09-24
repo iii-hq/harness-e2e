@@ -382,6 +382,7 @@
         "chess_engine_build",
         "form_flow_build",
         "state_machine_canvas_build",
+        "ade_incident_board",
         "chess_play_ladder",
         "trend_blog",
         "trending_topics_build",
