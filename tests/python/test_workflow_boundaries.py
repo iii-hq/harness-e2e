@@ -160,6 +160,34 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("cleanup --lease-id", launcher)
         self.assertNotIn("iii-hq/workers", workflow)
 
+    def test_no_executor_container_outlives_its_job_into_reporting_or_packaging(self):
+        """Cancelled or timed out, the runner kills the wrapper, not the
+        container: the evidence must stop changing before it is reported,
+        hashed and uploaded."""
+        jobs = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text())["jobs"]
+        wrapper = (ROOT / "scripts/run_in_image.sh").read_text()
+        for job, phase_filter in (("prepare", "harness-e2e.phase=prepare"),
+                                  ("groups", "harness-e2e.group=$GROUP_ID"),
+                                  ("finalize", "harness-e2e.phase=finalize")):
+            with self.subTest(job=job):
+                steps = jobs[job]["steps"]
+                runs = [step.get("run", "") for step in steps]
+                removal = next(index for index, run in enumerate(runs) if "docker rm -f" in run)
+                self.assertEqual(steps[removal]["if"], "always()")
+                self.assertIn('--filter "label=harness-e2e.execution=$EXECUTION_KEY"', runs[removal])
+                self.assertIn(f'--filter "label={phase_filter}"', runs[removal])
+                # After the job's last phase, and before every report or
+                # package that follows it.
+                phase_run = max(index for index, run in enumerate(runs) if "scripts/run_in_image.sh" in run)
+                later = [index for index, run in enumerate(runs) if index > phase_run and
+                         ("report_execution.py" in run or "exact_stack_campaign.py package" in run)]
+                self.assertLess(phase_run, removal)
+                self.assertTrue(later)
+                self.assertLess(removal, min(later))
+        for label in ("harness-e2e.execution=${EXECUTION_KEY:-}", "harness-e2e.phase=$phase",
+                      "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}"):
+            self.assertIn(f'--label "{label}"', wrapper)
+
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
         """Contract fields are read by the scripts, never by the workflow: a
         field the workflow read itself would have to change in lockstep."""

@@ -134,6 +134,16 @@ jobs:
           summary=target/harness-e2e-contract/contracts/resolution.json
           printf 'matrix=%s\n' "$(jq -c '.matrix' "$summary")" >>"$GITHUB_OUTPUT"
 
+      # Cancelled or timed out, the assembly's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the assembly's executor container
+        if: always()
+        run: |
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=prepare")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
+
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: contract_upload
         with:
@@ -333,6 +343,18 @@ jobs:
           HARNESS_E2E_CONTRACT: target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
         run: scripts/run_in_image.sh group
 
+      # Cancelled or timed out, the group's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the group's executor container
+        if: always()
+        env:
+          GROUP_ID: ${{ matrix.group_id }}
+        run: |
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.group=$GROUP_ID")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
+
       # Whatever the group did, its runs reach the ledger: from results.json
       # when the group finished, from the journal checkpoints when it did not,
       # and as an empty shard saying so when it produced neither.
@@ -527,6 +549,16 @@ jobs:
         id: aggregate
         continue-on-error: true
         run: scripts/run_in_image.sh finalize
+
+      # Cancelled or timed out, the finalizer's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the finalizer's executor container
+        if: always()
+        run: |
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=finalize")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
 
       - name: Report the campaign summary
         if: always() && inputs.execution_id != ''
