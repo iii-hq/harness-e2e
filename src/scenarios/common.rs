@@ -416,9 +416,50 @@ pub fn evidence_bundle(directory: &Path, roots: &[&str]) -> Result<Value> {
     Ok(json!({"files":files,"omitted_files":omitted}))
 }
 
+/// SIGTERM every process whose working directory is inside the workspace and
+/// return their pids. Reads `/proc`, so elsewhere than Linux nothing is stopped.
+pub async fn kill_processes_under(root: &Path) -> Vec<String> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    let pids = entries
+        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
+        .filter(|pid| pid.bytes().all(|byte| byte.is_ascii_digit()))
+        .filter(|pid| {
+            std::fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd.starts_with(root))
+        })
+        .collect::<Vec<_>>();
+    if !pids.is_empty() {
+        let _ = tokio::process::Command::new("kill")
+            .arg("-TERM")
+            .args(&pids)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await;
+    }
+    pids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stops_processes_inside_the_workspace() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .current_dir(temporary.path())
+            .spawn()
+            .unwrap();
+        let stopped = kill_processes_under(temporary.path()).await;
+        assert_eq!(stopped, [child.id().unwrap().to_string()]);
+        let status = tokio::time::timeout(std::time::Duration::from_secs(5), child.wait())
+            .await
+            .expect("the workspace process stopped")
+            .unwrap();
+        assert!(!status.success());
+    }
 
     #[test]
     fn normalizes_agent_trigger_and_native_function_calls() {

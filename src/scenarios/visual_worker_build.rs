@@ -352,7 +352,9 @@ package, React, icons, TypeScript, and build driver are already installed.
 
 The Harness provided `worker-compose.yaml` in this workspace with the run-scoped container
 `{worker}`. Leave that file in place and do not edit another project's Compose file. The Harness
-will start the Worker. It already installed pinned dependencies; do not change them.
+will start the Worker after your turn and first stops any process still running in this workspace,
+so a Worker you start for your own checks is not the one evaluated. It already installed pinned
+dependencies; do not change them.
 You may add build scripts to package.json while keeping dependency versions fixed.
 Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
 schemas. Register console:script and console:style Message-path triggers backed by `{ui}` at
@@ -411,7 +413,7 @@ Add focused local tests for domain behavior and verify the UI build before repor
 
 fn form_task(contract: &WorkerContract) -> String {
     format!(
-        r#"`{preview}` accepts `{{values: object, edit?: string}}`. The SWE issue form has base
+        r#"`{preview}` accepts `{{values: object, edit?: string}}`. The SWE issue form has required base
 fields `title` and `work_type`; work_type is `bug` or `feature`. Bug reveals required `reproduction`
 and `expected_behavior`; feature reveals required `user_story` and `acceptance_criteria`. The edit
 `add_environment` adds required `environment` to the bug branch. Return ordered `visible_fields`,
@@ -469,6 +471,21 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
 
     let local_contract = fs::read_to_string(&compose).ok()
         == Some(candidate_compose(&contract, &compose_namespace()));
+    // The agent may start the Worker itself to check its work; a copy still
+    // connected makes Compose refuse the Harness start (CONTAINER_NAME_TAKEN).
+    let stopped_leftovers = super::common::kill_processes_under(&root).await;
+    if !stopped_leftovers.is_empty() {
+        for _ in 0..40 {
+            if !context
+                .function_exists(&contract.functions["canvas"])
+                .await
+                .unwrap_or(false)
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(250)).await;
+        }
+    }
     let up = if local_contract {
         context
             .trigger_value(
@@ -539,7 +556,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     checks.insert("runtime_contract".into(), json!({
         "passed":local_contract && ready && surface,
         "reason":format!("compose_valid={local_contract}, worker_ready={ready}, function_surface={surface}"),
-        "observed":{"up":result_value(up),"status":status,"functions":result_value(info)}
+        "observed":{"stopped_leftover_processes":stopped_leftovers,"up":result_value(up),"status":status,"functions":result_value(info)}
     }));
 
     let source = if kind == Kind::Form {
@@ -1294,6 +1311,7 @@ async fn cleanup_workspace(context: &E2eContext, kind: Kind, run_id: &str) -> Re
         .trigger_value("compose::down", json!({"file":compose}))
         .await
         .context("stop run-scoped visual Worker")?;
+    super::common::kill_processes_under(&root).await;
     if let Ok(canvas_id) = fs::read_to_string(root.join(".harness-e2e/canvas-id")) {
         let canvas_id = canvas_id.trim();
         if !canvas_id.is_empty() {
