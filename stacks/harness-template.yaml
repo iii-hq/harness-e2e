@@ -1,0 +1,39 @@
+# The default stack started from the iii-hq/templates `harness` project.
+#
+# Same workers as default.yaml; the template adds the agents and skills the
+# harness project ships, among them the ade-worker-builder agent profile.
+# Keep the containers in step with default.yaml.
+
+iii: latest
+template: harness
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s
