@@ -22,6 +22,10 @@
 
 iii: latest
 
+# Release Control's plans all start from the harness template, and its agent
+# profiles (ade-worker-builder among them) exist only there.
+template: harness
+
 containers:
   # The application under test. Its package graph is the stack being measured.
   harness:
