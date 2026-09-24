@@ -350,9 +350,9 @@ fn scenario_spec(kind: Kind, run_id: &str) -> ScenarioSpec {
 `@iii-dev/console-ui` types before using components or host APIs. The pinned UI
 package, React, icons, TypeScript, and build driver are already installed.
 
-Declare exactly one run-scoped Compose container named `{worker}` with `worker: path://.`,
-`scripts.run: npm start`, no `engine:`, no sibling containers, and no external services. The
-Harness already installed pinned dependencies; do not change them or start the Worker yourself.
+The Harness provided `worker-compose.yaml` in this workspace with the run-scoped container
+`{worker}`. Leave that file in place and do not edit another project's Compose file. The Harness
+will start the Worker. It already installed pinned dependencies; do not change them.
 You may add build scripts to package.json while keeping dependency versions fixed.
 Register `{domain}`, `{canvas}`, and `{ui}` with non-empty descriptions and object JSON
 schemas. Register console:script and console:style Message-path triggers backed by `{ui}` at
@@ -467,29 +467,9 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         .map(|bytes| crate::artifact::sha256_bytes(&bytes));
     let mut checks = serde_json::Map::new();
 
-    let local_contract = fs::read_to_string(&compose)
-        .ok()
-        .and_then(|text| serde_yaml::from_str::<Value>(&text).ok())
-        .is_some_and(|yaml| {
-            let Some(containers) = yaml["containers"].as_object() else {
-                return false;
-            };
-            containers.len() == 1
-                && containers[&contract.worker]["worker"] == "path://."
-                && containers[&contract.worker]["scripts"]["run"] == "npm start"
-                && yaml.get("engine").is_none()
-        });
-    let validate = if compose.is_file() {
-        context
-            .trigger_value("compose::validate", json!({"file":compose}))
-            .await
-    } else {
-        Err(anyhow::anyhow!("worker-compose.yaml is missing"))
-    };
-    ensure_remote_or_success(&validate, "validate candidate Compose file")?;
-    let compose_valid = local_contract && validate.is_ok();
-
-    let up = if compose_valid {
+    let local_contract = fs::read_to_string(&compose).ok()
+        == Some(candidate_compose(&contract, &compose_namespace()));
+    let up = if local_contract {
         context
             .trigger_value(
                 "compose::up",
@@ -497,9 +477,13 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
             )
             .await
     } else {
-        Err(anyhow::anyhow!("compose validation failed"))
+        Err(anyhow::anyhow!(
+            "Harness-owned worker-compose.yaml is missing or changed"
+        ))
     };
-    ensure_remote_or_success(&up, "start candidate Compose container")?;
+    if local_contract {
+        ensure_remote_or_success(&up, "start candidate Compose container")?;
+    }
     let mut ready = false;
     let mut status = Value::Null;
     if up.is_ok() {
@@ -553,9 +537,9 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
             })
         });
     checks.insert("runtime_contract".into(), json!({
-        "passed":compose_valid && ready && surface,
-        "reason":format!("compose_valid={compose_valid}, worker_ready={ready}, function_surface={surface}"),
-        "observed":{"compose":result_value(validate),"up":result_value(up),"status":status,"functions":result_value(info)}
+        "passed":local_contract && ready && surface,
+        "reason":format!("compose_valid={local_contract}, worker_ready={ready}, function_surface={surface}"),
+        "observed":{"up":result_value(up),"status":status,"functions":result_value(info)}
     }));
 
     let source = if kind == Kind::Form {
@@ -1241,8 +1225,12 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
     remove_workspace(kind, &root)?;
     fs::create_dir_all(root.join("src"))?;
     let contract = WorkerContract::new(kind, run_id);
+    fs::write(
+        root.join("worker-compose.yaml"),
+        candidate_compose(&contract, &compose_namespace()),
+    )?;
     fs::write(root.join("README.md"), format!(
-        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness starts and stops Compose.\n\nFor Console UI, read `harness/ade-worker-design/index` with `directory::skills::get`, then its authoring and design references. The installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
+        "# {} task\n\nThe scenario prompt is authoritative. Build the run-scoped Worker `{}` here. Domain behavior belongs to this Worker; use canvas::validate/create/get/update only for its Mermaid projection. The Harness provided worker-compose.yaml here and owns its lifecycle.\n\nFor Console UI, read `harness/ade-worker-design/index` with `directory::skills::get`, then its authoring and design references. The installed `@iii-dev/console-ui` package is the exact component and build API. Use its `buildWorkerUi` driver for `ui/page.tsx` and scoped `ui/styles.css`, and serve the built assets from `dist/ui`.\n",
         if kind == Kind::Form { "Form Flow Builder" } else { "State Machine Canvas" }, contract.worker
     ))?;
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/visual-worker");
@@ -1272,30 +1260,40 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn candidate_compose(contract: &WorkerContract, namespace: &str) -> String {
+    format!(
+        "namespace: {namespace}\ncontainers:\n  {}:\n    worker: path://.\n    scripts:\n      run: npm start\n",
+        contract.worker
+    )
+}
+
+fn compose_namespace() -> String {
+    std::env::var("III_NAMESPACE").unwrap_or_else(|_| "default".into())
+}
+
 async fn cleanup_workspace(context: &E2eContext, kind: Kind, run_id: &str) -> Result<()> {
     let root = workspace_root(kind, run_id);
     let compose = root.join("worker-compose.yaml");
+    fs::create_dir_all(&root)?;
+    match fs::remove_file(&compose) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    fs::write(
+        &compose,
+        candidate_compose(&WorkerContract::new(kind, run_id), &compose_namespace()),
+    )?;
+    context
+        .trigger_value("compose::down", json!({"file":compose}))
+        .await
+        .context("stop run-scoped visual Worker")?;
     if let Ok(canvas_id) = fs::read_to_string(root.join(".harness-e2e/canvas-id")) {
         let canvas_id = canvas_id.trim();
         if !canvas_id.is_empty() {
             let deleted = invoke(context.client(), "canvas::delete", json!({"id":canvas_id})).await;
             ensure_remote_or_success(&deleted, "delete run-owned Canvas record")?;
         }
-    }
-    if compose.is_file() {
-        match context
-            .trigger_value("compose::validate", json!({"file":compose}))
-            .await
-        {
-            Ok(_) => context
-                .trigger_value("compose::down", json!({"file":compose}))
-                .await
-                .context("stop run-scoped visual Worker")?,
-            Err(error) if is_remote_failure(&error) => Value::Null,
-            Err(error) => {
-                return Err(error.context("validate visual Worker Compose before cleanup"))
-            }
-        };
     }
     remove_workspace(kind, &root)
 }
@@ -1449,6 +1447,31 @@ fn insert_binary_file(files: &mut serde_json::Map<String, Value>, name: &str, by
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn harness_places_candidate_compose_in_the_worker_workspace() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("worker");
+        fs::create_dir(&root).unwrap();
+        let contract = WorkerContract::new(Kind::Form, "attempt");
+        fs::write(
+            root.join("worker-compose.yaml"),
+            candidate_compose(&contract, "scenario-test"),
+        )
+        .unwrap();
+
+        let yaml: Value =
+            serde_yaml::from_str(&fs::read_to_string(root.join("worker-compose.yaml")).unwrap())
+                .unwrap();
+        assert_eq!(yaml["namespace"], "scenario-test");
+        assert_eq!(yaml["containers"].as_object().unwrap().len(), 1);
+        assert_eq!(yaml["containers"][&contract.worker]["worker"], "path://.");
+        assert_eq!(
+            yaml["containers"][&contract.worker]["scripts"]["run"],
+            "npm start"
+        );
+        assert!(yaml.get("engine").is_none());
+    }
 
     #[test]
     fn both_contracts_are_run_scoped_and_score_one_hundred() {
