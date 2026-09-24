@@ -87,7 +87,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
                     "FIXTURE_DIR": str(root), "GITHUB_OUTPUT": str(output),
                     "GITHUB_REPOSITORY": "iii-hq/harness-e2e", "GITHUB_RUN_ID": "77",
                     "GITHUB_RUN_ATTEMPT": "3", "CONTRACT_ATTEMPT": str(contract_attempt),
-                    "EXECUTION_ID": "execution-1",
+                    "EXECUTION_KEY": "execution-1",
                 }, capture_output=True, text=True)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
@@ -142,7 +142,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
-        self.assertIn("ref: ${{ inputs.runner_sha }}", workflow)
+        self.assertNotIn("ref: ${{ inputs.runner_sha }}", workflow)
         self.assertNotIn("matrix.requires_", workflow)
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text(
             encoding="utf-8"
@@ -154,62 +154,118 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("iii-hq/workers", workflow)
 
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
-        """The workflow is read from the default branch; the executor is pinned
-        per campaign by runner_sha. Any contract field the workflow reads itself
-        would have to change in lockstep with the contract, so it reads none —
-        the scripts checked out at runner_sha read them all."""
+        """Contract fields are read by the scripts, never by the workflow: a
+        field the workflow read itself would have to change in lockstep."""
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
-        for selector in (".suite", ".plan.definition", ".security.", ".orchestration", ".runner."):
+        for selector in (".suite.", ".plan.definition", ".security.", ".orchestration", ".runner.", ".runtime."):
             self.assertNotIn(selector, workflow, f"workflow selects contract field {selector}")
         self.assertIn("exact_stack_campaign.py digest", workflow)
         self.assertIn("exact_stack_campaign.py groups", workflow)
         self.assertIn("exact_stack_campaign.py validate", workflow)
 
-    def test_release_control_dispatches_a_profile_and_resolves_nothing(self):
-        """The five inputs of the run ledger. Release Control names an
-        execution, a plan with its profile, a stack policy, the executor commit
-        and the CLI; the composition and every exact version are resolved here."""
+    def test_a_dispatch_names_suite_stack_model_and_profile(self):
+        """What to test, where, with whom, and optionally for which Release
+        Control execution; the older five inputs are still accepted. Nothing
+        is required by the form: preparation says what is missing."""
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
-        block = workflow.split("    inputs:\n", 1)[1].split("\npermissions:", 1)[0]
+        inputs = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"]
         self.assertEqual(
-            sorted(re.findall(r"^      (\w+):$", block, re.MULTILINE)),
-            ["cli_version", "execution_id", "plan", "runner_sha", "stack"],
+            list(inputs),
+            ["suite", "stack", "model", "profile", "execution_id", "plan", "runner_sha", "cli_version"],
         )
-        # An absent input is a silent default; every one of the five is stated.
-        self.assertEqual(block.count("required: true"), 5)
-        # The composition belongs to the runner: the profile is materialized
-        # from the pinned commit, never read out of the dispatch.
-        self.assertIn("test-plan materialize --profile", workflow)
-        self.assertIn("scripts/resolve_stack_lock.py", workflow)
+        self.assertFalse(any(spec["required"] for spec in inputs.values()))
+        # Every input reaches a shell through the environment, never
+        # interpolated into the script.
+        for job in yaml.safe_load(workflow)["jobs"].values():
+            for step in job["steps"]:
+                for expression in ("${{ inputs.", "${{ env."):
+                    self.assertNotIn(expression, step.get("run", ""), step.get("name"))
+        # A suite stated whole is named "custom suite" in the run title.
+        self.assertIn("startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite", workflow)
+        # The runner the stack runs materializes the suite, with the flag every
+        # release of it knows.
+        self.assertIn('"$RUNNER_BINARY" test-plan materialize --profile "$suite"', workflow)
+        self.assertNotIn("cargo build", workflow)
+        self.assertIn("prepare_execution.py dispatch", workflow)
+        self.assertNotIn("resolve_stack_lock", workflow)
+        # Scripts come from the dispatched ref, and anyone who may dispatch may
+        # run it: the identity that matters is the OIDC token of the reports.
+        self.assertNotIn("ref: ${{ inputs.runner_sha }}", workflow)
+        # Identity stays a gate: a dispatch that reports to Release Control
+        # comes from its bot, with the ids it issues.
+        gate = next(step for step in yaml.safe_load(workflow)["jobs"]["prepare"]["steps"]
+                    if step.get("name") == "Validate a Release Control dispatch")
+        self.assertEqual(gate["if"], "inputs.execution_id != ''")
+        for check in ('test "$GITHUB_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"',
+                      '[[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]',
+                      '[[ -z "$RUNNER_SHA" || "$RUNNER_SHA" =~ ^[0-9a-f]{40}$ ]]'):
+            self.assertIn(check, gate["run"])
 
     def test_the_dispatched_plan_reaches_disk_as_the_plan(self):
-        """The recording step must write the dispatch, not a verdict about it.
+        """An older dispatch keeps its plan verbatim for the readers of
+        plan.json, and becomes the suite, model and stack it stands for."""
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
+        step = next(step for step in workflow["jobs"]["prepare"]["steps"] if step.get("name") == "Read the dispatch")
+        plan = {"key": "harness-regression", "profile": {"plan_id": "harness", "id": "regression"},
+                "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+                "runner": {"revision": "a" * 40, "version": "0.12.2"}}
+        with tempfile.TemporaryDirectory() as directory:
+            env = {name: "" for name in step["env"]}
+            env.update(DISPATCH_PLAN=json.dumps(plan), DISPATCH_STACK='{"versions":{"harness":"1.9.3"}}',
+                       DISPATCH_EXECUTION_ID="b0607faa-096a-4efe-a4a2-a2a9bc06de83", DISPATCH_CLI_VERSION="0.24.2")
+            subprocess.run(["bash", "-c", step["run"].replace("target/", f"{directory}/")], cwd=ROOT,
+                           env={**os.environ, **env}, check=True, capture_output=True, text=True)
+            written = pathlib.Path(directory) / "harness-e2e-contract"
+            self.assertEqual(json.loads((written / "plan.json").read_text()), plan)
+            execution = json.loads((written / "execution.json").read_text())
+            stack = yaml.safe_load((written / "stack.yaml").read_text())
+        self.assertEqual(execution["suite"], "regression")
+        self.assertEqual(execution["model"], "deepseek/deepseek-v4-flash")
+        self.assertEqual(stack["iii"], "0.24.2")
+        self.assertEqual(stack["containers"]["harness"]["version"], "1.9.3")
+        self.assertEqual(stack["containers"]["harness-e2e"]["version"], "0.12.2")
 
-        `jq -e 'type == "object"'` validates and then writes its own `true`,
-        which every later step reads as the plan. Run the real command."""
-        import shutil
-        import subprocess
-
-        if not shutil.which("jq"):
-            self.skipTest("jq is not installed")
-        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
-        block = workflow.split("Record the dispatch", 1)[1].split("- uses:", 1)[0]
-        command = next(line.strip() for line in block.splitlines() if "plan.json" in line)
-        command = command.replace("target/harness-e2e-contract/plan.json", "/dev/stdout")
-        plan = json.dumps({"key": "harness-regression", "profile": {"plan_id": "harness", "id": "regression"}})
-
-        written = subprocess.run(
-            ["bash", "-c", command], env={"PLAN": plan, "PATH": os.environ["PATH"]},
-            capture_output=True, text=True, check=True,
-        ).stdout
-        self.assertEqual(json.loads(written), json.loads(plan))
-
-        # And a dispatch that is not an object still fails the step.
-        rejected = subprocess.run(
-            ["bash", "-c", command], env={"PLAN": "true", "PATH": os.environ["PATH"]},
-            capture_output=True, text=True,
-        )
-        self.assertNotEqual(rejected.returncode, 0)
+    def test_groups_start_the_stack_preparation_assembled_and_locked(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
+        prepare = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
+        order = ["Resolve the iii release and the template", "Fetch the stack's runner",
+                 "Materialize the requested suite", "Report the materialized suite",
+                 "Write one contract per campaign", "Assemble and lock the stack",
+                 "Lock every contract to the assembled stack"]
+        self.assertEqual([name for name in prepare if name in order], order)
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        # Assembled with the credentials the groups get, and tried twice.
+        assemble = steps["Assemble and lock the stack"]
+        for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
+            self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
+        self.assertIn("for attempt in 1 2; do", assemble["run"])
+        # Its evidence passes the group packaging checks before upload, and
+        # never fails a prepared execution.
+        self.assertIn("exact_stack_campaign.py package", steps["Package the stack assembly evidence"]["run"])
+        self.assertTrue(steps["Package the stack assembly evidence"]["continue-on-error"])
+        # A preparation that fails after the materialized report still closes
+        # the execution in Release Control.
+        failed = workflow["jobs"]["report_preparation_failure"]
+        self.assertEqual(failed["needs"], "prepare")
+        self.assertEqual(failed["if"], "always() && needs.prepare.result != 'success' && needs.prepare.outputs.materialized == 'true'")
+        self.assertIn("report_execution.py summary", failed["steps"][-1]["run"])
+        self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["materialized"], "${{ steps.materialized.outputs.posted }}")
+        self.assertIn('echo "posted=true"', steps["Report the materialized suite"]["run"])
+        report = steps["Report the materialized suite"]["run"]
+        self.assertIn("--cli-version", report)
+        self.assertIn('--runner-sha "$RUNNER_REVISION"', report)
+        # The runner's identity: an older dispatch's runner_sha, otherwise the
+        # revision of the runner the stack ran, never this workflow's commit.
+        self.assertIn("jq -r '.runner_revision'", steps["Fetch the stack's runner"]["run"])
+        self.assertNotIn("RUNNER_SHA", steps["Fetch the stack's runner"].get("env", {}))
+        self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["runner_revision"], "${{ steps.stack_runner.outputs.revision }}")
+        for job, step in (("groups", "Report this shard's runs"), ("finalize", "Report the campaign summary")):
+            env = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == step)["env"]
+            self.assertEqual(env["RUNNER_REVISION"], "${{ needs.prepare.outputs.runner_revision }}")
+        self.assertNotIn("github.sha }}'", yaml.safe_dump(workflow))
+        launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
+        self.assertIn('{file:$file,frozen:$frozen}', launcher)
+        self.assertIn("HARNESS_E2E_ASSEMBLE_ONLY", launcher)
 
     def test_every_execution_reports_whatever_it_managed_to_observe(self):
         """No execution is lost: the profile is reported before anything runs,
@@ -218,10 +274,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         for kind in ("materialized", "shard", "summary"):
             self.assertIn(f"report_execution.py {kind}", workflow)
-        shard = workflow.split("Report this shard's runs", 1)[1]
-        self.assertTrue(shard.lstrip().startswith("if: always()"), "the shard report must be unconditional")
-        summary = workflow.split("Report the campaign summary", 1)[1]
-        self.assertTrue(summary.lstrip().startswith("if: always()"), "the summary report must be unconditional")
+        # Whatever the group or finalizer did — and only when there is a
+        # Release Control execution to report to.
+        for step in ("Report this shard's runs", "Report the campaign summary"):
+            condition = workflow.split(step, 1)[1].lstrip().split("\n", 1)[0]
+            self.assertEqual(condition, "if: always() && inputs.execution_id != ''")
+        materialized = next(step for step in yaml.safe_load(workflow)["jobs"]["prepare"]["steps"]
+                            if step.get("name") == "Report the materialized suite")
+        self.assertEqual(materialized["if"], "inputs.execution_id != ''")
         # Admission is gone with the campaign it admitted; the reports carry
         # the OIDC identity now, and the first one binds the run.
         self.assertNotIn("/admit", workflow)
@@ -235,12 +295,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         finalizer = workflow.split("\n  finalize:", 1)[1]
         self.assertLess(
-            finalizer.index("Swatinem/rust-cache"),
+            finalizer.index("Fetch the stack's runner"),
             finalizer.index("Restore deterministic group paths"),
         )
         restore = finalizer.split("- name: Restore deterministic group paths", 1)[
             1
-        ].split("\n      - uses:", 1)[0]
+        ].split("\n      - ", 1)[0]
         command = textwrap.dedent(restore.split("run: |\n", 1)[1])
         command = command.replace(
             "${{ inputs.execution_id }}", "execution-1"

@@ -190,7 +190,7 @@
       "Node 22+, npm and curl on the executor; one repetition per scaffold"
     ]
   },
-  "profiles": [
+  "suites": [
     {
       "id": "regression",
       "label": "Regression",

@@ -277,6 +277,7 @@ pub(super) fn execution_summary(
 fn request_parameters(metadata: &RunMetadata, report: Option<&E2eReport>) -> Value {
     let request = &metadata.request;
     json!(crate::plans::store::ExecutionParameters {
+        suite: None,
         scenarios: request.scenarios.clone(),
         runs: request.runs,
         technical_retries: request.technical_retries,

@@ -402,7 +402,13 @@ impl PlanStore {
             } = &mut execution.source
             {
                 *run_attempt = attempt;
-                *release_control_execution_id = Some(release_control_id);
+                // A contract that states its execution says whether Release
+                // Control dispatched it; an older one is always Release Control's.
+                *release_control_execution_id =
+                    match read_json(&scratch.path().join("contract/execution.json")) {
+                        Ok(stated) => stated["execution_id"].as_str().map(str::to_owned),
+                        Err(_) => Some(release_control_id),
+                    };
             }
             self.install_bundle(
                 &mut execution,
@@ -451,8 +457,7 @@ impl PlanStore {
                 failure["error"].as_str().unwrap_or("no detail")
             );
         }
-        let plan = read_json(&contract.join("plan.json")).unwrap_or(Value::Null);
-        let profile = read_json(&contract.join("profile.json")).unwrap_or(Value::Null);
+        let fields = contract_fields(contract);
         let campaigns = directories(bundle)?
             .into_iter()
             .filter(|path| path.join("groups").is_dir())
@@ -548,14 +553,15 @@ impl PlanStore {
                 .map(|request| request.technical_retries)
                 .max()
                 .unwrap_or_default(),
-            model: text(&plan["subject"]["model"])
+            model: text(&fields["model"])
                 .or_else(|| first.map(|request| request.model.clone()))
                 .unwrap_or_default(),
-            provider: text(&plan["subject"]["provider"])
+            provider: text(&fields["provider"])
                 .or_else(|| first.map(|request| request.provider.clone()))
                 .unwrap_or_default(),
-            agent: text(&plan["agent_profile"])
+            agent: text(&fields["agent"])
                 .or_else(|| first.and_then(|request| request.agent.clone())),
+            suite: text(&fields["suite"]),
         };
         let mut next = execution.clone();
         next.configuration_sha256 = artifact::sha256_value(&parameters)?;
@@ -580,7 +586,7 @@ impl PlanStore {
                 .read_execution(&next.id)
                 .await?
                 .label
-                .or_else(|| text(&profile["profile"]["label"]));
+                .or_else(|| text(&fields["suite_label"]));
             self.write_execution(&next).await?;
         }
         let kept = next
@@ -781,16 +787,40 @@ pub(super) fn highest_attempt<'a>(
         .max_by_key(|(_, attempt)| *attempt)
 }
 
+/// What a contract artifact says its execution ran. A contract states the
+/// execution itself (`execution.json`: suite, stack, `provider/model`, agent
+/// profile, iii) with the suite's snapshot and the stack's lock; one from
+/// before names only the plan Release Control dispatched (`plan.json`,
+/// `profile.json`). Either is read, the stated execution first.
 fn contract_fields(contract: &Path) -> Value {
-    let plan = read_json(&contract.join("plan.json")).unwrap_or(Value::Null);
-    let profile = read_json(&contract.join("profile.json")).unwrap_or(Value::Null);
+    let read = |name: &str| read_json(&contract.join(name)).unwrap_or(Value::Null);
+    let first =
+        |stated: &Value, older: &Value| if stated.is_null() { older } else { stated }.clone();
+    let (execution, plan) = (read("execution.json"), read("plan.json"));
+    let snapshot = first(&read("suite.json"), &read("profile.json"));
+    let (provider, model) = match execution["model"].as_str().and_then(|m| m.split_once('/')) {
+        Some((provider, model)) => (json!(provider), json!(model)),
+        None => (
+            plan["subject"]["provider"].clone(),
+            plan["subject"]["model"].clone(),
+        ),
+    };
+    let lock = fs::read_to_string(contract.join("worker-compose.lock"))
+        .ok()
+        .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
+        .unwrap_or(Value::Null);
     json!({
-        "suite": plan["profile"]["id"],
-        "suite_label": profile["profile"]["label"],
-        "model": plan["subject"]["model"],
-        "provider": plan["subject"]["provider"],
-        "agent": plan["agent_profile"],
-        "runner_version": plan["runner"]["version"],
+        "suite": first(&snapshot["profile"]["id"], &plan["profile"]["id"]),
+        "suite_label": snapshot["profile"]["label"],
+        "model": model,
+        "provider": provider,
+        "agent": first(&execution["profile"], &plan["agent_profile"]),
+        "runner_version": first(
+            &lock["containers"]["harness-e2e"]["resolved"]["version"],
+            &plan["runner"]["version"],
+        ),
+        "stack": execution["stack"],
+        "iii": read("contracts/resolution.json")["cli_version"],
     })
 }
 
@@ -961,6 +991,66 @@ mod tests {
             Some(("e2e-contract-exec-gh-1", 1))
         );
         assert_eq!(highest_attempt(names, |stem| stem == "missing"), None);
+    }
+
+    #[test]
+    fn contracts_are_read_whether_they_state_the_execution_or_only_the_plan() {
+        let root = tempfile::tempdir().unwrap();
+        let write = |dir: &Path, name: &str, value: &str| {
+            let path = dir.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, value).unwrap();
+        };
+        let older = root.path().join("older");
+        write(
+            &older,
+            "plan.json",
+            &json!({"profile": {"id": "regression"},
+            "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
+            "agent_profile": "tech-lead", "runner": {"version": "0.11.28"}})
+            .to_string(),
+        );
+        write(
+            &older,
+            "profile.json",
+            &json!({"profile": {"id": "regression", "label": "Regression"}}).to_string(),
+        );
+        write(
+            &older,
+            "contracts/resolution.json",
+            r#"{"cli_version": "0.24.1"}"#,
+        );
+        assert_eq!(
+            contract_fields(&older),
+            json!({"suite": "regression", "suite_label": "Regression", "model": "deepseek-v4-flash",
+                "provider": "deepseek", "agent": "tech-lead", "runner_version": "0.11.28",
+                "stack": null, "iii": "0.24.1"})
+        );
+
+        let stated = root.path().join("stated");
+        write(
+            &stated,
+            "execution.json",
+            &json!({"execution_id": null, "suite": {"id": "smoke"},
+            "stack": "default", "model": "zai/glm-5.1", "profile": null, "iii": "0.24.2"})
+            .to_string(),
+        );
+        write(
+            &stated,
+            "suite.json",
+            &json!({"profile": {"id": "smoke", "label": "smoke"}}).to_string(),
+        );
+        write(&stated, "worker-compose.lock", "version: 1\ncontainers:\n  harness-e2e:\n    worker: package://harness-e2e\n    requested: latest\n    resolved:\n      version: 0.12.2\n");
+        write(
+            &stated,
+            "contracts/resolution.json",
+            r#"{"cli_version": "0.24.2"}"#,
+        );
+        assert_eq!(
+            contract_fields(&stated),
+            json!({"suite": "smoke", "suite_label": "smoke", "model": "glm-5.1", "provider": "zai",
+                "agent": null, "runner_version": "0.12.2", "stack": "default", "iii": "0.24.2"})
+        );
     }
 
     #[test]

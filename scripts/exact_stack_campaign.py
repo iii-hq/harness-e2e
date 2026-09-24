@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Validate and materialize the exact-stack campaign contract.
 
-Release Control owns every campaign decision — the suite, the models, the
-policy — and states each one exactly once in the contract it dispatches. This
-repository owns the runtime: which scenarios a pinned runner release can
-execute, how the stack boots, and what evidence comes back. No campaign
-configuration is read from this repository, and nothing is verified twice:
+`prepare_execution.py` writes one contract per campaign: the suite's groups,
+the model, the iii release and the stack Compose assembled once, with its
+lock. This tool turns a contract into what one group runs — its Compose
+project, its run request, its evidence — and nothing is verified twice:
 unknown fields are ignored so either side can add one and ship alone.
 """
 
@@ -22,12 +21,6 @@ from typing import Any
 
 CONTRACT_SCHEMA = "rc-e2e/v2"
 SHA256 = re.compile(r"^sha256:[0-9a-f]{64}$")
-GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
-VERSION = re.compile(
-    r"^[0-9]+\.[0-9]+\.[0-9]+"
-    r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
-    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
-)
 EXECUTION_KINDS = {
     "harness_turn",
     "scripted_dialogue",
@@ -40,17 +33,61 @@ APPLICATION = "harness"
 RUNNER = "harness-e2e"
 #: What a declaration means when it does not name a version.
 DEFAULT_SELECTOR = "latest"
-#: The stack this repository declares. Every execution starts from it.
-BASE_COMPOSE = Path(__file__).resolve().parents[1] / "worker-compose.base.yaml"
+#: The stack an execution runs on when it names none.
+DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
+#: Stack keys the executor reads; the rest of a stack is the Compose project.
+EXECUTOR_KEYS = ("iii", "template")
+
+
+def load_yaml(text: str) -> Any:
+    """YAML the way Compose reads it (1.2 core schema).
+
+    PyYAML resolves YAML 1.1: `on`, `no` and `yes` become booleans, an
+    unquoted date a datetime, `010` the octal 8 and `1:30` the sexagesimal
+    90, which then reach Compose as something the author did not write (or
+    do not serialize at all). Here only `true`/`false` are booleans, a date
+    stays text, and integers are 1.2's: decimal, `0o` octal, `0x` hex.
+    Writing back with `yaml.safe_dump` quotes the strings 1.1 would misread,
+    which 1.2 reads as strings too.
+    """
+    import yaml
+
+    class Loader(yaml.SafeLoader):
+        pass
+
+    replaced = {"tag:yaml.org,2002:bool", "tag:yaml.org,2002:timestamp", "tag:yaml.org,2002:int"}
+    Loader.yaml_implicit_resolvers = {
+        first: [(tag, pattern) for tag, pattern in resolvers if tag not in replaced]
+        for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+    Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+    )
+    Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")
+    )
+
+    def integer(loader: Any, node: Any) -> int:
+        value = loader.construct_scalar(node)
+        if value.startswith(("0o", "0x")):
+            return int(value[2:], 8 if value[1] == "o" else 16)
+        return int(value, 10)
+
+    Loader.add_constructor("tag:yaml.org,2002:int", integer)
+    return yaml.load(text, Loader=Loader)
+
+
+def worker_name(source: str) -> str:
+    """The name a package is known by, whatever registry host its reference
+    names: Compose records `package://api.workers.iii.dev/<name>` as readily
+    as `package://<name>`."""
+    return str(source).removeprefix("package://").rsplit("/", 1)[-1]
 
 
 def declared_base() -> dict[str, Any]:
-    import yaml
-
-    project = yaml.safe_load(BASE_COMPOSE.read_text())
-    if not isinstance(project, dict):
-        raise ValueError("base compose must be an object")
-    return project
+    """The Compose project of the default stack."""
+    stack = load_yaml(DEFAULT_STACK.read_text())
+    return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -87,13 +124,6 @@ def require_digest(value: Any, label: str) -> str:
     value = require_text(value, label)
     if not SHA256.fullmatch(value):
         raise ValueError(f"{label} must be sha256:<64 lowercase hex>")
-    return value
-
-
-def require_version(value: Any, label: str) -> str:
-    value = require_text(value, label)
-    if not VERSION.fullmatch(value):
-        raise ValueError(f"{label} must be an exact version")
     return value
 
 
@@ -136,9 +166,7 @@ def validate_suite(suite: Any) -> dict[str, Any]:
         require_positive_integer(suite.get("seed"), "suite.seed")
     validate_identity(suite, "subject")
     if suite.get("agent_profile") is not None:
-        agent = require_text(suite["agent_profile"], "suite.agent_profile")
-        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", agent):
-            raise ValueError("suite.agent_profile must be a Directory agent id")
+        require_text(suite["agent_profile"], "suite.agent_profile")
 
     groups = suite.get("groups")
     if not isinstance(groups, list) or not groups:
@@ -197,21 +225,18 @@ def validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
         {"version", "target", "asset", "sha256"},
         "runtime.cli",
     )
-    require_version(cli.get("version"), "runtime.cli.version")
+    require_text(cli.get("version"), "runtime.cli.version")
     require_text(cli.get("target"), "runtime.cli.target")
     asset = require_text(cli.get("asset"), "runtime.cli.asset")
     if not asset.startswith("iii-") or asset.startswith("iii-" + "worker"):
         raise ValueError("runtime.cli.asset must name the iii CLI archive")
+    # The download is checked against it: integrity, not preference.
     require_digest(cli.get("sha256"), "runtime.cli.sha256")
     template = contract["runtime"].get("template")
     if template is not None:
-        require_keys(template, {"id", "repository", "ref", "revision"}, "runtime.template")
-        if not isinstance(template["id"], str) or not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", template["id"]):
-            raise ValueError("runtime.template.id must be an iii template id")
-        if template["repository"] != "iii-hq/templates" or template["ref"] != "main":
-            raise ValueError("runtime.template must originate from iii-hq/templates main")
-        if not isinstance(template["revision"], str) or not GIT_SHA.fullmatch(template["revision"]):
-            raise ValueError("runtime.template.revision must be a full lowercase git SHA")
+        require_keys(template, {"id", "revision"}, "runtime.template")
+        require_text(template["id"], "runtime.template.id")
+        require_text(template["revision"], "runtime.template.revision")
 
     security = require_keys(contract.get("security"), {"oidc_audience"}, "security")
     audience = require_text(security.get("oidc_audience"), "security.oidc_audience")
@@ -376,9 +401,7 @@ def assignments(values: list[str], label: str) -> dict[str, str]:
 
 def declared_workers(compose_path: Path) -> dict[str, str]:
     """The workers a compose project declares, with the selector each carries."""
-    import yaml
-
-    project = yaml.safe_load(compose_path.read_text())
+    project = load_yaml(compose_path.read_text())
     if not isinstance(project, dict):
         raise ValueError("compose project must be an object")
     declared: dict[str, str] = {}
@@ -387,8 +410,7 @@ def declared_workers(compose_path: Path) -> dict[str, str]:
         if source.startswith("package://"):
             # Compose rewrites a declaration with the registry host it resolved
             # against, so workers are compared by the name they are known by.
-            package = source.removeprefix("package://").rsplit("/", 1)[-1]
-            declared[package] = str(container.get("version", DEFAULT_SELECTOR))
+            declared[worker_name(source)] = str(container.get("version", DEFAULT_SELECTOR))
     return dict(sorted(declared.items()))
 
 
@@ -455,9 +477,23 @@ def project_scaffold(
     template: dict[str, Any] | None = None,
     template_packages: dict[str, str] | None = None,
     profile_root: Path | None = None,
-    base: dict[str, Any] | None = None,
     group_id: str | None = None,
+    assembling: bool = False,
 ) -> dict[str, Any]:
+    """The Compose project one group starts, or with no group the stack the
+    execution assembles once for all of them.
+
+    Assembling, the model's provider and the Directory are not declared: a
+    worker a declared one depends on (Harness brings both) arrives from its
+    graph with the graph's pin, and a second declaration of it conflicts with
+    that pin. The launcher asks for whichever no graph brought.
+
+    Without a template it is the stack the contract carries — assembled once,
+    its lock beside it — with only what is per group stamped on: namespace,
+    runner data and configuration, credentials. Its workers keep the versions
+    the lock was taken for. With a template, the template is the project and
+    every package it declares takes the version the execution's lock
+    resolved, or `latest`."""
     if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}[a-z0-9]", namespace):
         raise ValueError("project namespace must be lowercase kebab-case")
     if not data_dir.is_absolute():
@@ -479,37 +515,59 @@ def project_scaffold(
             raise ValueError(f"invalid container environment assignment: {key}")
         declared_environment.setdefault(worker, {})[name] = value
 
-    overrides = contract.get("runtime", {}).get("stack") or {}
-    if not isinstance(overrides, dict):
-        raise ValueError("runtime.stack must be an object of worker selectors")
+    runtime = contract.get("runtime") or {}
+    locked = {
+        worker_name(entry["worker"]): entry["resolved"]["version"]
+        for entry in ((runtime.get("lock") or {}).get("containers") or {}).values()
+    }
+    # A template's packages take the dispatch's pins first (an older Release
+    # Control dispatch pins workers the stack does not declare), then the
+    # versions the execution locked.
+    locked.update(runtime.get("stack_overrides") or {})
 
-    # The project is the template when there is one and the base otherwise.
+    # The project is the template when there is one and the stack otherwise.
     # Add the runner and the campaign's provider to either project. Templates
     # only enable their own default providers; credentials alone cannot start
     # the provider selected by the campaign.
     if env_file and not Path(env_file).is_absolute():
         raise ValueError("env file must be absolute")
-    manifest = copy.deepcopy(template if template is not None else (declared_base() if base is None else base))
+    manifest = copy.deepcopy(template if template is not None else (runtime.get("compose") or declared_base()))
     containers = manifest.setdefault("containers", {})
-    containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}"})
+    def declares(package: str) -> bool:
+        return any(
+            str(item.get("worker", "")).startswith("package://") and worker_name(item["worker"]) == package
+            for item in containers.values()
+        )
+
+    if not declares(RUNNER):
+        containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
+    group_scenarios = scenarios
     if group_id is not None:
         group = next((group for group in contract["suite"]["groups"] if group["id"] == group_id), None)
         if group is None:
             raise ValueError(f"unknown campaign group: {group_id}")
-        if {"form_flow_build", "state_machine_canvas_build"} & set(group["scenarios"]):
-            if not any(item.get("worker") == "package://canvas" for item in containers.values()):
-                if "canvas" in containers:
-                    raise ValueError("container canvas is already used by another worker")
-                containers["canvas"] = {"worker": "package://canvas"}
+        group_scenarios = set(group["scenarios"])
+    # Canvas only where a visual worker is built. The stack assembled for the
+    # whole suite carries it when any group needs it; a group that does not
+    # leaves it out again, with what only Canvas brought in.
+    if {"form_flow_build", "state_machine_canvas_build"} & group_scenarios:
+        if not declares("canvas"):
+            if "canvas" in containers:
+                raise ValueError("container canvas is already used by another worker")
+            containers["canvas"] = {"worker": "package://canvas", "version": DEFAULT_SELECTOR}
+    elif template is None and runtime.get("lock"):
+        graphs = runtime["lock"].get("graphs") or {}
+        others = {node for root, nodes in graphs.items() if root != "canvas" for node in nodes}
+        for name in {"canvas", *graphs.get("canvas", [])} - others:
+            containers.pop(name, None)
     provider = contract["suite"]["subject"]["provider"]
     if not re.fullmatch(r"[a-z][a-z0-9-]*", provider):
         raise ValueError("suite.subject.provider must be a provider package name")
     provider_package = f"provider-{provider}"
-    provider_source = f"package://{provider_package}"
-    if not any(container.get("worker") == provider_source for container in containers.values()):
+    if not assembling and not declares(provider_package):
         if provider_package in containers:
             raise ValueError(f"container {provider_package} is already used by another worker")
-        containers[provider_package] = {"worker": provider_source}
+        containers[provider_package] = {"worker": f"package://{provider_package}", "version": DEFAULT_SELECTOR}
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
         source = container.get("worker", "")
@@ -520,16 +578,18 @@ def project_scaffold(
             if not path.is_absolute() and (not source.startswith("path://./") or ".." in path.parts):
                 raise ValueError(f"declared worker {name} must stay inside its project")
             continue
-        package = source.removeprefix("package://")
-        package = (template_packages or {}).get(package, package)
         if not source.startswith("package://"):
             raise ValueError(f"declared worker {name} has an unsupported source: {source}")
-        container["worker"] = f"package://{package}"
-        # Release Control may hold a worker to a particular release; everything
-        # else runs latest. A template's own pin is its author's, not ours: a
-        # fixture checked out at an old commit would otherwise downgrade the
-        # very application under test.
-        container["version"] = overrides.get(package, DEFAULT_SELECTOR)
+        package = worker_name(source)
+        renamed = (template_packages or {}).get(package, package)
+        if renamed != package:
+            container["worker"] = source[: -len(package)] + renamed
+            package = renamed
+        if template is not None:
+            # A template's own pin is its author's, not ours: a fixture checked
+            # out at an old commit would otherwise downgrade the very
+            # application under test. It runs what the execution locked.
+            container["version"] = locked.get(package, DEFAULT_SELECTOR)
         package_names.setdefault(package, []).append(name)
     if template is not None:
         # Compose expands dependencies by container name, so a template that
@@ -543,7 +603,8 @@ def project_scaffold(
                     for dependency in container["start_after"]
                 ]
     for name, container in containers.items():
-        worker = container["worker"].removeprefix("package://")
+        source = str(container["worker"])
+        worker = worker_name(source) if source.startswith("package://") else None
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
@@ -561,13 +622,16 @@ def project_scaffold(
         # id reaches: only then name the container ourselves.
         if "config_name" not in container and len(f"{namespace}-{name}") > 64:
             container["config_name"] = scoped_config_name(namespace, name)
-    if profile_root is not None:
+    if profile_root is not None and not assembling:
         if not profile_root.is_absolute():
             raise ValueError("profile root must be absolute")
+        if "iii-directory" not in package_names and template is None and runtime.get("lock"):
+            # A frozen start cannot add a worker its lock does not name.
+            raise ValueError("the assembled stack brings no iii-directory; an agent profile needs one")
         if "iii-directory" not in package_names:
             containers["iii-directory"] = {
                 "worker": "package://iii-directory",
-                "version": DEFAULT_SELECTOR,
+                "version": locked.get("iii-directory", DEFAULT_SELECTOR),
             }
             package_names["iii-directory"] = ["iii-directory"]
         for name in package_names["iii-directory"]:
@@ -606,7 +670,6 @@ def compose_evidence(
     worker_rows = workers_payload.get("workers")
     if not isinstance(worker_rows, list):
         raise ValueError("engine worker evidence must contain a workers array")
-    import yaml
 
     # What the project was asked to run is the compose it was assembled from.
     requested = declared_workers(compose_path)
@@ -615,7 +678,7 @@ def compose_evidence(
     # freely (Linkly runs `ade` as `console`). Compose already gated the start;
     # a container the engine does not report is drift to show, never a reason
     # to discard a finished run.
-    containers = (yaml.safe_load(compose_path.read_text()) or {}).get("containers") or {}
+    containers = (load_yaml(compose_path.read_text()) or {}).get("containers") or {}
     missing = sorted(
         name for name, container in containers.items()
         if str(container.get("worker", "")).startswith("package://") and name not in observed
@@ -739,14 +802,14 @@ def main() -> int:
     template.add_argument("--group-id", required=True)
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
-    project.add_argument("--group-id")
+    project.add_argument("--group-id", help="omit to scaffold the stack the whole suite shares")
+    project.add_argument("--assemble", action="store_true", help="the stack the execution assembles once")
     project.add_argument("--namespace", required=True)
     project.add_argument("--data-dir", type=Path, required=True)
     project.add_argument("--env-file", type=Path)
     project.add_argument("--environment", action="append", default=[])
     project.add_argument("--output", type=Path, required=True)
     project.add_argument("--template-compose", type=Path)
-    project.add_argument("--base-compose", type=Path)
     project.add_argument("--fixture-compose", type=Path)
     project.add_argument("--profile-root", type=Path)
     project.add_argument("--template-package", action="append", default=[])
@@ -803,12 +866,7 @@ def main() -> int:
                 import yaml
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
-            template = yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None
-            base = None
-            if args.base_compose:
-                base = yaml.safe_load(args.base_compose.read_text())
-                if not isinstance(base, dict):
-                    raise ValueError("base compose must be an object")
+            template = load_yaml(args.template_compose.read_text()) if args.template_compose else None
             if args.fixture_compose:
                 if template is None:
                     raise ValueError("fixture-compose requires template-compose")
@@ -818,7 +876,7 @@ def main() -> int:
                     source = container.get("worker", "")
                     if source.startswith("path://./"):
                         container["worker"] = f"path://{(args.template_compose.parent / source.removeprefix('path://')).resolve()}"
-                template = with_fixture(template, yaml.safe_load(args.fixture_compose.read_text()))
+                template = with_fixture(template, load_yaml(args.fixture_compose.read_text()))
             manifest = project_scaffold(
                 contract,
                 args.namespace,
@@ -828,12 +886,26 @@ def main() -> int:
                 template,
                 assignments(args.template_package, "template-package"),
                 args.profile_root,
-                base,
                 args.group_id,
+                args.assemble,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"
             args.output.write_text(yaml.safe_dump(manifest, sort_keys=False))
+            lock = contract["runtime"].get("lock")
+            if lock and template is None:
+                # Beside the compose file, where `compose::up` reads it, and
+                # only for what this group declares: frozen, Compose refuses a
+                # lock entry the file no longer names.
+                kept = manifest["containers"]
+                lock = {
+                    **lock,
+                    "containers": {name: entry for name, entry in lock["containers"].items() if name in kept},
+                    **({"graphs": {root: [node for node in nodes if node in kept]
+                                   for root, nodes in lock["graphs"].items() if root in kept}}
+                       if lock.get("graphs") else {}),
+                }
+                (args.output.parent / "worker-compose.lock").write_text(yaml.safe_dump(lock, sort_keys=False))
             if args.engine_config:
                 args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
         elif args.command == "group-template":

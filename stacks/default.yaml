@@ -1,0 +1,54 @@
+# The default stack a campaign measures: where a suite runs.
+#
+# A stack is an iii Compose project plus two keys for the executor:
+#
+#   iii       the iii CLI release every group installs, or `latest` for the
+#             newest release candidate of iii-hq/iii.
+#   template  optional iii-hq/templates project the groups start from,
+#             `<id>` or `<id>@<revision>`; the containers below then pin
+#             versions of the workers it declares.
+#
+# The containers are the workers the stack declares. Everything else in the
+# graph — state, llm-router, iii-directory, session-manager and the rest — is a
+# dependency Compose resolves from the package. The execution assembles this
+# project once and every group starts from its worker-compose.lock, so all of
+# them run the same versions.
+#
+# The executor stamps what is per group and cannot be written down: the
+# namespace, the runner's data_dir and configuration, the model's provider
+# when the stack does not declare it, what a scenario needs (Canvas, Harness
+# fan-out and depth limits, agent-profile assets) and the private env file
+# with provider credentials. Credentials never go in a stack.
+
+iii: latest
+
+containers:
+  # The application under test. Its package graph is the stack being measured.
+  harness:
+    worker: package://harness
+    version: latest
+
+  # The runner that executes the scenarios inside that stack.
+  harness-e2e:
+    worker: package://harness-e2e
+    version: latest
+
+  # Workers the measurement itself needs and that the application does not
+  # bring along. A worker the application already depends on is left out: the
+  # engine resolves it from that dependency, and declaring it here as well is a
+  # second, independent spec for the same worker, which it refuses.
+  # `browser` is one of those, and arrives with `harness`.
+  fp:
+    worker: package://fp
+    version: latest
+
+  provider-deepseek:
+    worker: package://provider-deepseek
+    version: latest
+
+  provider-zai:
+    worker: package://provider-zai
+    version: latest
+
+startup_timeout: 5m
+stop_timeout: 30s
