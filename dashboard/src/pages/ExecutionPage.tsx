@@ -25,6 +25,7 @@ import {
   ResultContractStrip,
   ScenarioMatrix,
 } from '@/components/ScenarioMatrix'
+import { ScenarioRerunDialog } from '@/components/ScenarioRerunDialog'
 import type { SystemOutcome } from '@/components/SystemOutcome'
 import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
@@ -66,7 +67,7 @@ import {
   providerModel,
   workerVersion,
 } from '@/lib/execution-view'
-import { planAction } from '@/lib/plan-execution'
+import { planAction, scenarioReruns } from '@/lib/plan-execution'
 import {
   buildPrimaryMetrics,
   excludeUnsuccessfulTests,
@@ -232,10 +233,19 @@ export function provenanceEntries(
 ): Array<[string, string]> {
   const started = Date.parse(presentation.startedAt)
   const completed = Date.parse(presentation.completedAt)
-  const duration =
-    Number.isFinite(started) &&
-    Number.isFinite(completed) &&
-    completed >= started
+  // After a scenario ran again, start to finish spans the pause and the
+  // replaced attempt: the time is the current runs' own.
+  const reran = detail.plan_execution?.slots.some(
+    (slot) => (slot.previous_attempts?.length ?? 0) > 0,
+  )
+  const runTime = finiteMetric(detail.totals?.wall_time_seconds)
+  const duration = reran
+    ? runTime === null
+      ? 'after running a scenario again'
+      : `after running a scenario again · ${formatDuration(runTime)} of current runs`
+    : Number.isFinite(started) &&
+        Number.isFinite(completed) &&
+        completed >= started
       ? formatDuration((completed - started) / 1000)
       : null
   const rows: Array<[string, string | null | undefined]> = [
@@ -462,6 +472,8 @@ export function ExecutionPage({
   const [deleting, setDeleting] = useState(false)
   // The parameters the Run again form opened with; null while it is closed.
   const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
+  // The scenario the Run this scenario again dialog is open on.
+  const [scenarioRerun, setScenarioRerun] = useState<string | null>(null)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
@@ -521,6 +533,8 @@ export function ExecutionPage({
     presentation?.attention === 'running' ||
     presentation?.attention === 'cancelling'
   const importing = detail?.status === 'importing'
+  // Running a scenario again: the other scenarios keep their results on screen.
+  const rerunning = live && Boolean(detail?.plan_execution?.rerun)
 
   // Audit ED-12: a live execution follows the run instead of waiting for F5.
   useEffect(() => {
@@ -628,6 +642,11 @@ export function ExecutionPage({
   const runCount =
     scenarioMatrix?.items.reduce((total, item) => total + item.runCount, 0) ?? 0
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
+  const rerunScenarios = new Set(
+    detail.plan_execution?.slots
+      .filter((slot) => scenarioReruns(detail.plan_execution, slot.scenario_id))
+      .map((slot) => slot.scenario_id),
+  ).size
   const { title } = executionTitle(presentation)
   const identity: Array<[string, ReactNode]> = [
     [
@@ -711,7 +730,7 @@ export function ExecutionPage({
                   ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
                   : live
                     ? 'Execution in progress · results are provisional'
-                    : `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'} · ${runCount} ${runCount === 1 ? 'run' : 'runs'}`}
+                    : `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'} · ${runCount} ${runCount === 1 ? 'run' : 'runs'}${rerunScenarios > 0 ? ` · ${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts` : ''}`}
               </span>
             </>
           }
@@ -915,7 +934,7 @@ export function ExecutionPage({
         {detail.plan_execution && !live ? (
           <ExecutionConfiguration execution={detail.plan_execution} />
         ) : null}
-        {!noRun && !live ? (
+        {!noRun && (!live || rerunning) ? (
           <div className="execution-layers mt-6 grid min-w-0 gap-3">
             <section
               id="results"
@@ -938,6 +957,12 @@ export function ExecutionPage({
                   detail={resultDetail ?? detail}
                   onTranscript={(run, title) => setTranscript({ run, title })}
                   showContract={false}
+                  // Offered once finished; a saved plan's executions run again whole.
+                  onRerun={
+                    ready && !live && detail.plan_execution && !detail.plan_id
+                      ? setScenarioRerun
+                      : undefined
+                  }
                 />
               )}
             </section>
@@ -985,6 +1010,18 @@ export function ExecutionPage({
           </div>
         }
       />
+      {detail.plan_execution ? (
+        <ScenarioRerunDialog
+          bridge={bridge}
+          execution={detail.plan_execution}
+          scenarioId={scenarioRerun}
+          onClose={() => setScenarioRerun(null)}
+          onStarted={() => {
+            setScenarioRerun(null)
+            void load()
+          }}
+        />
+      ) : null}
       <LocalRunnerDialog
         bridge={bridge}
         open={rerun !== null}

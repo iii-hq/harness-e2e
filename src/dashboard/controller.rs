@@ -34,7 +34,8 @@ pub(super) struct Controller {
     defaults: Defaults,
     control: Option<ControlPlane>,
     state: Mutex<ControllerState>,
-    read_model: RwLock<Option<Arc<DashboardReadModel>>>,
+    /// The read model and the previous-attempts revision it left out.
+    read_model: RwLock<Option<(u64, Arc<DashboardReadModel>)>>,
     events: Option<Arc<DashboardEvents>>,
 }
 
@@ -134,7 +135,7 @@ impl Controller {
         } else {
             super::presenter::execution_detail_value_optional(&metadata, hydrated.report.as_ref())?
         };
-        if let Some(model) = self.read_model.write().await.as_mut() {
+        if let Some((_, model)) = self.read_model.write().await.as_mut() {
             if let Some(summary) = Arc::make_mut(model)
                 .summaries
                 .iter_mut()
@@ -218,8 +219,13 @@ impl Controller {
     }
 
     pub(super) async fn read_model(&self) -> Result<Arc<DashboardReadModel>> {
-        if let Some(model) = self.read_model.read().await.as_ref() {
-            return Ok(model.clone());
+        // Read before the previous attempts, so a change between the two
+        // builds the model again next time.
+        let attempts = self.plan_store.attempts_revision();
+        if let Some((revision, model)) = self.read_model.read().await.as_ref() {
+            if *revision == attempts {
+                return Ok(model.clone());
+            }
         }
         #[cfg(test)]
         if self.control.is_none() {
@@ -231,7 +237,7 @@ impl Controller {
                         anyhow::anyhow!("load dashboard test model task: {error}")
                     })??,
             );
-            *self.read_model.write().await = Some(model.clone());
+            *self.read_model.write().await = Some((attempts, model.clone()));
             return Ok(model);
         }
         let mut records = self
@@ -259,8 +265,9 @@ impl Controller {
                 }
             }
         }
-        let model = Arc::new(DashboardReadModel::from_records(records)?);
-        *self.read_model.write().await = Some(model.clone());
+        let discarded = self.plan_store.previous_attempts().await?;
+        let model = Arc::new(DashboardReadModel::from_records(records, &discarded)?);
+        *self.read_model.write().await = Some((attempts, model.clone()));
         Ok(model)
     }
 
@@ -413,6 +420,15 @@ impl Controller {
         label: &str,
     ) -> Result<Value> {
         let execution = self.plan_store.start_execution(parameters, label).await?;
+        self.emit_change("started", &execution.id).await;
+        Ok(json!({"execution_id": execution.id}))
+    }
+
+    /// Run one scenario of a finished local execution again; answers at once
+    /// and runs it in the background.
+    pub(super) async fn rerun_scenario(&self, id: &str, scenario_id: &str) -> Result<Value> {
+        super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
+        let execution = self.plan_store.rerun_scenario(id, scenario_id).await?;
         self.emit_change("started", &execution.id).await;
         Ok(json!({"execution_id": execution.id}))
     }

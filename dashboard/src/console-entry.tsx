@@ -24,6 +24,7 @@ const runtimeConfig: RuntimeConfig = {
     test_history_get: 'e2e::dashboard::test-history-get',
     catalog_get: 'e2e::dashboard::catalog-get',
     execution_start: 'e2e::dashboard::execution-start',
+    execution_slot_rerun: 'e2e::dashboard::execution-slot-rerun',
     run_cancel: 'e2e::dashboard::run-cancel',
     plans_list: 'e2e::dashboard::plans-list',
     plan_control: 'e2e::dashboard::plan-control',

@@ -42,6 +42,7 @@ import {
   comparisonMarkdown,
   type ExecutionComparison,
   exclusionPhrase,
+  rerunPhrase,
   runnerWarning,
   type ScenarioComparison,
   type StackComparison,
@@ -602,6 +603,7 @@ export function ComparisonView({
               const score = scenario.metrics[0]
               const open = expanded.has(scenario.id)
               const phrase = exclusionPhrase(scenario)
+              const reran = rerunPhrase(scenario)
               return (
                 <Fragment key={scenario.id}>
                   <tr
@@ -638,6 +640,15 @@ export function ComparisonView({
                           />
                           {scenario.id}
                         </button>
+                        {reran ? (
+                          <span
+                            className="font-mono text-label text-warning"
+                            data-reruns={reran}
+                            title="Only the last attempt is compared"
+                          >
+                            {reran}
+                          </span>
+                        ) : null}
                       </span>
                     </td>
                     <td data-label="Score A" className={numericCellClassName}>

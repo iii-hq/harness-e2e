@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Callout, Panel } from '@/design-system'
 import { hashForExecution, hashForPlan } from '@/hooks/use-hash-route'
+import { formatDate, formatDuration } from '@/lib/execution-view'
 import {
   type PlanExecution,
   type PlanRequirements,
@@ -90,6 +91,15 @@ export function PlanProgress({
         max={planned || 1}
         aria-label="Finished planned slots"
       />
+      {execution.rerun && running(execution.state) ? (
+        <p className="mb-0 text-xs text-ink" data-rerun-progress>
+          {`${execution.rerun.scenarios.join(', ')} running again since ${formatDate(execution.rerun.started_at)}`}
+          {Number.isFinite(Date.parse(execution.rerun.started_at))
+            ? ` · ${formatDuration((Date.now() - Date.parse(execution.rerun.started_at)) / 1000)} elapsed`
+            : ''}
+          {' · totals update when it finishes'}
+        </p>
+      ) : null}
       <p className="text-xs text-ink-soft" aria-live="polite">
         {active
           ? `Round ${active.round} · ${active.scenario_id}`

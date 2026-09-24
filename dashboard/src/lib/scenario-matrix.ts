@@ -123,6 +123,33 @@ export function buildScenarioMatrix(
   return { items, summary, contracts }
 }
 
+/** A run a scenario's slot ran before its current one: shown, never counted. */
+export type PreviousAttempt = {
+  /** The native execution that holds its evidence. */
+  executionId: string
+  item: ScenarioMatrixItem
+}
+
+/** The earlier attempts of the slot an item reports, oldest first. */
+export function previousAttempts(
+  detail: DashboardExecutionDetail,
+  item: ScenarioMatrixItem,
+): PreviousAttempt[] {
+  const round = detail.reports[item.reportIndex]?.round
+  const records = (detail.previous_reports ?? []).filter(
+    (record) =>
+      record.scenario_id === item.scenarioId && record.round === round,
+  )
+  return buildScenarioMatrix({
+    ...detail,
+    reports: records,
+    previous_reports: [],
+  }).items.map((attempt) => ({
+    executionId: String(records[attempt.reportIndex]?.native_execution_id),
+    item: attempt,
+  }))
+}
+
 function resultContracts(
   detail: DashboardExecutionDetail,
 ): ResultContractSummary[] {
@@ -252,23 +279,22 @@ function unavailableScenario(
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)
+  // A slot running, or waiting to run again, has no report yet.
+  const running = record?.state === 'running'
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason:
-      nonEmptyString(record?.error) ??
-      'The expected report for this scenario was not retained.',
+    reason: running
+      ? null
+      : (nonEmptyString(record?.error) ??
+        'The expected report for this scenario was not retained.'),
     reportIndex,
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: {
-      status: 'unavailable',
-      label: 'Unavailable',
-      raw: 'unavailable',
-    },
+    objective: objectiveStatus(running ? 'running' : 'unavailable'),
     durationMs: null,
     durationKind: null,
     runCount: 0,

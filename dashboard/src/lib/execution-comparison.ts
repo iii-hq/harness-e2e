@@ -17,6 +17,7 @@ import {
   type MetricFormat,
   type PlanMetricComparison,
 } from '@/lib/plan-comparison'
+import { scenarioReruns } from '@/lib/plan-execution'
 import { primaryRunValues } from '@/lib/primary-metrics'
 
 /**
@@ -105,6 +106,8 @@ export type ScenarioSide = {
   state: string | null
   /** That run's first failure message. */
   failure: string | null
+  /** Times the scenario ran again; only its last attempt is compared. */
+  reruns: number
 }
 
 export type CriterionChange = {
@@ -931,8 +934,9 @@ export function runnerWarning(runner: RunnerComparison): string | null {
 const FAILURE_LENGTH = 240
 
 /** What kept one side of a scenario from a result, when anything did. */
-function scenarioSide(runs: LedgerRun[]): ScenarioSide {
-  if (runs.length === 0) return { runs: 0, state: 'no run', failure: null }
+function scenarioSide(runs: LedgerRun[], reruns: number): ScenarioSide {
+  if (runs.length === 0)
+    return { runs: 0, state: 'no run', failure: null, reruns }
   const gap =
     runs.find((run) => run.technical === 'technical_invalid') ??
     runs.find((run) => run.completion === 'undetermined') ??
@@ -945,6 +949,7 @@ function scenarioSide(runs: LedgerRun[]): ScenarioSide {
       failure && failure.length > FAILURE_LENGTH
         ? `${failure.slice(0, FAILURE_LENGTH - 1)}…`
         : failure || null,
+    reruns,
   }
 }
 
@@ -1025,8 +1030,14 @@ export function compareExecutions(
     return {
       id,
       sides: {
-        a: scenarioSide(runs.a.filter((run) => run.scenarioId === id)),
-        b: scenarioSide(runs.b.filter((run) => run.scenarioId === id)),
+        a: scenarioSide(
+          runs.a.filter((run) => run.scenarioId === id),
+          scenarioReruns(a.plan_execution, id),
+        ),
+        b: scenarioSide(
+          runs.b.filter((run) => run.scenarioId === id),
+          scenarioReruns(b.plan_execution, id),
+        ),
       },
       counted: isCounted(id),
       exclusion,
@@ -1158,6 +1169,15 @@ export function exclusionPhrase(scenario: ScenarioComparison): string | null {
   return scenario.exclusion?.applied ? gapPhrase(scenario) : null
 }
 
+/** "rerun ×2 in A, ×1 in B": the sides whose scenario ran again, compared
+ *  on its last attempt. */
+export function rerunPhrase(scenario: ScenarioComparison): string | null {
+  const parts = SIDES.filter((which) => scenario.sides[which].reruns > 0).map(
+    (which) => `×${scenario.sides[which].reruns} in ${which.toUpperCase()}`,
+  )
+  return parts.length > 0 ? `rerun ${parts.join(', ')}` : null
+}
+
 /** A scenario's score on one side; a run without one says what it was. */
 export function scenarioScore(
   scenario: ScenarioComparison,
@@ -1251,6 +1271,12 @@ export function comparisonMarkdown(comparison: ExecutionComparison): string {
       '',
       `No difference: ${same.map((scenario) => cell(scenario.id)).join(', ')}.`,
     )
+  const reran = comparison.scenarios.flatMap((scenario) => {
+    const phrase = rerunPhrase(scenario)
+    return phrase ? [`- ${cell(scenario.id)}: ${phrase}`] : []
+  })
+  if (reran.length > 0)
+    lines.push('', 'Run again (only the last attempt is compared):', ...reran)
   const out = comparison.scenarios.flatMap((scenario) => {
     const phrase = exclusionPhrase(scenario)
     return phrase ? [`- ${cell(scenario.id)}: ${cell(phrase)}`] : []

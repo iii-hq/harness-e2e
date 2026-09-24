@@ -30,6 +30,7 @@ pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
 pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
+pub(super) const EXECUTION_SLOT_RERUN: &str = "e2e::dashboard::execution-slot-rerun";
 pub(super) const EVIDENCE_READ: &str = "e2e::dashboard::evidence-read";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
@@ -107,6 +108,13 @@ pub(super) struct ExecutionStartRequest {
     /// Empty or absent uses the default name.
     #[serde(default)]
     pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct ExecutionSlotRerunRequest {
+    pub execution_id: String,
+    /// The scenario to run again; a sequential group runs again whole.
+    pub scenario_id: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -369,6 +377,24 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 async move {
                     let started = controller
                         .start_execution(request.parameters, &request.label)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_SLOT_RERUN,
+        "Run one scenario of a finished local execution again on this stack; the last attempt counts and the one it replaces stays visible outside every total. Answers with its id and runs in the background.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionSlotRerunRequest| {
+                let controller = controller.clone();
+                async move {
+                    let started = controller
+                        .rerun_scenario(&request.execution_id, &request.scenario_id)
                         .await
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)

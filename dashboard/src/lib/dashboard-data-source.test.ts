@@ -59,6 +59,17 @@ describe('live dashboard transport', () => {
     }
     await (await getDashboardDataBridge()).startExecution(started)
     expect(trigger).toHaveBeenCalledWith('execution-start', started)
+    installDashboardRuntimeConfig({
+      functions: { execution_slot_rerun: 'execution-slot-rerun' },
+    } as RuntimeConfig)
+    await (await getDashboardDataBridge()).rerunScenario(
+      'plan-1',
+      'minimal_path',
+    )
+    expect(trigger).toHaveBeenCalledWith('execution-slot-rerun', {
+      execution_id: 'plan-1',
+      scenario_id: 'minimal_path',
+    })
   })
 
   it('does not retry iii failures through HTTP', async () => {
