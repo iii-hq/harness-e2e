@@ -5,10 +5,13 @@ import type { PlanExecution } from '@/lib/plan-execution'
 
 const execution: PlanExecution = {
   id: 'plan-imported',
-  plan_id: null,
-  role: null,
   label: 'Software engineering',
   parameters: {
+    suite: {
+      id: 'software-engineering',
+      label: 'Software engineering',
+      sha256: 'sha256:8c0cde58a134e6be0fe7',
+    },
     scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
     runs: 1,
     technical_retries: 0,
@@ -23,6 +26,7 @@ const execution: PlanExecution = {
     run_attempt: 2,
     url: 'https://github.com/iii-hq/harness-e2e/actions/runs/35823421664',
     release_control_execution_id: '366030b3',
+    stack: 'default',
   },
   stack: [
     {
@@ -56,13 +60,12 @@ const execution: PlanExecution = {
   started_at: '2026-09-20T10:00:00Z',
   finished_at: '2026-09-20T11:00:00Z',
   error: null,
-  baseline_eligible: false,
   slots: [],
   measurements: null,
 }
 
 describe('execution configuration', () => {
-  it('shows parameters, the linked origin and the stack', () => {
+  it('shows the suite, parameters, the linked origin and the stack', () => {
     const html = renderToStaticMarkup(
       <ExecutionConfiguration execution={execution} />,
     )
@@ -71,6 +74,9 @@ describe('execution configuration', () => {
     )
     const text = html.replace(/<[^>]*>/g, '')
     expect(text).toContain('GitHub #35823421664 · attempt 2')
+    // The suite by name and digest, and the stack its contract names.
+    expect(text).toContain('suiteSoftware engineering · 8c0cde58a134')
+    expect(text).toContain('stackdefault')
     expect(html).toContain('deepseek/deepseek-flash')
     expect(html).toContain('tech-lead')
     expect(html).toContain('kanban_c1_foundation, kanban_c2_persistence')

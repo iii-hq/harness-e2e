@@ -11,7 +11,6 @@ import {
 const sharedProps = {
   idPrefix: 'test-setup',
   label: '',
-  url: 'ws://127.0.0.1:49134',
   subject: 'openai\ngpt-5',
   modelGroups: [
     {
@@ -29,7 +28,6 @@ const sharedProps = {
     text: 'catalog ready · 1 model · 1 test',
   },
   onLabelChange: () => undefined,
-  onUrlChange: () => undefined,
   onSubjectChange: () => undefined,
   onSelectedScenariosChange: () => undefined,
   onQueryChange: () => undefined,
@@ -38,24 +36,19 @@ const sharedProps = {
 }
 
 describe('execution setup sheet', () => {
-  it('uses the same one-column structure for plans and quick executions', () => {
-    const plan = renderToStaticMarkup(
-      <ExecutionSetup
-        {...sharedProps}
-        mode="plan"
-        purpose="Measure prompt routing"
-        onPurposeChange={() => undefined}
-      />,
+  it('uses the same one-column structure for suites and quick executions', () => {
+    const suite = renderToStaticMarkup(
+      <ExecutionSetup {...sharedProps} mode="suite" />,
     )
     const quick = renderToStaticMarkup(
       <ExecutionSetup {...sharedProps} mode="quick" />,
     )
 
-    for (const html of [plan, quick]) {
-      expect(html).toContain('Choose the model')
+    for (const html of [suite, quick]) {
       expect(html).not.toContain('Judge')
       expect(html).toContain('Pick the tests')
-      expect(html).toContain('Advanced · sampling and retries')
+      expect(html).toContain('Runs per test')
+      expect(html).toContain('Technical retries')
       // Every execution runs the canonical cases, so runs pair up.
       expect(html).not.toMatch(/seed/i)
       expect(html).toContain('Search by name or id')
@@ -64,11 +57,6 @@ describe('execution setup sheet', () => {
       expect(html).not.toContain('logical')
       // Audit RS-04: no 01/02/03 numerals.
       expect(html).not.toContain('>01<')
-      // Audit PN-12: the model trigger is a labelled 36px control.
-      expect(html).toContain('for="test-setup-subject"')
-      expect(html).toContain('id="test-setup-subject"')
-      // Audit PN-13: the disclosure carries a chevron.
-      expect(html).toContain('group-open:rotate-0')
       // Audit PN-09: a 36px row per test inside a family group.
       expect(html).toContain('data-scenario-group="other"')
       expect(html).toContain('min-h-9')
@@ -79,36 +67,53 @@ describe('execution setup sheet', () => {
       expect(html).not.toContain('type="search"')
       expect(html).toContain('1 of 1 shown · 1 selected · 2 runs in total')
     }
-    // Audit PN-21: a plan's endpoint lives under advanced, read from the
-    // summary. A quick run always targets this worker's stack.
-    expect(plan).toContain('Harness endpoint')
-    expect(plan).toContain('ws://127.0.0.1:49134')
-    expect(quick).not.toContain('Harness endpoint')
-    expect(quick).not.toContain('ws://127.0.0.1:49134')
-    expect(plan).toContain('Plan label')
-    expect(plan).toContain('Name the plan')
-    expect(plan).toContain('Purpose')
+    // A run picks its model, sampling and retries tucked under advanced;
+    // a suite holds no model and shows its runs and retries as its own.
+    expect(quick).toContain('Choose the model')
+    // Audit PN-12: the model trigger is a labelled 36px control.
+    expect(quick).toContain('for="test-setup-subject"')
+    expect(quick).toContain('id="test-setup-subject"')
+    // Audit PN-13: the disclosure carries a chevron.
+    expect(quick).toContain('group-open:rotate-0')
+    expect(quick).toContain('Advanced · sampling and retries')
+    expect(suite).not.toContain('Choose the model')
+    expect(suite).not.toContain('Advanced · sampling and retries')
+    expect(suite).toContain('Runs and retries')
+    expect(suite).toContain('Suite name')
+    expect(suite).toContain('Name the suite')
     expect(quick).toContain('Execution label')
     expect(quick).toContain('Name this run')
-    expect(quick).not.toContain('Purpose')
+    for (const html of [suite, quick]) {
+      expect(html).not.toContain('Harness endpoint')
+      expect(html).not.toContain('Purpose')
+    }
   })
 
   // Audit PN-05: validation names each pending item and marks the field.
   it('shows the submit-time errors inline', () => {
-    const errors = validateExecutionSetup({
-      mode: 'plan',
-      label: ' ',
-      subject: '',
-      selectedScenarios: [],
-      url: '',
+    // A suite needs a name and holds no model.
+    expect(
+      validateExecutionSetup({
+        mode: 'suite',
+        label: ' ',
+        selectedScenarios: [],
+      }),
+    ).toEqual({
+      label: 'Name the suite.',
+      scenarios: 'Select at least one test.',
     })
-    expect(errors).toEqual({
-      label: 'Add a plan label.',
+    expect(
+      validateExecutionSetup({
+        mode: 'quick',
+        label: '',
+        subject: '',
+        selectedScenarios: [],
+      }),
+    ).toEqual({
       subject: 'Choose an execution model.',
       scenarios: 'Select at least one test.',
-      url: 'The Harness endpoint is missing.',
     })
-    // A quick run needs no endpoint, so a failed catalog does not block it.
+    // A run needs no name, and a failed catalog does not block it.
     expect(
       validateExecutionSetup({
         mode: 'quick',
@@ -120,11 +125,11 @@ describe('execution setup sheet', () => {
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
-        mode="plan"
+        mode="suite"
         label=""
         selectedScenarios={[]}
         errors={{
-          label: 'Add a plan label.',
+          label: 'Name the suite.',
           scenarios: 'Select at least one test.',
         }}
       />,
@@ -161,7 +166,6 @@ describe('execution setup sheet', () => {
       runsPerScenario: 1,
       technicalRetries: 1,
       subject: 'anthropic / claude-fable-5',
-      url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
       '2 tests · 2 runs · anthropic / claude-fable-5',
@@ -170,22 +174,21 @@ describe('execution setup sheet', () => {
     const html = renderToStaticMarkup(
       <ExecutionSetupFooter
         summary={{
-          mode: 'plan',
+          mode: 'suite',
           selectedScenarios: 0,
           runsPerScenario: 2,
           technicalRetries: 0,
-          subject: '',
-          url: 'ws://x',
         }}
-        pending={['Add a plan label.', 'Select at least one test.']}
+        pending={['Name the suite.', 'Select at least one test.']}
       >
-        <button type="submit">create draft plan</button>
+        <button type="submit">save suite</button>
       </ExecutionSetupFooter>,
     )
-    expect(html).toContain('0 tests · 0 runs · no model')
-    expect(html).toContain('2 runs per test · 0 retries · ws://x')
+    // A suite holds no model.
+    expect(html).toContain('>0 tests · 0 runs<')
+    expect(html).toContain('2 runs per test · 0 retries')
     expect(html).toContain(
-      'Before creating: Add a plan label. Select at least one test.',
+      'Before saving: Name the suite. Select at least one test.',
     )
     expect(html).toContain('role="status"')
     expect(html).toContain('data-execution-setup-footer')
@@ -201,7 +204,6 @@ describe('execution setup sheet', () => {
           runsPerScenario: 1,
           technicalRetries: 0,
           subject: 'openai / gpt-5',
-          url: 'ws://x',
         }}
         error="Runner unavailable"
       >
@@ -253,7 +255,7 @@ describe('execution setup sheet', () => {
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
-        mode="plan"
+        mode="suite"
         availableScenarios={['chess_build', 'chess_play', 'minimal_path']}
         selectedScenarios={[]}
       />,

@@ -24,34 +24,36 @@ pnpm test
 pnpm build
 ```
 
-The Console routes live under `#/ext/harness-e2e`. The page exposes Overview,
-Tests, Executions and Plans and keeps entity detail inside the same extension
-route.
+The Console routes live under `#/ext/harness-e2e`. The page exposes Tests,
+Executions and Suites and keeps entity detail inside the same extension route.
 
-**Run tests** executes one or more scenarios against the Harness already
-running at `III_URL`. **Run again**, on any execution (local or imported), opens
-the same form with that execution's scenarios, runs, technical retries, model
-and agent profile copied and editable. Both call
+**Run tests** executes a suite, or scenarios ticked by hand, against the
+Harness already running at `III_URL`. Its first field is the suite (see
+[Suites](#suites)); picking one ticks its scenarios, runs and retries, and
+changing any of them makes the suite unnamed. **Run again**, on any execution
+(local or imported), opens the same form with that execution's suite,
+scenarios, runs, technical retries, model and agent profile copied and
+editable; a suite this runner does not list is offered *as recorded*. Both call
 `e2e::dashboard::execution-start`, which creates an execution with a `local`
-origin and no plan on this worker's stack, and the Console follows it on its
-page. The form discovers registered provider/model pairs from the stack and
+origin on this worker's stack, and the Console follows it on its page. The
+execution records its suite (name and snapshot digest) and shows it in its
+header; an imported execution also shows the stack its contract names. The form discovers registered provider/model pairs from the stack and
 scenario ids from the same E2E binary only when it opens, and still sends what
 it holds when that catalog cannot be read; runs, retries and agent profile sit
 under **Advanced**. Run tests starts from the model of the newest execution
 that the catalog still lists, and picks none without one. There is no seed:
 every execution the Console starts runs the canonical cases, so any two pair
 by scenario and repetition when compared (a `seed` an older Console sends is
-ignored). New plans run the canonical cases too; a saved plan keeps its seed
-when edited or duplicated. A scenario of a sequential
+ignored). A scenario of a sequential
 group (such as `registry_implementation` then `registry_verification`) brings
 the whole group: the catalog lists the groups (`scenario_groups`), so the form
 ticks and counts the group before running, and the execution notes it. One
 execution runs at a time: a start while another runs names that execution
-(`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution without a plan can be
-deleted with its native runs, previous attempts included; a plan's executions go with the plan.
+(`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution can be
+deleted with its native runs, previous attempts included.
 
-**Run this scenario again**, on any scenario of a finished local execution
-without a saved plan, calls `e2e::dashboard::execution-slot-rerun`. Every
+**Run this scenario again**, on any scenario of a finished local execution,
+calls `e2e::dashboard::execution-slot-rerun`. Every
 check runs first and nothing changes: the recorded requests must still be
 valid, and the stack's identity (Harness and engine versions, runner
 revision, native contracts) must be the one the execution pinned, or the call
@@ -101,7 +103,7 @@ its contract artifact through `github-run-contracts`, read once and cached; the
 Harness version is known only once the run is imported. `github-run-import` answers with
 an `importing` execution at once; the worker downloads the run's bundle and
 installs its native runs like finished local runs. An imported execution is the
-same record as one planned here: the list, the report, evidence and
+same record as one run here: the list, the report, evidence and
 `e2e::dashboard::execution-rename` treat both alike, and its origin is shown as
 text (`local` or `GitHub #<run>` with a link). `gh` errors are shown as they come.
 
@@ -190,23 +192,22 @@ pnpm screenshots
 Captures and a typography census (`census.json`) land in
 `dashboard/.screenshots/`, which is ignored by git.
 
-## Executable profile plans
+## Suites
 
-The dashboard has one kind of plan and one baseline/candidate lifecycle. Plan executions use the shared execution detail page, with aggregate metrics, scenario results and native evidence. **My
-plans** uses the existing plan table and detail visualization for every plan.
-**New plan** opens the same form for a blank scope, a starting profile or a copy.
-The profiles are templates: they populate coverage, purpose, repetitions and
-retry policy. Users may edit the scope and explicitly select the execution
-model. The saved plan owns that configuration; later template changes do not
-change it or prevent execution.
+A suite is only what to test: its scenarios, how many times each runs and how
+many technical retries a crash gets. The model, the agent profile and the stack
+are chosen when it runs. **Suites** lists the master plan's suites
+(`config/test-plan.json`, read-only) and this Console's. **copy** makes a suite
+of this Console from any suite and opens it to edit its name, tests, runs and
+retries; **delete** removes one. Executions that ran a suite keep its name and
+digest after it changes or goes.
 
-**Save plan** keeps the configuration editable. **Save and run** saves it,
-checks requirements and starts the baseline. Busy admission preserves the draft
-and links to active work. **Duplicate plan** preserves scope, policy and evaluator,
-asks for a new execution model and starts without baseline, candidates or history.
-All plans lock configuration at first admission, capture a baseline only after
-complete technically valid evidence, and run candidates through the same controls,
-charts and history. There is no Evolution-specific lifecycle.
+An execution records its suite in its parameters: the id, the name and the
+digest of the snapshot it materialized to (`profile_sha256`). A suite of the
+master plan run as it is materializes as reviewed, so its digest is the one the
+exact-stack workflow records for it; scenarios ticked by hand make an unnamed
+suite. Comparing two executions lists the suite among the parameters that
+differ.
 
 The shared Rust coordinator persists every child identity before dispatch and
 reserves admission across the whole execution. It cancels active work before
@@ -215,16 +216,15 @@ reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
 No synthetic results report is created. Missing telemetry stays unavailable.
 
-Saved plans and composed receipts live in the local SQL store, accessed only
+Suites and composed executions live in the local SQL store, accessed only
 through the database worker. The store carries no version and no migration
 step: at start the worker recreates any table whose layout fingerprint moved,
-keeping every execution, plan and receipt the current binary can still read.
-Plans written by another binary are deleted, never migrated.
+keeping every suite, execution and receipt the current binary can still read.
+The baseline/candidate plans suites replaced are dropped; the executions they
+ran stay, without a suite.
 
-Creation, reading, updates and starts use the `plan-*` iii functions. Starting a
-plan requires a caller idempotency key. `e2e::dashboard::plan-control` provide requirements, export, execution lookup and
-cancellation. The former profile-plan endpoint, duplicate creation/start actions,
-native plan-context tracking and manual-route alias have been removed.
+`e2e::dashboard::suites-list`, `suite-create`, `suite-update` and
+`suite-delete` read and change suites; `execution-cancel` stops an execution.
 
 Run deterministic browser acceptance after building the dashboard and Rust binary:
 

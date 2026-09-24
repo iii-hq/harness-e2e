@@ -12,7 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "screenshots": "node scripts/screenshots.mjs",
-    "test:profiles": "node scripts/profile-plans.browser.mjs && node scripts/run-executions.browser.mjs && node scripts/compare-executions.browser.mjs && node scripts/rerun-scenario.browser.mjs"
+    "test:profiles": "node scripts/suites.browser.mjs && node scripts/run-executions.browser.mjs && node scripts/compare-executions.browser.mjs && node scripts/rerun-scenario.browser.mjs"
   },
   "dependencies": {
     "lucide-react": "^1.16.0",

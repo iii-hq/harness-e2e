@@ -2,6 +2,7 @@ import type {
   DashboardExecutionDetail,
   DashboardExecutionSummary,
   DashboardSubjectSummary,
+  ExecutionSuite,
   ExecutionTotals,
   JsonObject,
   StackWorker,
@@ -365,6 +366,17 @@ export function executionProgress(
 /** The version a stack worker ran: its checkout for a `path://` worker,
  *  else the version the engine reported (or the one asked for). Versions
  *  that differed between groups are all listed. */
+/** A suite as the Console names it: its name, or "unnamed suite", and the
+ *  start of the digest of what it materialized. */
+export function suiteText(
+  suite: ExecutionSuite | null | undefined,
+): string | null {
+  if (!suite) return null
+  const name = suite.id ? suite.label || suite.id : 'unnamed suite'
+  const digest = suite.sha256?.replace(/^sha256:/, '').slice(0, 12)
+  return digest ? `${name} · ${digest}` : name
+}
+
 export function workerVersion(
   stack: StackWorker[] | undefined,
   name: string,

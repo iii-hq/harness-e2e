@@ -24,54 +24,34 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue }
 
-export type LocalPlanState =
-  | 'draft'
-  | 'baseline_running'
-  | 'baseline_ready'
-  | 'candidate_running'
-  | 'comparison_ready'
-
-export type LocalPlan = {
+/** A suite: only what to test. `repository` ones come from the master
+ *  plan and are read-only; `local` ones are this Console's. */
+export type Suite = {
   id: string
   label: string
+  source: 'repository' | 'local'
   purpose: string
-  created_at: string
-  updated_at: string
-  state: LocalPlanState
-  locked: boolean
-  scope_hash: string
-  url: string
-  model: string
-  provider: string
-  scenarios: Array<{
-    scenario_id: string
-    behavior_sha256: string
-    case_id: string
-    seed: number
-    inputs_sha256: string
-    contract_sha256: string
-  }>
-  scenario_ids: string[]
-  runs: number
+  scenarios: string[]
+  repetitions: number
   technical_retries: number
-  seed: number | null
-  baseline_execution_id: string | null
-  candidate_execution_ids: string[]
-  candidate_labels?: Record<string, string>
-  incomplete_execution_ids: string[]
-  last_attempt_id: string | null
-  template_id?: string | null
-  compatible?: boolean
+  /** Digest of the snapshot this runner materializes it to. */
+  sha256: string | null
+  updated_at: string | null
 }
 
-export type LocalPlansResponse = {
-  mode: 'unified'
-  plans: LocalPlan[]
-  master_plan?: MasterTestPlan
+/** The suite an execution ran; `id` is absent for an unnamed suite. The
+ *  runner sets `sha256`, the digest of what it materialized; a request never
+ *  does. */
+export type ExecutionSuite = {
+  id?: string | null
+  label: string
+  sha256?: string
 }
 
 /** What running an execution again would need. */
 export type ExecutionParameters = {
+  /** Absent for an execution from before suites. */
+  suite?: ExecutionSuite | null
   scenarios: string[]
   runs: number
   technical_retries: number
@@ -91,6 +71,8 @@ export type ExecutionSource =
       run_attempt: number
       url: string
       release_control_execution_id: string | null
+      /** The stack its contract names. */
+      stack?: string | null
     }
 
 export type StackWorker = {
@@ -133,34 +115,6 @@ export type GithubRunsResponse = {
   page: number
   runs: GithubRun[]
   next_page: number | null
-}
-
-export type MasterTestProfile = {
-  id: string
-  label: string
-  purpose: string
-  metrics: string[]
-  cases?: Array<{
-    scenario_id: string
-    requirements: string[]
-  }>
-  scenario_ids: string[]
-  repetitions: number
-  technical_retries: number
-  profile_sha256: string
-  budget: {
-    planned_runs: number
-    scenario_runs: number
-    session_turn_limit_sum: number
-    subject_token_limit: number | null
-    unbounded_token_cases: string[]
-  }
-}
-
-export type MasterTestPlan = {
-  plan_id: string
-  definition_sha256: string
-  profiles: MasterTestProfile[]
 }
 
 export type ExecutionTotals = JsonObject & {
@@ -293,7 +247,6 @@ export type DashboardExecutionSummary = JsonObject & {
   state?: string
   parameters?: ExecutionParameters | null
   stack?: JsonObject | StackWorker[]
-  plan_id?: string | null
   subjects: DashboardSubjectSummary[]
   scenario_metrics?: DashboardScenarioMetricSummary[]
   workflow_metrics?: DashboardWorkflowMetricSummary | null
@@ -303,7 +256,6 @@ export type DashboardExecutionSummary = JsonObject & {
   live_progress_error?: string | null
   persistence_errors?: string[]
   slot_start_deadline_seconds?: number | null
-  baseline_comparable?: boolean
 }
 
 export type LiveProgress = {
@@ -581,14 +533,12 @@ export type RuntimeConfig = {
     catalog_get: string
     execution_start: string
     execution_slot_rerun: string
+    execution_cancel: string
     run_cancel: string
-    plan_control: string
-    plans_list: string
-    plan_get: string
-    plan_create: string
-    plan_update: string
-    plan_delete: string
-    plan_run_start: string
+    suites_list: string
+    suite_create: string
+    suite_update: string
+    suite_delete: string
     changed_trigger: string
   }
 }
@@ -626,13 +576,17 @@ export type DashboardDataBridge = {
   listTests(input?: TestsListInput): Promise<TestsListResponse>
   getTestVersion(input: TestVersionInput): Promise<TestVersionResult>
   getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
-  planControl(request: JsonObject): Promise<JsonObject>
-  listPlans(): Promise<LocalPlansResponse>
-  getPlan(planId: string): Promise<LocalPlan>
-  createPlan(request: JsonObject): Promise<LocalPlan>
-  updatePlan(planId: string, request: JsonObject): Promise<LocalPlan>
-  deletePlan(planId: string): Promise<void>
-  startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
+  /** The master plan's suites, then this Console's. */
+  listSuites(): Promise<{ suites: Suite[] }>
+  /** A suite of this Console that starts as a copy of `from`. */
+  createSuite(from: string, label?: string): Promise<Suite>
+  updateSuite(
+    suiteId: string,
+    changes: Partial<
+      Pick<Suite, 'label' | 'scenarios' | 'repetitions' | 'technical_retries'>
+    >,
+  ): Promise<Suite>
+  deleteSuite(suiteId: string): Promise<void>
   getCatalog(url?: string): Promise<JsonObject>
   /** Starts an execution on this stack; Run tests and Run again alike. */
   startExecution(request: {
@@ -644,6 +598,8 @@ export type DashboardDataBridge = {
     executionId: string,
     scenarioId: string,
   ): Promise<{ execution_id: string }>
+  /** Stops an execution: no next scenario is admitted. */
+  cancelExecution(executionId: string): Promise<JsonObject>
   cancelRun(): Promise<JsonObject>
   subscribeRunChanges(
     handler: (payload: JsonObject) => void,
@@ -723,22 +679,15 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         runtime.functions.test_history_get,
         input as unknown as JsonObject,
       ),
-    planControl: (request) => call(runtime.functions.plan_control, request),
-    listPlans: () => call(runtime.functions.plans_list, {}),
-    getPlan: (planId) => call(runtime.functions.plan_get, { plan_id: planId }),
-    createPlan: (request) => call(runtime.functions.plan_create, request),
-    updatePlan: (planId, request) =>
-      call(runtime.functions.plan_update, { ...request, plan_id: planId }),
-    deletePlan: (planId) =>
-      call(runtime.functions.plan_delete, { plan_id: planId }).then(
+    listSuites: () => call(runtime.functions.suites_list, {}),
+    createSuite: (from, label = '') =>
+      call(runtime.functions.suite_create, { from, label }),
+    updateSuite: (suiteId, changes) =>
+      call(runtime.functions.suite_update, { ...changes, suite_id: suiteId }),
+    deleteSuite: (suiteId) =>
+      call(runtime.functions.suite_delete, { suite_id: suiteId }).then(
         () => undefined,
       ),
-    startPlan: (planId, role) =>
-      call(runtime.functions.plan_run_start, {
-        plan_id: planId,
-        role,
-        idempotency_key: crypto.randomUUID(),
-      }),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
     startExecution: (request) =>
@@ -748,6 +697,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         execution_id: executionId,
         scenario_id: scenarioId,
       }),
+    cancelExecution: (executionId) =>
+      call(runtime.functions.execution_cancel, { execution_id: executionId }),
     cancelRun: () => call(runtime.functions.run_cancel, {}),
     subscribeRunChanges: async (handler) => {
       const client = await getDashboardIiiClient()

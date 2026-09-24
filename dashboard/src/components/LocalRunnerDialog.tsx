@@ -3,16 +3,16 @@ import {
   ExecutionSetup,
   ExecutionSetupFooter,
   focusFirstInvalid,
-  requestPlanFromSelection,
   validateExecutionSetup,
 } from '@/components/ExecutionSetup'
-import { buttonClassName, Dialog } from '@/design-system'
-import { hashForExecution, hashForNewPlan } from '@/hooks/use-hash-route'
+import { buttonClassName, Dialog, Field, Select } from '@/design-system'
+import { hashForExecution } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   DashboardExecutionSummary,
   ExecutionParameters,
   JsonObject,
+  Suite,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
@@ -21,7 +21,7 @@ import {
 } from '@/lib/execution-view'
 
 type RunnerModel = { provider: string; model: string }
-type RunnerCatalog = {
+export type RunnerCatalog = {
   models: RunnerModel[]
   scenarios: string[]
   /** Scenarios that run only together, in order. */
@@ -31,6 +31,8 @@ type RunnerCatalog = {
 export type RunnerForm = {
   label: string
   subject: string
+  /** The suite picked, by id; empty for scenarios ticked by hand. */
+  suite: string
   scenarios: string[]
   runs: string
   technicalRetries: string
@@ -40,6 +42,7 @@ export type RunnerForm = {
 const initialForm: RunnerForm = {
   label: '',
   subject: '',
+  suite: '',
   scenarios: [],
   runs: '1',
   technicalRetries: '1',
@@ -65,6 +68,8 @@ export function runnerForm(
     // The name it runs again under, to edit.
     label,
     subject: modelKey(parameters),
+    // A subset of its scenarios is ticked by hand.
+    suite: scenarios.length > 0 ? '' : (parameters.suite?.id ?? ''),
     scenarios: scenarios.length > 0 ? scenarios : parameters.scenarios,
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
@@ -110,8 +115,58 @@ export function withSequentialGroups(
   return result
 }
 
+/** What a suite holds, to fill the form and to tell whether it still does. */
+export type SuiteContent = Pick<
+  Suite,
+  'id' | 'label' | 'scenarios' | 'repetitions' | 'technical_retries'
+> & {
+  /** An execution's suite this runner does not list, as it ran. */
+  recorded?: boolean
+}
+
+/** The suites the form offers: this runner's, and the one an execution ran
+ *  when this runner does not list it (with what it ran). */
+export function suiteChoices(
+  suites: Suite[],
+  parameters: ExecutionParameters | null,
+): SuiteContent[] {
+  const recorded = parameters?.suite?.id
+  return recorded && !suites.some((suite) => suite.id === recorded)
+    ? [
+        ...suites,
+        {
+          id: recorded,
+          label: parameters.suite?.label || recorded,
+          scenarios: parameters.scenarios,
+          repetitions: parameters.runs,
+          technical_retries: parameters.technical_retries,
+          recorded: true,
+        },
+      ]
+    : suites
+}
+
+/** The picked suite while the form still holds exactly what it does; any
+ *  change to its tests, runs or retries makes the suite unnamed. */
+export function namedSuite(
+  form: RunnerForm,
+  choices: SuiteContent[],
+): SuiteContent | null {
+  const suite = choices.find((choice) => choice.id === form.suite)
+  if (!suite) return null
+  const same =
+    suite.scenarios.length === form.scenarios.length &&
+    suite.scenarios.every((id) => form.scenarios.includes(id)) &&
+    suite.repetitions === Number(form.runs) &&
+    suite.technical_retries === Number(form.technicalRetries)
+  return same ? suite : null
+}
+
 /** What `execution-start` receives for the form. */
-export function executionStartRequest(form: RunnerForm): {
+export function executionStartRequest(
+  form: RunnerForm,
+  suite: SuiteContent | null = null,
+): {
   parameters: ExecutionParameters
   label: string
 } {
@@ -119,6 +174,7 @@ export function executionStartRequest(form: RunnerForm): {
   return {
     label: form.label.trim(),
     parameters: {
+      suite: suite ? { id: suite.id, label: suite.label } : null,
       scenarios: form.scenarios,
       runs: Number(form.runs) || 1,
       technical_retries: Number(form.technicalRetries) || 0,
@@ -147,7 +203,7 @@ function modelGroups(models: RunnerModel[]) {
     }))
 }
 
-function asCatalog(value: JsonObject): RunnerCatalog {
+export function asCatalog(value: JsonObject): RunnerCatalog {
   const models = Array.isArray(value.models)
     ? value.models.flatMap((candidate) => {
         if (!candidate || typeof candidate !== 'object') return []
@@ -213,6 +269,7 @@ export function LocalRunnerDialog({
   onClose: () => void
 }) {
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
+  const [suites, setSuites] = useState<Suite[]>([])
   const [form, setForm] = useState<RunnerForm>(initialForm)
   const [scenarioQuery, setScenarioQuery] = useState('')
   const [loadingCatalog, setLoadingCatalog] = useState(false)
@@ -233,7 +290,7 @@ export function LocalRunnerDialog({
     setLoadingCatalog(true)
     setError(null)
     try {
-      const [next, recent] = await Promise.all([
+      const [next, recent, listed] = await Promise.all([
         bridge.getCatalog().then(asCatalog),
         // Running again brings its own model.
         parameters
@@ -242,10 +299,15 @@ export function LocalRunnerDialog({
               .listExecutions({ limit: 20 })
               .then((manifest) => manifest.executions)
               .catch(() => []),
+        bridge
+          .listSuites()
+          .then((response) => response.suites)
+          .catch(() => []),
       ])
       const last = lastUsedModel(recent, next.models)
       setLastSubject(last ? modelKey(last) : '')
       setCatalog(next)
+      setSuites(listed)
       setForm((current) => ({
         ...current,
         // Never a model the user did not pick or run last: without one the
@@ -297,9 +359,41 @@ export function LocalRunnerDialog({
     const listed = catalog?.scenarios ?? []
     return [
       ...listed,
-      ...(parameters?.scenarios ?? []).filter((id) => !listed.includes(id)),
+      ...[...(parameters?.scenarios ?? []), ...form.scenarios].filter(
+        (id, index, all) => !listed.includes(id) && all.indexOf(id) === index,
+      ),
     ]
-  }, [catalog, parameters])
+  }, [catalog, parameters, form.scenarios])
+  const choices = useMemo(
+    () => suiteChoices(suites, parameters),
+    [suites, parameters],
+  )
+  const picked = choices.find((choice) => choice.id === form.suite) ?? null
+  const suite = namedSuite(form, choices)
+  const pickSuite = (id: string) => {
+    const chosen = choices.find((choice) => choice.id === id)
+    setForm((current) =>
+      chosen
+        ? {
+            ...current,
+            suite: id,
+            scenarios: chosen.scenarios,
+            runs: String(chosen.repetitions),
+            technicalRetries: String(chosen.technical_retries),
+          }
+        : { ...current, suite: '' },
+    )
+  }
+  const suiteHint = suite
+    ? `${suite.scenarios.length} ${suite.scenarios.length === 1 ? 'test' : 'tests'} · ${suite.repetitions} ${suite.repetitions === 1 ? 'run' : 'runs'} each · ${suite.technical_retries} ${suite.technical_retries === 1 ? 'retry' : 'retries'}`
+    : picked
+      ? `Changed from ${picked.label}: runs as an unnamed suite.`
+      : 'Pick a suite, or tick the tests below.'
+  const suiteGroups: Array<[string, SuiteContent[]]> = [
+    ['Repository', suites.filter((choice) => choice.source === 'repository')],
+    ['This Console', suites.filter((choice) => choice.source === 'local')],
+    ['This execution', choices.filter((choice) => choice.recorded)],
+  ]
   const modelOptions = modelGroups(models).map((group) => ({
     provider: group.provider,
     models: group.models.map((model) => ({
@@ -344,7 +438,9 @@ export function LocalRunnerDialog({
     setError(null)
     setRunning(null)
     try {
-      const started = await bridge.startExecution(executionStartRequest(form))
+      const started = await bridge.startExecution(
+        executionStartRequest(form, suite),
+      )
       onClose()
       window.location.hash = hashForExecution(started.execution_id)
     } catch (cause) {
@@ -380,8 +476,8 @@ export function LocalRunnerDialog({
       title={parameters ? 'Run again' : 'Run tests'}
       description={
         parameters
-          ? 'Starts a new execution on this stack with the parameters of this one. Change anything before running.'
-          : 'Runs the selected tests on this stack as a new execution. To compare, tick two executions in the list.'
+          ? 'Starts a new execution on this stack with the suite and parameters of this one. Change anything before running.'
+          : 'Runs a suite, or the tests ticked, on this stack as a new execution. To compare, tick two executions in the list.'
       }
       closeLabel="Close execution form"
       className="ds-root"
@@ -404,16 +500,6 @@ export function LocalRunnerDialog({
               open {running.title}
             </a>
           ) : null}
-          <a
-            className={buttonClassName({
-              variant: 'quiet',
-              className: 'no-underline',
-            })}
-            href={hashForNewPlan()}
-            onClick={() => requestPlanFromSelection(form.scenarios)}
-          >
-            create a reusable plan instead
-          </a>
           <button
             className={buttonClassName({ variant: 'secondary' })}
             type="button"
@@ -439,6 +525,33 @@ export function LocalRunnerDialog({
         onSubmit={submit}
         noValidate
       >
+        {/* The first field: what to test. Ticking tests by hand after
+            picking a suite makes it unnamed. */}
+        <div className="grid items-start gap-4 sm:grid-cols-2">
+          <Field label="Suite" htmlFor="quick-execution-suite" hint={suiteHint}>
+            <Select
+              id="quick-execution-suite"
+              value={form.suite}
+              disabled={submitting}
+              onChange={(event) => pickSuite(event.target.value)}
+            >
+              <option value="">Unnamed · the tests ticked below</option>
+              {suiteGroups.map(([group, entries]) =>
+                entries.length > 0 ? (
+                  <optgroup key={group} label={group}>
+                    {entries.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.recorded
+                          ? `${entry.label} · as recorded`
+                          : entry.label}
+                      </option>
+                    ))}
+                  </optgroup>
+                ) : null,
+              )}
+            </Select>
+          </Field>
+        </div>
         <ExecutionSetup
           key={opening}
           // Running again shows what will run first.

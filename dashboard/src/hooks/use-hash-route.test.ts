@@ -2,9 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   hashForComparison,
   hashForExecution,
-  hashForNewPlan,
-  hashForPlan,
-  hashForPlans,
+  hashForSuites,
   hashForTestHistory,
   hashForVersionComparison,
   hashForWorkspace,
@@ -70,7 +68,7 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash('#main')).toBeNull()
   })
 
-  it('keeps local plans and test metric history as independent routes', () => {
+  it('keeps suites and test metric history as independent routes', () => {
     expect(hashForTestHistory('direct/answer')).toBe(
       '#/ext/harness-e2e/tests/direct%2Fanswer',
     )
@@ -78,14 +76,11 @@ describe('dashboard hash routes', () => {
       page: 'test-history',
       testId: 'direct/answer',
     })
-    expect(hashForPlans()).toBe('#/ext/harness-e2e/plans')
-    expect(routeFromHash(hashForPlans())).toEqual({ page: 'plans' })
-    expect(hashForNewPlan()).toBe('#/ext/harness-e2e/plans/new')
-    expect(routeFromHash(hashForNewPlan())).toEqual({ page: 'plan-create' })
-    expect(routeFromHash(hashForPlan('plan/one'))).toEqual({
-      page: 'plan-detail',
-      planId: 'plan/one',
-    })
+    expect(hashForSuites()).toBe('#/ext/harness-e2e/suites')
+    expect(routeFromHash(hashForSuites())).toEqual({ page: 'suites' })
+    // The retired plan pages are no route of this page any more.
+    expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()
+    expect(routeFromHash('#/ext/harness-e2e/plans/new')).toBeNull()
   })
 
   it('does not claim routes belonging to another Console page', () => {

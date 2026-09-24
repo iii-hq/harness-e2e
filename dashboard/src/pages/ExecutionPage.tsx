@@ -15,10 +15,10 @@ import {
 } from '@/components/ExecutionConfiguration'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
+import { ExecutionProgress } from '@/components/ExecutionProgress'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
-import { PlanProgress } from '@/components/PlanStatus'
 import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
 import {
   contractScent,
@@ -39,12 +39,7 @@ import {
   Panel,
   StatusBadge,
 } from '@/design-system'
-import {
-  hashForExecution,
-  hashForPlan,
-  hashForPlans,
-  hashForWorkspace,
-} from '@/hooks/use-hash-route'
+import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type AssessmentRunView,
@@ -65,9 +60,10 @@ import {
   formatDate,
   formatDuration,
   providerModel,
+  suiteText,
   workerVersion,
 } from '@/lib/execution-view'
-import { planAction, scenarioReruns } from '@/lib/plan-execution'
+import { scenarioReruns } from '@/lib/plan-execution'
 import {
   buildPrimaryMetrics,
   excludeUnsuccessfulTests,
@@ -130,14 +126,26 @@ export function rerunParameters(
   )
 }
 
-/** The Harness and the E2E runner an execution ran on, as its stack
- *  recorded them; nothing is shown for a run that recorded no stack. */
+/** The suite an execution ran: its name and digest, or nothing recorded. */
+export function executionSuite(detail: DashboardExecutionDetail) {
+  return (
+    suiteText(
+      (detail.plan_execution?.parameters ?? detail.parameters)?.suite,
+    ) ?? 'not recorded'
+  )
+}
+
+/** Where an execution ran: for an imported one the stack its contract names,
+ *  then the Harness and the E2E runner as its stack recorded them. What was
+ *  not recorded is not shown. */
 export function stackVersions(
   detail: DashboardExecutionDetail,
 ): Array<[string, string]> {
   const stack = detail.plan_execution?.stack
+  const source = detail.plan_execution?.source
   return (
     [
+      ['stack', source?.kind === 'github' ? (source.stack ?? null) : null],
       ['harness', workerVersion(stack, 'harness')],
       ['runner', workerVersion(stack, 'harness-e2e')],
     ] as const
@@ -649,6 +657,7 @@ export function ExecutionPage({
   ).size
   const { title } = executionTitle(presentation)
   const identity: Array<[string, ReactNode]> = [
+    ['suite', executionSuite(detail)],
     [
       'subject',
       presentation.subjects.map(providerModel).join(', ') || 'not reported',
@@ -678,10 +687,7 @@ export function ExecutionPage({
     setCancelling(true)
     try {
       if (detail.plan_execution) {
-        await planAction(bridge, {
-          action: 'cancel',
-          execution_id: executionId,
-        })
+        await bridge.cancelExecution(executionId)
       } else {
         await bridge.cancelRun()
       }
@@ -736,12 +742,7 @@ export function ExecutionPage({
           }
           headingId="execution-title"
           breadcrumb={[
-            detail.plan_id
-              ? { label: 'plans', href: hashForPlans() }
-              : { label: 'executions', href: hashForWorkspace('executions') },
-            ...(detail.plan_id
-              ? [{ label: 'Plan', href: hashForPlan(detail.plan_id) }]
-              : []),
+            { label: 'executions', href: hashForWorkspace('executions') },
             { label: title },
           ]}
           actions={
@@ -756,17 +757,6 @@ export function ExecutionPage({
               ) : null}
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
-              ) : null}
-              {ready && detail.plan_id ? (
-                <a
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    className: 'no-underline',
-                  })}
-                  href={hashForPlan(detail.plan_id)}
-                >
-                  back to plan
-                </a>
               ) : null}
               {ready ? (
                 <button
@@ -804,7 +794,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {ready && !live && !detail.plan_id ? (
+              {ready && !live ? (
                 <button
                   className={buttonClassName({
                     variant: 'quiet',
@@ -868,7 +858,7 @@ export function ExecutionPage({
           />
         ) : null}
         {detail.plan_execution && live && !importing ? (
-          <PlanProgress
+          <ExecutionProgress
             execution={detail.plan_execution}
             actions={
               ready ? (
@@ -957,9 +947,9 @@ export function ExecutionPage({
                   detail={resultDetail ?? detail}
                   onTranscript={(run, title) => setTranscript({ run, title })}
                   showContract={false}
-                  // Offered once finished; a saved plan's executions run again whole.
+                  // Offered once finished.
                   onRerun={
-                    ready && !live && detail.plan_execution && !detail.plan_id
+                    ready && !live && detail.plan_execution
                       ? setScenarioRerun
                       : undefined
                   }

@@ -24,10 +24,14 @@ const imported = {
   totals: { expected_reports: 2, received_reports: 2 },
   plan_execution: {
     id: 'plan-0123456789abcdef0123456789abcdef',
-    plan_id: null,
-    role: null,
     label: 'Software engineering',
     parameters: {
+      // A suite this runner does not list: Run again offers it as recorded.
+      suite: {
+        id: 'software-engineering-2025',
+        label: 'Software engineering 2025',
+        sha256: 'sha256:0123456789abcdef0123456789abcdef',
+      },
       scenarios: ['minimal_path', 'retired_scenario'],
       runs: 2,
       technical_retries: 0,
@@ -42,6 +46,7 @@ const imported = {
       run_attempt: 1,
       url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
       release_control_execution_id: null,
+      stack: 'default',
     },
     stack: [
       {
@@ -66,7 +71,6 @@ const imported = {
     started_at: '2026-09-20T10:00:00Z',
     finished_at: '2026-09-20T11:00:00Z',
     error: null,
-    baseline_eligible: false,
     slots: [],
     measurements: null,
   },
@@ -220,6 +224,10 @@ const trigger = async (name, request = {}) => {
     started.push(request)
     return { execution_id: `plan-${String(started.length).padStart(32, 'f')}` }
   }
+  if (id === 'suites-list') {
+    if (catalogDown) throw new Error('catalog unavailable: harness restarting')
+    return { suites: [] }
+  }
   if (id === 'execution-delete') {
     deleted.push(request.execution_id)
     return {}
@@ -256,13 +264,13 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  // An empty ledger offers every way in: run, import, plan.
+  // An empty ledger offers every way in: run, import.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page.getByText('No executions retained yet').waitFor()
   const empty = page.locator('main, body').first()
   for (const action of ['run tests', 'import from GitHub'])
     await empty.getByRole('button', { name: action, exact: true }).waitFor()
-  await empty.getByRole('link', { name: 'new plan', exact: true }).waitFor()
+  assert.equal(await empty.getByText(/new plan/i).count(), 0)
 
   // Without an earlier execution Run tests picks no model for the user.
   await empty.getByRole('button', { name: 'run tests', exact: true }).click()
@@ -393,6 +401,8 @@ try {
   assert.deepEqual(started[0], {
     label: '',
     parameters: {
+      // Ticked by hand: an unnamed suite.
+      suite: null,
       scenarios: ['context_pressure'],
       runs: 1,
       technical_retries: 1,
@@ -412,6 +422,11 @@ try {
   const band = page.locator('[data-identity-band]')
   await band.getByText('1.8.8', { exact: true }).waitFor()
   await band.getByText('0.11.28', { exact: true }).waitFor()
+  // Its suite, by name and digest, and the stack its contract names.
+  await band
+    .getByText('Software engineering 2025 · 0123456789ab', { exact: true })
+    .waitFor()
+  await band.getByText('default', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.getByText('catalog unavailable: harness restarting').waitFor()
@@ -419,6 +434,14 @@ try {
     await again.locator('#quick-execution-label').inputValue(),
     'Software engineering',
   )
+  // Its suite, as recorded, even though this runner does not list it.
+  assert.equal(
+    await again.locator('#quick-execution-suite').inputValue(),
+    'software-engineering-2025',
+  )
+  await again
+    .getByRole('option', { name: 'Software engineering 2025 · as recorded' })
+    .waitFor({ state: 'attached' })
   for (const scenario of ['minimal_path', 'retired_scenario'])
     assert.ok(
       await again
@@ -437,9 +460,16 @@ try {
   )
   await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
   await page.waitForFunction(() => !location.hash.includes('0123456789abcdef'))
+  // Its parameters unchanged, under its suite; the runner records the digest.
   assert.deepEqual(started[1], {
     label: 'Software engineering',
-    parameters: imported.plan_execution.parameters,
+    parameters: {
+      ...imported.plan_execution.parameters,
+      suite: {
+        id: 'software-engineering-2025',
+        label: 'Software engineering 2025',
+      },
+    },
   })
 
   // With the catalog read, the form still opens on the tests that will run.
@@ -454,7 +484,7 @@ try {
   )
   await page.keyboard.press('Escape')
 
-  // A finished execution without a plan can be deleted.
+  // A finished execution can be deleted.
   await page
     .getByRole('button', { name: 'Delete execution', exact: true })
     .click()
@@ -465,7 +495,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, versions, selected-first prefill without a catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, delete.',
   )
 } finally {
   await browser.close()

@@ -39,7 +39,7 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
       - name: Build the runner the browser flows drive
         run: cargo build --locked --bin harness-e2e
-      - name: Validate executable plan browser flows
+      - name: Validate the Console browser flows
         run: |
           pnpm --dir dashboard exec playwright install --with-deps chromium
           pnpm --dir dashboard test:profiles

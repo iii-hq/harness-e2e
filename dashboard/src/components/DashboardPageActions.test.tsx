@@ -7,7 +7,7 @@ import {
 
 describe('route chrome bridge', () => {
   it('does not render a second global header', () => {
-    const html = renderToStaticMarkup(<DashboardPageActions active="plans" />)
+    const html = renderToStaticMarkup(<DashboardPageActions active="suites" />)
 
     expect(html).toBe('')
   })

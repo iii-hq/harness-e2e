@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest'
-import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import type {
+  DashboardExecutionDetail,
+  ExecutionParameters,
+} from '@/lib/dashboard-data-source'
 import {
   automaticExclusions,
   comparedValue,
@@ -497,8 +500,18 @@ describe('comparing two executions', () => {
   })
 
   it('names parameter changes and a side whose stack was not recorded', () => {
+    const a = imported()
+    a.parameters = {
+      ...(a.parameters as ExecutionParameters),
+      suite: {
+        id: 'regression',
+        label: 'Regression',
+        sha256: 'sha256:0123456789abcdef0123',
+      },
+    }
     const b = local()
     b.parameters = {
+      suite: { label: '', sha256: 'sha256:fedcba9876543210fedc' },
       scenarios: ['minimal_path', 'timer_wake'],
       runs: 3,
       technical_retries: 1,
@@ -509,8 +522,14 @@ describe('comparing two executions', () => {
     }
     delete b.plan_execution
     b.stack = { mode: 'source', versions: null, lock_digest: null }
-    const comparison = compareExecutions(imported(), b)
+    const comparison = compareExecutions(a, b)
     expect(comparison.parameters).toEqual([
+      // The suite by name and digest; scenarios ticked by hand are unnamed.
+      {
+        field: 'suite',
+        a: 'Regression · 0123456789ab',
+        b: 'unnamed suite · fedcba987654',
+      },
       {
         field: 'scenarios',
         a: '3 scenarios · only here: persistent_state, shell_coder_sandbox',
@@ -790,15 +809,21 @@ describe('comparison summary', () => {
     expect(swapped && rerunPhrase(swapped)).toBe('rerun ×2 in A')
   })
 
-  it('states no profile difference when a side did not record its parameters', () => {
+  it('states no profile or suite difference when a side did not record its parameters', () => {
+    const a = imported()
+    a.parameters = {
+      ...(a.parameters as ExecutionParameters),
+      suite: { id: 'regression', label: 'Regression', sha256: 'sha256:0a' },
+    }
     const b = local()
     b.parameters = null
     delete b.plan_execution
-    const comparison = compareExecutions(imported(), b)
+    const comparison = compareExecutions(a, b)
     expect(comparison.b.profile).toBeNull()
-    expect(comparison.parameters.map((change) => change.field)).not.toContain(
-      'profile',
-    )
+    for (const field of ['profile', 'suite'])
+      expect(comparison.parameters.map((change) => change.field)).not.toContain(
+        field,
+      )
     expect(comparisonMarkdown(comparison).split('\n')[0]).toBe(
       '### smoke · deepseek/flash',
     )

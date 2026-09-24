@@ -198,7 +198,7 @@ export function workflowMetricEntries(
   return workflowMetricEntriesFromRecord(metrics.numericMetrics)
 }
 
-export function workflowMetricEntriesFromRecord(
+function workflowMetricEntriesFromRecord(
   metrics: Readonly<Record<string, unknown>> | undefined | null,
 ): Array<[string, number]> {
   return Object.entries(metrics ?? {})
@@ -209,29 +209,6 @@ export function workflowMetricEntriesFromRecord(
         Number.isFinite(entry[1]),
     )
     .sort(([left], [right]) => left.localeCompare(right))
-}
-
-const WORKFLOW_METRIC_LABELS: Record<string, string> = {
-  finding_count: 'Findings',
-  listed_run_count: 'Listed runs',
-  'poll.poll_count': 'Polls',
-  'poll.wait_duration_ms': 'Poll wait',
-  reconciliation_operations: 'Reconciliation operations',
-  request_count: 'Requests',
-}
-
-export function workflowMetricLabel(path: string): string {
-  return (
-    WORKFLOW_METRIC_LABELS[path] ??
-    path
-      .replaceAll('.', ' ')
-      .replaceAll('_', ' ')
-      .replace(/\b\w/g, (letter) => letter.toUpperCase())
-  )
-}
-
-export function workflowMetricUnit(path: string): 'count' | 'milliseconds' {
-  return path.endsWith('_ms') ? 'milliseconds' : 'count'
 }
 
 /** Read the native usage totals; absent measurements remain unavailable. */

@@ -10,32 +10,39 @@ import {
 } from '@/lib/iii-client'
 
 describe('live dashboard transport', () => {
-  it('carries current plan controls and idempotent starts through the Console client', async () => {
-    const trigger = vi.fn(async () => ({ ready: true }))
+  it('carries suite and execution controls through the Console client', async () => {
+    const trigger = vi.fn(async () => ({ suites: [] }))
     installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
-    const request = {
-      action: 'requirements',
-      plan_id: 'plan-1',
-    }
     installDashboardRuntimeConfig({
-      functions: { plan_control: 'plan-control', plan_run_start: 'plan-start' },
+      functions: {
+        suites_list: 'suites-list',
+        suite_create: 'suite-create',
+        suite_update: 'suite-update',
+        suite_delete: 'suite-delete',
+        execution_cancel: 'execution-cancel',
+      },
     } as RuntimeConfig)
     const live = await getDashboardDataBridge()
-    await expect(live.planControl?.(request)).resolves.toEqual({
-      ready: true,
+    await expect(live.listSuites()).resolves.toEqual({ suites: [] })
+    expect(trigger).toHaveBeenCalledWith('suites-list', {})
+    await live.createSuite('regression')
+    expect(trigger).toHaveBeenCalledWith('suite-create', {
+      from: 'regression',
+      label: '',
     })
-    expect(trigger).toHaveBeenCalledWith('plan-control', request)
-    await live.startPlan('plan-1', 'baseline')
-    expect(trigger).toHaveBeenCalledWith('plan-start', {
-      plan_id: 'plan-1',
-      role: 'baseline',
-      idempotency_key: expect.any(String),
+    await live.updateSuite('suite-1', { repetitions: 2 })
+    expect(trigger).toHaveBeenCalledWith('suite-update', {
+      suite_id: 'suite-1',
+      repetitions: 2,
     })
-    installDashboardRuntimeConfig({
-      functions: { plan_delete: 'plan-delete' },
-    } as RuntimeConfig)
-    await (await getDashboardDataBridge()).deletePlan('plan-1')
-    expect(trigger).toHaveBeenCalledWith('plan-delete', { plan_id: 'plan-1' })
+    await live.deleteSuite('suite-1')
+    expect(trigger).toHaveBeenCalledWith('suite-delete', {
+      suite_id: 'suite-1',
+    })
+    await live.cancelExecution('plan-1')
+    expect(trigger).toHaveBeenCalledWith('execution-cancel', {
+      execution_id: 'plan-1',
+    })
     installDashboardRuntimeConfig({
       functions: { execution_delete: 'execution-delete' },
     } as RuntimeConfig)

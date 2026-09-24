@@ -2,7 +2,7 @@ import { ExternalLink } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { DataTable } from '@/design-system'
-import { providerModel } from '@/lib/execution-view'
+import { providerModel, suiteText } from '@/lib/execution-view'
 import type { PlanExecution } from '@/lib/plan-execution'
 
 /** Where the execution came from, with a link to its GitHub run. */
@@ -39,8 +39,11 @@ export function ExecutionConfiguration({
   ]
   if (source.kind === 'github' && source.release_control_execution_id)
     rows.push(['release control', source.release_control_execution_id])
+  if (source.kind === 'github' && source.stack)
+    rows.push(['stack', source.stack])
   if (parameters)
     rows.push(
+      ['suite', suiteText(parameters.suite) ?? 'not recorded'],
       ['model', providerModel(parameters)],
       ['profile', parameters.agent ?? 'default'],
       ['scenarios', parameters.scenarios.join(', ')],

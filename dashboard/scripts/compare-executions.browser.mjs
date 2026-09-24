@@ -77,8 +77,6 @@ function execution(id, label, source, parameters, runs, stack) {
     reports,
     plan_execution: {
       id,
-      plan_id: null,
-      role: null,
       label,
       parameters,
       source,
@@ -100,7 +98,8 @@ const worker = (name, observed) => ({
 })
 // Two registry tests that the runner only runs together, in order.
 const group = ['registry_implementation', 'registry_verification']
-const parameters = (runs) => ({
+const parameters = (runs, suite) => ({
+  suite,
   scenarios: ['minimal_path', 'persistent_state', 'timer_wake', ...group],
   runs,
   technical_retries: 2,
@@ -119,7 +118,12 @@ const a = execution(
     url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
     release_control_execution_id: null,
   },
-  parameters(1),
+  // A suite of the master plan, as the workflow recorded it.
+  parameters(1, {
+    id: 'smoke',
+    label: 'Smoke',
+    sha256: 'sha256:0123456789abcdef0123456789abcdef',
+  }),
   {
     minimal_path: run('a1', { score: 82 }),
     persistent_state: run('a2', { score: 100, screenshot: true }),
@@ -137,7 +141,11 @@ const b = execution(
   'plan-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
   'smoke rerun',
   { kind: 'local' },
-  parameters(3),
+  // The same tests ticked by hand: an unnamed suite.
+  parameters(3, {
+    label: '',
+    sha256: 'sha256:fedcba9876543210fedcba9876543210',
+  }),
   {
     minimal_path: run('b1', { score: 94 }),
     persistent_state: run('b2', { score: 62, screenshot: true }),
@@ -184,6 +192,7 @@ const trigger = (name, request = {}) => {
     started.push(request)
     return { execution_id: 'plan-cccccccccccccccccccccccccccccccc' }
   }
+  if (id === 'suites-list') return { suites: [] }
   throw new Error(`Unexpected RPC ${name}`)
 }
 
@@ -220,6 +229,12 @@ try {
     'infrastructure_error',
   )
   assert.equal(await page.getByText(/Not reported|Not comparable/).count(), 0)
+  // The parameter difference names each side's suite by name and digest.
+  const suite = page.locator('[data-change="suite"]')
+  await suite.getByText('Smoke · 0123456789ab', { exact: true }).waitFor()
+  await suite
+    .getByText('unnamed suite · fedcba987654', { exact: true })
+    .waitFor()
   await page
     .getByText(
       'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ.',
@@ -292,6 +307,8 @@ try {
       label: b.label,
       parameters: {
         ...b.parameters,
+        // A subset ticked by hand is an unnamed suite.
+        suite: null,
         // In table order; the dialog adds the rest of the group after.
         scenarios: [
           'minimal_path',
@@ -304,7 +321,7 @@ try {
   ])
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, exclusions, side-by-side screenshots, rerun selected with B parameters.',
+    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters.',
   )
 } finally {
   await browser.close()

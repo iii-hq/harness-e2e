@@ -1,5 +1,5 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import { FlaskConical, ListChecks, Route } from 'lucide-react'
+import { FlaskConical, Layers, ListChecks } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -11,20 +11,20 @@ import {
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
 import {
   type DashboardRoute,
-  hashForPlans,
+  hashForSuites,
   hashForWorkspace,
   routeRenderIdentity,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
 import './dashboard-shell.css'
 
-export type DashboardSection = 'tests' | 'executions' | 'plans'
+export type DashboardSection = 'tests' | 'executions' | 'suites'
 
 export type DashboardHeaderState = {
   key: string
   actions?: ReactNode
   actionsLabel?: string
-  /** The open entity (execution label, test id, plan label) for the console title. */
+  /** The open entity (execution label, test id) for the console title. */
   context?: string
 }
 
@@ -47,13 +47,7 @@ export function useDashboardChrome() {
 }
 
 export function sectionForRoute(route: DashboardRoute): DashboardSection {
-  if (
-    route.page === 'plans' ||
-    route.page === 'plan-create' ||
-    route.page === 'plan-detail'
-  ) {
-    return 'plans'
-  }
+  if (route.page === 'suites') return 'suites'
   if (
     route.page === 'execution' ||
     route.page === 'compare' ||
@@ -72,26 +66,26 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
 }
 
 function hashForSection(section: DashboardSection): string {
-  if (section === 'plans') return hashForPlans()
+  if (section === 'suites') return hashForSuites()
   return hashForWorkspace(section as WorkspaceView)
 }
 
 const sectionIcons: Record<DashboardSection, ReactNode> = {
   tests: <FlaskConical size={15} aria-hidden="true" />,
   executions: <ListChecks size={15} aria-hidden="true" />,
-  plans: <Route size={15} aria-hidden="true" />,
+  suites: <Layers size={15} aria-hidden="true" />,
 }
 
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
-  { value: 'plans', label: 'Plans' },
+  { value: 'suites', label: 'Suites' },
 ]
 
 const sectionLabels: Record<DashboardSection, string> = {
   tests: 'Tests',
   executions: 'Executions',
-  plans: 'Plans',
+  suites: 'Suites',
 }
 
 function HarnessE2eIcon() {
