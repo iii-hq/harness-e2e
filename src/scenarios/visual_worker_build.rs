@@ -77,7 +77,7 @@ const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
 const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
     "evidence_complete",
     5,
-    "Portable screenshots show the Worker and rendered Canvas graph in the full Console workspace.",
+    "Portable screenshots show the Worker page and the Canvas graph it opens in the Console.",
     EvaluationDimension::StructuralIntegrity,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -320,7 +320,7 @@ fn deliverable_contract(kind: Kind) -> DeliverableContract {
             ),
             (
                 "evidence_complete",
-                "Screenshots show the Worker and Canvas graph in the full Console workspace.",
+                "Screenshots show the Worker page and the Canvas graph it opens in the Console.",
             ),
         ]
         .into_iter()
@@ -689,14 +689,14 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
             );
         }
     }
-    let evidence_ok = browser["workspace_evidence"] == true
+    let evidence_ok = browser["page_evidence"] == true
         && files.contains_key("screenshots/before.png")
         && files.contains_key("screenshots/after.png")
         && files.contains_key("screenshots/canvas.png")
         && files.contains_key("screenshots/narrow_dark.png")
         && source_sha256.is_some()
         && compose_sha256.is_some();
-    checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser prerequisites failed"} else if evidence_ok {"Worker and Canvas graph screenshots show the full Console workspace and are identity-bound"} else {"full Console screenshot or identity evidence is incomplete"}}));
+    checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser prerequisites failed"} else if evidence_ok {"Worker page and Canvas graph screenshots are identity-bound"} else {"Worker page or Canvas screenshot, or identity evidence, is incomplete"}}));
     Ok(json!({"identity":identity,"checks":checks,"files":files}))
 }
 
@@ -925,24 +925,15 @@ async fn capture_browser(
     port: u16,
     identity: &Value,
 ) -> Result<Value> {
-    let screen = format!("ext:{}", kind.page_id());
-    context
-        .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
-        .await
-        .context("clear an earlier Canvas panel before visual evidence")?;
-    let workspace = context
-        .trigger_value(
-            "console::workspace::open",
-            json!({"screen":screen,"placement":"new-tab"}),
-        )
-        .await
-        .context("open visual Worker in the full Console workspace")?;
-    if workspace["screens"] != json!(["chat", screen]) {
-        bail!("Console did not place the visual Worker beside chat: {workspace}");
-    }
-    let mut identity = identity.clone();
-    identity["workspace"] = workspace;
-    let url = format!("http://127.0.0.1:{port}/#/");
+    // `#/worker/<scope>/<page>` is the Console rendering one page alone: no tab
+    // strip, chat or palette, and nothing changes in the operator's workspace.
+    let worker = identity["worker"]
+        .as_str()
+        .context("visual Worker identity omitted its name")?;
+    let url = format!(
+        "http://127.0.0.1:{port}/#/worker/{worker}/{}",
+        kind.page_id()
+    );
     let started = context
         .trigger_value(
             "browser::sessions::start",
@@ -953,24 +944,16 @@ async fn capture_browser(
         .as_str()
         .context("browser session omitted session_id")?
         .to_string();
-    let result = capture_browser_session(context, kind, &session, &url, &identity).await;
-    let stopped = context
+    let result = capture_browser_session(context, kind, &session, &url, identity).await;
+    context
         .trigger_value("browser::sessions::stop", json!({"session_id":session}))
-        .await;
-    let canvas_closed = context
-        .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
-        .await;
-    let worker_closed = context
-        .trigger_value("console::workspace::close", json!({"screen":screen}))
-        .await;
-    stopped.context("stop visual Worker browser session")?;
-    canvas_closed.context("close Canvas evidence panel")?;
-    worker_closed.context("close visual Worker evidence panel")?;
+        .await
+        .context("stop visual Worker browser session")?;
     result
 }
 
 /// `browser::navigate` answers only after the page's `load` event, which its CDP
-/// client caps at 30 seconds. The Console workspace renders and runs well before
+/// client caps at 30 seconds. The Console page renders and runs well before
 /// a still-pending resource lets `load` fire, so that overrun is recorded on the
 /// navigation instead of failing the capture; the readiness checks that follow
 /// decide whether the page is usable.
@@ -985,7 +968,18 @@ async fn navigate(context: &E2eContext, session: &str, url: &str) -> Result<Valu
     )
 }
 
-/// Navigating to the current `#/` URL is a same-document fragment navigation
+/// Worker and Canvas pages are hash routes of the same Console document, so
+/// moving between them is a same-document change with no `load` to wait for.
+async fn route(context: &E2eContext, session: &str, url: &str) -> Result<Value> {
+    context
+        .trigger_value(
+            "browser::execute",
+            json!({"session_id":session,"code":format!("location.href={};return location.href", serde_json::to_string(url)?)}),
+        )
+        .await
+}
+
+/// Navigating to the current hash URL is a same-document fragment navigation
 /// that keeps the page as it is, so persistence is checked across a real reload.
 async fn reload(context: &E2eContext, session: &str) -> Result<Value> {
     let reloaded = tolerate_load_timeout(
@@ -1108,28 +1102,44 @@ return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorde
             "browser::execute",
             json!({"session_id":session,"timeout_ms":30000,"code":format!(r#"return await (async()=>{{
 const expected={expected_canvas_id};
-const editedLabel={};
-const worker=document.querySelector('[data-testid="domain-result"]')?.closest('[data-workspace-pane-id]');
 const button=document.querySelector('[data-testid="open-canvas"]');
 const visible=!!button&&button.getBoundingClientRect().width>20&&button.getBoundingClientRect().height>20;
 const sameId=button?.dataset.canvasId===expected;
-if(visible&&sameId)button.click();
-for(let i=0;i<200;i++){{
-  const canvas=document.querySelector('[data-iii-ui="canvas"]');
-  const canvasPane=canvas?.closest('[data-workspace-pane-id]');
-  const graph=canvas?.querySelector('[aria-label^="diagram preview"] svg');
-  if(worker?.isConnected&&canvasPane&&canvasPane!==worker&&graph?.textContent?.includes(editedLabel))
-    return {{visible,same_id:sameId,rendered_graph:true,graph_label:editedLabel}};
-  await new Promise(resolve=>setTimeout(resolve,100));
-}}
-return {{visible,same_id:sameId,rendered_graph:false}};
-}})();"#, serde_json::to_string(if kind == Kind::Form { "Environment" } else { "cancelled" })?)}),
+let opened=null;const original=window.open;window.open=u=>{{opened=String(u);return null}};
+try{{if(visible&&sameId)button.click();for(let i=0;i<50&&!opened;i++)await new Promise(r=>setTimeout(r,100))}}finally{{window.open=original}}
+const url=opened?new URL(opened,location.href).href:null;
+let path='',context=null;
+try{{const hash=url?new URL(url).hash:'';const q=hash.indexOf('?');path=q<0?hash:hash.slice(0,q);context=q<0?null:JSON.parse(new URLSearchParams(hash.slice(q+1)).get('context'))}}catch{{}}
+return {{visible,same_id:sameId,url,canvas_route:/^#\/worker\/[^/]+\/canvas$/.test(path),context_canvas_id:context?.canvasId??null}};
+}})();"#)}),
         )
         .await?;
+    let canvas_url = open_canvas["result"]["url"].as_str().map(str::to_string);
+    let opens_canvas = open_canvas["result"]["canvas_route"] == true
+        && open_canvas["result"]["context_canvas_id"] == identity["canvas_id"];
+    let graph = match canvas_url.as_deref().filter(|_| opens_canvas) {
+        Some(canvas_url) => {
+            route(context, session, canvas_url).await?;
+            context
+                .trigger_value(
+                    "browser::execute",
+                    json!({"session_id":session,"timeout_ms":30000,"code":format!(r#"return await (async()=>{{
+const label={};
+for(let i=0;i<200;i++){{
+  const graph=document.querySelector('[data-iii-ui="canvas"] [aria-label^="diagram preview"] svg');
+  if(graph?.textContent?.includes(label))return {{rendered_graph:true,graph_label:label}};
+  await new Promise(r=>setTimeout(r,100));
+}}
+return {{rendered_graph:false}};
+}})();"#, serde_json::to_string(if kind == Kind::Form { "Environment" } else { "cancelled" })?)}),
+                )
+                .await?["result"]
+                .clone()
+        }
+        None => json!({"rendered_graph":false}),
+    };
     let canvas = screenshot_png(context, session).await?;
-    context
-        .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
-        .await?;
+    route(context, session, url).await?;
     let reload = reload(context, session).await?;
     let reloaded_state = if reload["ok"] == true {
         inspect_ui(context, kind, session, "reloaded").await?
@@ -1161,7 +1171,7 @@ return {{visible,same_id:sameId,rendered_graph:false}};
             json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{
 const domain=document.querySelector('[data-testid="domain-result"]');
 const control=document.querySelector('[data-testid="work-type"],[data-event="start"]');
-const pane=domain?.closest('[data-workspace-pane-id]');
+const pane=domain?.closest('[data-workspace-pane-id]')??document.documentElement;
 pane?.scrollIntoView({block:'nearest',inline:'nearest'});
 await new Promise(requestAnimationFrame);
 const bounds=pane?.getBoundingClientRect();
@@ -1171,7 +1181,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         )
         .await?;
     let narrow_dark = screenshot_png(context, session).await?;
-    let workspace_evidence = before_state["passed"] == true
+    let page_evidence = before_state["passed"] == true
         && after_state["passed"] == true
         && before["data"].is_string()
         && after["data"].is_string()
@@ -1179,19 +1189,20 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         && narrow_dark["data"].is_string()
         && open_canvas["result"]["visible"] == true
         && open_canvas["result"]["same_id"] == true
-        && open_canvas["result"]["rendered_graph"] == true
+        && opens_canvas
+        && graph["rendered_graph"] == true
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
         && mobile["result"]["passed"] == true;
-    let passed = workspace_evidence && interaction["result"].get("error").is_none();
+    let passed = page_evidence && interaction["result"].get("error").is_none();
     let captures = json!([
-        {"id":"before","caption":format!("{} in the full Console workspace before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
-        {"id":"after","caption":format!("{} in the full Console workspace after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
-        {"id":"canvas","caption":"The edited graph rendered by Canvas beside the Worker in the full Console workspace","url":url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]},
-        {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console workspace",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
+        {"id":"before","caption":format!("{} alone in the Console before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
+        {"id":"after","caption":format!("{} alone in the Console after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
+        {"id":"canvas","caption":"The edited graph rendered by the Canvas page the Worker opened","url":canvas_url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]},
+        {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"page_evidence":page_evidence,"reason":if passed {"Worker page, persisted edit, and the Canvas graph it opened rendered in the Console"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"canvas_graph":graph,"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"mobile":mobile["result"]}}),
     )
 }
 
@@ -1201,13 +1212,13 @@ async fn inspect_ui(context: &E2eContext, kind: Kind, session: &str, phase: &str
 const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>0&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'}};
 const seen=e=>{{e?.scrollIntoView({{block:'nearest',inline:'nearest'}});return visible(e)}};
 const domain=document.querySelector('[data-testid="domain-result"]'),error=document.querySelector('[data-testid="error"]');
-const workspaceOk=location.hash==='#/'&&!!domain?.closest('[data-workspace-pane-id]')&&document.querySelectorAll('[data-workspace-pane-id]').length>=2;
+const routeOk=location.hash.startsWith('#/worker/')&&!!domain;
 const state=document.querySelector('[data-testid="current-state"]')?.textContent?.trim()||'';
 const environment=document.querySelector('[data-testid="environment"]');
 const branchOk={} ? (phase==='initial' ? !environment : phase==='edited' ? seen(environment) : true) : (phase==='initial' ? state==='queued' : phase==='edited' ? state==='cancelled' : state==='queued'||state==='cancelled');
 const noOverflow=document.documentElement.scrollWidth<=document.documentElement.clientWidth+1;
 const domainVisible=seen(domain),errorText=error?.textContent?.trim()||'';
-return {{passed:workspaceOk&&domainVisible&&branchOk&&noOverflow&&!errorText,workspace_ok:workspaceOk,state,branch_ok:branchOk,no_horizontal_overflow:noOverflow,domain_visible:domainVisible,error_text:errorText}};"#,
+return {{passed:routeOk&&domainVisible&&branchOk&&noOverflow&&!errorText,route_ok:routeOk,state,branch_ok:branchOk,no_horizontal_overflow:noOverflow,domain_visible:domainVisible,error_text:errorText}};"#,
         serde_json::to_string(phase)?,
         if kind == Kind::Form { "true" } else { "false" },
     );
