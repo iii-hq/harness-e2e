@@ -2635,13 +2635,17 @@ mod tests {
         // Only YAML that does not parse or declares no containers is refused,
         // and it changes nothing.
         for (refused, reason) in [
-            ("containers: [", "not YAML"),
-            ("iii: latest\n", "`containers` mapping"),
+            ("containers: [".to_owned(), "not YAML"),
+            ("iii: latest\n".to_owned(), "`containers` mapping"),
+            (
+                format!("containers: {{}}\n#{}\n", "x".repeat(32 * 1024)),
+                "at most 32 KiB",
+            ),
         ] {
             let error = manager
                 .update_stack(StackUpdateRequest {
                     stack_id: copy.id.clone(),
-                    yaml: Some(refused.into()),
+                    yaml: Some(refused),
                     ..StackUpdateRequest::default()
                 })
                 .await

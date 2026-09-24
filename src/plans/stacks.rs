@@ -147,19 +147,71 @@ impl LocalStack {
     }
 }
 
+/// Past this a stack is refused before it is read: a workflow input holds
+/// 64 KiB, and the text bounds what its aliases can expand to.
+const MAX_YAML_BYTES: usize = 32 * 1024;
+/// What reading a stack may build once its aliases expand: scalar bytes plus
+/// `NODE_COST` per node. Refused past it, before anything is built.
+const MAX_EXPANDED_BYTES: usize = 1024 * 1024;
+const NODE_COST: usize = 64;
+/// Tags the executor's loader (PyYAML's safe loader) constructs.
+const SAFE_TAGS: &[&str] = &[
+    "str",
+    "int",
+    "float",
+    "bool",
+    "null",
+    "map",
+    "seq",
+    "set",
+    "omap",
+    "pairs",
+    "binary",
+    "timestamp",
+];
+
 /// Read a stack the way Compose does (YAML 1.2: `on`, `no` and dates stay
 /// text, only `true`/`false` are booleans; merge keys apply). Refused only
-/// when it does not parse or declares no `containers` mapping.
+/// when it is past 32 KiB or its aliases expand past 1 MiB (integrity), does
+/// not parse, or declares no `containers` mapping.
 pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
-    let mut stack: Value =
-        serde_yaml::from_str(yaml).map_err(|error| anyhow!("The stack is not YAML: {error}"))?;
-    stack
-        .apply_merge()
-        .map_err(|error| anyhow!("The stack is not YAML: {error}"))?;
+    ensure!(
+        yaml.len() <= MAX_YAML_BYTES,
+        "A stack is at most 32 KiB of YAML; this one is {} bytes.",
+        yaml.len()
+    );
+    let not_yaml = |error: serde_yaml::Error| anyhow!("The stack is not YAML: {error}");
+    let budget = std::cell::Cell::new(MAX_EXPANDED_BYTES);
+    match serde::de::DeserializeSeed::deserialize(
+        Budget(&budget),
+        serde_yaml::Deserializer::from_str(yaml),
+    ) {
+        Err(_) if budget.get() == 0 => {
+            bail!("The stack expands past 1 MiB through its aliases.")
+        }
+        result => result.map_err(not_yaml)?,
+    }
+    let mut stack: Value = serde_yaml::from_str(yaml).map_err(not_yaml)?;
+    let mut tags = std::collections::BTreeSet::new();
+    untag(&mut stack, &mut tags);
+    stack.apply_merge().map_err(not_yaml)?;
     let Some(containers) = stack.get("containers").and_then(Value::as_mapping) else {
         bail!("A stack needs a `containers` mapping.");
     };
-    let mut warnings = Vec::new();
+    // Tags of the `!!` handle Compose drops without a trace: read them in the text.
+    for (at, _) in yaml.match_indices("!!") {
+        let tag = yaml[at + 2..]
+            .split(|c: char| c.is_whitespace() || matches!(c, ',' | ']' | '}'))
+            .next()
+            .unwrap_or_default();
+        if !tag.is_empty() && !SAFE_TAGS.contains(&tag) {
+            tags.insert(format!("!!{tag}"));
+        }
+    }
+    let mut warnings = tags
+        .iter()
+        .map(|tag| format!("The executor refuses tag {tag}."))
+        .collect::<Vec<_>>();
     for key in stack.as_mapping().into_iter().flat_map(|top| top.keys()) {
         let key = text(key).unwrap_or_else(|| format!("{key:?}"));
         if !KNOWN_KEYS.contains(&key.as_str()) {
@@ -168,30 +220,47 @@ pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
             ));
         }
     }
+    for key in ["iii", "template"] {
+        if let Some(read) = stack.get(key).and_then(|value| not_text(yaml, value)) {
+            warnings.push(format!(
+                "`{key}` reads as {read}; quote it to keep it as written."
+            ));
+        }
+    }
     let mut listed = Vec::new();
     for (name, container) in containers {
         let name = text(name).unwrap_or_else(|| format!("{name:?}"));
-        match container
-            .get("worker")
-            .map(|worker| text(worker).ok_or(worker))
-        {
-            None | Some(Err(Value::Null)) => warnings.push(format!(
+        if !container.is_mapping() {
+            warnings.push(format!(
+                "{name} is not a mapping; a container is a mapping with `worker:`, and the executor fails on anything else."
+            ));
+        }
+        match container.get("worker").filter(|worker| !worker.is_null()) {
+            None if !container.is_mapping() => {}
+            None => warnings.push(format!(
                 "{name} names no worker; Compose refuses a container without one."
             )),
-            Some(Ok(worker)) if worker.starts_with("path://") => warnings.push(format!(
+            Some(Value::String(worker)) if worker.starts_with("path://") => warnings.push(format!(
                 "{name} runs {worker}, a path on this machine; the stack runs it only here."
             )),
-            Some(Ok(worker)) if worker.starts_with("package://") => {}
+            Some(Value::String(worker)) if worker.starts_with("package://") => {}
             Some(worker) => warnings.push(format!(
                 "{name}: worker {} is neither package:// nor path://.",
-                worker.unwrap_or_else(|value| format!("{value:?}"))
+                text(worker).unwrap_or_else(|| format!("{worker:?}"))
             )),
         }
-        let commit = container.get("commit");
+        let commit = container.get("commit").filter(|commit| !commit.is_null());
         if commit.is_some() {
             warnings.push(format!(
                 "{name} pins a commit; it takes effect once the executor runs commit pins."
             ));
+        }
+        for key in ["version", "commit"] {
+            if let Some(read) = container.get(key).and_then(|value| not_text(yaml, value)) {
+                warnings.push(format!(
+                    "{name}: `{key}` reads as {read}; quote it to keep it as written."
+                ));
+            }
         }
         listed.push(StackContainer {
             name,
@@ -214,6 +283,154 @@ fn text(value: &Value) -> Option<String> {
         Value::Number(number) => Some(number.to_string()),
         Value::Bool(value) => Some(value.to_string()),
         _ => None,
+    }
+}
+
+/// What a value that should be text reads as, when it is not text to the
+/// executor or to Compose; `None` for text and for an absent (null) value.
+/// ponytail: of the texts only leading-zero integers (`0123456`, an int to
+/// the executor) are caught, and by the text: the same value quoted in one
+/// place and plain in another warns for both. PyYAML's `1_0.5` and `1:30.5`
+/// floats are not caught; libyaml events would give the exact style.
+fn not_text(yaml: &str, value: &Value) -> Option<String> {
+    match value {
+        Value::Null => None,
+        Value::String(text) => {
+            let digits = text.strip_prefix(['-', '+']).unwrap_or(text);
+            let leading_zero = digits.len() > 1
+                && digits.starts_with('0')
+                && digits.bytes().all(|b| b.is_ascii_digit());
+            (leading_zero && written_plain(yaml, text)).then(|| {
+                format!(
+                    "the number {} to the executor",
+                    text.parse::<i128>()
+                        .map_or_else(|_| text.clone(), |n| n.to_string())
+                )
+            })
+        }
+        Value::Number(number) => Some(format!("the number {number}")),
+        Value::Bool(value) => Some(format!("the boolean {value}")),
+        _ => Some("a list or a mapping".into()),
+    }
+}
+
+/// Whether `value` is written unquoted somewhere in `yaml`: as a mapping
+/// value, a sequence item or a flow entry, up to a line end, comment or
+/// flow delimiter.
+fn written_plain(yaml: &str, value: &str) -> bool {
+    yaml.match_indices(value).any(|(at, _)| {
+        let head = &yaml[..at];
+        let trimmed = head.trim_end_matches([' ', '\t']);
+        let before = match trimmed.chars().next_back() {
+            Some(':' | '-' | '?') => trimmed.len() < head.len(),
+            Some('[' | '{' | ',') => true,
+            _ => false,
+        };
+        before
+            && yaml[at + value.len()..]
+                .chars()
+                .next()
+                .is_none_or(|c| c.is_whitespace() || matches!(c, '#' | ',' | ']' | '}'))
+    })
+}
+
+/// Tags of the `!` handle, collected and removed so the rest reads through
+/// them.
+fn untag(value: &mut Value, tags: &mut std::collections::BTreeSet<String>) {
+    if let Value::Tagged(tagged) = value {
+        tags.insert(tagged.tag.to_string());
+        *value = std::mem::take(&mut tagged.value);
+        return untag(value, tags);
+    }
+    match value {
+        Value::Sequence(items) => items.iter_mut().for_each(|item| untag(item, tags)),
+        Value::Mapping(entries) => {
+            for key in entries.keys() {
+                if let Value::Tagged(tagged) = key {
+                    tags.insert(tagged.tag.to_string());
+                }
+            }
+            entries.values_mut().for_each(|item| untag(item, tags));
+        }
+        _ => {}
+    }
+}
+
+/// Walks a stack as its aliases expand, spending the budget on every node
+/// and scalar byte and failing once it runs out, so an alias bomb stops
+/// before anything is built.
+struct Budget<'a>(&'a std::cell::Cell<usize>);
+
+impl Budget<'_> {
+    fn spend<E: serde::de::Error>(&self, bytes: usize) -> Result<(), E> {
+        match self.0.get().checked_sub(NODE_COST + bytes) {
+            Some(left) => {
+                self.0.set(left);
+                Ok(())
+            }
+            None => {
+                self.0.set(0);
+                Err(E::custom("expansion budget spent"))
+            }
+        }
+    }
+}
+
+impl<'de> serde::de::DeserializeSeed<'de> for Budget<'_> {
+    type Value = ();
+    fn deserialize<D: serde::Deserializer<'de>>(self, deserializer: D) -> Result<(), D::Error> {
+        deserializer.deserialize_any(self)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for Budget<'_> {
+    type Value = ();
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("YAML")
+    }
+    fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_i128<E: serde::de::Error>(self, _: i128) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_u128<E: serde::de::Error>(self, _: u128) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_str<E: serde::de::Error>(self, text: &str) -> Result<(), E> {
+        self.spend(text.len())
+    }
+    fn visit_unit<E: serde::de::Error>(self) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_none<E: serde::de::Error>(self) -> Result<(), E> {
+        self.spend(0)
+    }
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut items: A) -> Result<(), A::Error> {
+        self.spend(0)?;
+        while items.next_element_seed(Budget(self.0))?.is_some() {}
+        Ok(())
+    }
+    fn visit_map<A: serde::de::MapAccess<'de>>(self, mut entries: A) -> Result<(), A::Error> {
+        self.spend(0)?;
+        while entries.next_key_seed(Budget(self.0))?.is_some() {
+            entries.next_value_seed(Budget(self.0))?;
+        }
+        Ok(())
+    }
+    fn visit_enum<A: serde::de::EnumAccess<'de>>(self, tagged: A) -> Result<(), A::Error> {
+        use serde::de::VariantAccess;
+        let ((), value) = tagged.variant_seed(Budget(self.0))?;
+        value.newtype_variant_seed(Budget(self.0))
     }
 }
 
@@ -262,7 +479,7 @@ mod tests {
     #[test]
     fn a_stack_reads_as_yaml_1_2() {
         let summary = summarize(
-            "iii: 0.24.2\ntemplate: yes\ncontainers:\n  on:\n    worker: package://on\n    version: 2026-09-01\n  no:\n    worker: package://no\n    version: 0o17\n  off:\n    worker: package://off\n    version: true\n",
+            "iii: 0.24.2\ntemplate: yes\ncontainers:\n  on:\n    worker: package://on\n    version: 2026-09-01\n  no:\n    worker: package://no\n    version: off\n  off:\n    worker: package://off\n    version: '1.10'\n",
         )
         .unwrap();
         assert_eq!(summary.iii.as_deref(), Some("0.24.2"));
@@ -276,8 +493,8 @@ mod tests {
             containers,
             vec![
                 ("on", Some("2026-09-01")),
-                ("no", Some("15")),
-                ("off", Some("true"))
+                ("no", Some("off")),
+                ("off", Some("1.10"))
             ]
         );
         assert!(summary.warnings.is_empty(), "{:?}", summary.warnings);
@@ -311,7 +528,7 @@ mod tests {
     #[test]
     fn what_may_not_run_as_written_is_a_warning() {
         let summary = summarize(
-            "iii: latest\nregistry: https://example.test\ncontainers:\n  bare: {}\n  plain: package://harness\n  local:\n    worker: path://../workers/harness\n  image:\n    worker: docker://harness\n  pinned:\n    worker: package://harness\n    commit: 0123456789abcdef\n",
+            "iii: latest\nregistry: https://example.test\ncontainers:\n  bare: {}\n  plain: package://harness\n  empty:\n  local:\n    worker: path://../workers/harness\n  image:\n    worker: docker://harness\n  pinned:\n    worker: package://harness\n    commit: 0123456789abcdef\n  unpinned:\n    worker: package://harness\n    commit: ~\n",
         )
         .unwrap();
         assert_eq!(
@@ -319,20 +536,107 @@ mod tests {
             vec![
                 "`registry` is not a key of a stack (iii, template) or of a Compose project.",
                 "bare names no worker; Compose refuses a container without one.",
-                "plain names no worker; Compose refuses a container without one.",
+                "plain is not a mapping; a container is a mapping with `worker:`, and the executor fails on anything else.",
+                "empty is not a mapping; a container is a mapping with `worker:`, and the executor fails on anything else.",
                 "local runs path://../workers/harness, a path on this machine; the stack runs it only here.",
                 "image: worker docker://harness is neither package:// nor path://.",
                 "pinned pins a commit; it takes effect once the executor runs commit pins.",
             ]
         );
         assert_eq!(
-            summary.containers.last().unwrap(),
-            &StackContainer {
-                name: "pinned".into(),
-                version: None,
-                commit: Some("0123456789abcdef".into()),
-            }
+            summary.containers[summary.containers.len() - 2..],
+            [
+                StackContainer {
+                    name: "pinned".into(),
+                    version: None,
+                    commit: Some("0123456789abcdef".into()),
+                },
+                StackContainer {
+                    name: "unpinned".into(),
+                    version: None,
+                    commit: None,
+                }
+            ]
         );
+    }
+
+    #[test]
+    fn a_value_that_is_not_text_to_the_executor_is_a_warning_to_quote_it() {
+        let summary = summarize(
+            "iii: 0.24\ntemplate: true\ncontainers:\n  float:\n    worker: package://a\n    version: 1.10\n  exponent: {worker: package://b, version: 1e3}\n  octal:\n    worker: package://c\n    commit: 0123456\n  quoted:\n    worker: package://d\n    version: '1.10'\n    commit: \"0765432\"\n  listed:\n    worker: package://e\n    version: [1]\n",
+        )
+        .unwrap();
+        assert_eq!(
+            summary.warnings,
+            vec![
+                "`iii` reads as the number 0.24; quote it to keep it as written.",
+                "`template` reads as the boolean true; quote it to keep it as written.",
+                "float: `version` reads as the number 1.1; quote it to keep it as written.",
+                "exponent: `version` reads as the number 1000.0; quote it to keep it as written.",
+                "octal pins a commit; it takes effect once the executor runs commit pins.",
+                "octal: `commit` reads as the number 123456 to the executor; quote it to keep it as written.",
+                "quoted pins a commit; it takes effect once the executor runs commit pins.",
+                "listed: `version` reads as a list or a mapping; quote it to keep it as written.",
+            ]
+        );
+        assert_eq!(summary.containers[2].commit.as_deref(), Some("0123456"));
+    }
+
+    #[test]
+    fn a_tag_the_executor_refuses_is_a_warning_and_read_through() {
+        let summary = summarize(
+            "iii: !!str latest\ncontainers: !reset\n  harness:\n    worker: !env WORKER\n    config_override: !!python/object:os.system {}\n    version: !!int 3\n",
+        )
+        .unwrap();
+        assert_eq!(
+            summary.warnings,
+            vec![
+                "The executor refuses tag !!python/object:os.system.",
+                "The executor refuses tag !env.",
+                "The executor refuses tag !reset.",
+                "harness: worker WORKER is neither package:// nor path://.",
+                "harness: `version` reads as the number 3; quote it to keep it as written.",
+            ]
+        );
+        assert_eq!(summary.containers[0].name, "harness");
+    }
+
+    #[test]
+    fn a_stack_past_32_kib_or_expanding_past_1_mib_is_refused_before_it_is_built() {
+        let started = std::time::Instant::now();
+        // The bomb that took the worker down: 100 KB behind 30000 aliases.
+        let bomb = format!(
+            "x: &a {}\ny: [{}]\ncontainers: {{}}\n",
+            "a".repeat(100_000),
+            vec!["*a"; 30_000].join(", ")
+        );
+        let error = summarize(&bomb).unwrap_err().to_string();
+        assert!(error.contains("at most 32 KiB"), "{error}");
+        // Under 32 KiB: a flat one, and one nested a level (8 GB expanded).
+        for bomb in [
+            format!(
+                "x: &a {}\ny: [{}]\ncontainers: {{}}\n",
+                "a".repeat(16_000),
+                vec!["*a"; 3_000].join(",")
+            ),
+            format!(
+                "s: &s {}\na: &a [{}]\nb: [{}]\ncontainers: {{}}\n",
+                "a".repeat(8_000),
+                vec!["*s"; 2_000].join(","),
+                vec!["*a"; 2_000].join(",")
+            ),
+        ] {
+            assert!(bomb.len() <= MAX_YAML_BYTES, "{}", bomb.len());
+            let error = summarize(&bomb).unwrap_err().to_string();
+            assert!(error.contains("expands past 1 MiB"), "{error}");
+        }
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        // Aliases a stack means to use still read.
+        let shared = summarize(
+            "x: &worker package://harness\ncontainers:\n  a: {worker: *worker}\n  b: {worker: *worker}\n",
+        )
+        .unwrap();
+        assert_eq!(shared.containers.len(), 2);
     }
 
     #[test]

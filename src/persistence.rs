@@ -1063,6 +1063,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_local_stack_is_saved_hashed_and_an_unreadable_one_deleted_on_read() {
+        let stack = LocalStack {
+            id: "stack-0123456789ab".into(),
+            label: "Mine".into(),
+            yaml: "# kept\ncontainers: {}\n".into(),
+            created_at: "2026-09-24T00:00:00Z".into(),
+            updated_at: "2026-09-24T00:00:00Z".into(),
+        };
+        let (client, server) = fake_database(|sql| panic!("unexpected query: {sql}")).await;
+        Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
+            .save_local_stack(&stack)
+            .await
+            .unwrap();
+        let saved = server.await.unwrap();
+        client.shutdown_async().await;
+        assert_eq!(saved, vec![local_stack_statement(&stack).unwrap()]);
+        assert!(saved[0]["sql"]
+            .as_str()
+            .unwrap()
+            .starts_with("INSERT INTO local_stacks"));
+        let (payload, hash) = (&saved[0]["params"][2], &saved[0]["params"][3]);
+        assert_eq!(
+            hash.as_str().unwrap(),
+            crate::artifact::sha256_bytes(payload.as_str().unwrap().as_bytes())
+        );
+
+        let rows = json!([
+            {"id": stack.id, "payload_json": payload, "payload_sha256": hash},
+            {"id": "stack-tampered", "payload_json": payload, "payload_sha256": "sha256:other"},
+        ]);
+        let (client, server) = fake_database(move |_| rows.clone()).await;
+        let listed = Persistence::new(client.clone(), "harness_e2e".into(), "default".into())
+            .local_stacks()
+            .await
+            .unwrap();
+        let deleted = server.await.unwrap();
+        client.shutdown_async().await;
+        assert_eq!(listed, vec![stack]);
+        assert_eq!(
+            deleted,
+            vec![
+                json!({"sql": "DELETE FROM local_stacks WHERE id = ?", "params": ["stack-tampered"]})
+            ]
+        );
+    }
+
+    #[tokio::test]
     async fn start_drops_plans_and_imported_history_and_keeps_suites_stacks_and_executions() {
         let suite = LocalSuite {
             id: "suite-0123456789ab".into(),
