@@ -66,6 +66,7 @@ pub mod validation_hook;
 pub mod validation_loop;
 pub mod validation_scope_enforcement;
 pub mod validation_self_repair;
+pub mod visual_worker_build;
 pub mod wake_chain_soak;
 
 pub use domain::{
@@ -486,6 +487,8 @@ scenarios! {
     ContentionLedger = "contention_ledger" => contention_ledger::ContentionLedger,
     WakeChainSoak = "wake_chain_soak" => wake_chain_soak::WakeChainSoak,
     ChessEngineBuild = "chess_engine_build" => chess_engine_build::ChessEngineBuild,
+    FormFlowBuild = "form_flow_build" => visual_worker_build::FormFlowBuild,
+    StateMachineCanvasBuild = "state_machine_canvas_build" => visual_worker_build::StateMachineCanvasBuild,
     ChessPlayLadder = "chess_play_ladder" => chess_play_ladder::ChessPlayLadder,
     TrendBlog = "trend_blog" => trend_blog::TrendBlog,
     TrendingTopicsBuild = "trending_topics_build" => trending_topics_build::TrendingTopicsBuild,
@@ -660,7 +663,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_seven_unique_valid_scenarios() {
+    fn registry_contains_fifty_nine_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -669,7 +672,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 57);
+        assert_eq!(ids.len(), 59);
     }
 
     #[test]

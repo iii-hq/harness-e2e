@@ -1,0 +1,21 @@
+{
+  "name": "harness-visual-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.mjs"
+  },
+  "dependencies": {
+    "@iii-dev/console-ui": "0.2.0",
+    "iii-sdk": "0.23.1-rc.6",
+    "lucide-react": "1.16.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.14",
+    "@types/react-dom": "19.2.3",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3"
+  }
+}

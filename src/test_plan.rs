@@ -442,7 +442,7 @@ mod tests {
         assert_eq!(plan.profiles.len(), 4);
         for (id, cases, runs) in [
             ("regression", 9, 9),
-            ("software-engineering", 13, 13),
+            ("software-engineering", 15, 15),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -489,11 +489,13 @@ mod tests {
                 "linkly_tutorial",
                 "alertmanager_route_match",
                 "chess_engine_build",
+                "form_flow_build",
+                "state_machine_canvas_build",
             ])
             .collect::<Vec<_>>();
         assert_eq!(snapshot.scenario_ids, expected);
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 12);
+        assert_eq!(groups.len(), 14);
         let linkly = groups
             .iter()
             .find(|g| g["id"] == "case-linkly-tutorial")
@@ -524,6 +526,17 @@ mod tests {
             .unwrap();
         assert_eq!(chess["scenarios"], json!(["chess_engine_build"]));
         assert_eq!(chess["technical_retries"], 0);
+        for (group_id, scenario_id) in [
+            ("case-form-flow-build", "form_flow_build"),
+            (
+                "case-state-machine-canvas-build",
+                "state_machine_canvas_build",
+            ),
+        ] {
+            let group = groups.iter().find(|group| group["id"] == group_id).unwrap();
+            assert_eq!(group["scenarios"], json!([scenario_id]));
+            assert_eq!(group["technical_retries"], 0);
+        }
         assert!(snapshot.budget["unbounded_turn_cases"]
             .as_array()
             .unwrap()
@@ -545,7 +558,7 @@ mod tests {
         let plan = embedded().unwrap();
         let snapshot = plan.materialize("software-engineering").unwrap();
         let groups = snapshot.campaigns[0]["groups"].as_array().unwrap();
-        assert_eq!(groups.len(), 12);
+        assert_eq!(groups.len(), 14);
         let build = groups
             .iter()
             .find(|g| g["id"] == "case-trending-topics-build")
@@ -559,8 +572,8 @@ mod tests {
             delivery["scenarios"],
             json!(["registry_implementation", "registry_verification"])
         );
-        assert_eq!(snapshot.cases.len(), 13);
-        assert_eq!(snapshot.budget["planned_runs"], 13);
+        assert_eq!(snapshot.cases.len(), 15);
+        assert_eq!(snapshot.budget["planned_runs"], 15);
 
         let mut profile = snapshot.profile;
         profile.scenario_groups[0].push("registry_verification".into());

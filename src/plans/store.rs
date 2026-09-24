@@ -2656,7 +2656,7 @@ mod tests {
     async fn native_coordination_covers_all_profile_slots() {
         for (profile, expected_slots, expected_submissions) in [
             ("regression", 9, 9),
-            ("software-engineering", 13, 12),
+            ("software-engineering", 15, 14),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {
@@ -2865,7 +2865,7 @@ mod tests {
             assert_eq!(runner.submitted.load(Ordering::SeqCst), 1);
             let detail = manager.execution_detail(&id, &[]).await.unwrap().unwrap();
             let reports = detail["reports"].as_array().unwrap();
-            assert_eq!(reports.len(), 13);
+            assert_eq!(reports.len(), 15);
             // Reconciliation retains evidence from the persisted child even
             // when admission returned a different identity; remaining slots stay explicit.
             assert_eq!(reports[0]["available"], wrong_identity);

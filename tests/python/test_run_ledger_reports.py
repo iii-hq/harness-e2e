@@ -13,6 +13,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -276,6 +277,33 @@ class LedgerDeliveryTests(unittest.TestCase):
 
 
 class StackResolutionTests(unittest.TestCase):
+    def test_visual_profile_freezes_canvas_latest_before_dispatch(self):
+        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
+        snapshot["campaigns"][0]["groups"].append({
+            "id": "case-form-flow-build", "execution_kind": "harness_turn",
+            "runs": 1, "technical_retries": 0, "scenarios": ["form_flow_build"],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "snapshot.json").write_text(json.dumps(snapshot))
+            (root / "plan.json").write_text(json.dumps(PLAN))
+            args = SimpleNamespace(
+                execution_id="b0607faa-096a-4efe-a4a2-a2a9bc06de83",
+                profile_snapshot=root / "snapshot.json", plan=root / "plan.json",
+                stack='{"policy":"latest"}', cli_version="0.23.1",
+                oidc_audience="release-control-harness-e2e", output_dir=root / "contracts",
+            )
+            with patch.object(resolve_stack_lock, "parse_args", return_value=args), \
+                 patch.object(resolve_stack_lock, "resolve_cli", return_value={"version": "0.23.1"}), \
+                 patch.object(resolve_stack_lock, "get_json", return_value={"root": {"version": "0.1.16"}}) as get:
+                self.assertEqual(resolve_stack_lock.main(), 0)
+            get.assert_called_once_with(
+                f"{resolve_stack_lock.REGISTRY_API_URL}/resolve",
+                {"worker": "canvas", "version": "latest"},
+            )
+            contract = json.loads((root / "contracts/regression-r01.json").read_text())
+            self.assertEqual(contract["runtime"]["stack"]["canvas"], "0.1.16")
+
     def test_runner_release_version_pins_the_runner_unless_the_stack_does(self):
         plan = {"runner": {"version": "0.11.2-experimental"}}
         self.assertEqual(resolve_stack_lock.runner_selector(plan, {}), "0.11.2-experimental")
