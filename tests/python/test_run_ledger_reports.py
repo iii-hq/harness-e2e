@@ -86,7 +86,7 @@ class Args:
             "plan": None,
             "resolution": None,
             "summary": None,
-            "contract_sha256": None,
+            "stack_lock_sha256": None,
             "runner_sha": None,
             "cli_version": None,
             "artifact_name": None,

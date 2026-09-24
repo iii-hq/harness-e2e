@@ -158,7 +158,7 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "definition_sha256": snapshot.get("definition_sha256"),
             "stack_versions": observed or resolution.get("stack_versions"),
             "stack_overrides": resolution.get("stack_overrides"),
-            "stack_lock_sha256": args.contract_sha256,
+            "stack_lock_sha256": args.stack_lock_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,
             "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
@@ -348,7 +348,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plan", type=Path)
     parser.add_argument("--resolution", type=Path)
     parser.add_argument("--summary", type=Path)
-    parser.add_argument("--contract-sha256")
+    parser.add_argument("--stack-lock-sha256")
     parser.add_argument("--runner-sha")
     parser.add_argument("--cli-version")
     parser.add_argument("--artifact-name", help="exact name of this report's GitHub observation bundle")

@@ -361,10 +361,10 @@ jobs:
           mkdir -p target/harness-e2e-exact-stack
           contract=target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
           cp "$contract" target/harness-e2e-exact-stack/stack-lock.json
-          # The digest travels with every run as the instrument's identity, so
-          # it is the executor's canonical one, never a shell approximation.
-          printf 'sha256=%s\n' \
-            "$(python3 scripts/exact_stack_campaign.py digest --contract "$contract")" >>"$GITHUB_OUTPUT"
+          # The stack a run measured is the lock every group started from: the
+          # same versions give the same digest, whatever execution ran them.
+          printf 'lock_sha256=sha256:%s\n' \
+            "$(sha256sum target/harness-e2e-contract/worker-compose.lock | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
 
       - name: Checkout Kanban fixture
         if: startsWith(matrix.group_id, 'case-kanban-')
@@ -446,7 +446,7 @@ jobs:
             --profile-snapshot target/harness-e2e-contract/profile.json \
             --plan target/harness-e2e-contract/plan.json \
             --resolution target/harness-e2e-contract/contracts/resolution.json \
-            --contract-sha256 '${{ steps.contract.outputs.sha256 }}' \
+            --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
             --runner-sha "$RUNNER_REVISION"
 
       - name: Package factual group evidence
