@@ -11,13 +11,13 @@ FROM ubuntu:24.04
 LABEL org.opencontainers.image.source=https://github.com/iii-hq/harness-e2e
 ARG DEBIAN_FRONTEND=noninteractive
 
-# One mirror for every pocket, the one the Actions runners use: behind
-# archive.ubuntu.com and security.ubuntu.com, nodes that lag hours behind the
-# others answer the same name, so an index from one lists packages another's
-# pool does not have yet.
-RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
-      /etc/apt/sources.list.d/ubuntu.sources \
- && echo 'Acquire::Retries "3";' >/etc/apt/apt.conf.d/80-retries \
+# Every apt call reads one snapshot of the Ubuntu archive
+# (snapshot.ubuntu.com): the same packages for the same Dockerfile, never an
+# index from a mirror node that lists what another node's pool lacks. The
+# snapshot is fetched over https, so the first call trusts the CA bundle of
+# the Docker CLI image until ca-certificates is installed.
+COPY --from=docker-cli /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
+RUN printf 'APT::Snapshot "20260924T000000Z";\nAcquire::Retries "3";\n' >/etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       build-essential ca-certificates curl git jq procps python3 python3-yaml unzip xz-utils \
