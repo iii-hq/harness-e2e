@@ -1200,13 +1200,15 @@ async fn inspect_ui(context: &E2eContext, kind: Kind, session: &str, phase: &str
     let code = format!(
         r#"const phase={};
 const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>20&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'}};
+const seen=e=>{{e?.scrollIntoView({{block:'nearest',inline:'nearest'}});return visible(e)}};
 const domain=document.querySelector('[data-testid="domain-result"]'),error=document.querySelector('[data-testid="error"]');
 const workspaceOk=location.hash==='#/'&&!!domain?.closest('[data-workspace-pane-id]')&&document.querySelectorAll('[data-workspace-pane-id]').length>=2;
 const state=document.querySelector('[data-testid="current-state"]')?.textContent?.trim()||'';
 const environment=document.querySelector('[data-testid="environment"]');
-const branchOk={} ? (phase==='initial' ? !environment : phase==='edited' ? visible(environment) : true) : (phase==='initial' ? state==='queued' : phase==='edited' ? state==='cancelled' : state==='queued'||state==='cancelled');
+const branchOk={} ? (phase==='initial' ? !environment : phase==='edited' ? seen(environment) : true) : (phase==='initial' ? state==='queued' : phase==='edited' ? state==='cancelled' : state==='queued'||state==='cancelled');
 const noOverflow=document.documentElement.scrollWidth<=document.documentElement.clientWidth+1;
-return {{passed:workspaceOk&&visible(domain)&&branchOk&&noOverflow&&(!error||!error.textContent.trim()),workspace_ok:workspaceOk,state,branch_ok:branchOk,no_horizontal_overflow:noOverflow}};"#,
+const domainVisible=seen(domain),errorText=error?.textContent?.trim()||'';
+return {{passed:workspaceOk&&domainVisible&&branchOk&&noOverflow&&!errorText,workspace_ok:workspaceOk,state,branch_ok:branchOk,no_horizontal_overflow:noOverflow,domain_visible:domainVisible,error_text:errorText}};"#,
         serde_json::to_string(phase)?,
         if kind == Kind::Form { "true" } else { "false" },
     );
