@@ -22,8 +22,9 @@ use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+    SuiteView,
 };
-use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
+use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
@@ -31,6 +32,7 @@ pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
 pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
 pub(super) const EXECUTION_SLOT_RERUN: &str = "e2e::dashboard::execution-slot-rerun";
+pub(super) const EXECUTION_CANCEL: &str = "e2e::dashboard::execution-cancel";
 pub(super) const EVIDENCE_READ: &str = "e2e::dashboard::evidence-read";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
@@ -41,13 +43,10 @@ pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
-pub(super) const PLAN_CONTROL: &str = "e2e::dashboard::plan-control";
-pub(super) const PLANS_LIST: &str = "e2e::dashboard::plans-list";
-pub(super) const PLAN_GET: &str = "e2e::dashboard::plan-get";
-pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
-pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
-pub(super) const PLAN_DELETE: &str = "e2e::dashboard::plan-delete";
-pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
+pub(super) const SUITES_LIST: &str = "e2e::dashboard::suites-list";
+pub(super) const SUITE_CREATE: &str = "e2e::dashboard::suite-create";
+pub(super) const SUITE_UPDATE: &str = "e2e::dashboard::suite-update";
+pub(super) const SUITE_DELETE: &str = "e2e::dashboard::suite-delete";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -155,18 +154,14 @@ struct DashboardEmptyRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-struct PlanGetRequest {
-    #[serde(rename = "_caller_worker_id", default)]
-    #[schemars(skip)]
-    _caller_worker_id: Option<String>,
-    plan_id: String,
+struct SuiteDeleteRequest {
+    suite_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-struct PlansListResponse {
-    mode: String,
-    plans: Vec<LocalPlan>,
-    master_plan: Value,
+struct SuitesListResponse {
+    /// The master plan's suites, then this Console's.
+    suites: Vec<SuiteView>,
 }
 
 type PlanControlResponse = BTreeMap<String, Value>;
@@ -333,7 +328,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_DELETE,
-        "Delete one finished native run, or one finished execution without a saved plan together with its native runs.",
+        "Delete one finished native run, or one finished execution together with its native runs.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionGetRequest| {
@@ -398,6 +393,24 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .await
                         .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        EXECUTION_CANCEL,
+        "Stop an execution: no next scenario is admitted and the running one is cancelled.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionGetRequest| {
+                let controller = controller.clone();
+                async move {
+                    let execution = controller
+                        .cancel_execution(&request.execution_id)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(execution).map_err(handler_error)
                 }
             })
         },
@@ -547,113 +560,67 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
-        PLANS_LIST,
-        "List saved plans from the local database.",
+        SUITES_LIST,
+        "List the suites an execution can run: the master plan's (read-only) and this Console's.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
                 let controller = controller.clone();
                 async move {
-                    let plans = controller.list_plans().await.map_err(handler_error)?;
-                    Ok(PlansListResponse {
-                        mode: "unified".into(),
-                        plans,
-                        master_plan: crate::test_plan::embedded()
-                            .and_then(|plan| plan.catalog())
-                            .map_err(handler_error)?,
+                    Ok(SuitesListResponse {
+                        suites: controller.suites().await.map_err(handler_error)?,
                     })
                 }
             })
         },
     );
-    register(iii, PLAN_CONTROL, "Configure, export and execute saved plans, and inspect or cancel their composed executions.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: crate::plans::store::Request| {
-            let controller = controller.clone();
-            async move {
-                let response = controller
-                    .plan_store
-                    .handle(request)
-                    .await
-                    .map_err(handler_error)?;
-                serde_json::from_value::<PlanControlResponse>(response).map_err(handler_error)
-            }
-        })
-    });
-    register(iii, PLAN_GET, "Read one saved plan.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: PlanGetRequest| {
-            let controller = controller.clone();
-            async move {
-                controller
-                    .get_plan(&request.plan_id)
-                    .await
-                    .map_err(handler_error)
-            }
-        })
-    });
     register(
         iii,
-        PLAN_CREATE,
-        "Create a draft local plan with an explicit small test scope.",
+        SUITE_CREATE,
+        "Create a suite of this Console as a copy of another suite.",
         {
             let controller = controller.clone();
-            RegisterFunction::new_async(move |request: PlanCreateRequest| {
-                let controller = controller.clone();
-                async move { controller.create_plan(request).await.map_err(handler_error) }
-            })
-        },
-    );
-    register(iii, PLAN_UPDATE, "Update a local plan.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: PlanUpdateRequest| {
-            let controller = controller.clone();
-            async move {
-                let id = request
-                    .plan_id
-                    .clone()
-                    .ok_or_else(|| handler_error("plan_id is required"))?;
-                controller
-                    .update_plan(&id, request)
-                    .await
-                    .map_err(handler_error)
-            }
-        })
-    });
-    register(iii, PLAN_DELETE, "Delete a local plan.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: PlanGetRequest| {
-            let controller = controller.clone();
-            async move {
-                controller
-                    .delete_plan(&request.plan_id)
-                    .await
-                    .map(|()| PlanControlResponse::new())
-                    .map_err(handler_error)
-            }
-        })
-    });
-    register(
-        iii,
-        PLAN_RUN_START,
-        "Start a baseline or candidate from a saved local plan.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |request: PlanRunRequest| {
+            RegisterFunction::new_async(move |request: SuiteCreateRequest| {
                 let controller = controller.clone();
                 async move {
-                    let id = request
-                        .plan_id
-                        .as_deref()
-                        .ok_or_else(|| handler_error("plan_id is required"))?;
                     controller
-                        .start_plan(id, request.role, &request.idempotency_key)
+                        .create_suite(request)
                         .await
                         .map_err(handler_error)
                 }
             })
         },
     );
+    register(
+        iii,
+        SUITE_UPDATE,
+        "Change the name, scenarios, runs or technical retries of a suite of this Console.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: SuiteUpdateRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .update_suite(request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(iii, SUITE_DELETE, "Delete a suite of this Console.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: SuiteDeleteRequest| {
+            let controller = controller.clone();
+            async move {
+                controller
+                    .delete_suite(&request.suite_id)
+                    .await
+                    .map(|()| PlanControlResponse::new())
+                    .map_err(handler_error)
+            }
+        })
+    });
     register(
         iii,
         CATALOG_GET,

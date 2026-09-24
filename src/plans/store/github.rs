@@ -16,8 +16,8 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::{
-    finish, now, update_slot, ExecutionParameters, ExecutionSource, PlanExecution, PlanStore,
-    Runner, Slot, StackWorker,
+    finish, now, update_slot, ExecutionParameters, ExecutionSource, ExecutionSuite, PlanExecution,
+    PlanStore, Runner, Slot, StackWorker,
 };
 use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
@@ -273,10 +273,7 @@ impl PlanStore {
         // the previous import installed.
         let mut execution = previous.unwrap_or_else(|| PlanExecution {
             id: id.clone(),
-            plan_id: None,
             idempotency_key: format!("github:{repository}#{run_id}"),
-            configuration_sha256: String::new(),
-            role: None,
             label: None,
             parameters: None,
             source: ExecutionSource::Local,
@@ -288,7 +285,6 @@ impl PlanStore {
             finished_at: None,
             cancel_requested: false,
             error: None,
-            baseline_eligible: false,
             slots: Vec::new(),
             measurements: None,
             system_under_test: None,
@@ -300,6 +296,7 @@ impl PlanStore {
             run_attempt: run["run_attempt"].as_u64().unwrap_or(1) as u32,
             url: run["html_url"].as_str().unwrap_or_default().to_owned(),
             release_control_execution_id: title.strip_prefix("E2E · ").map(str::to_owned),
+            stack: None,
         };
         execution.state = "importing".into();
         execution.error = None;
@@ -561,11 +558,17 @@ impl PlanStore {
                 .unwrap_or_default(),
             agent: text(&fields["agent"])
                 .or_else(|| first.and_then(|request| request.agent.clone())),
-            suite: text(&fields["suite"]),
+            suite: text(&fields["suite"]).map(|id| ExecutionSuite {
+                label: text(&fields["suite_label"]).unwrap_or_else(|| id.clone()),
+                id: Some(id),
+                sha256: text(&fields["suite_sha256"]).unwrap_or_default(),
+            }),
         };
         let mut next = execution.clone();
-        next.configuration_sha256 = artifact::sha256_value(&parameters)?;
         next.parameters = Some(parameters);
+        if let ExecutionSource::Github { stack, .. } = &mut next.source {
+            *stack = text(&fields["stack"]);
+        }
         next.stack = merge_stacks(stacks);
         next.slots = slots;
         next.error = None;
@@ -711,7 +714,7 @@ impl PlanStore {
                     let mut slot = slot(round, &group_id, scenario.as_str());
                     slot.execution_id = id.clone();
                     slot.request = request_value.clone();
-                    if let Err(error) = update_slot(&mut slot, &record, None, &root) {
+                    if let Err(error) = update_slot(&mut slot, &record, &root) {
                         slot.error = Some(format!("{error:#}"));
                     }
                     slot
@@ -812,6 +815,7 @@ fn contract_fields(contract: &Path) -> Value {
     json!({
         "suite": first(&snapshot["profile"]["id"], &plan["profile"]["id"]),
         "suite_label": snapshot["profile"]["label"],
+        "suite_sha256": snapshot["profile_sha256"],
         "model": model,
         "provider": provider,
         "agent": first(&execution["profile"], &plan["agent_profile"]),
@@ -1013,7 +1017,7 @@ mod tests {
         write(
             &older,
             "profile.json",
-            &json!({"profile": {"id": "regression", "label": "Regression"}}).to_string(),
+            &json!({"profile": {"id": "regression", "label": "Regression"}, "profile_sha256": "sha256:regression"}).to_string(),
         );
         write(
             &older,
@@ -1022,7 +1026,7 @@ mod tests {
         );
         assert_eq!(
             contract_fields(&older),
-            json!({"suite": "regression", "suite_label": "Regression", "model": "deepseek-v4-flash",
+            json!({"suite": "regression", "suite_label": "Regression", "suite_sha256": "sha256:regression", "model": "deepseek-v4-flash",
                 "provider": "deepseek", "agent": "tech-lead", "runner_version": "0.11.28",
                 "stack": null, "iii": "0.24.1"})
         );
@@ -1048,7 +1052,7 @@ mod tests {
         );
         assert_eq!(
             contract_fields(&stated),
-            json!({"suite": "smoke", "suite_label": "smoke", "model": "glm-5.1", "provider": "zai",
+            json!({"suite": "smoke", "suite_label": "smoke", "suite_sha256": null, "model": "glm-5.1", "provider": "zai",
                 "agent": null, "runner_version": "0.12.2", "stack": "default", "iii": "0.24.2"})
         );
     }

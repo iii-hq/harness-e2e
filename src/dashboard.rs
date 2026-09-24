@@ -88,7 +88,7 @@ struct RunSnapshot {
     defaults: Defaults,
 }
 
-/// Register the dashboard read, plan, run, status, and cancellation functions
+/// Register the dashboard read, suite, run, status, and cancellation functions
 /// against an already registered E2E control plane.
 pub async fn register_worker_functions(
     iii: &iii_sdk::IIIClient,

@@ -7,7 +7,7 @@
 //! Storage carries no version number and needs no migration step.  Every
 //! table records the fingerprint of the statements that create it; at start
 //! the worker recreates the tables whose fingerprint moved, keeping the rows
-//! it can still read (executions, local plans and receipts) and reprojecting
+//! it can still read (executions, local suites and receipts) and reprojecting
 //! runs from the native bundles.  Everything else is reported as a warning
 //! and never refused.
 use std::collections::{BTreeMap, BTreeSet};
@@ -20,7 +20,8 @@ use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
 use crate::control::ExecutionRecord;
-use crate::plans::store::{PlanExecution, SavedPlan};
+use crate::plans::store::PlanExecution;
+use crate::plans::LocalSuite;
 use crate::report::{E2eRunReport, E2eScenarioReport};
 
 const DATABASE_QUERY: &str = "database::query";
@@ -36,22 +37,23 @@ const SCHEMA: &[&str] = &[
     "CREATE INDEX IF NOT EXISTS runs_execution_scenario_idx ON runs(execution_id, scenario_id, case_id)",
     "CREATE TABLE IF NOT EXISTS artifacts (execution_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT NOT NULL, available INTEGER NOT NULL CHECK (available IN (0, 1)), archive_uri TEXT NULL, PRIMARY KEY (execution_id, artifact_id, sha256))",
     "CREATE TABLE IF NOT EXISTS archives (execution_id TEXT PRIMARY KEY, archive_id TEXT NOT NULL UNIQUE, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, expires_at TEXT NULL, payload_json TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS local_suites (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     // ponytail: `origin` is read by no code here; it exists only so an older
-    // build opened on this database keeps the local plans and executions
-    // instead of dropping every row without it. Drop it with those builds.
-    "CREATE TABLE IF NOT EXISTS saved_plans (id TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT 'local', updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS saved_plans_updated_idx ON saved_plans(updated_at DESC)",
-    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, plan_id TEXT NULL, origin TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
-    "CREATE INDEX IF NOT EXISTS saved_plan_executions_plan_started_idx ON saved_plan_executions(plan_id, started_at DESC)",
+    // build opened on this database keeps the executions instead of dropping
+    // every row without it. Drop it with those builds.
+    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS saved_plan_executions_started_idx ON saved_plan_executions(started_at DESC)",
 ];
 
 const STORAGE_TABLE: &str = "harness_e2e_storage";
 const PROJECTION_TABLES: &[&str] = &["attempts", "runs", "artifacts", "archives"];
 /// Tables of layouts this runner no longer writes; dropped when found. The
 /// `history_*` tables held Release Control history imported as a parallel
-/// record; imported executions are ordinary executions now.
+/// record; imported executions are ordinary executions now. `saved_plans`
+/// held the baseline/candidate plans suites replaced.
 const LEGACY_TABLES: &[&str] = &[
     "harness_e2e_schema",
+    "saved_plans",
     "plans",
     "plan_executions",
     "plan_slots",
@@ -112,8 +114,8 @@ fn layout_statements() -> impl Iterator<Item = Value> {
 struct Salvage {
     statements: Vec<Value>,
     executions: usize,
-    plans: usize,
-    plan_executions: usize,
+    suites: usize,
+    saved_executions: usize,
     dropped: Value,
     unavailable: Vec<Value>,
 }
@@ -146,7 +148,7 @@ impl Persistence {
 
     /// Create the layout and reconcile the tables whose fingerprint moved.
     /// A stale table is dropped and recreated with the rows this runner can
-    /// still read: execution records, local plans and receipts are decoded
+    /// still read: execution records, local suites and receipts are decoded
     /// and reinserted, run projections are rebuilt from the native bundles
     /// under `data_dir`, and tables of layouts this runner no longer writes
     /// are dropped. Returns the summary it logs as a warning; nothing here
@@ -201,8 +203,8 @@ impl Persistence {
                 "recreated": stale,
                 "legacy_dropped": legacy,
                 "executions": salvage.executions,
-                "plans": salvage.plans,
-                "plan_executions": salvage.plan_executions,
+                "suites": salvage.suites,
+                "saved_executions": salvage.saved_executions,
                 "dropped": salvage.dropped,
                 "unavailable_evidence": salvage.unavailable,
             });
@@ -298,62 +300,40 @@ impl Persistence {
             }
         }
 
-        // Plans and executions: decoded and validated before reinsertion.
-        let mut plan_ids = BTreeSet::new();
-        if is_stale("saved_plans") && present.contains("saved_plans") {
-            let mut plans = Vec::new();
-            for row in self.query("SELECT * FROM saved_plans", json!([])).await? {
-                match decode_hashed_payload::<SavedPlan>(&row, "saved plan")
-                    .and_then(|plan| validate_saved_plan(&plan).map(|()| plan))
-                {
-                    Ok(plan) => plans.push(plan),
-                    Err(error) => {
-                        tracing::warn!(id = %row["id"], %error, "dropping a saved plan this runner cannot read");
-                        salvage.count("plans");
+        // Suites and executions: decoded and validated before reinsertion.
+        if is_stale("local_suites") && present.contains("local_suites") {
+            for row in self.query("SELECT * FROM local_suites", json!([])).await? {
+                match decode_hashed_payload::<LocalSuite>(&row, "local suite") {
+                    Ok(suite) => {
+                        salvage.suites += 1;
+                        salvage.statements.push(local_suite_statement(&suite)?);
                     }
-                }
-            }
-            salvage.plans = plans.len();
-            for plan in &plans {
-                plan_ids.insert(plan.plan.id.clone());
-                salvage.statements.push(saved_plan_statement(plan)?);
-            }
-        } else if present.contains("saved_plans") {
-            for row in self.query("SELECT id FROM saved_plans", json!([])).await? {
-                if let Some(id) = row["id"].as_str() {
-                    plan_ids.insert(id.to_owned());
+                    Err(error) => {
+                        tracing::warn!(id = %row["id"], %error, "dropping a suite this runner cannot read");
+                        salvage.count("suites");
+                    }
                 }
             }
         }
         if is_stale("saved_plan_executions") && present.contains("saved_plan_executions") {
-            let mut receipts = Vec::new();
             for row in self
                 .query("SELECT * FROM saved_plan_executions", json!([]))
                 .await?
             {
-                match decode_hashed_payload::<PlanExecution>(&row, "saved plan execution").and_then(
-                    |execution| {
-                        validate_saved_plan_execution(&execution)?;
-                        if let Some(plan_id) = &execution.plan_id {
-                            if !plan_ids.contains(plan_id) {
-                                bail!("plan {plan_id} is not retained");
-                            }
-                        }
-                        Ok(execution)
-                    },
-                ) {
-                    Ok(execution) => receipts.push(execution),
+                match decode_hashed_payload::<PlanExecution>(&row, "execution")
+                    .and_then(|execution| validate_saved_execution(&execution).map(|()| execution))
+                {
+                    Ok(execution) => {
+                        salvage.saved_executions += 1;
+                        salvage
+                            .statements
+                            .push(saved_execution_statement(&execution)?);
+                    }
                     Err(error) => {
-                        tracing::warn!(id = %row["id"], %error, "dropping a plan receipt this runner cannot read");
-                        salvage.count("plan_executions");
+                        tracing::warn!(id = %row["id"], %error, "dropping an execution this runner cannot read");
+                        salvage.count("saved_executions");
                     }
                 }
-            }
-            salvage.plan_executions = receipts.len();
-            for execution in &receipts {
-                salvage
-                    .statements
-                    .push(saved_plan_execution_statement(execution)?);
             }
         }
         Ok(salvage)
@@ -372,27 +352,27 @@ impl Persistence {
             .collect())
     }
 
-    pub(crate) async fn saved_plan(&self, id: &str) -> Result<Option<SavedPlan>> {
+    pub(crate) async fn local_suite(&self, id: &str) -> Result<Option<LocalSuite>> {
         Ok(self
-            .retained_plans(
-                "SELECT id, payload_json, payload_sha256 FROM saved_plans WHERE id = ?",
+            .retained_suites(
+                "SELECT id, payload_json, payload_sha256 FROM local_suites WHERE id = ?",
                 json!([id]),
             )
             .await?
             .pop())
     }
 
-    pub(crate) async fn saved_plans(&self) -> Result<Vec<SavedPlan>> {
-        self.retained_plans(
-            "SELECT id, payload_json, payload_sha256 FROM saved_plans ORDER BY updated_at DESC, id DESC",
+    pub(crate) async fn local_suites(&self) -> Result<Vec<LocalSuite>> {
+        self.retained_suites(
+            "SELECT id, payload_json, payload_sha256 FROM local_suites ORDER BY updated_at DESC, id",
             json!([]),
         )
         .await
     }
 
-    pub(crate) async fn saved_plan_execution(&self, id: &str) -> Result<Option<PlanExecution>> {
+    pub(crate) async fn saved_execution(&self, id: &str) -> Result<Option<PlanExecution>> {
         Ok(self
-            .retained_plan_executions(
+            .retained_executions(
                 "SELECT id, payload_json, payload_sha256 FROM saved_plan_executions WHERE id = ?",
                 json!([id]),
             )
@@ -400,41 +380,29 @@ impl Persistence {
             .pop())
     }
 
-    pub(crate) async fn saved_plan_executions(
-        &self,
-        plan_id: Option<&str>,
-    ) -> Result<Vec<PlanExecution>> {
-        let (sql, params) = match plan_id { Some(id) => ("SELECT id, payload_json, payload_sha256 FROM saved_plan_executions WHERE plan_id = ? ORDER BY started_at DESC", json!([id])), None => ("SELECT id, payload_json, payload_sha256 FROM saved_plan_executions ORDER BY started_at DESC", json!([])) };
-        self.retained_plan_executions(sql, params).await
-    }
-
-    async fn retained_plans(&self, sql: &str, params: Value) -> Result<Vec<SavedPlan>> {
-        self.retained(
-            sql,
-            params,
-            "saved plan",
-            validate_saved_plan,
-            delete_plan_statements,
+    pub(crate) async fn saved_executions(&self) -> Result<Vec<PlanExecution>> {
+        self.retained_executions(
+            "SELECT id, payload_json, payload_sha256 FROM saved_plan_executions ORDER BY started_at DESC",
+            json!([]),
         )
         .await
     }
 
-    async fn retained_plan_executions(
-        &self,
-        sql: &str,
-        params: Value,
-    ) -> Result<Vec<PlanExecution>> {
+    async fn retained_suites(&self, sql: &str, params: Value) -> Result<Vec<LocalSuite>> {
         self.retained(
             sql,
             params,
-            "saved plan execution",
-            validate_saved_plan_execution,
-            |id| {
-                vec![
-                    json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
-                ]
-            },
+            "local suite",
+            |_| Ok(()),
+            |id| vec![json!({"sql": "DELETE FROM local_suites WHERE id = ?", "params": [id]})],
         )
+        .await
+    }
+
+    async fn retained_executions(&self, sql: &str, params: Value) -> Result<Vec<PlanExecution>> {
+        self.retained(sql, params, "execution", validate_saved_execution, |id| {
+            vec![json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]})]
+        })
         .await
     }
 
@@ -468,28 +436,20 @@ impl Persistence {
         Ok(values)
     }
 
-    pub(crate) async fn save_plan(&self, plan: &SavedPlan) -> Result<()> {
-        self.transaction(vec![saved_plan_statement(plan)?]).await
+    pub(crate) async fn save_local_suite(&self, suite: &LocalSuite) -> Result<()> {
+        self.transaction(vec![local_suite_statement(suite)?]).await
     }
-    pub(crate) async fn save_plan_execution(&self, execution: &PlanExecution) -> Result<()> {
-        self.transaction(vec![saved_plan_execution_statement(execution)?])
-            .await
-    }
-    pub(crate) async fn save_plan_and_execution(
-        &self,
-        plan: &SavedPlan,
-        execution: &PlanExecution,
-    ) -> Result<()> {
+    pub(crate) async fn delete_local_suite(&self, id: &str) -> Result<()> {
         self.transaction(vec![
-            saved_plan_statement(plan)?,
-            saved_plan_execution_statement(execution)?,
+            json!({"sql": "DELETE FROM local_suites WHERE id = ?", "params": [id]}),
         ])
         .await
     }
-    pub(crate) async fn delete_plan_and_executions(&self, id: &str) -> Result<()> {
-        self.transaction(delete_plan_statements(id)).await
+    pub(crate) async fn save_execution_receipt(&self, execution: &PlanExecution) -> Result<()> {
+        self.transaction(vec![saved_execution_statement(execution)?])
+            .await
     }
-    pub(crate) async fn delete_plan_execution(&self, id: &str) -> Result<()> {
+    pub(crate) async fn delete_execution_receipt(&self, id: &str) -> Result<()> {
         self.transaction(vec![
             json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
         ])
@@ -590,7 +550,7 @@ impl Persistence {
 
     /// Decode the records this runner can read. A record it cannot read
     /// (one naming a removed scenario, say) is deleted with a warning, as
-    /// plans are, so it never fails the start or a list.
+    /// suites are, so it never fails the start or a list.
     async fn records_query(&self, sql: &str, params: Value) -> Result<Vec<ExecutionRecord>> {
         let mut records = Vec::new();
         let mut discarded = Vec::new();
@@ -700,13 +660,6 @@ fn delete_execution_statements(execution_id: &str) -> Vec<Value> {
         json!({"sql": "DELETE FROM artifacts WHERE execution_id = ?", "params": [execution_id]}),
         json!({"sql": "DELETE FROM archives WHERE execution_id = ?", "params": [execution_id]}),
         json!({"sql": "DELETE FROM executions WHERE execution_id = ?", "params": [execution_id]}),
-    ]
-}
-
-fn delete_plan_statements(id: &str) -> Vec<Value> {
-    vec![
-        json!({"sql": "DELETE FROM saved_plan_executions WHERE plan_id = ?", "params": [id]}),
-        json!({"sql": "DELETE FROM saved_plans WHERE id = ?", "params": [id]}),
     ]
 }
 
@@ -846,30 +799,25 @@ fn decode_hashed_payload<T: DeserializeOwned>(row: &Value, kind: &str) -> Result
     serde_json::from_str(payload).with_context(|| format!("decode {kind}"))
 }
 
-fn saved_plan_statement(plan: &SavedPlan) -> Result<Value> {
-    validate_saved_plan(plan)?;
-    let payload = serde_json::to_string(plan)?;
+fn local_suite_statement(suite: &LocalSuite) -> Result<Value> {
+    let payload = serde_json::to_string(suite)?;
     let hash = crate::artifact::sha256_bytes(payload.as_bytes());
     Ok(
-        json!({"sql": "INSERT INTO saved_plans(id, updated_at, payload_json, payload_sha256) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, payload_json=excluded.payload_json, payload_sha256=excluded.payload_sha256", "params": [plan.plan.id, plan.plan.updated_at, payload, hash]}),
+        json!({"sql": "INSERT INTO local_suites(id, updated_at, payload_json, payload_sha256) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET updated_at=excluded.updated_at, payload_json=excluded.payload_json, payload_sha256=excluded.payload_sha256", "params": [suite.id, suite.updated_at, payload, hash]}),
     )
 }
 
-fn saved_plan_execution_statement(execution: &PlanExecution) -> Result<Value> {
-    validate_saved_plan_execution(execution)?;
+fn saved_execution_statement(execution: &PlanExecution) -> Result<Value> {
+    validate_saved_execution(execution)?;
     let payload = serde_json::to_string(execution)?;
     let hash = crate::artifact::sha256_bytes(payload.as_bytes());
     Ok(
-        json!({"sql": "INSERT INTO saved_plan_executions(id, plan_id, idempotency_key, state, started_at, updated_at, payload_json, payload_sha256) VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at, payload_json=excluded.payload_json, payload_sha256=excluded.payload_sha256", "params": [execution.id, execution.plan_id, execution.idempotency_key, execution.state, execution.started_at, execution.updated_at, payload, hash]}),
+        json!({"sql": "INSERT INTO saved_plan_executions(id, idempotency_key, state, started_at, updated_at, payload_json, payload_sha256) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at, payload_json=excluded.payload_json, payload_sha256=excluded.payload_sha256", "params": [execution.id, execution.idempotency_key, execution.state, execution.started_at, execution.updated_at, payload, hash]}),
     )
 }
 
-fn validate_saved_plan(plan: &SavedPlan) -> Result<()> {
-    crate::plans::store::validate_saved_plan(plan)
-}
-
-fn validate_saved_plan_execution(execution: &PlanExecution) -> Result<()> {
-    crate::plans::store::validate_saved_plan_execution(execution)
+fn validate_saved_execution(execution: &PlanExecution) -> Result<()> {
+    crate::plans::store::validate_saved_execution(execution)
 }
 
 #[cfg(test)]
@@ -897,18 +845,20 @@ mod tests {
             "harness_e2e_storage",
             "executions",
             "runs",
-            "saved_plans",
+            "local_suites",
             "saved_plan_executions",
         ] {
             assert!(names.contains(&table), "{table}");
         }
+        assert!(!names.contains(&"saved_plans"));
         let runs = layouts.iter().find(|layout| layout.name == "runs").unwrap();
         assert_eq!(runs.statements.len(), 2);
-        // Older builds drop plan rows without `origin`; keep it for them.
-        for table in ["saved_plans", "saved_plan_executions"] {
-            let layout = layouts.iter().find(|layout| layout.name == table).unwrap();
-            assert!(layout.statements[0].contains("origin TEXT NOT NULL DEFAULT 'local'"));
-        }
+        // Older builds drop execution rows without `origin`; keep it for them.
+        let layout = layouts
+            .iter()
+            .find(|layout| layout.name == "saved_plan_executions")
+            .unwrap();
+        assert!(layout.statements[0].contains("origin TEXT NOT NULL DEFAULT 'local'"));
         assert!(runs.fingerprint().starts_with("sha256:"));
     }
 
@@ -1057,37 +1007,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn start_drops_imported_history_and_keeps_local_plans_and_executions() {
-        let request: crate::plans::PlanCreateRequest = serde_json::from_value(json!({
-            "label": "Local plan", "url": "ws://127.0.0.1:49134", "model": "model",
-            "provider": "provider", "scenarios": ["context_pressure"],
-        }))
-        .unwrap();
-        let plan = crate::plans::store::prepared_plan(
-            crate::plans::new_plan(&request, "plan-local".into()).unwrap(),
-            None,
-        )
-        .unwrap();
-        // Rows as the previous layout stored them: an `origin` column, and a
-        // receipt written before executions carried a label, parameters, a
-        // source or a stack.
-        let row = |id: &str, origin: &str, body: String| json!({"id": id, "origin": origin, "payload_sha256": crate::artifact::sha256_bytes(body.as_bytes()), "payload_json": body});
-        let plans = json!([
-            row("plan-local", "local", serde_json::to_string(&plan).unwrap()),
+    async fn start_drops_plans_and_imported_history_and_keeps_suites_and_executions() {
+        let suite = LocalSuite {
+            id: "suite-0123456789ab".into(),
+            label: "Mine".into(),
+            scenarios: vec!["context_pressure".into()],
+            repetitions: 1,
+            technical_retries: 0,
+            created_at: "2026-09-24T00:00:00Z".into(),
+            updated_at: "2026-09-24T00:00:00Z".into(),
+        };
+        let row = |id: &str, body: String| json!({"id": id, "payload_sha256": crate::artifact::sha256_bytes(body.as_bytes()), "payload_json": body});
+        let suites = json!([
+            row(&suite.id, serde_json::to_string(&suite).unwrap()),
             row(
-                "remote-plan-rc",
-                "remote",
-                json!({"plan": {"key": "harness-smoke"}, "source": {"instance_id": "rc"}})
-                    .to_string()
+                "suite-unreadable",
+                json!({"id": "suite-unreadable"}).to_string()
             ),
         ]);
+        // An execution a saved plan ran, as the plan layout stored it: it
+        // stays, without its plan and role.
         let executions = json!([
             row(
                 "plan-receipt",
-                "local",
                 json!({
                     "id": "plan-receipt", "plan_id": "plan-local", "idempotency_key": "key",
-                    "configuration_sha256": plan.configuration_sha256, "role": "baseline",
+                    "configuration_sha256": "sha256:plan", "role": "baseline",
                     "state": "completed", "started_at": "2026-09-01T00:00:00Z",
                     "updated_at": "2026-09-01T00:10:00Z", "finished_at": "2026-09-01T00:10:00Z",
                     "cancel_requested": false, "error": null, "baseline_eligible": true,
@@ -1097,12 +1042,12 @@ mod tests {
             ),
             row(
                 "remote-execution-rc",
-                "remote",
                 json!({"execution": {"record": {"id": "rc"}}, "source": {"instance_id": "rc"}})
                     .to_string()
             ),
         ]);
-        let history = [
+        let legacy = [
+            "saved_plans",
             "history_campaigns",
             "history_reports",
             "history_runs",
@@ -1114,20 +1059,20 @@ mod tests {
                 json!(layouts
                     .iter()
                     .map(|layout| layout.name.as_str())
-                    .chain(history)
+                    .chain(legacy)
                     .map(|name| json!({"name": name}))
                     .collect::<Vec<_>>())
             } else if sql == format!("SELECT * FROM {STORAGE_TABLE}") {
                 json!(layouts
                     .iter()
                     .map(|layout| {
-                        let moved = layout.name.starts_with("saved_plan");
-                        json!({"name": layout.name, "fingerprint": if moved { "sha256:with-origin".into() } else { layout.fingerprint() }})
+                        let moved = matches!(layout.name.as_str(), "local_suites" | "saved_plan_executions");
+                        json!({"name": layout.name, "fingerprint": if moved { "sha256:before".into() } else { layout.fingerprint() }})
                     })
-                    .chain(history.iter().map(|name| json!({"name": name, "fingerprint": "sha256:history"})))
+                    .chain(legacy.iter().map(|name| json!({"name": name, "fingerprint": "sha256:legacy"})))
                     .collect::<Vec<_>>())
-            } else if sql == "SELECT * FROM saved_plans" {
-                plans.clone()
+            } else if sql == "SELECT * FROM local_suites" {
+                suites.clone()
             } else if sql == "SELECT * FROM saved_plan_executions" {
                 executions.clone()
             } else {
@@ -1143,27 +1088,36 @@ mod tests {
         let statements = server.await.unwrap();
         client.shutdown_async().await;
 
-        assert_eq!(summary["legacy_dropped"], json!(history));
+        assert_eq!(summary["legacy_dropped"], json!(legacy));
         assert_eq!(
-            (&summary["plans"], &summary["plan_executions"]),
+            (&summary["suites"], &summary["saved_executions"]),
             (&json!(1), &json!(1))
         );
         assert_eq!(
             summary["dropped"],
-            json!({"plans": 1, "plan_executions": 1})
+            json!({"suites": 1, "saved_executions": 1})
         );
         let sql = |statement: &Value| statement["sql"].as_str().unwrap().to_owned();
-        for table in history {
+        for table in legacy {
             assert!(statements
                 .iter()
                 .any(|statement| sql(statement) == format!("DROP TABLE IF EXISTS {table}")));
         }
         let inserted = statements
             .iter()
-            .filter(|statement| sql(statement).starts_with("INSERT INTO saved_plan"))
+            .filter(|statement| {
+                sql(statement).starts_with("INSERT INTO local_suites")
+                    || sql(statement).starts_with("INSERT INTO saved_plan_executions")
+            })
             .map(|statement| statement["params"][0].as_str().unwrap())
             .collect::<Vec<_>>();
-        assert_eq!(inserted, vec!["plan-local", "plan-receipt"]);
+        assert_eq!(inserted, vec!["suite-0123456789ab", "plan-receipt"]);
+        let receipt = statements
+            .iter()
+            .find(|statement| sql(statement).starts_with("INSERT INTO saved_plan_executions"))
+            .unwrap();
+        let payload: Value = serde_json::from_str(receipt["params"][5].as_str().unwrap()).unwrap();
+        assert!(payload.get("plan_id").is_none() && payload.get("role").is_none());
         assert!(statements.iter().any(|statement| sql(statement)
             .starts_with("DELETE FROM harness_e2e_storage WHERE name NOT IN")));
     }

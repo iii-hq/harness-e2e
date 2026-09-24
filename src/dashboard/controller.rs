@@ -17,8 +17,9 @@ use crate::control::{
 };
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+    SuiteView,
 };
-use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
+use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -66,8 +67,7 @@ impl Controller {
             }
         }
         let plan_store =
-            crate::plans::store::PlanStore::new(runs_dir.clone(), url.clone(), control.clone())
-                .await?;
+            crate::plans::store::PlanStore::new(runs_dir.clone(), control.clone()).await?;
         let controller = Arc::new(Self {
             plan_store,
             github_repository,
@@ -275,13 +275,23 @@ impl Controller {
         self.read_model.write().await.take();
     }
 
-    pub(super) async fn list_plans(&self) -> Result<Vec<LocalPlan>> {
-        self.plan_store.list_local().await
+    pub(super) async fn suites(&self) -> Result<Vec<SuiteView>> {
+        self.plan_store.suites().await
     }
 
-    pub(super) async fn get_plan(&self, id: &str) -> Result<LocalPlan> {
-        validate_plan_id(id)?;
-        self.plan_store.get_local(id).await
+    pub(super) async fn create_suite(&self, request: SuiteCreateRequest) -> Result<SuiteView> {
+        validate_suite_id(&request.from)?;
+        self.plan_store.create_suite(request).await
+    }
+
+    pub(super) async fn update_suite(&self, request: SuiteUpdateRequest) -> Result<SuiteView> {
+        validate_suite_id(&request.suite_id)?;
+        self.plan_store.update_suite(request).await
+    }
+
+    pub(super) async fn delete_suite(&self, id: &str) -> Result<()> {
+        validate_suite_id(id)?;
+        self.plan_store.delete_suite(id).await
     }
 
     pub(super) async fn read_evidence(
@@ -353,26 +363,6 @@ impl Controller {
         Ok(json!({"execution_id": execution.id, "state": execution.state}))
     }
 
-    pub(super) async fn create_plan(&self, request: PlanCreateRequest) -> Result<LocalPlan> {
-        self.require_current_url(&request.url)?;
-        self.plan_store.create_local(request).await
-    }
-
-    pub(super) async fn update_plan(
-        &self,
-        id: &str,
-        update: PlanUpdateRequest,
-    ) -> Result<LocalPlan> {
-        validate_plan_id(id)?;
-        self.plan_store.update_local(id, update).await
-    }
-
-    pub(super) async fn delete_plan(&self, id: &str) -> Result<()> {
-        validate_plan_id(id)?;
-        self.plan_store.get_local(id).await?;
-        self.plan_store.delete_local(id).await
-    }
-
     pub(super) async fn delete_execution(&self, id: &str) -> Result<()> {
         super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
         if id.starts_with("plan-") {
@@ -394,16 +384,6 @@ impl Controller {
         self.invalidate_summaries().await;
         self.emit_change("deleted", id).await;
         Ok(())
-    }
-
-    pub(super) async fn start_plan(
-        self: &Arc<Self>,
-        id: &str,
-        role: PlanRunRole,
-        idempotency_key: &str,
-    ) -> Result<LocalPlan> {
-        validate_plan_id(id)?;
-        self.plan_store.start_local(id, idempotency_key, role).await
     }
 
     async fn emit_change(&self, kind: &str, execution_id: &str) {
@@ -433,6 +413,14 @@ impl Controller {
         Ok(json!({"execution_id": execution.id}))
     }
 
+    /// Stop an execution: no next slot is admitted and the running one is cancelled.
+    pub(super) async fn cancel_execution(&self, id: &str) -> Result<Value> {
+        super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
+        let execution = self.plan_store.cancel(id).await?;
+        self.emit_change("cancelling", id).await;
+        Ok(execution)
+    }
+
     pub(super) async fn cancel(&self) -> Result<()> {
         let control = self
             .control
@@ -456,16 +444,6 @@ impl Controller {
         }
         let record = control.record(&execution_id).await?;
         self.sync_control_record(record).await?;
-        Ok(())
-    }
-
-    fn require_current_url(&self, url: &str) -> Result<()> {
-        if url.trim() != self.defaults.url {
-            bail!(
-                "execution URL must match the worker stack {}",
-                self.defaults.url
-            );
-        }
         Ok(())
     }
 
@@ -587,14 +565,14 @@ fn change_kind(record: &ExecutionRecord) -> &'static str {
     }
 }
 
-fn validate_plan_id(value: &str) -> Result<()> {
+fn validate_suite_id(value: &str) -> Result<()> {
     if value.is_empty()
         || value.len() > 100
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        bail!("plan id is invalid");
+        bail!("suite id is invalid");
     }
     Ok(())
 }
