@@ -42,25 +42,38 @@ EXECUTOR_KEYS = ("iii", "template")
 def load_yaml(text: str) -> Any:
     """YAML the way Compose reads it (1.2 core schema).
 
-    PyYAML resolves YAML 1.1: `on`, `no` and `yes` become booleans and an
-    unquoted date a datetime, which then reach Compose as something the
-    author did not write (or do not serialize at all). Only `true`/`false`
-    are booleans here, and a date stays text. Writing back with
-    `yaml.safe_dump` quotes those strings, which 1.2 reads as strings too.
+    PyYAML resolves YAML 1.1: `on`, `no` and `yes` become booleans, an
+    unquoted date a datetime, `010` the octal 8 and `1:30` the sexagesimal
+    90, which then reach Compose as something the author did not write (or
+    do not serialize at all). Here only `true`/`false` are booleans, a date
+    stays text, and integers are 1.2's: decimal, `0o` octal, `0x` hex.
+    Writing back with `yaml.safe_dump` quotes the strings 1.1 would misread,
+    which 1.2 reads as strings too.
     """
     import yaml
 
     class Loader(yaml.SafeLoader):
         pass
 
-    ambiguous = {"tag:yaml.org,2002:bool", "tag:yaml.org,2002:timestamp"}
+    replaced = {"tag:yaml.org,2002:bool", "tag:yaml.org,2002:timestamp", "tag:yaml.org,2002:int"}
     Loader.yaml_implicit_resolvers = {
-        first: [(tag, pattern) for tag, pattern in resolvers if tag not in ambiguous]
+        first: [(tag, pattern) for tag, pattern in resolvers if tag not in replaced]
         for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
     }
     Loader.add_implicit_resolver(
         "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
     )
+    Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:int", re.compile(r"^(?:[-+]?[0-9]+|0o[0-7]+|0x[0-9a-fA-F]+)$"), list("-+0123456789")
+    )
+
+    def integer(loader: Any, node: Any) -> int:
+        value = loader.construct_scalar(node)
+        if value.startswith(("0o", "0x")):
+            return int(value[2:], 8 if value[1] == "o" else 16)
+        return int(value, 10)
+
+    Loader.add_constructor("tag:yaml.org,2002:int", integer)
     return yaml.load(text, Loader=Loader)
 
 
@@ -465,9 +478,15 @@ def project_scaffold(
     template_packages: dict[str, str] | None = None,
     profile_root: Path | None = None,
     group_id: str | None = None,
+    assembling: bool = False,
 ) -> dict[str, Any]:
     """The Compose project one group starts, or with no group the stack the
     execution assembles once for all of them.
+
+    Assembling, the model's provider and the Directory are not declared: a
+    worker a declared one depends on (Harness brings both) arrives from its
+    graph with the graph's pin, and a second declaration of it conflicts with
+    that pin. The launcher asks for whichever no graph brought.
 
     Without a template it is the stack the contract carries — assembled once,
     its lock beside it — with only what is per group stamped on: namespace,
@@ -501,6 +520,10 @@ def project_scaffold(
         worker_name(entry["worker"]): entry["resolved"]["version"]
         for entry in ((runtime.get("lock") or {}).get("containers") or {}).values()
     }
+    # A template's packages take the dispatch's pins first (an older Release
+    # Control dispatch pins workers the stack does not declare), then the
+    # versions the execution locked.
+    locked.update(runtime.get("stack_overrides") or {})
 
     # The project is the template when there is one and the stack otherwise.
     # Add the runner and the campaign's provider to either project. Templates
@@ -541,7 +564,7 @@ def project_scaffold(
     if not re.fullmatch(r"[a-z][a-z0-9-]*", provider):
         raise ValueError("suite.subject.provider must be a provider package name")
     provider_package = f"provider-{provider}"
-    if not declares(provider_package):
+    if not assembling and not declares(provider_package):
         if provider_package in containers:
             raise ValueError(f"container {provider_package} is already used by another worker")
         containers[provider_package] = {"worker": f"package://{provider_package}", "version": DEFAULT_SELECTOR}
@@ -599,9 +622,12 @@ def project_scaffold(
         # id reaches: only then name the container ourselves.
         if "config_name" not in container and len(f"{namespace}-{name}") > 64:
             container["config_name"] = scoped_config_name(namespace, name)
-    if profile_root is not None:
+    if profile_root is not None and not assembling:
         if not profile_root.is_absolute():
             raise ValueError("profile root must be absolute")
+        if "iii-directory" not in package_names and template is None and runtime.get("lock"):
+            # A frozen start cannot add a worker its lock does not name.
+            raise ValueError("the assembled stack brings no iii-directory; an agent profile needs one")
         if "iii-directory" not in package_names:
             containers["iii-directory"] = {
                 "worker": "package://iii-directory",
@@ -777,6 +803,7 @@ def main() -> int:
     project = commands.add_parser("project")
     project.add_argument("--contract", type=Path, required=True)
     project.add_argument("--group-id", help="omit to scaffold the stack the whole suite shares")
+    project.add_argument("--assemble", action="store_true", help="the stack the execution assembles once")
     project.add_argument("--namespace", required=True)
     project.add_argument("--data-dir", type=Path, required=True)
     project.add_argument("--env-file", type=Path)
@@ -860,6 +887,7 @@ def main() -> int:
                 assignments(args.template_package, "template-package"),
                 args.profile_root,
                 args.group_id,
+                args.assemble,
             )
             if "engine" in manifest:
                 manifest["engine"]["url"] = f"ws://127.0.0.1:{args.engine_port}"

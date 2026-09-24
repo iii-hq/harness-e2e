@@ -358,7 +358,11 @@ project_args=(
   --engine-port "$engine_port"
 )
 # Without a group the scaffold is the stack the whole suite shares.
-[[ -n "$assemble_only" ]] || project_args+=(--group-id "$campaign_group_id")
+if [[ -n "$assemble_only" ]]; then
+  project_args+=(--assemble)
+else
+  project_args+=(--group-id "$campaign_group_id")
+fi
 if [[ -n "$project_template" ]]; then
   project_args+=(--template-compose "$template_project/worker-compose.yaml"
     --template-package shell=ide --template-package console=ade)
@@ -366,7 +370,8 @@ if [[ -n "$project_template" ]]; then
     project_args+=(--fixture-compose "$compose_file")
   fi
 fi
-if [[ "$profile_assets" == true ]]; then
+# The Directory's configuration is per group; the assembled stack has none.
+if [[ "$profile_assets" == true && -z "$assemble_only" ]]; then
   project_args+=(--profile-root "$project_dir")
 fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
@@ -401,8 +406,12 @@ else
   if [[ -n "$project_template" ]]; then
     add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@')")
   else
+    # Except what the executor only needs to exist: the model's provider and
+    # the Directory. Harness's graph brings them pinned, and asking for one as
+    # well is a second, conflicting spec. Declared, one keeps its pin unasked.
+    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory "
     while IFS= read -r root; do
-      add_args+=("worker=$root")
+      [[ "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
     done < <(python3 "$contract_tool" roots --compose "$compose_file")
   fi
   compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
@@ -410,6 +419,16 @@ else
   [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
 if [[ -n "$assemble_only" ]]; then
+  # Ask on its own for whichever of those no graph brought.
+  needed=("provider-$(jq -r '.suite.subject.provider' "$contract_path")")
+  [[ "$profile_assets" != true ]] || needed+=(iii-directory)
+  for worker in "${needed[@]}"; do
+    if python3 "$contract_tool" roots --compose "$compose_file" | grep -q "^$worker@"; then
+      continue
+    fi
+    compose_trigger compose::add "file=$compose_file" "worker=$worker" >"$artifact_dir/stack/add-$worker.json"
+    await_compose_add "$artifact_dir/stack/add-$worker.json" "$artifact_dir/stack/add-$worker-operation.json"
+  done
   # compose::add expanded every root into its graph and wrote the lock beside
   # the file; the exit handler takes the project down.
   log "Assembled $compose_file and its worker-compose.lock"

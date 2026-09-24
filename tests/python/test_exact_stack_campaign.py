@@ -339,6 +339,35 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         )
         self.assertEqual(pinned["containers"]["canvas"]["version"], "0.4.0")
 
+    def test_an_agent_profile_on_the_default_stack_leaves_provider_and_directory_to_the_graph(self):
+        """Harness depends on the Directory and on several providers, pinned in
+        its graph. Declaring either again while assembling is a second spec
+        Compose refuses ("conflicting sources, versions, or settings"); the
+        groups then configure the Directory the graph brought."""
+        contract = campaign_contract()
+        contract["suite"]["agent_profile"] = "ade-worker-builder"
+        contract["suite"]["subject"]["provider"] = "anthropic"
+        assembled = MODULE.project_scaffold(
+            contract, "e2e-prepare", Path("/data"), "/private/.env", {},
+            profile_root=Path("/project"), assembling=True,
+        )
+        self.assertEqual(sorted(assembled["containers"]),
+                         sorted(declared_base()["containers"]))
+        # The same contract in a group, without the lock yet: both are ensured.
+        group = MODULE.project_scaffold(
+            contract, "e2e-group", Path("/data"), "/private/.env", {}, profile_root=Path("/project"),
+        )
+        self.assertIn("iii-directory", group["containers"])
+        self.assertIn("provider-anthropic", group["containers"])
+        # Frozen, the group configures the Directory the graph brought (see the
+        # assembled-stack test); a lock with none cannot gain one.
+        contract["runtime"]["lock"] = lock_of({"harness": "1.8.31"})
+        contract["runtime"]["compose"] = {"containers": {"harness": {"worker": "package://harness"}}}
+        with self.assertRaisesRegex(ValueError, "brings no iii-directory"):
+            MODULE.project_scaffold(
+                contract, "e2e-group", Path("/data"), None, {}, profile_root=Path("/project"), group_id="daily-core",
+            )
+
     def test_a_group_starts_the_assembled_stack_exactly_and_keeps_its_lock_beside_it(self):
         """Compose checks the lock against every package container's worker and
         selector, so the group stamps what is per group and nothing else."""
@@ -1011,7 +1040,9 @@ fail() {
         template_branch = block[start:block.index("else", start)]
         # Only the runner, at the version the scaffold gave it; no template role.
         self.assertIn('add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep \'^harness-e2e@\')")', template_branch)
-        self.assertEqual(block.count("compose_trigger compose::add"), 1)
+        # One add assembles the project; preparation's second asks only for
+        # what no graph brought.
+        self.assertEqual(block.count("compose_trigger compose::add"), 2)
         self.assertNotIn("exact-stack-scaffold", block)
         self.assertIn("await_compose_add", block)
         self.assertNotIn("runner_dependencies", MODULE.__dict__)
@@ -1031,22 +1062,35 @@ compose_file=$1/$3/worker-compose.yaml
 contract_tool=$2
 log() { :; }
 await_compose_add() { :; }
-compose_trigger() { printf '%s\\n' "$*" >>"$artifact_dir/calls"; echo '{"status":"ok"}'; }
+compose_trigger() {
+  printf '%s\\n' "$*" >>"$artifact_dir/calls"
+  # Harness's graph brings the Directory when the case says so.
+  if [[ -n "${BRINGS:-}" && "$*" == *"worker=harness@"* ]]; then cat "$BRINGS" >>"$compose_file"; fi
+  echo '{"status":"ok"}'
+}
 """
         compose = {"containers": {
             "harness": {"worker": "package://harness", "version": "latest"},
             "harness-e2e": {"worker": "package://harness-e2e", "version": "0.12.3"},
+            "provider-deepseek": {"worker": "package://provider-deepseek", "version": "latest"},
         }}
+        directory_from_graph = {"worker": "package://api.workers.iii.dev/iii-directory", "version": "1.2.29"}
         cases = (
-            # (lock in contract, assemble_only, project template) -> (frozen, calls)
-            (True, "", "", "true", ["compose::up --json"]),
-            (False, "1", "", "false", ["compose::add file="]),
+            # (lock in contract, assemble_only, project template, agent profile,
+            #  Directory already in the file) -> (frozen, calls)
+            (True, "", "", False, False, "true", ["compose::up --json"]),
+            (False, "1", "", False, False, "false", ["compose::add file="]),
+            # With an agent profile the Directory is asked for on its own only
+            # when no graph brought it, never alongside Harness.
+            (False, "1", "", True, False, "false", ["compose::add file=", "compose::add file="]),
+            (False, "1", "", True, True, "false", ["compose::add file="]),
             # Preparation assembles the stack itself, never a template project.
-            (False, "1", "linkly-agentic", "false", ["compose::add file="]),
-            (True, "", "linkly-agentic", "false", ["compose::add file=", "compose::up --json"]),
+            (False, "1", "linkly-agentic", False, False, "false", ["compose::add file="]),
+            (True, "", "linkly-agentic", False, False, "false", ["compose::add file=", "compose::up --json"]),
         )
-        for locked, assemble_only, template, frozen, calls in cases:
-            with self.subTest(locked=locked, assemble_only=assemble_only, template=template), \
+        for locked, assemble_only, template, profile, brought, frozen, calls in cases:
+            with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
+                              profile=profile, brought=brought), \
                     tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 # A template project lives in the run tree, a stack in the evidence.
@@ -1054,12 +1098,20 @@ compose_trigger() { printf '%s\\n' "$*" >>"$artifact_dir/calls"; echo '{"status"
                 (root / "stack").mkdir()
                 (root / project).mkdir(exist_ok=True)
                 (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(compose))
-                (root / "contract.json").write_text(json.dumps({"runtime": {"lock": lock_of({}) if locked else None}}))
-                variables = f"assemble_only={assemble_only!r}\nproject_template={template!r}\nexecution_template=''\nlinkly_fixture=false\n"
+                (root / "brings.yaml").write_text(
+                    yaml.safe_dump({"containers": {"iii-directory": directory_from_graph}}).split("\n", 1)[1]
+                )
+                (root / "contract.json").write_text(json.dumps({
+                    "runtime": {"lock": lock_of({}) if locked else None},
+                    "suite": {"subject": {"provider": "deepseek"}},
+                }))
+                variables = (f"assemble_only={assemble_only!r}\nproject_template={template!r}\n"
+                             f"execution_template=''\nlinkly_fixture=false\nprofile_assets={str(profile).lower()}\n")
                 result = subprocess.run(
                     ["bash", "-c", stubs + variables + decide + 'printf "%s\\n" "$frozen" >"$artifact_dir/frozen"\n' + assembly,
                      "runner", str(root), str(SCRIPT), project],
                     capture_output=True, text=True,
+                    env={**os.environ, "BRINGS": str(root / "brings.yaml") if brought else ""},
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual((root / "frozen").read_text().strip(), frozen)
@@ -1077,6 +1129,12 @@ compose_trigger() { printf '%s\\n' "$*" >>"$artifact_dir/calls"; echo '{"status"
                     self.assertNotIn("worker=harness@", made[0])
                 elif not locked:
                     self.assertIn("worker=harness@latest", made[0])
+                    # What the executor only needs to exist is never asked
+                    # for next to Harness: its graph pins them.
+                    self.assertNotIn("worker=iii-directory", made[0])
+                    self.assertNotIn("worker=provider-deepseek", made[0])
+                if len(made) == 2 and assemble_only:
+                    self.assertTrue(made[1].endswith("worker=iii-directory"), made[1])
 
     def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):
         contract = campaign_contract()

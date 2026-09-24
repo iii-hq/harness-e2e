@@ -222,7 +222,9 @@ Preparation resolves the rest, once:
 3. `contracts` writes one contract per campaign.
 4. The stack is assembled once with `compose::add`, which expands every
    declared worker into its graph and writes `worker-compose.lock`; it gets
-   the groups' provider credentials and one retry. `lock` puts that project
+   the groups' provider credentials and one retry. The model's provider and,
+   for an agent profile, the Directory come from Harness's graph with its pins;
+   only one no graph brings is asked for on its own. `lock` puts that project
    and lock into every contract. Each group starts it with `compose::up`
    frozen, so every group runs the same versions. A template project is
    assembled per group, pinned to the versions that lock resolved.
