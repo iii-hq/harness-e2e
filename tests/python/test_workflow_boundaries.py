@@ -138,7 +138,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
             ROOT / ".github/workflows/exact-stack-e2e.yml"
         ).read_text(encoding="utf-8")
         self.assertIn("strategy:\n      fail-fast: false", workflow)
-        self.assertIn("scripts/run_exact_stack_group.sh", workflow)
+        # Each phase runs in the executor image, which starts the group there.
+        self.assertIn("scripts/run_in_image.sh group", workflow)
+        self.assertIn("group) exec bash scripts/run_exact_stack_group.sh",
+                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
@@ -162,7 +165,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("sha256sum target/harness-e2e-contract/worker-compose.lock", workflow)
         self.assertIn("--stack-lock-sha256", workflow)
         self.assertIn("exact_stack_campaign.py groups", workflow)
-        self.assertIn("exact_stack_campaign.py validate", workflow)
+        self.assertIn("exact_stack_campaign.py validate", (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
 
     def test_a_dispatch_names_suite_stack_model_and_profile(self):
         """What to test, where, with whom, and optionally for which Release
@@ -185,9 +188,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite", workflow)
         # The runner the stack runs materializes the suite, with the flag every
         # release of it knows.
-        self.assertIn('"$RUNNER_BINARY" test-plan materialize --profile "$suite"', workflow)
+        executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
+        self.assertIn('"$runner" test-plan materialize --profile "$suite"', executor)
         self.assertNotIn("cargo build", workflow)
-        self.assertIn("prepare_execution.py dispatch", workflow)
+        self.assertIn("prepare_execution.py dispatch", executor)
+        self.assertIn("scripts/run_in_image.sh prepare materialize", workflow)
         self.assertNotIn("resolve_stack_lock", workflow)
         # Identity stays a gate: a dispatch that reports to Release Control
         # comes from its bot, with the ids it issues.
@@ -202,12 +207,19 @@ class WorkflowBoundaryTests(unittest.TestCase):
         """The inputs reach disk as the execution, the requested stack, and
         the plan shape older Console imports and the ledger reports read."""
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
-        step = next(step for step in workflow["jobs"]["prepare"]["steps"] if step.get("name") == "Read the dispatch")
+        step = next(step for step in workflow["jobs"]["prepare"]["steps"]
+                    if step.get("name") == "Materialize the suite with the stack's runner")
+        names = ("suite", "stack", "model", "profile", "execution_id")
+        self.assertEqual({name: step["env"][f"DISPATCH_{name.upper()}"] for name in names},
+                         {name: "${{ inputs." + name + " }}" for name in names})
+        self.assertIn("python3 scripts/prepare_execution.py dispatch --contract-dir \"$contract_dir\"",
+                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as directory:
-            env = {name: "" for name in step["env"]}
+            env = {f"DISPATCH_{name.upper()}": "" for name in names}
             env.update(DISPATCH_SUITE="regression", DISPATCH_MODEL="deepseek/deepseek-v4-flash",
                        DISPATCH_EXECUTION_ID="b0607faa-096a-4efe-a4a2-a2a9bc06de83")
-            subprocess.run(["bash", "-c", step["run"].replace("target/", f"{directory}/")], cwd=ROOT,
+            subprocess.run(["python3", "scripts/prepare_execution.py", "dispatch", "--contract-dir",
+                            f"{directory}/harness-e2e-contract"], cwd=ROOT,
                            env={**os.environ, **env}, check=True, capture_output=True, text=True)
             written = pathlib.Path(directory) / "harness-e2e-contract"
             plan = json.loads((written / "plan.json").read_text())
@@ -223,17 +235,18 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
         prepare = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
-        order = ["Resolve the iii release and the template", "Fetch the stack's runner",
-                 "Materialize the requested suite", "Report the materialized suite",
-                 "Write one contract per campaign", "Assemble and lock the stack",
-                 "Lock every contract to the assembled stack"]
+        # Release Control learns the suite's shape before anything is assembled.
+        order = ["Materialize the suite with the stack's runner", "Report the materialized suite",
+                 "Assemble the stack and lock every contract to it"]
         self.assertEqual([name for name in prepare if name in order], order)
         steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        self.assertIn("scripts/run_in_image.sh prepare materialize", steps[order[0]]["run"])
         # Assembled with the credentials the groups get, and tried twice.
-        assemble = steps["Assemble and lock the stack"]
+        assemble = steps["Assemble the stack and lock every contract to it"]
         for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
             self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
-        self.assertIn("for attempt in 1 2; do", assemble["run"])
+        self.assertIn("scripts/run_in_image.sh prepare assemble", assemble["run"])
+        self.assertIn("for attempt in 1 2; do", (ROOT / "scripts/executor.sh").read_text())
         # Its evidence passes the group packaging checks before upload, and
         # never fails a prepared execution.
         self.assertIn("exact_stack_campaign.py package", steps["Package the stack assembly evidence"]["run"])
@@ -251,7 +264,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn('--runner-sha "$RUNNER_REVISION"', report)
         # The runner's identity: the revision of the runner the stack ran,
         # never this workflow's commit.
-        self.assertIn("jq -r '.runner_revision'", steps["Fetch the stack's runner"]["run"])
+        self.assertIn("jq -r '.runner_revision'", steps["Materialize the suite with the stack's runner"]["run"])
         self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["runner_revision"], "${{ steps.stack_runner.outputs.revision }}")
         for job, step in (("groups", "Report this shard's runs"), ("finalize", "Report the campaign summary")):
             env = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == step)["env"]
@@ -288,9 +301,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
 
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         finalizer = workflow.split("\n  finalize:", 1)[1]
+        # The executor image aggregates what the restored paths hold.
         self.assertLess(
-            finalizer.index("Fetch the stack's runner"),
             finalizer.index("Restore deterministic group paths"),
+            finalizer.index("scripts/run_in_image.sh finalize"),
         )
         restore = finalizer.split("- name: Restore deterministic group paths", 1)[
             1
@@ -443,7 +457,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         lifecycle = (ROOT / "tests/fixtures/trending-topics-build/lifecycle.py").read_text()
         revision = lifecycle.split('FIXTURE_SHA = "', 1)[1].split('"', 1)[0]
         self.assertIn(f"ref: {revision}", source_block)
-        self.assertIn(".insteadOf git@github.com:iii-hq/e2e-fixture.git", source_block)
+        # The group runs in the executor image, which reads this routing from
+        # the environment.
+        self.assertIn('.trending-topics-fixture.insteadOf"', source_block)
+        self.assertIn('GIT_CONFIG_VALUE_0=git@github.com:iii-hq/e2e-fixture.git"', source_block)
+        self.assertIn('>>"$GITHUB_ENV"', source_block)
         self.assertNotIn("token@github.com", source_block)
 
 if __name__ == "__main__":

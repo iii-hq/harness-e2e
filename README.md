@@ -242,6 +242,26 @@ one. A group that produced neither still reports that fact.
 `workers` supplies versioned stack components. It does not orchestrate
 campaigns.
 
+### Executor image
+
+Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first
+12 hex of the Dockerfile's sha256>` ([`Dockerfile`](Dockerfile)): git, curl, jq,
+Python 3 with PyYAML, Node 24 with pnpm, Go 1.25, Rust stable, Playwright's
+Chromium at `/usr/bin/chromium` and the Docker CLI. It holds no scripts:
+[`scripts/run_in_image.sh`](scripts/run_in_image.sh) `<phase>` mounts the
+checkout at the same path, with a fresh `TMPDIR`, the host's Docker socket and
+the caller's uid, passes the phase's environment through by name, and runs
+[`scripts/executor.sh`](scripts/executor.sh) `prepare [materialize|assemble]`,
+`group` or `finalize` there. Each group's engine listens on 49134 in its own
+container. The workflow keeps on the runner what needs it: checkouts,
+artifacts, the OIDC reports and `gh`.
+
+[`executor-image.yml`](.github/workflows/executor-image.yml) publishes a tag
+from `main` when the Dockerfile changes (or by hand) and never rebuilds an
+existing one. A tag that is not published yet is built where it runs, with a
+warning. `resolution.json` records the image the execution was prepared in:
+the registry digest, or the tag when it was built locally.
+
 ### Agent profile and project template
 
 A dispatch can name an existing Directory agent profile (`profile`), such as
