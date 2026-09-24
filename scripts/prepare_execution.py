@@ -10,12 +10,16 @@ reports go to. Everything else is resolved here, once for the whole execution:
                and `report_execution.py` read. Release Control's older inputs
                (plan, stack policy, runner_sha, cli_version) are translated
                first, so there is one path after this.
+    runtime    `iii: latest` becomes the newest iii release candidate, with
+               its archive digest, and a template one commit.
+    runner     the `harness-e2e` the stack declares, resolved by Compose and
+               pinned in the stack, so the suite is materialized by the very
+               runner every group runs. Prints that binary's path.
     contracts  one contract per materialized campaign and the group matrix.
-               `iii: latest` becomes the newest iii release candidate and a
-               template one commit.
     lock       the stack as Compose assembled it once, with its
                worker-compose.lock, into every contract. Each group starts it
                frozen, so all of them run the same versions.
+    runner-binary  the runner a lock resolved, for the finalizer's aggregate.
 """
 
 from __future__ import annotations
@@ -25,12 +29,17 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
+import tarfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from exact_stack_campaign import load_yaml, worker_name  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,13 +97,11 @@ def get_json(url: str, token: str | None = None) -> Any:
 
 def load_stack(value: str) -> tuple[str, dict[str, Any]]:
     """A stack by name (`stacks/<name>.yaml`) or stated as YAML."""
-    import yaml
-
     value = value.strip() or "default"
     if re.fullmatch(r"[A-Za-z0-9._-]+", value):
-        name, stack = value, yaml.safe_load((STACKS / f"{value}.yaml").read_text())
+        name, stack = value, load_yaml((STACKS / f"{value}.yaml").read_text())
     else:
-        name, stack = "inline", yaml.safe_load(value)
+        name, stack = "inline", load_yaml(value)
     if not isinstance(stack, dict):
         raise ResolutionError("stack must name a file in stacks/ or be a YAML mapping")
     return name, stack
@@ -112,6 +119,9 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
     agent. The stack is the default one with the policy's versions on the
     workers it declares, the plan's runner release as the runner's version
     unless the policy pins it, the plan's template, and `cli_version` as iii.
+    A pinned worker the default stack does not declare (Canvas, the subject's
+    provider, a template's package) is declared with its pin: a pin is never
+    dropped. The applied pins travel as `stack_overrides`.
     """
     plan = json.loads(inputs["plan"])
     policy = json.loads(inputs.get("stack") or "{}")
@@ -120,12 +130,16 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
     runner = (plan.get("runner") or {}).get("version")
     if runner:
         pins.setdefault(RUNNER, str(runner))
-    for container in (stack.get("containers") or {}).values():
-        package = str(container.get("worker", "")).removeprefix("package://")
-        if package in pins:
-            container["version"] = pins.pop(package)
-    for worker, version in sorted(pins.items()):
-        print(f"::warning::the default stack does not declare {worker}; its pin {version} is not applied")
+    containers = stack.setdefault("containers", {})
+    left = dict(pins)
+    for container in containers.values():
+        package = worker_name(container.get("worker", ""))
+        if package in left:
+            container["version"] = left.pop(package)
+    for worker, version in sorted(left.items()):
+        if worker in containers:
+            raise ResolutionError(f"container {worker} is already used by another worker; cannot pin {worker}@{version}")
+        containers[worker] = {"worker": f"package://{worker}", "version": version}
     head = {"iii": inputs.get("cli_version") or "latest"}
     if plan.get("template"):
         head["template"] = plan["template"]
@@ -136,6 +150,7 @@ def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, 
         "stack": "default",
         "model": f"{subject['provider']}/{subject['model']}" if subject.get("provider") and subject.get("model") else "",
         "profile": plan.get("agent_profile"),
+        "stack_overrides": dict(sorted(pins.items())),
     }
     return {"execution": execution, "stack": {**head, **compose_of(stack)}}, plan
 
@@ -225,6 +240,60 @@ def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
     if not isinstance(revision, str) or not revision:
         raise ResolutionError(f"{TEMPLATES_REPOSITORY}@{ref} did not resolve to a commit")
     return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": ref, "revision": revision}
+
+
+def download(url: str, sha256: str, destination: Path) -> Path:
+    """Fetch `url` and check it against the digest the release or lock states."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with urllib.request.urlopen(url, timeout=300) as response:
+        payload = response.read()
+    observed = hashlib.sha256(payload).hexdigest()
+    if observed != sha256.removeprefix("sha256:"):
+        raise ResolutionError(f"{url} does not match its digest {sha256}")
+    destination.write_bytes(payload)
+    return destination
+
+
+def install_cli(cli: dict[str, str], work_dir: Path) -> Path:
+    archive = download(
+        f"https://github.com/{III_REPOSITORY}/releases/download/iii/v{cli['version']}/{cli['asset']}",
+        cli["sha256"],
+        work_dir / cli["asset"],
+    )
+    with tarfile.open(archive) as bundle:
+        bundle.extractall(work_dir / "bin", filter="data")
+    return work_dir / "bin" / "iii"
+
+
+def runner_declaration(stack: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The container that runs `harness-e2e` in a stack, or the one the
+    scaffold would add when the stack declares none."""
+    for name, container in (stack.get("containers") or {}).items():
+        source = str(container.get("worker", ""))
+        if source.startswith("package://") and worker_name(source) == RUNNER:
+            return name, container
+    return RUNNER, {"worker": f"package://{RUNNER}", "version": "latest"}
+
+
+def fetch_runner(lock: dict[str, Any], work_dir: Path) -> Path:
+    """The runner a lock resolved: its Linux artifact, checked against the
+    lock's digest and unpacked."""
+    entry = next(
+        (entry for entry in (lock.get("containers") or {}).values() if worker_name(entry.get("worker", "")) == RUNNER),
+        None,
+    )
+    if entry is None:
+        raise ResolutionError(f"the lock resolves no {RUNNER}")
+    artifact = entry["resolved"]["artifacts"][CLI_TARGET]
+    archive = download(artifact["url"], artifact["sha256"], work_dir / f"{RUNNER}.tar.gz")
+    target = work_dir / RUNNER
+    with tarfile.open(archive) as bundle:
+        bundle.extractall(target, filter="data")
+    binary = next((path for path in sorted(target.rglob(RUNNER)) if path.is_file()), None)
+    if binary is None:
+        raise ResolutionError(f"{artifact['url']} holds no {RUNNER} executable")
+    binary.chmod(0o755)
+    return binary
 
 
 def seal(body: dict[str, Any]) -> dict[str, Any]:
@@ -322,18 +391,52 @@ def command_dispatch(args: argparse.Namespace) -> None:
     (args.contract_dir / "stack.yaml").write_text(yaml.safe_dump(dispatch["stack"], sort_keys=False))
 
 
-def command_contracts(args: argparse.Namespace) -> None:
+def command_runtime(args: argparse.Namespace) -> None:
+    token = os.environ.get("GITHUB_TOKEN") or None
+    execution = json.loads((args.contract_dir / "execution.json").read_text())
+    stack = load_yaml((args.contract_dir / "stack.yaml").read_text())
+    cli = resolve_cli(stack.get("iii") or "latest", token)
+    execution.update(iii=cli["version"], cli=cli, template=resolve_template(stack.get("template"), token))
+    write_json(args.contract_dir / "execution.json", execution)
+
+
+def command_runner(args: argparse.Namespace) -> None:
+    """Resolve the stack's runner the way Compose will, pin it, fetch it."""
     import yaml
 
-    token = os.environ.get("GITHUB_TOKEN") or None
+    directory, work = args.contract_dir, args.work_dir
+    execution = json.loads((directory / "execution.json").read_text())
+    stack = load_yaml((directory / "stack.yaml").read_text())
+    iii = install_cli(execution["cli"], work)
+    name, container = runner_declaration(stack)
+    compose = work / "worker-compose.yaml"
+    compose.write_text(yaml.safe_dump({"containers": {name: {
+        "worker": container["worker"], **({"version": container["version"]} if "version" in container else {}),
+    }}}, sort_keys=False))
+    subprocess.run(
+        [str(iii), "compose", "build", "-f", str(compose)],
+        env={**os.environ, "III_COMPOSE_STATE_DIR": str(work / "state"), "NO_COLOR": "1"},
+        check=True, stdout=sys.stderr,
+    )
+    lock = load_yaml((work / "worker-compose.lock").read_text())
+    version = lock["containers"][name]["resolved"]["version"]
+    # The assembly then resolves this exact release, whatever `latest` means
+    # by the time it runs.
+    stack.setdefault("containers", {})[name] = {**container, "version": version}
+    (directory / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
+    binary = fetch_runner(lock, work)
+    catalog = subprocess.run([str(binary), "catalog"], capture_output=True, text=True, check=True).stdout
+    identity = json.loads(catalog).get("runner") or {}
+    write_json(directory / "runner.json", {"name": RUNNER, "version": version, **identity})
+    print(binary)
+
+
+def command_contracts(args: argparse.Namespace) -> None:
     directory = args.contract_dir
     execution = json.loads((directory / "execution.json").read_text())
     snapshot = json.loads((directory / "suite.json").read_text())
-    stack = yaml.safe_load((directory / "stack.yaml").read_text())
-    cli = resolve_cli(stack.get("iii") or "latest", token)
-    template = resolve_template(stack.get("template"), token)
-    execution.update(iii=cli["version"], template=template)
-    write_json(directory / "execution.json", execution)
+    stack = load_yaml((directory / "stack.yaml").read_text())
+    cli, template = execution["cli"], execution.get("template")
 
     include = []
     for campaign in snapshot["campaigns"]:
@@ -366,6 +469,7 @@ def command_contracts(args: argparse.Namespace) -> None:
             "cli_version": cli["version"],
             "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
             **({"template": template} if template else {}),
+            **({"stack_overrides": execution["stack_overrides"]} if execution.get("stack_overrides") else {}),
         },
     )
 
@@ -374,9 +478,9 @@ def command_lock(args: argparse.Namespace) -> None:
     import yaml
 
     directory = args.contract_dir
-    compose = yaml.safe_load((args.assembled / "worker-compose.yaml").read_text())
+    compose = load_yaml((args.assembled / "worker-compose.yaml").read_text())
     lock_text = (args.assembled / "worker-compose.lock").read_text()
-    lock = yaml.safe_load(lock_text)
+    lock = load_yaml(lock_text)
     for path in contract_paths(directory):
         contract = json.loads(path.read_text())
         contract.pop("idempotency_key", None)
@@ -385,8 +489,8 @@ def command_lock(args: argparse.Namespace) -> None:
     resolution = json.loads((directory / "contracts" / "resolution.json").read_text())
     resolution["stack_versions"] = stack_versions(lock)
     write_json(directory / "contracts" / "resolution.json", resolution)
-    # The stack as it ran, and its lock, beside the contracts for whoever
-    # reads the execution later.
+    # The stack as it ran, and its lock byte for byte, beside the contracts
+    # for whoever reads the execution later.
     execution = json.loads((directory / "execution.json").read_text())
     template = execution.get("template")
     head = {"iii": execution["iii"]}
@@ -396,21 +500,35 @@ def command_lock(args: argparse.Namespace) -> None:
     (directory / "worker-compose.lock").write_text(lock_text)
 
 
+def command_runner_binary(args: argparse.Namespace) -> None:
+    print(fetch_runner(load_yaml(args.lock.read_text()), args.work_dir))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     dispatch = commands.add_parser("dispatch", help="read the DISPATCH_* inputs")
+    runtime = commands.add_parser("runtime")
+    runner = commands.add_parser("runner")
+    runner.add_argument("--work-dir", type=Path, required=True)
     contracts = commands.add_parser("contracts")
     contracts.add_argument("--execution-key", required=True, help="the execution id, or the run id without one")
     contracts.add_argument("--oidc-audience", required=True)
     lock = commands.add_parser("lock")
     lock.add_argument("--assembled", type=Path, required=True, help="directory with the assembled worker-compose.{yaml,lock}")
-    for command in (dispatch, contracts, lock):
+    for command in (dispatch, runtime, runner, contracts, lock):
         command.add_argument("--contract-dir", type=Path, required=True)
+    runner_binary = commands.add_parser("runner-binary")
+    runner_binary.add_argument("--lock", type=Path, required=True)
+    runner_binary.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
+    handlers = {
+        "dispatch": command_dispatch, "runtime": command_runtime, "runner": command_runner,
+        "contracts": command_contracts, "lock": command_lock, "runner-binary": command_runner_binary,
+    }
     try:
-        {"dispatch": command_dispatch, "contracts": command_contracts, "lock": command_lock}[args.command](args)
-    except (ResolutionError, OSError, ValueError, KeyError) as error:
+        handlers[args.command](args)
+    except (ResolutionError, OSError, ValueError, KeyError, subprocess.CalledProcessError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
     return 0

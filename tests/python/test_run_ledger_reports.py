@@ -12,6 +12,7 @@ import os
 import pathlib
 import sys
 import tempfile
+import textwrap
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -287,6 +288,7 @@ class DispatchTests(unittest.TestCase):
             "execution_id": None, "suite": "pr", "stack": "default",
             "model": "zai/glm-5.1", "profile": "tech-lead",
         })
+        self.assertNotIn("stack_overrides", dispatch["execution"])
         self.assertEqual(dispatch["stack"]["iii"], "latest")
         self.assertEqual(dispatch["stack"]["containers"]["harness"]["worker"], "package://harness")
         # The plan shape the Console import and the ledger reports still read.
@@ -315,9 +317,10 @@ class DispatchTests(unittest.TestCase):
     def test_an_older_dispatch_becomes_the_execution_it_stands_for(self):
         plan = {**PLAN, "agent_profile": "console-ui", "template": "harness",
                 "runner": {"revision": "a" * 40, "version": "0.12.2"}}
+        versions = {"harness": "1.9.3", "canvas": "0.4.0", "provider-anthropic": "2.0.1", "ade": "1.9.35"}
         dispatch = prepare_execution.read_dispatch({
             "plan": json.dumps(plan), "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-            "stack": json.dumps({"versions": {"harness": "1.9.3", "llm-router": "1.4.0"}}),
+            "stack": json.dumps({"versions": versions}),
             "runner_sha": "a" * 40, "cli_version": "0.24.2-rc.2",
             # Ignored: an older dispatch states all of it in its plan.
             "suite": "after-release",
@@ -325,18 +328,22 @@ class DispatchTests(unittest.TestCase):
         self.assertEqual(dispatch["execution"], {
             "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83", "suite": "regression",
             "stack": "default", "model": "deepseek/deepseek-v4-flash", "profile": "console-ui",
+            # Every pin applied, the runner's release among them.
+            "stack_overrides": {**versions, "harness-e2e": "0.12.2"},
         })
         self.assertEqual(dispatch["plan"], plan)
         stack = dispatch["stack"]
         self.assertEqual(list(stack)[:2], ["iii", "template"])
         self.assertEqual((stack["iii"], stack["template"]), ("0.24.2-rc.2", "harness"))
-        versions = {name: c["version"] for name, c in stack["containers"].items()}
+        containers = stack["containers"]
         # The policy pins what the stack declares; the plan's runner release is
-        # the runner's version; a worker the stack does not declare is not added.
-        self.assertEqual(versions["harness"], "1.9.3")
-        self.assertEqual(versions["harness-e2e"], "0.12.2")
-        self.assertEqual(versions["fp"], "latest")
-        self.assertNotIn("llm-router", stack["containers"])
+        # the runner's version; a pinned worker it does not declare (Canvas, the
+        # subject's provider, a template package) is declared with its pin.
+        self.assertEqual(containers["harness"]["version"], "1.9.3")
+        self.assertEqual(containers["harness-e2e"]["version"], "0.12.2")
+        self.assertEqual(containers["fp"]["version"], "latest")
+        for worker in ("canvas", "provider-anthropic", "ade"):
+            self.assertEqual(containers[worker], {"worker": f"package://{worker}", "version": versions[worker]})
         pinned = prepare_execution.read_dispatch({
             "plan": json.dumps(plan), "stack": json.dumps({"versions": {"harness-e2e": "0.12.0"}}),
         })
@@ -390,6 +397,84 @@ class StackResolutionTests(unittest.TestCase):
         self.assertTrue(urls[0].endswith("/commits/main") and urls[1].endswith("/commits/v2"))
         self.assertIsNone(prepare_execution.resolve_template(None, None))
 
+    def test_the_suite_is_materialized_by_the_runner_the_stack_resolves_and_pins(self):
+        """`iii compose build` resolves the stack's own runner declaration; its
+        exact release is pinned in the stack, so the assembly installs the
+        binary that materialized the suite."""
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            contract = root / "contract"
+            contract.mkdir()
+            (contract / "execution.json").write_text(json.dumps({"cli": {"version": "0.24.2-rc.2"}}))
+            stack = {"iii": "0.24.2-rc.2", "containers": {
+                "runner": {"worker": "package://api.workers.iii.dev/harness-e2e", "version": "latest", "env_file": ["./x"]},
+                "harness": {"worker": "package://harness", "version": "latest"},
+            }}
+            (contract / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
+            iii = root / "iii"
+            iii.write_text(
+                "#!/usr/bin/env python3\n"
+                "import pathlib, sys\n"
+                "compose = pathlib.Path(sys.argv[sys.argv.index('-f') + 1])\n"
+                "assert 'harness:' not in compose.read_text(), 'only the runner is built'\n"
+                "compose.with_name('worker-compose.lock').write_text("
+                "'version: 1\\ncontainers:\\n  runner:\\n    worker: package://api.workers.iii.dev/harness-e2e\\n'"
+                "'    requested: latest\\n    resolved:\\n      version: 0.12.3\\n')\n"
+            )
+            runner = root / "harness-e2e"
+            runner.write_text("#!/bin/sh\necho '{\"runner\":{\"name\":\"harness-e2e\",\"version\":\"0.12.3\",\"revision\":\"" + "c" * 40 + "\"}}'\n")
+            for executable in (iii, runner):
+                executable.chmod(0o755)
+            args = SimpleNamespace(contract_dir=contract, work_dir=root / "work")
+            (root / "work").mkdir()
+            with patch.object(prepare_execution, "install_cli", return_value=iii), \
+                 patch.object(prepare_execution, "fetch_runner", return_value=runner) as fetched, \
+                 patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
+                prepare_execution.command_runner(args)
+            self.assertEqual(printed.getvalue().strip(), str(runner))
+            self.assertEqual(fetched.call_args.args[0]["containers"]["runner"]["resolved"]["version"], "0.12.3")
+            pinned = yaml.safe_load((contract / "stack.yaml").read_text())
+            self.assertEqual(pinned["containers"]["runner"]["version"], "0.12.3")
+            self.assertEqual(pinned["containers"]["harness"]["version"], "latest")
+            self.assertEqual(json.loads((contract / "runner.json").read_text()),
+                             {"name": "harness-e2e", "version": "0.12.3", "revision": "c" * 40})
+
+    def test_the_runner_a_lock_resolved_is_fetched_by_name_and_checked_against_its_digest(self):
+        import hashlib
+        import io
+        import tarfile
+
+        payload = io.BytesIO()
+        with tarfile.open(fileobj=payload, mode="w:gz") as bundle:
+            body = b"#!/bin/sh\n"
+            info = tarfile.TarInfo("harness-e2e")
+            info.size = len(body)
+            bundle.addfile(info, io.BytesIO(body))
+        archive = payload.getvalue()
+        lock = {"containers": {"e2e": {"worker": "package://api.workers.iii.dev/harness-e2e", "resolved": {
+            "version": "0.12.3", "artifacts": {prepare_execution.CLI_TARGET: {
+                "url": "https://example.invalid/harness-e2e.tar.gz",
+                "sha256": hashlib.sha256(archive).hexdigest(),
+            }},
+        }}}}
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        with tempfile.TemporaryDirectory() as directory, \
+                patch("urllib.request.urlopen", side_effect=lambda *a, **k: Response(archive)):
+            binary = prepare_execution.fetch_runner(lock, pathlib.Path(directory))
+            self.assertEqual(binary.read_bytes(), b"#!/bin/sh\n")
+            lock["containers"]["e2e"]["resolved"]["artifacts"][prepare_execution.CLI_TARGET]["sha256"] = "0" * 64
+            with self.assertRaisesRegex(prepare_execution.ResolutionError, "digest"):
+                prepare_execution.fetch_runner(lock, pathlib.Path(directory))
+
     def test_the_contract_states_the_suite_the_runner_materialized(self):
         execution = {"model": "deepseek/deepseek-v4-flash", "profile": None}
         cli = {"version": "0.24.2", "target": "t", "asset": "iii-t.tar.gz", "sha256": "sha256:" + "c" * 64}
@@ -429,10 +514,30 @@ class StackResolutionTests(unittest.TestCase):
                 "harness": {"worker": "package://harness", "version": "latest"},
                 "state": {"worker": "package://state", "version": "0.22.8"},
             }}
-            lock_text = yaml.safe_dump({"version": 1, "containers": {
-                name: {"worker": f"package://{name}", "requested": "latest", "resolved": {"name": name, "version": version}}
-                for name, version in (("harness", "1.9.3"), ("state", "0.22.8"))
-            }})
+            # As Compose writes it, with the registry host; and read as YAML
+            # 1.2, where `on`, `no` and an unquoted date are strings, not
+            # booleans and a datetime.
+            lock_text = textwrap.dedent("""\
+                version: 1
+                containers:
+                  harness:
+                    worker: package://api.workers.iii.dev/harness
+                    requested: latest
+                    resolved:
+                      name: harness
+                      version: 1.9.3
+                  state:
+                    worker: package://api.workers.iii.dev/state
+                    requested: latest
+                    resolved:
+                      name: state
+                      version: 0.22.8
+                      default_config:
+                        mode: on
+                        audit: no
+                        since: 2026-09-24
+                        strict: true
+                """)
             (root / "assembled/worker-compose.yaml").write_text(yaml.safe_dump(compose))
             (root / "assembled/worker-compose.lock").write_text(lock_text)
             (root / "contract/execution.json").write_text(json.dumps({"iii": "0.24.2", "template": None}))
@@ -446,7 +551,11 @@ class StackResolutionTests(unittest.TestCase):
             stack = yaml.safe_load((root / "contract/stack.yaml").read_text())
             self.assertEqual((root / "contract/worker-compose.lock").read_text(), lock_text)
         self.assertEqual(contract["runtime"]["compose"], compose)
-        self.assertEqual(contract["runtime"]["lock"], yaml.safe_load(lock_text))
+        self.assertEqual(contract["runtime"]["lock"]["containers"]["state"]["resolved"]["default_config"],
+                         {"mode": "on", "audit": "no", "since": "2026-09-24", "strict": True})
+        # Written back for a group, a 1.2 reader gets the same strings.
+        rewritten = yaml.safe_dump(contract["runtime"]["lock"], sort_keys=False)
+        self.assertEqual(prepare_execution.load_yaml(rewritten), contract["runtime"]["lock"])
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
         self.assertEqual(resolution["stack_versions"], {"harness": "1.9.3", "state": "0.22.8"})
         self.assertEqual(stack, {"iii": "0.24.2", **compose})

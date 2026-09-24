@@ -174,7 +174,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
             ["suite", "stack", "model", "profile", "execution_id", "plan", "runner_sha", "cli_version"],
         )
         self.assertFalse(any(spec["required"] for spec in inputs.values()))
-        self.assertIn("test-plan materialize --suite", workflow)
+        # Every input reaches a shell through the environment, never
+        # interpolated into the script.
+        for job in yaml.safe_load(workflow)["jobs"].values():
+            for step in job["steps"]:
+                self.assertNotIn("${{ inputs.", step.get("run", ""), step.get("name"))
+        # A suite stated whole is named "custom suite" in the run title.
+        self.assertIn("startsWith(inputs.suite, '{') && 'custom suite' || inputs.suite", workflow)
+        # The runner the stack runs materializes the suite, with the flag every
+        # release of it knows.
+        self.assertIn('"$RUNNER_BINARY" test-plan materialize --profile "$suite"', workflow)
+        self.assertNotIn("cargo build", workflow)
         self.assertIn("prepare_execution.py dispatch", workflow)
         self.assertNotIn("resolve_stack_lock", workflow)
         # Scripts come from the dispatched ref, and anyone who may dispatch may
@@ -209,10 +219,30 @@ class WorkflowBoundaryTests(unittest.TestCase):
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
         prepare = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
-        self.assertLess(prepare.index("Resolve iii and write one contract per campaign"),
-                        prepare.index("Assemble and lock the stack"))
-        self.assertLess(prepare.index("Assemble and lock the stack"),
-                        prepare.index("Lock every contract to the assembled stack"))
+        order = ["Resolve the iii release and the template", "Fetch the stack's runner",
+                 "Materialize the requested suite", "Report the materialized suite",
+                 "Write one contract per campaign", "Assemble and lock the stack",
+                 "Lock every contract to the assembled stack"]
+        self.assertEqual([name for name in prepare if name in order], order)
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        # Assembled with the credentials the groups get, and tried twice.
+        assemble = steps["Assemble and lock the stack"]
+        for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
+            self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
+        self.assertIn("for attempt in 1 2; do", assemble["run"])
+        # Its evidence passes the group packaging checks before upload.
+        self.assertIn("exact_stack_campaign.py package", steps["Package the stack assembly evidence"]["run"])
+        report = steps["Report the materialized suite"]["run"]
+        self.assertIn("--cli-version", report)
+        self.assertIn('--runner-sha "$RUNNER_REVISION"', report)
+        # The runner's identity: an older dispatch's runner_sha, otherwise the
+        # revision of the runner the stack ran, never this workflow's commit.
+        self.assertIn("${RUNNER_SHA:-$(jq -r '.revision // .version'", steps["Fetch the stack's runner"]["run"])
+        self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["runner_revision"], "${{ steps.stack_runner.outputs.revision }}")
+        for job, step in (("groups", "Report this shard's runs"), ("finalize", "Report the campaign summary")):
+            env = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == step)["env"]
+            self.assertEqual(env["RUNNER_REVISION"], "${{ needs.prepare.outputs.runner_revision }}")
+        self.assertNotIn("github.sha }}'", yaml.safe_dump(workflow))
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text()
         self.assertIn('{file:$file,frozen:$frozen}', launcher)
         self.assertIn("HARNESS_E2E_ASSEMBLE_ONLY", launcher)
@@ -244,12 +274,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         finalizer = workflow.split("\n  finalize:", 1)[1]
         self.assertLess(
-            finalizer.index("Swatinem/rust-cache"),
+            finalizer.index("Fetch the stack's runner"),
             finalizer.index("Restore deterministic group paths"),
         )
         restore = finalizer.split("- name: Restore deterministic group paths", 1)[
             1
-        ].split("\n      - uses:", 1)[0]
+        ].split("\n      - ", 1)[0]
         command = textwrap.dedent(restore.split("run: |\n", 1)[1])
         command = command.replace(
             "${{ inputs.execution_id }}", "execution-1"

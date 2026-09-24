@@ -203,23 +203,29 @@ Release Control's older inputs (`plan`, a stack policy, `runner_sha`,
 profile is the suite, its subject the model, its agent the profile; the stack
 is `default` with the policy's versions on the workers it declares, the plan's
 runner release on `harness-e2e`, the plan's template, and `cli_version` as
-`iii`. Scripts always come from the dispatched ref.
+`iii`. A pinned worker `default` does not declare (Canvas, the subject's
+provider, a template package) is declared with its pin, and the applied pins
+are reported as `stack_overrides`. Scripts always come from the dispatched
+ref.
 
 Preparation resolves the rest, once:
 
 1. `scripts/prepare_execution.py dispatch` reads the inputs into
-   `execution.json`, `stack.yaml` and `plan.json`.
-2. `harness-e2e test-plan materialize --suite <id|json>` expands the suite into
-   campaigns, groups, and cases (`suite.json`, also kept as `profile.json`),
-   with a `profile_sha256` over the result.
-3. `scripts/prepare_execution.py contracts` resolves `iii` and the template and
-   writes one contract per campaign.
+   `execution.json`, `stack.yaml` and `plan.json`; `runtime` resolves `iii`
+   and the template.
+2. `runner` resolves the stack's own `harness-e2e` with `iii compose build`,
+   pins that release in the stack and fetches it. That binary materializes the
+   suite (`suite.json`, also kept as `profile.json`), so the suite always comes
+   from the runner every group runs, and the finalizer aggregates with it. The
+   runner's identity in the reports is its revision (an older dispatch keeps
+   its `runner_sha`).
+3. `contracts` writes one contract per campaign.
 4. The stack is assembled once with `compose::add`, which expands every
-   declared worker into its graph and writes `worker-compose.lock`;
-   `scripts/prepare_execution.py lock` puts that project and lock into every
-   contract. Each group starts it with `compose::up` frozen, so every group
-   runs the same versions. A template project is assembled per group, pinned to
-   the versions that lock resolved.
+   declared worker into its graph and writes `worker-compose.lock`; it gets
+   the groups' provider credentials and one retry. `lock` puts that project
+   and lock into every contract. Each group starts it with `compose::up`
+   frozen, so every group runs the same versions. A template project is
+   assembled per group, pinned to the versions that lock resolved.
 
 The contract artifact carries the suite snapshot, the final `stack.yaml`, the
 lock, the model, the profile and the iii release.
