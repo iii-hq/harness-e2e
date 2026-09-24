@@ -57,6 +57,8 @@ socket=${socket#unix://}
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX")
 # Fixtures a scenario ran as root through the socket may leave files behind.
 trap 'rm -rf "$tmp" 2>/dev/null || warn "could not remove all of $tmp"' EXIT
+# Chromium opens a socket under TMPDIR, and a socket path holds 107 bytes.
+((${#tmp} <= 60)) || warn "TMPDIR $tmp is too long for Chromium's socket: the browser worker will not start"
 
 args=(run --rm --init
   --user "$(id -u):$(id -g)" --group-add "$(stat -c %g "$socket")"

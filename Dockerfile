@@ -31,10 +31,15 @@ RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v24.18.0/node-v24.18.0-
  && rm -rf /root/.npm
 
 # The browser worker drives a system Chromium (/usr/bin/chromium); Playwright
-# brings one and the libraries it needs.
+# brings one and the libraries it needs. A container has no user namespaces
+# for Chromium's sandbox (it aborts: "No usable sandbox!") and a 64 MB
+# /dev/shm, so /usr/bin/chromium starts it without either; the container is
+# the sandbox.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 RUN npx -y playwright@1.62.1 install --with-deps --no-shell chromium \
- && ln -s "$(find /opt/ms-playwright -type f -path '*/chrome-linux*/chrome' | head -n1)" /usr/bin/chromium \
+ && printf '#!/bin/sh\nexec %s --no-sandbox --disable-dev-shm-usage "$@"\n' \
+      "$(find /opt/ms-playwright -type f -path '*/chrome-linux*/chrome' | head -n1)" >/usr/bin/chromium \
+ && chmod 755 /usr/bin/chromium \
  && chromium --version \
  && rm -rf /root/.npm /var/lib/apt/lists/*
 

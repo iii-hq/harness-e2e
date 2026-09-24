@@ -101,7 +101,7 @@ class WrapperTests(unittest.TestCase):
         self.assertNotIn("secret-value", "\n".join(run))
         self.assertNotIn("--network", run)
         self.assertNotIn("--env-file", run)
-        self.assertEqual(result.stderr, "")
+        self.assertNotIn("not published", result.stderr)
 
     def test_an_unpublished_image_is_built_here_and_said_out_loud(self):
         root, _, result, invoked = self.run_wrapper("--env-file", "/secrets/providers.env", "prepare", "assemble",
