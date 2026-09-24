@@ -4037,6 +4037,7 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            suite: None,
         }
     }
 
