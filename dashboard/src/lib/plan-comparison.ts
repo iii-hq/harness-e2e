@@ -7,6 +7,7 @@ import type {
   ExecutionTotals,
   JsonObject,
 } from '@/lib/dashboard-data-source'
+import { formatDuration } from '@/lib/execution-view'
 import {
   generalRunMetrics,
   workflowMetricEntriesFromRecord,
@@ -699,12 +700,8 @@ export function formatPlanMetricValue(
       return compactNumber(value)
     case 'tokens':
       return compactNumber(value)
-    case 'seconds': {
-      if (value < 59.5) return `${value.toFixed(value < 10 ? 1 : 0)}s`
-      // Round the total first, so 119.6s reads "2m 0s", never "1m 60s".
-      const total = Math.round(value)
-      return `${Math.floor(total / 60)}m ${total % 60}s`
-    }
+    case 'seconds':
+      return formatDuration(value)
     case 'milliseconds':
       return value < 1_000
         ? `${compactNumber(value)} ms`

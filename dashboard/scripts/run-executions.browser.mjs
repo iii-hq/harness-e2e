@@ -299,16 +299,12 @@ try {
   assert.equal(await importDialog.getByText('0.11.28').count(), 2)
   await page.keyboard.press('Escape')
 
-  // The ledger: a running row reads its progress; a cancelled one reads as
-  // cancelled with how far it got, and its runtime rounds whole.
-  executions = [runningSummary, cancelledSummary]
+  // One execution: nothing to compare it with, so no hint, button or column.
+  executions = [runningSummary]
   await page.reload()
   await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  // One execution: nothing to compare it with, so no hint, button or column.
-  assert.equal(
-    await page.getByText('tick two executions to compare').count(),
-    0,
-  )
+  const compareHint = page.getByText('tick two executions to compare')
+  assert.equal(await compareHint.count(), 0)
   assert.equal(
     await page.getByRole('button', { name: 'compare', exact: true }).count(),
     0,
@@ -317,6 +313,14 @@ try {
     await page.locator('[data-ledger] input[type=checkbox]').count(),
     0,
   )
+
+  // The ledger: a running row reads its progress; a cancelled one reads as
+  // cancelled with how far it got, and its runtime rounds whole. Two rows:
+  // now they can be compared.
+  executions = [runningSummary, cancelledSummary]
+  await page.reload()
+  await page.getByText('1 of 9 done', { exact: true }).waitFor()
+  await compareHint.waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
   await stopped.getByText('cancelled', { exact: true }).waitFor()

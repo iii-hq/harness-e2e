@@ -369,8 +369,8 @@ describe('local plan comparison view model', () => {
         } as never,
         'baseline',
       )
-    expect(duration(119.6)).toBe('2m 0s')
-    expect(duration(59.7)).toBe('1m 0s')
+    expect(duration(119.6)).toBe('2m 00s')
+    expect(duration(59.7)).toBe('1m 00s')
     expect(duration(83.2)).toBe('1m 23s')
     expect(duration(9.96)).toBe('10.0s')
   })

@@ -98,8 +98,10 @@ const worker = (name, observed) => ({
   commit: null,
   dirty: null,
 })
+// Two registry tests that the runner only runs together, in order.
+const group = ['registry_implementation', 'registry_verification']
 const parameters = (runs) => ({
-  scenarios: ['minimal_path', 'persistent_state', 'timer_wake'],
+  scenarios: ['minimal_path', 'persistent_state', 'timer_wake', ...group],
   runs,
   technical_retries: 2,
   seed: '18446744073709551615',
@@ -127,6 +129,8 @@ const a = execution(
       score: null,
       failure: 'scenario setup failed: UNKNOWN_DB primary',
     }),
+    registry_implementation: run('a4', { score: 70 }),
+    registry_verification: run('a5', { score: 70 }),
   },
   [worker('harness-e2e', '0.11.24'), worker('state', '0.22.3')],
 )
@@ -139,6 +143,8 @@ const b = execution(
     minimal_path: run('b1', { score: 94 }),
     persistent_state: run('b2', { score: 62, screenshot: true }),
     timer_wake: run('b3', { score: 40 }),
+    registry_implementation: run('b4', { score: 70 }),
+    registry_verification: run('b5', { score: 70 }),
   },
   [
     worker('harness-e2e', '0.11.27'),
@@ -171,7 +177,8 @@ const trigger = (name, request = {}) => {
   }
   if (id === 'catalog-get')
     return {
-      scenarios: ['minimal_path', 'persistent_state', 'timer_wake'],
+      scenarios: ['minimal_path', 'persistent_state', 'timer_wake', ...group],
+      scenario_groups: [group],
       models: [{ provider: 'deepseek', model: 'flash' }],
     }
   if (id === 'execution-start') {
@@ -236,12 +243,17 @@ try {
     ]),
   )
 
-  // Rerun selected: Run again with B's parameters and only the ticked tests.
-  for (const scenario of ['minimal_path', 'timer_wake'])
+  // Rerun selected: Run again with B's parameters and only the ticked tests;
+  // one test of a sequential group brings the whole group.
+  for (const scenario of [
+    'minimal_path',
+    'timer_wake',
+    'registry_verification',
+  ])
     await page
       .getByRole('checkbox', { name: `Select ${scenario} to run again` })
       .check()
-  await page.getByRole('button', { name: 'rerun selected (2)' }).click()
+  await page.getByRole('button', { name: 'rerun selected (3)' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.waitFor()
   await again.getByText('Advanced · sampling, retries and seed').click()
@@ -258,8 +270,8 @@ try {
     await again.locator('#quick-execution-agent').inputValue(),
     'tech-lead',
   )
-  // It opens on what will run: the ticked tests, and only those.
-  for (const scenario of ['minimal_path', 'timer_wake'])
+  // It opens on what will run: the ticked tests and their group, only those.
+  for (const scenario of ['minimal_path', 'timer_wake', ...group])
     assert.ok(
       await again
         .getByRole('checkbox', { name: scenario, exact: true })
@@ -271,14 +283,25 @@ try {
       .count(),
     0,
   )
-  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await again
+    .getByText(
+      'registry_implementation then registry_verification run only together, in this order.',
+    )
+    .waitFor()
+  await again.getByRole('button', { name: 'run 4 tests', exact: true }).click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-c'))
   assert.deepEqual(started, [
     {
       label: b.label,
       parameters: {
         ...b.parameters,
-        scenarios: ['minimal_path', 'timer_wake'],
+        // In table order; the dialog adds the rest of the group after.
+        scenarios: [
+          'minimal_path',
+          'registry_verification',
+          'timer_wake',
+          'registry_implementation',
+        ],
       },
     },
   ])

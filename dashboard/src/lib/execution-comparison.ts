@@ -8,6 +8,7 @@ import { runTotalTokens } from '@/lib/execution-metrics'
 import {
   buildExecutionPresentation,
   executionTitle,
+  providerModel,
 } from '@/lib/execution-view'
 import {
   comparisonMetric,
@@ -713,7 +714,7 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
     id: detail.id,
     title: executionTitle(buildExecutionPresentation(detail)).title,
     origin: parts.join(' · '),
-    subject: `${parameters.provider}/${parameters.model}`,
+    subject: providerModel(parameters),
     profile: parameters.profile,
   }
 }

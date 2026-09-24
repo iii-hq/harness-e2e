@@ -502,7 +502,8 @@ describe('comparing two executions', () => {
       runs: 3,
       technical_retries: 1,
       seed: null,
-      model: 'pro',
+      // A model id that carries its provider is not prefixed again.
+      model: 'deepseek/pro',
       provider: 'deepseek',
       agent: 'coder',
     }
@@ -516,9 +517,10 @@ describe('comparing two executions', () => {
         b: '2 scenarios · only here: timer_wake',
       },
       { field: 'runs', a: '1', b: '3' },
-      { field: 'model', a: 'flash', b: 'pro' },
+      { field: 'model', a: 'flash', b: 'deepseek/pro' },
       { field: 'profile', a: 'no profile', b: 'coder' },
     ])
+    expect(comparison.b.subject).toBe('deepseek/pro')
     expect(comparison.stack.recorded).toEqual({ a: true, b: false })
     expect(stackSummary(comparison.stack)).toBe('no stack recorded for B')
   })
