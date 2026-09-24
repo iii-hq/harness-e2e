@@ -197,16 +197,7 @@ optional `template`
 (`<id>` or `<id>@<revision>` of `iii-hq/templates`). Credentials never go in a
 stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.
-
-Release Control's older inputs (`plan`, a stack policy, `runner_sha`,
-`cli_version`) still work. Preparation translates them first: the plan's
-profile is the suite, its subject the model, its agent the profile; the stack
-is `default` with the policy's versions on the workers it declares, the plan's
-runner release on `harness-e2e`, the plan's template, and `cli_version` as
-`iii`. A pinned worker `default` does not declare (Canvas, the subject's
-provider, a template package) is declared with its pin, and the applied pins
-are reported as `stack_overrides`. Scripts always come from the dispatched
-ref.
+Scripts always come from the dispatched ref.
 
 Preparation resolves the rest, once:
 
@@ -217,8 +208,7 @@ Preparation resolves the rest, once:
    pins that release in the stack and fetches it. That binary materializes the
    suite (`suite.json`, also kept as `profile.json`), so the suite always comes
    from the runner every group runs, and the finalizer aggregates with it. The
-   runner's identity in the reports is its revision (an older dispatch keeps
-   its `runner_sha`).
+   runner's identity in the reports is its revision.
 3. `contracts` writes one contract per campaign.
 4. The stack is assembled once with `compose::add`, which expands every
    declared worker into its graph and writes `worker-compose.lock`; it gets
@@ -256,14 +246,8 @@ campaigns.
 
 ### Agent profile and project template
 
-A dispatch can name an existing Directory agent profile (`profile`; in an
-older Release Control plan, `agent_profile`):
-
-```json
-{ "agent_profile": "console-ui" }
-```
-
-`console-ui` is **Console UI Engineer**. The runner reads that profile from
+A dispatch can name an existing Directory agent profile (`profile`), such as
+`console-ui`. `console-ui` is **Console UI Engineer**. The runner reads that profile from
 the group's Directory and sends its id as `agent` to `e2e::run`. The profile,
 its parents, skills, functions, and model or provider must exist in that
 stack. The runner downloads the stack's versioned skill bundles into an
@@ -272,7 +256,7 @@ missing fails resolution. A profile model overrides the plan model;
 `provider::model` also selects its provider. Results record the resolved
 subject model and the profile configuration hash. **Run again** resolves the
 same profile id in its test stack. Comparisons stay manual in Release Control.
-Omitting `agent_profile` keeps the built-in agent.
+Omitting `profile` keeps the built-in agent.
 
 A project template belongs to the stack and is independent of the suite and
 the agent profile:
@@ -299,8 +283,8 @@ scaffold and container roles; the selected template's base and agent assets
 are applied separately. With no template, the run keeps the existing generated
 stack (or the required fixture).
 
-To measure a profile, compare the same plan, template commit, model, and stack
-with and without `agent_profile`. Changing the template as well measures the
+To measure a profile, compare the same suite, template commit, model, and stack
+with and without `profile`. Changing the template as well measures the
 combined effect. Non-Compose templates and templates that ask for an
 interactive language choice are rejected before boot.
 

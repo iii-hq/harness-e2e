@@ -6,10 +6,8 @@ wanted, an agent profile (with whom), plus the Release Control execution the
 reports go to. Everything else is resolved here, once for the whole execution:
 
     dispatch   the inputs as one execution: `execution.json`, the requested
-               `stack.yaml`, and `plan.json`, the plan shape the Console import
-               and `report_execution.py` read. Release Control's older inputs
-               (plan, stack policy, runner_sha, cli_version) are translated
-               first, so there is one path after this.
+               `stack.yaml`, and `plan.json`, the plan shape older Console
+               imports and `report_execution.py` read.
     runtime    `iii: latest` becomes the newest iii release candidate, with
                its archive digest, and a template one commit.
     runner     the `harness-e2e` the stack declares, resolved by Compose and
@@ -112,89 +110,29 @@ def compose_of(stack: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
 
 
-def translate_legacy(inputs: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Release Control's older dispatch as the execution it stands for.
-
-    The suite is the plan's profile, the model its subject, the profile its
-    agent. The stack is the default one with the policy's versions on the
-    workers it declares, the plan's runner release as the runner's version
-    (it is the runner Release Control resolved and reports, so it wins over a
-    policy pin), the plan's template, and `cli_version` as iii.
-
-    A pinned worker the default stack does not declare is declared with its
-    pin when the executor would add it anyway: Canvas and the subject's
-    provider. A pin on anything else, such as a dependency Harness's graph
-    pins itself, would be a second spec Compose refuses: it is said out loud,
-    applied to a template's worker of that name, and still reported. Every
-    pin travels as `stack_overrides`.
-    """
-    plan = json.loads(inputs["plan"])
-    policy = json.loads(inputs.get("stack") or "{}")
-    _, stack = load_stack("default")
-    pins = {str(worker): str(version) for worker, version in ((policy.get("versions") or {}).items())}
-    runner = (plan.get("runner") or {}).get("version")
-    if runner:
-        pins[RUNNER] = str(runner)
-    subject = plan.get("subject") or {}
-    containers = stack.setdefault("containers", {})
-    left = dict(pins)
-    for container in containers.values():
-        package = worker_name(container.get("worker", ""))
-        if package in left:
-            container["version"] = left.pop(package)
-    for worker, version in sorted(left.items()):
-        if worker in ("canvas", f"provider-{subject.get('provider')}") and worker not in containers:
-            containers[worker] = {"worker": f"package://{worker}", "version": version}
-            continue
-        where = "the template's worker of that name" if plan.get("template") else "nothing"
-        # A workflow command: GitHub reads it from standard output.
-        print(f"::warning::{worker}@{version} is not a worker the default stack declares; the pin applies to {where}")
-    head = {"iii": inputs.get("cli_version") or "latest"}
-    if plan.get("template"):
-        head["template"] = plan["template"]
-    execution = {
-        "execution_id": inputs.get("execution_id") or None,
-        "suite": (plan.get("profile") or {}).get("id"),
-        "stack": "default",
-        "model": f"{subject['provider']}/{subject['model']}" if subject.get("provider") and subject.get("model") else "",
-        "profile": plan.get("agent_profile"),
-        "stack_overrides": dict(sorted(pins.items())),
-    }
-    if runner and inputs.get("runner_sha"):
-        # The runner Release Control resolved, by the commit it reports.
-        execution["runner_sha"] = inputs["runner_sha"]
-    return {"execution": execution, "stack": {**head, **compose_of(stack)}}, plan
-
-
 def read_dispatch(inputs: dict[str, str]) -> dict[str, Any]:
-    """The execution a dispatch asks for, from the new inputs or the older ones."""
-    if (inputs.get("plan") or "").strip():
-        translated, plan = translate_legacy(inputs)
-        execution, stack = translated["execution"], translated["stack"]
-    else:
-        suite = (inputs.get("suite") or "").strip()
-        stack_name, stack = load_stack(inputs.get("stack") or "default")
-        execution = {
-            "execution_id": (inputs.get("execution_id") or "").strip() or None,
-            "suite": json.loads(suite) if suite.startswith("{") else suite,
-            "stack": stack_name,
-            "model": (inputs.get("model") or "").strip(),
-            "profile": (inputs.get("profile") or "").strip() or None,
-        }
-        plan = None
+    """The execution a dispatch asks for."""
+    suite = (inputs.get("suite") or "").strip()
+    stack_name, stack = load_stack(inputs.get("stack") or "default")
+    execution = {
+        "execution_id": (inputs.get("execution_id") or "").strip() or None,
+        "suite": json.loads(suite) if suite.startswith("{") else suite,
+        "stack": stack_name,
+        "model": (inputs.get("model") or "").strip(),
+        "profile": (inputs.get("profile") or "").strip() or None,
+    }
     if not execution["suite"]:
         raise ResolutionError("suite is required: a suite id of config/test-plan.json or one suite as JSON")
     provider, _, model = execution["model"].partition("/")
     if not provider or not model:
         raise ResolutionError("model must be <provider>/<model>")
-    if plan is None:
-        # The plan shape the Console import and the ledger reports read.
-        suite = execution["suite"]
-        plan = {
-            "profile": {"id": suite["id"] if isinstance(suite, dict) else suite},
-            "subject": {"provider": provider, "model": model},
-            **({"agent_profile": execution["profile"]} if execution["profile"] else {}),
-        }
+    suite = execution["suite"]
+    # The plan shape older Console imports and the ledger reports read.
+    plan = {
+        "profile": {"id": suite["id"] if isinstance(suite, dict) else suite},
+        "subject": {"provider": provider, "model": model},
+        **({"agent_profile": execution["profile"]} if execution["profile"] else {}),
+    }
     return {"execution": execution, "stack": stack, "plan": plan}
 
 
@@ -349,7 +287,6 @@ def build_contract(
     oidc_audience: str,
     template: dict[str, str] | None = None,
     lock: dict[str, Any] | None = None,
-    stack_overrides: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     provider, _, model = execution["model"].partition("/")
     suite = {
@@ -369,8 +306,6 @@ def build_contract(
         runtime["template"] = template
     if lock:
         runtime["lock"] = lock
-    if stack_overrides:
-        runtime["stack_overrides"] = stack_overrides
     return seal(
         {
             "schema": CONTRACT_SCHEMA,
@@ -410,7 +345,7 @@ def write_json(path: Path, value: Any) -> None:
 def command_dispatch(args: argparse.Namespace) -> None:
     import yaml
 
-    names = ("suite", "stack", "model", "profile", "execution_id", "plan", "runner_sha", "cli_version")
+    names = ("suite", "stack", "model", "profile", "execution_id")
     dispatch = read_dispatch({name: os.environ.get(f"DISPATCH_{name.upper()}", "") for name in names})
     write_json(args.contract_dir / "execution.json", dispatch["execution"])
     write_json(args.contract_dir / "plan.json", dispatch["plan"])
@@ -454,9 +389,8 @@ def command_runner(args: argparse.Namespace) -> None:
     catalog = subprocess.run([str(binary), "catalog"], capture_output=True, text=True, check=True).stdout
     identity = {"name": RUNNER, "version": version, **(json.loads(catalog).get("runner") or {})}
     write_json(directory / "runner.json", identity)
-    # What the reports name as the runner: the commit Release Control
-    # resolved for an older dispatch, else the one this runner was built from.
-    execution["runner_revision"] = execution.get("runner_sha") or identity.get("revision") or version
+    # What the reports name as the runner: the commit it was built from.
+    execution["runner_revision"] = identity.get("revision") or version
     write_json(directory / "execution.json", execution)
     print(binary)
 
@@ -479,7 +413,6 @@ def command_contracts(args: argparse.Namespace) -> None:
             compose=compose_of(stack),
             oidc_audience=args.oidc_audience,
             template=template,
-            stack_overrides=execution.get("stack_overrides"),
         )
         write_json(directory / "contracts" / f"{campaign['campaign_id']}.json", contract)
         for group in contract["suite"]["groups"]:
@@ -500,7 +433,6 @@ def command_contracts(args: argparse.Namespace) -> None:
             "cli_version": cli["version"],
             "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
             **({"template": template} if template else {}),
-            **({"stack_overrides": execution["stack_overrides"]} if execution.get("stack_overrides") else {}),
         },
     )
 

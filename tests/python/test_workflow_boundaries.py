@@ -142,7 +142,6 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
-        self.assertNotIn("ref: ${{ inputs.runner_sha }}", workflow)
         self.assertNotIn("matrix.requires_", workflow)
         launcher = (ROOT / "scripts/run_exact_stack_group.sh").read_text(
             encoding="utf-8"
@@ -167,13 +166,13 @@ class WorkflowBoundaryTests(unittest.TestCase):
 
     def test_a_dispatch_names_suite_stack_model_and_profile(self):
         """What to test, where, with whom, and optionally for which Release
-        Control execution; the older five inputs are still accepted. Nothing
-        is required by the form: preparation says what is missing."""
+        Control execution. Nothing is required by the form: preparation says
+        what is missing."""
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         inputs = yaml.safe_load(workflow)[True]["workflow_dispatch"]["inputs"]
         self.assertEqual(
             list(inputs),
-            ["suite", "stack", "model", "profile", "execution_id", "plan", "runner_sha", "cli_version"],
+            ["suite", "stack", "model", "profile", "execution_id"],
         )
         self.assertFalse(any(spec["required"] for spec in inputs.values()))
         # Every input reaches a shell through the environment, never
@@ -190,42 +189,36 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("cargo build", workflow)
         self.assertIn("prepare_execution.py dispatch", workflow)
         self.assertNotIn("resolve_stack_lock", workflow)
-        # Scripts come from the dispatched ref, and anyone who may dispatch may
-        # run it: the identity that matters is the OIDC token of the reports.
-        self.assertNotIn("ref: ${{ inputs.runner_sha }}", workflow)
         # Identity stays a gate: a dispatch that reports to Release Control
         # comes from its bot, with the ids it issues.
         gate = next(step for step in yaml.safe_load(workflow)["jobs"]["prepare"]["steps"]
                     if step.get("name") == "Validate a Release Control dispatch")
         self.assertEqual(gate["if"], "inputs.execution_id != ''")
         for check in ('test "$GITHUB_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"',
-                      '[[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]',
-                      '[[ -z "$RUNNER_SHA" || "$RUNNER_SHA" =~ ^[0-9a-f]{40}$ ]]'):
+                      '[[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]'):
             self.assertIn(check, gate["run"])
 
-    def test_the_dispatched_plan_reaches_disk_as_the_plan(self):
-        """An older dispatch keeps its plan verbatim for the readers of
-        plan.json, and becomes the suite, model and stack it stands for."""
+    def test_the_dispatch_step_writes_the_execution_and_its_plan(self):
+        """The inputs reach disk as the execution, the requested stack, and
+        the plan shape older Console imports and the ledger reports read."""
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
         step = next(step for step in workflow["jobs"]["prepare"]["steps"] if step.get("name") == "Read the dispatch")
-        plan = {"key": "harness-regression", "profile": {"plan_id": "harness", "id": "regression"},
-                "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"},
-                "runner": {"revision": "a" * 40, "version": "0.12.2"}}
         with tempfile.TemporaryDirectory() as directory:
             env = {name: "" for name in step["env"]}
-            env.update(DISPATCH_PLAN=json.dumps(plan), DISPATCH_STACK='{"versions":{"harness":"1.9.3"}}',
-                       DISPATCH_EXECUTION_ID="b0607faa-096a-4efe-a4a2-a2a9bc06de83", DISPATCH_CLI_VERSION="0.24.2")
+            env.update(DISPATCH_SUITE="regression", DISPATCH_MODEL="deepseek/deepseek-v4-flash",
+                       DISPATCH_EXECUTION_ID="b0607faa-096a-4efe-a4a2-a2a9bc06de83")
             subprocess.run(["bash", "-c", step["run"].replace("target/", f"{directory}/")], cwd=ROOT,
                            env={**os.environ, **env}, check=True, capture_output=True, text=True)
             written = pathlib.Path(directory) / "harness-e2e-contract"
-            self.assertEqual(json.loads((written / "plan.json").read_text()), plan)
+            plan = json.loads((written / "plan.json").read_text())
             execution = json.loads((written / "execution.json").read_text())
             stack = yaml.safe_load((written / "stack.yaml").read_text())
+        self.assertEqual(plan, {"profile": {"id": "regression"},
+                                "subject": {"provider": "deepseek", "model": "deepseek-v4-flash"}})
         self.assertEqual(execution["suite"], "regression")
-        self.assertEqual(execution["model"], "deepseek/deepseek-v4-flash")
-        self.assertEqual(stack["iii"], "0.24.2")
-        self.assertEqual(stack["containers"]["harness"]["version"], "1.9.3")
-        self.assertEqual(stack["containers"]["harness-e2e"]["version"], "0.12.2")
+        self.assertEqual(execution["stack"], "default")
+        self.assertEqual(execution["execution_id"], "b0607faa-096a-4efe-a4a2-a2a9bc06de83")
+        self.assertEqual(stack["iii"], "latest")
 
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
@@ -256,10 +249,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         report = steps["Report the materialized suite"]["run"]
         self.assertIn("--cli-version", report)
         self.assertIn('--runner-sha "$RUNNER_REVISION"', report)
-        # The runner's identity: an older dispatch's runner_sha, otherwise the
-        # revision of the runner the stack ran, never this workflow's commit.
+        # The runner's identity: the revision of the runner the stack ran,
+        # never this workflow's commit.
         self.assertIn("jq -r '.runner_revision'", steps["Fetch the stack's runner"]["run"])
-        self.assertNotIn("RUNNER_SHA", steps["Fetch the stack's runner"].get("env", {}))
         self.assertEqual(workflow["jobs"]["prepare"]["outputs"]["runner_revision"], "${{ steps.stack_runner.outputs.revision }}")
         for job, step in (("groups", "Report this shard's runs"), ("finalize", "Report the campaign summary")):
             env = next(s for s in workflow["jobs"][job]["steps"] if s.get("name") == step)["env"]

@@ -520,10 +520,6 @@ def project_scaffold(
         worker_name(entry["worker"]): entry["resolved"]["version"]
         for entry in ((runtime.get("lock") or {}).get("containers") or {}).values()
     }
-    # A template's packages take the dispatch's pins first (an older Release
-    # Control dispatch pins workers the stack does not declare), then the
-    # versions the execution locked.
-    locked.update(runtime.get("stack_overrides") or {})
 
     # The project is the template when there is one and the stack otherwise.
     # Add the runner and the campaign's provider to either project. Templates

@@ -278,7 +278,7 @@ class LedgerDeliveryTests(unittest.TestCase):
 
 
 class DispatchTests(unittest.TestCase):
-    """One execution from a dispatch: the new inputs, or Release Control's older ones."""
+    """One execution from a dispatch."""
 
     def test_a_new_dispatch_names_the_suite_stack_model_and_profile(self):
         dispatch = prepare_execution.read_dispatch(
@@ -288,10 +288,9 @@ class DispatchTests(unittest.TestCase):
             "execution_id": None, "suite": "pr", "stack": "default",
             "model": "zai/glm-5.1", "profile": "tech-lead",
         })
-        self.assertNotIn("stack_overrides", dispatch["execution"])
         self.assertEqual(dispatch["stack"]["iii"], "latest")
         self.assertEqual(dispatch["stack"]["containers"]["harness"]["worker"], "package://harness")
-        # The plan shape the Console import and the ledger reports still read.
+        # The plan shape older Console imports and the ledger reports read.
         self.assertEqual(dispatch["plan"], {
             "profile": {"id": "pr"}, "subject": {"provider": "zai", "model": "glm-5.1"},
             "agent_profile": "tech-lead",
@@ -314,70 +313,19 @@ class DispatchTests(unittest.TestCase):
             with self.subTest(missing=missing), self.assertRaisesRegex(prepare_execution.ResolutionError, missing):
                 prepare_execution.read_dispatch(inputs)
 
-    def test_an_older_dispatch_becomes_the_execution_it_stands_for(self):
-        plan = {**PLAN, "subject": {"provider": "anthropic", "model": "claude"}, "agent_profile": "console-ui",
-                "template": "harness", "runner": {"revision": "a" * 40, "version": "0.12.3"}}
-        versions = {"harness": "1.9.3", "canvas": "0.4.0", "provider-anthropic": "2.0.1",
-                    "ade": "1.9.35", "llm-router": "1.4.0", "harness-e2e": "0.12.0"}
-        with patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
-            dispatch = prepare_execution.read_dispatch({
-                "plan": json.dumps(plan), "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-                "stack": json.dumps({"versions": versions}),
-                "runner_sha": "a" * 40, "cli_version": "0.24.2-rc.2",
-                # Ignored: an older dispatch states all of it in its plan.
-                "suite": "after-release",
-            })
-        self.assertEqual(dispatch["execution"], {
-            "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83", "suite": "regression",
-            "stack": "default", "model": "anthropic/claude", "profile": "console-ui",
-            # Every pin is reported; the plan's runner release is the runner.
-            "stack_overrides": {**versions, "harness-e2e": "0.12.3"},
-            "runner_sha": "a" * 40,
-        })
-        self.assertEqual(dispatch["plan"], plan)
-        stack = dispatch["stack"]
-        self.assertEqual(list(stack)[:2], ["iii", "template"])
-        self.assertEqual((stack["iii"], stack["template"]), ("0.24.2-rc.2", "harness"))
-        containers = stack["containers"]
-        # The policy pins what the stack declares, and the plan's runner
-        # release wins over a policy pin on the runner.
-        self.assertEqual(containers["harness"]["version"], "1.9.3")
-        self.assertEqual(containers["harness-e2e"]["version"], "0.12.3")
-        self.assertEqual(containers["fp"]["version"], "latest")
-        # What the executor adds anyway is declared with its pin.
-        for worker in ("canvas", "provider-anthropic"):
-            self.assertEqual(containers[worker], {"worker": f"package://{worker}", "version": versions[worker]})
-        # A dependency Harness's graph pins itself is never a second spec: it
-        # is said out loud (and reaches the template's worker of that name).
-        self.assertNotIn("llm-router", containers)
-        self.assertNotIn("ade", containers)
-        for worker in ("llm-router@1.4.0", "ade@1.9.35"):
-            self.assertIn(f"::warning::{worker} is not a worker the default stack declares", printed.getvalue())
-
-        # Without a runner release in the plan, the policy's pin (or latest)
-        # runs and the runner is named by the revision it reports, not runner_sha.
-        unpinned = {**plan, "runner": {"revision": "a" * 40}}
-        pinned = prepare_execution.read_dispatch({
-            "plan": json.dumps(unpinned), "stack": json.dumps({"versions": {"harness-e2e": "0.12.0"}}),
-            "runner_sha": "a" * 40,
-        })
-        self.assertEqual(pinned["stack"]["containers"]["harness-e2e"]["version"], "0.12.0")
-        self.assertNotIn("runner_sha", pinned["execution"])
-        self.assertEqual(pinned["stack"]["iii"], "latest")
-
-    def test_template_packages_take_the_dispatch_pins_before_the_lock(self):
+    def test_template_packages_take_the_versions_the_execution_locked(self):
         spec = importlib.util.spec_from_file_location("exact_stack_campaign", ROOT / "scripts/exact_stack_campaign.py")
         campaign = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(campaign)
         contract = {"suite": {"groups": [{"id": "g", "scenarios": ["minimal_path"]}],
                               "subject": {"provider": "deepseek", "model": "m"}},
-                    "runtime": {"stack_overrides": {"ade": "1.9.35"}, "lock": {"containers": {
+                    "runtime": {"lock": {"containers": {
                         "ade": {"worker": "package://api.workers.iii.dev/ade", "resolved": {"version": "1.9.41"}},
                         "harness": {"worker": "package://api.workers.iii.dev/harness", "resolved": {"version": "1.8.31"}},
                     }}}}
         template = {"containers": {"console": {"worker": "package://ade"}, "harness": {"worker": "package://harness"}}}
         project = campaign.project_scaffold(contract, "e2e-group", pathlib.Path("/data"), None, {}, template)
-        self.assertEqual(project["containers"]["console"]["version"], "1.9.35")
+        self.assertEqual(project["containers"]["console"]["version"], "1.9.41")
         self.assertEqual(project["containers"]["harness"]["version"], "1.8.31")
 
 
@@ -470,15 +418,8 @@ class StackResolutionTests(unittest.TestCase):
             self.assertEqual(pinned["containers"]["harness"]["version"], "latest")
             self.assertEqual(json.loads((contract / "runner.json").read_text()),
                              {"name": "harness-e2e", "version": "0.12.3", "revision": "c" * 40})
-            # The reports name the runner by the revision it reports ...
+            # The reports name the runner by the revision it reports.
             self.assertEqual(json.loads((contract / "execution.json").read_text())["runner_revision"], "c" * 40)
-            # ... or, for an older dispatch with a runner release, by runner_sha.
-            (contract / "execution.json").write_text(json.dumps({"cli": {}, "runner_sha": "a" * 40}))
-            with patch.object(prepare_execution, "install_cli", return_value=iii), \
-                 patch.object(prepare_execution, "fetch_runner", return_value=runner), \
-                 patch("sys.stdout", new_callable=__import__("io").StringIO):
-                prepare_execution.command_runner(args)
-            self.assertEqual(json.loads((contract / "execution.json").read_text())["runner_revision"], "a" * 40)
 
     def test_a_download_survives_a_transient_failure_but_never_a_wrong_digest(self):
         import hashlib
