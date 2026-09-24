@@ -159,7 +159,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         for selector in (".suite.", ".plan.definition", ".security.", ".orchestration", ".runner.", ".runtime."):
             self.assertNotIn(selector, workflow, f"workflow selects contract field {selector}")
-        self.assertIn("exact_stack_campaign.py digest", workflow)
+        # The stack a run reports is the lock, not the per-execution contract.
+        self.assertIn("sha256sum target/harness-e2e-contract/worker-compose.lock", workflow)
+        self.assertIn("--stack-lock-sha256", workflow)
         self.assertIn("exact_stack_campaign.py groups", workflow)
         self.assertIn("exact_stack_campaign.py validate", workflow)
 
