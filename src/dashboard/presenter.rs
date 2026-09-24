@@ -280,7 +280,6 @@ fn request_parameters(metadata: &RunMetadata, report: Option<&E2eReport>) -> Val
         scenarios: request.scenarios.clone(),
         runs: request.runs,
         technical_retries: request.technical_retries,
-        seed: request.seed,
         model: request.model.clone(),
         provider: request.provider.clone(),
         agent: report.and_then(|report| report

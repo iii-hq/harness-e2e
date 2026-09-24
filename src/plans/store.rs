@@ -118,51 +118,18 @@ pub(crate) struct PlanExecution {
     pub system_under_test: Option<Value>,
 }
 
+/// What an execution ran, to run it again. Always the canonical cases: a
+/// `seed` sent or stored by an older Console is ignored, so every execution
+/// pairs with any other by scenario and repetition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct ExecutionParameters {
     pub scenarios: Vec<String>,
     pub runs: u32,
     pub technical_retries: u8,
-    /// Written as text, read as text or a number: JavaScript numbers lose
-    /// seeds above 2^53. Absent means the canonical case set.
-    #[serde(default, with = "seed_text")]
-    #[schemars(with = "Option<SeedText>")]
-    pub seed: Option<u64>,
     pub model: String,
     pub provider: String,
     /// Agent profile the subject ran under.
     pub agent: Option<String>,
-}
-
-/// A seed as the Console sends it (text) or as older rows hold it.
-#[derive(Deserialize, JsonSchema)]
-#[serde(untagged)]
-enum SeedText {
-    Text(String),
-    Number(u64),
-}
-
-mod seed_text {
-    use serde::de::Error;
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(seed: &Option<u64>, to: S) -> Result<S::Ok, S::Error> {
-        seed.map(|seed| seed.to_string()).serialize(to)
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(from: D) -> Result<Option<u64>, D::Error> {
-        match Option::<super::SeedText>::deserialize(from)? {
-            None => Ok(None),
-            Some(super::SeedText::Number(seed)) => Ok(Some(seed)),
-            Some(super::SeedText::Text(text)) if text.trim().is_empty() => Ok(None),
-            Some(super::SeedText::Text(text)) => text.trim().parse().map(Some).map_err(|_| {
-                D::Error::custom(format!(
-                    "seed must be a whole number from 0 to {}, got '{text}'",
-                    u64::MAX
-                ))
-            }),
-        }
-    }
 }
 
 /// Where an execution came from; shown and used to deduplicate imports.
@@ -1020,7 +987,6 @@ impl PlanStore {
                 scenarios: config.scenario_ids.clone(),
                 runs: config.runs,
                 technical_retries: config.technical_retries,
-                seed: config.seed,
                 model: config.model.clone(),
                 provider: config.provider.clone(),
                 agent: None,
@@ -1491,7 +1457,7 @@ fn parameter_slots(
             technical_retries: parameters.technical_retries,
             lane: "local".into(),
         };
-        let snapshot = master.materialize_scope(profile, parameters.seed)?;
+        let snapshot = master.materialize_scope(profile, None)?;
         slots = campaign_slots(
             &snapshot,
             owner,
@@ -1499,7 +1465,7 @@ fn parameter_slots(
             &parameters.model,
             &parameters.provider,
             parameters.agent.as_deref(),
-            parameters.seed,
+            None,
         )?;
     }
     for round in 1..=parameters.runs {
@@ -2521,7 +2487,6 @@ mod tests {
                 scenarios: vec!["context_pressure".into(), "registry_planning".into()],
                 runs: 1,
                 technical_retries: 0,
-                seed: None,
                 model: "model".into(),
                 provider: "provider".into(),
                 agent: Some("tech-lead".into()),
@@ -3335,7 +3300,6 @@ mod tests {
             ],
             runs: 1,
             technical_retries: 0,
-            seed: None,
             model: " model ".into(),
             provider: "provider".into(),
             agent: Some("tech-lead".into()),
@@ -3441,7 +3405,6 @@ mod tests {
                 scenarios,
                 runs: 1,
                 technical_retries: 0,
-                seed: None,
                 model: model.into(),
                 provider: provider.into(),
                 agent: agent.map(str::to_owned),
@@ -3465,7 +3428,6 @@ mod tests {
             ],
             runs: 2,
             technical_retries: 1,
-            seed: Some(7),
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
@@ -3480,7 +3442,8 @@ mod tests {
                 .collect::<BTreeSet<_>>();
             assert_eq!(ids.len(), 2, "one run for the group, one for minimal_path");
         }
-        assert!(slots.iter().all(|slot| slot.request["seed"] == 7));
+        // The canonical cases, so every execution pairs with any other.
+        assert!(slots.iter().all(|slot| slot.request["seed"].is_null()));
     }
 
     #[tokio::test]
@@ -3493,7 +3456,6 @@ mod tests {
             scenarios: vec!["minimal_path".into()],
             runs: 1,
             technical_retries: 0,
-            seed: None,
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
@@ -3521,7 +3483,6 @@ mod tests {
             scenarios: vec!["registry_verification".into(), "minimal_path".into()],
             runs: 1,
             technical_retries: 0,
-            seed: None,
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
@@ -3594,7 +3555,6 @@ mod tests {
             scenarios: vec!["minimal_path".into(), "retired_scenario".into()],
             runs: 1,
             technical_retries: 0,
-            seed: None,
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
@@ -3645,26 +3605,16 @@ mod tests {
     }
 
     #[test]
-    fn seeds_travel_as_text_and_are_read_as_text_or_numbers() {
-        let parameters = |seed: Value| -> Result<ExecutionParameters, serde_json::Error> {
-            serde_json::from_value(json!({
-                "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0,
-                "seed": seed, "model": "m", "provider": "p", "agent": null,
-            }))
-        };
-        let largest = parameters(json!("18446744073709551615")).unwrap();
-        assert_eq!(largest.seed, Some(u64::MAX));
-        assert_eq!(
-            serde_json::to_value(&largest).unwrap()["seed"],
-            "18446744073709551615"
-        );
-        assert_eq!(parameters(json!(7)).unwrap().seed, Some(7));
-        assert_eq!(parameters(Value::Null).unwrap().seed, None);
-        assert_eq!(parameters(json!("")).unwrap().seed, None);
-        for invalid in [json!("7a"), json!("-1"), json!("18446744073709551616")] {
-            let error = parameters(invalid).unwrap_err().to_string();
-            assert!(error.contains("seed must be a whole number"), "{error}");
-        }
+    fn a_seed_from_an_older_console_or_row_is_ignored() {
+        let parameters: ExecutionParameters = serde_json::from_value(json!({
+            "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0,
+            "seed": "18446744073709551615", "model": "m", "provider": "p", "agent": null,
+        }))
+        .unwrap();
+        assert!(serde_json::to_value(&parameters)
+            .unwrap()
+            .get("seed")
+            .is_none());
     }
 
     #[tokio::test]

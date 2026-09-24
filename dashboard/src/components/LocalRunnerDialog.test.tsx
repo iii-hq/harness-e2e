@@ -15,7 +15,6 @@ const imported: ExecutionParameters = {
   scenarios: ['minimal_path', 'context_pressure', 'kanban_c1_foundation'],
   runs: 3,
   technical_retries: 0,
-  seed: null,
   model: 'gpt-5.6-terra',
   provider: 'openai-codex',
   agent: 'tech-lead',
@@ -30,7 +29,6 @@ describe('run form', () => {
       scenarios: imported.scenarios,
       runs: '3',
       technicalRetries: '0',
-      seed: '',
       agent: 'tech-lead',
     })
     // Unchanged, the form starts the same parameters again.
@@ -38,12 +36,6 @@ describe('run form', () => {
       label: '',
       parameters: imported,
     })
-    // Seeds stay text end to end, exact beyond 2^53.
-    const seed = '18446744073709551615'
-    expect(runnerForm({ ...imported, seed }).seed).toBe(seed)
-    expect(
-      executionStartRequest(runnerForm({ ...imported, seed })).parameters.seed,
-    ).toBe(seed)
   })
 
   it('names the new execution after the one it runs again', () => {
@@ -65,7 +57,6 @@ describe('run form', () => {
       ...runnerForm(null, ['minimal_path']),
       label: '  Before the prompt change ',
       subject: 'deepseek\ndeepseek-v4-flash',
-      seed: ' 42 ',
       agent: ' ',
     }
     expect(executionStartRequest(form)).toEqual({
@@ -74,7 +65,6 @@ describe('run form', () => {
         scenarios: ['minimal_path'],
         runs: 1,
         technical_retries: 1,
-        seed: '42',
         model: 'deepseek-v4-flash',
         provider: 'deepseek',
         agent: null,

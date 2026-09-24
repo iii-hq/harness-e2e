@@ -122,7 +122,6 @@ export function rerunParameters(
       scenarios: [...new Set(scenarios)],
       runs: 1,
       technical_retries: 1,
-      seed: null,
       model: subject?.model ?? '',
       provider: subject?.provider ?? '',
       agent: null,

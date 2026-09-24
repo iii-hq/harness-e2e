@@ -180,7 +180,6 @@ describe('executions ledger', () => {
           scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
           runs: 1,
           technical_retries: 0,
-          seed: null,
           model: 'gpt-5.6-terra',
           provider: 'openai-codex',
           agent: 'tech-lead',

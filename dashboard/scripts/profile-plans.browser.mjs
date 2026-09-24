@@ -90,7 +90,6 @@ function startPlan(plan, role) {
       scenarios: plan.scenario_ids,
       runs: plan.runs,
       technical_retries: plan.technical_retries,
-      seed: plan.seed,
       model: plan.model,
       provider: plan.provider,
       agent: null,

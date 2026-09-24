@@ -4,7 +4,6 @@ import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 import { createConsoleTestHost } from './console-test-host.mjs'
 
-const seed = '18446744073709551615'
 const imported = {
   id: 'plan-0123456789abcdef0123456789abcdef',
   label: 'Software engineering',
@@ -32,7 +31,6 @@ const imported = {
       scenarios: ['minimal_path', 'retired_scenario'],
       runs: 2,
       technical_retries: 0,
-      seed,
       model: 'gpt-5.6-terra',
       provider: 'openai-codex',
       agent: 'tech-lead',
@@ -316,8 +314,8 @@ try {
 
   // Run tests: it starts from the last execution's model; a sequential group
   // ticks whole before running; the box, its name and Space all toggle a
-  // test; a bad seed and a busy runner are named in the footer; the next
-  // submit starts an execution and follows it on its page.
+  // test; the form has no seed; a busy runner is named in the footer; the
+  // next submit starts an execution and follows it on its page.
   await page
     .getByRole('button', { name: 'Run tests', exact: true })
     .first()
@@ -350,19 +348,13 @@ try {
   await box('context_pressure').focus()
   await page.keyboard.press('Space')
   assert.ok(await box('context_pressure').isChecked())
-  await runTests.getByText('Advanced · sampling, retries and seed').click()
-  await runTests.locator('#quick-execution-seed').fill('1e5')
+  // Every execution runs the canonical cases, so runs pair up in comparisons.
+  await runTests.getByText('Advanced · sampling and retries').click()
+  assert.doesNotMatch(await runTests.textContent(), /seed/i)
   const submit = runTests.getByRole('button', {
     name: 'run 1 test',
     exact: true,
   })
-  await submit.click()
-  await runTests
-    .getByText(/The seed is a whole number/)
-    .first()
-    .waitFor()
-  assert.equal(started.length, 0)
-  await runTests.locator('#quick-execution-seed').fill('')
   await submit.click()
   // A busy runner names what runs, by its title, and offers to open it.
   await runTests
@@ -387,7 +379,6 @@ try {
       scenarios: ['context_pressure'],
       runs: 1,
       technical_retries: 1,
-      seed: null,
       model: 'deepseek-v4-flash',
       provider: 'deepseek',
       agent: null,
@@ -397,8 +388,8 @@ try {
   await page.getByText('Execution · running', { exact: true }).waitFor()
 
   // Run again: the header names what it ran on; the form opens on the tests
-  // that will run, under the execution's name, with its exact seed, and
-  // sends them unchanged even when the catalog cannot be read.
+  // that will run, under the execution's name, and sends its parameters
+  // unchanged even when the catalog cannot be read.
   catalogDown = true
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   const band = page.locator('[data-identity-band]')
@@ -417,13 +408,12 @@ try {
         .getByRole('checkbox', { name: scenario, exact: true })
         .isChecked(),
     )
-  await again.getByText('Advanced · sampling, retries and seed').click()
+  await again.getByText('Advanced · sampling and retries').click()
   assert.equal(await again.locator('#quick-execution-runs').inputValue(), '2')
   assert.equal(
     await again.locator('#quick-execution-retries').inputValue(),
     '0',
   )
-  assert.equal(await again.locator('#quick-execution-seed').inputValue(), seed)
   assert.equal(
     await again.locator('#quick-execution-agent').inputValue(),
     'tech-lead',
@@ -458,7 +448,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, seed check, busy runner named with a link, start and follow, versions, selected-first prefill without a catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, versions, selected-first prefill without a catalog, delete.',
   )
 } finally {
   await browser.close()

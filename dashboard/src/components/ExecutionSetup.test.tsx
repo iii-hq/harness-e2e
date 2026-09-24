@@ -24,7 +24,6 @@ const sharedProps = {
   query: '',
   runs: '2',
   technicalRetries: '1',
-  seed: '',
   catalogStatus: {
     tone: 'ready' as const,
     text: 'catalog ready · 1 model · 1 test',
@@ -36,7 +35,6 @@ const sharedProps = {
   onQueryChange: () => undefined,
   onRunsChange: () => undefined,
   onTechnicalRetriesChange: () => undefined,
-  onSeedChange: () => undefined,
 }
 
 describe('execution setup sheet', () => {
@@ -57,7 +55,9 @@ describe('execution setup sheet', () => {
       expect(html).toContain('Choose the model')
       expect(html).not.toContain('Judge')
       expect(html).toContain('Pick the tests')
-      expect(html).toContain('Advanced · sampling, retries and seed')
+      expect(html).toContain('Advanced · sampling and retries')
+      // Every execution runs the canonical cases, so runs pair up.
+      expect(html).not.toMatch(/seed/i)
       expect(html).toContain('Search by name or id')
       expect(html).toContain('2 runs in total')
       expect(html).toContain('catalog ready · 1 model · 1 test')
@@ -117,34 +117,6 @@ describe('execution setup sheet', () => {
         selectedScenarios: ['a'],
       }),
     ).toEqual({})
-    // Seeds are digits up to 2^64 - 1, checked before anything is sent.
-    for (const [seed, valid] of [
-      ['18446744073709551615', true],
-      [' 7 ', true],
-      ['18446744073709551616', false],
-      ['1e5', false],
-      ['-1', false],
-      ['7.5', false],
-    ] as const) {
-      const errors = validateExecutionSetup({
-        mode: 'quick',
-        label: '',
-        subject: 'openai\ngpt-5',
-        selectedScenarios: ['a'],
-        seed,
-      })
-      expect(errors.seed === undefined, seed).toBe(valid)
-    }
-    expect(
-      renderToStaticMarkup(
-        <ExecutionSetup
-          {...sharedProps}
-          mode="quick"
-          seed="1e5"
-          errors={{ seed: 'The seed is a whole number.' }}
-        />,
-      ),
-    ).toContain('The seed is a whole number.')
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
@@ -188,14 +160,13 @@ describe('execution setup sheet', () => {
       selectedScenarios: 2,
       runsPerScenario: 1,
       technicalRetries: 1,
-      seed: '',
       subject: 'anthropic / claude-fable-5',
       url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
       '2 tests · 2 runs · anthropic / claude-fable-5',
     )
-    expect(summary.detail).toBe('1 run per test · 1 retry · canonical seed')
+    expect(summary.detail).toBe('1 run per test · 1 retry')
     const html = renderToStaticMarkup(
       <ExecutionSetupFooter
         summary={{
@@ -203,7 +174,6 @@ describe('execution setup sheet', () => {
           selectedScenarios: 0,
           runsPerScenario: 2,
           technicalRetries: 0,
-          seed: '7',
           subject: '',
           url: 'ws://x',
         }}
@@ -213,7 +183,7 @@ describe('execution setup sheet', () => {
       </ExecutionSetupFooter>,
     )
     expect(html).toContain('0 tests · 0 runs · no model')
-    expect(html).toContain('2 runs per test · 0 retries · seed 7 · ws://x')
+    expect(html).toContain('2 runs per test · 0 retries · ws://x')
     expect(html).toContain(
       'Before creating: Add a plan label. Select at least one test.',
     )
@@ -230,7 +200,6 @@ describe('execution setup sheet', () => {
           selectedScenarios: 1,
           runsPerScenario: 1,
           technicalRetries: 0,
-          seed: '',
           subject: 'openai / gpt-5',
           url: 'ws://x',
         }}

@@ -52,7 +52,6 @@ describe('live dashboard transport', () => {
         scenarios: ['minimal_path'],
         runs: 1,
         technical_retries: 0,
-        seed: null,
         model: 'model',
         provider: 'provider',
         agent: null,

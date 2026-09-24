@@ -547,7 +547,6 @@ impl PlanStore {
                 .map(|request| request.technical_retries)
                 .max()
                 .unwrap_or_default(),
-            seed: first.and_then(|request| request.seed),
             model: text(&plan["subject"]["model"])
                 .or_else(|| first.map(|request| request.model.clone()))
                 .unwrap_or_default(),

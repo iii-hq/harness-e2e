@@ -46,10 +46,6 @@ export function ExecutionConfiguration({
       ['scenarios', parameters.scenarios.join(', ')],
       ['runs', String(parameters.runs)],
       ['technical retries', String(parameters.technical_retries)],
-      [
-        'seed',
-        parameters.seed === null ? 'canonical' : String(parameters.seed),
-      ],
     )
   const differing = new Set(
     execution.stack

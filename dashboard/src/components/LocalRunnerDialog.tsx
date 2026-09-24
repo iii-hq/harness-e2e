@@ -34,7 +34,6 @@ export type RunnerForm = {
   scenarios: string[]
   runs: string
   technicalRetries: string
-  seed: string
   agent: string
 }
 
@@ -44,7 +43,6 @@ const initialForm: RunnerForm = {
   scenarios: [],
   runs: '1',
   technicalRetries: '1',
-  seed: '',
   agent: '',
 }
 
@@ -70,8 +68,6 @@ export function runnerForm(
     scenarios: scenarios.length > 0 ? scenarios : parameters.scenarios,
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
-    // Copied as is; cleared means the canonical case set.
-    seed: parameters.seed ?? '',
     agent: parameters.agent ?? '',
   }
 }
@@ -126,7 +122,6 @@ export function executionStartRequest(form: RunnerForm): {
       scenarios: form.scenarios,
       runs: Number(form.runs) || 1,
       technical_retries: Number(form.technicalRetries) || 0,
-      seed: form.seed.trim() || null,
       model,
       provider,
       agent: form.agent.trim() || null,
@@ -312,7 +307,6 @@ export function LocalRunnerDialog({
       label: form.label,
       subject: form.subject,
       selectedScenarios: form.scenarios,
-      seed: form.seed,
     })
   const errors = attempted ? validation() : {}
 
@@ -359,7 +353,6 @@ export function LocalRunnerDialog({
     selectedScenarios: form.scenarios.length,
     runsPerScenario,
     technicalRetries,
-    seed: form.seed,
     subject: form.subject ? providerModel(request.parameters) : '',
   }
   // Said before running: a sequential group always runs whole.
@@ -457,7 +450,6 @@ export function LocalRunnerDialog({
           query={scenarioQuery}
           runs={form.runs}
           technicalRetries={form.technicalRetries}
-          seed={form.seed}
           agent={form.agent}
           disabled={submitting}
           catalogLoading={loadingCatalog}
@@ -490,7 +482,6 @@ export function LocalRunnerDialog({
           onTechnicalRetriesChange={(value) =>
             update('technicalRetries', value)
           }
-          onSeedChange={(value) => update('seed', value)}
           onAgentChange={(value) => update('agent', value)}
         />
       </form>

@@ -75,8 +75,6 @@ export type ExecutionParameters = {
   scenarios: string[]
   runs: number
   technical_retries: number
-  /** Text: seeds reach 2^64 - 1, beyond what a JavaScript number holds. */
-  seed: string | null
   model: string
   provider: string
   /** Agent profile the subject ran under. */

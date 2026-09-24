@@ -12,7 +12,6 @@ const execution: PlanExecution = {
     scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
     runs: 1,
     technical_retries: 0,
-    seed: null,
     model: 'deepseek-flash',
     provider: 'deepseek',
     agent: 'tech-lead',

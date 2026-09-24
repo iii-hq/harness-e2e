@@ -270,11 +270,12 @@ pub(crate) mod tests {
         assert!(summary["totals"]["turns"].is_null());
         assert_eq!(summary["run_id"], "execution");
         assert_eq!(summary["lane"], "local");
-        // Running it again starts from its own request.
+        // Running it again starts from its own request, on the canonical
+        // cases whatever seed the native run had.
         assert_eq!(
             summary["parameters"],
             json!({"scenarios": ["context_pressure"], "runs": 1, "technical_retries": 1,
-                "seed": "42", "model": "model", "provider": "provider", "agent": null})
+                "model": "model", "provider": "provider", "agent": null})
         );
         assert_eq!(summary["stack"]["mode"], "source");
         assert_eq!(
