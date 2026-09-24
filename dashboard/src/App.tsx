@@ -3,6 +3,7 @@ import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
 import { ExecutionComparePage } from '@/pages/ExecutionComparePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
+import { StacksPage } from '@/pages/StacksPage'
 import { SuitesPage } from '@/pages/SuitesPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
@@ -32,6 +33,8 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
       return <TestHistoryPage key={route.testId} testId={route.testId} />
     case 'suites':
       return <SuitesPage />
+    case 'stacks':
+      return <StacksPage />
     case 'workspace':
       if (route.view === 'tests') return <TestsCatalogPage />
       return <ExecutionsPage />

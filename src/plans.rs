@@ -2,6 +2,7 @@
 //! how many times each runs and how many technical retries a crash gets.
 //! The master plan's suites are read-only; a local one starts as a copy of
 //! another suite and is edited here.
+pub(crate) mod stacks;
 pub(crate) mod store;
 
 use std::collections::BTreeSet;

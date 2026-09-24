@@ -15,6 +15,7 @@ use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
     ControlPlane, ExecutionPhase, ExecutionRecord, ScenariosListRequest, ScenariosListResponse,
 };
+use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
     SuiteView,
@@ -294,6 +295,25 @@ impl Controller {
         self.plan_store.delete_suite(id).await
     }
 
+    pub(super) async fn stacks(&self) -> Result<Vec<StackView>> {
+        self.plan_store.stacks().await
+    }
+
+    pub(super) async fn create_stack(&self, request: StackCreateRequest) -> Result<StackView> {
+        validate_stack_id(&request.from)?;
+        self.plan_store.create_stack(request).await
+    }
+
+    pub(super) async fn update_stack(&self, request: StackUpdateRequest) -> Result<StackView> {
+        validate_stack_id(&request.stack_id)?;
+        self.plan_store.update_stack(request).await
+    }
+
+    pub(super) async fn delete_stack(&self, id: &str) -> Result<()> {
+        validate_stack_id(id)?;
+        self.plan_store.delete_stack(id).await
+    }
+
     pub(super) async fn read_evidence(
         &self,
         request: super::bus::EvidenceReadRequest,
@@ -566,15 +586,25 @@ fn change_kind(record: &ExecutionRecord) -> &'static str {
 }
 
 fn validate_suite_id(value: &str) -> Result<()> {
-    if value.is_empty()
-        || value.len() > 100
-        || !value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-    {
+    if !valid_id(value) {
         bail!("suite id is invalid");
     }
     Ok(())
+}
+
+fn validate_stack_id(value: &str) -> Result<()> {
+    if !valid_id(value) {
+        bail!("stack id is invalid");
+    }
+    Ok(())
+}
+
+fn valid_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 100
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
 }
 
 pub(super) fn validate_stack_url(value: &str) -> Result<()> {

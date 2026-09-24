@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect } from 'react'
 import { useDashboardChrome } from '@/components/DashboardShell'
 
-export type DashboardSection = 'tests' | 'executions' | 'suites'
+export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
 
 function classes(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')

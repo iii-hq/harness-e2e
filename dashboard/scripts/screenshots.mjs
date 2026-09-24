@@ -22,6 +22,7 @@ const ROUTES = [
   { name: 'tests', route: 'tests' },
   { name: 'executions', route: 'executions' },
   { name: 'suites', route: 'suites' },
+  { name: 'stacks', route: 'stacks' },
   { name: 'compare', route: 'compare' },
   { name: 'versions', route: 'versions' },
   { name: 'execution', discover: 'execution/' },

@@ -10,7 +10,7 @@ import {
 } from '@/lib/iii-client'
 
 describe('live dashboard transport', () => {
-  it('carries suite and execution controls through the Console client', async () => {
+  it('carries suite, stack and execution controls through the Console client', async () => {
     const trigger = vi.fn(async () => ({ suites: [] }))
     installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
     installDashboardRuntimeConfig({
@@ -19,6 +19,10 @@ describe('live dashboard transport', () => {
         suite_create: 'suite-create',
         suite_update: 'suite-update',
         suite_delete: 'suite-delete',
+        stacks_list: 'stacks-list',
+        stack_create: 'stack-create',
+        stack_update: 'stack-update',
+        stack_delete: 'stack-delete',
         execution_cancel: 'execution-cancel',
       },
     } as RuntimeConfig)
@@ -38,6 +42,22 @@ describe('live dashboard transport', () => {
     await live.deleteSuite('suite-1')
     expect(trigger).toHaveBeenCalledWith('suite-delete', {
       suite_id: 'suite-1',
+    })
+    await live.listStacks()
+    expect(trigger).toHaveBeenCalledWith('stacks-list', {})
+    await live.createStack('default')
+    expect(trigger).toHaveBeenCalledWith('stack-create', {
+      from: 'default',
+      label: '',
+    })
+    await live.updateStack('stack-1', { yaml: 'containers: {}\n' })
+    expect(trigger).toHaveBeenCalledWith('stack-update', {
+      stack_id: 'stack-1',
+      yaml: 'containers: {}\n',
+    })
+    await live.deleteStack('stack-1')
+    expect(trigger).toHaveBeenCalledWith('stack-delete', {
+      stack_id: 'stack-1',
     })
     await live.cancelExecution('plan-1')
     expect(trigger).toHaveBeenCalledWith('execution-cancel', {
