@@ -34,9 +34,16 @@ jobs:
           set -euo pipefail
           image=$(scripts/run_in_image.sh image)
           printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
-          if docker manifest inspect "$image" >/dev/null 2>&1; then
+          # Only the registry saying it has no such tag lets this publish:
+          # any other answer could hide a tag this would overwrite. "denied"
+          # is how GHCR answers for a package that does not exist yet, and it
+          # cannot hide one either: a token that may push the tag may read it.
+          if answer=$(docker manifest inspect "$image" 2>&1); then
             echo "::notice::$image is already published"
             exit 0
+          elif ! grep -qiE 'manifest unknown|no such manifest|name unknown|not found|denied' <<<"$answer"; then
+            echo "::error::could not tell whether $image is published: $answer"
+            exit 1
           fi
           docker build --tag "$image" - <Dockerfile
           docker push "$image"
