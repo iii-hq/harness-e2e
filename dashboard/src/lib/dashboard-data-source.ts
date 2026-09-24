@@ -39,6 +39,30 @@ export type Suite = {
   updated_at: string | null
 }
 
+/** A container a stack declares, with the version or commit it pins. */
+export type StackContainer = {
+  name: string
+  version: string | null
+  commit: string | null
+}
+
+/** A stack: where a suite runs, an iii Compose project plus `iii` and an
+ *  optional `template`. `repository` ones come from `stacks/` and are
+ *  read-only; `local` ones are this Console's. */
+export type Stack = {
+  id: string
+  label: string
+  source: 'repository' | 'local'
+  /** The stack as written, comments included. */
+  yaml: string
+  iii: string | null
+  template: string | null
+  containers: StackContainer[]
+  /** What may not run as written; never blocking. */
+  warnings: string[]
+  updated_at: string | null
+}
+
 /** The suite an execution ran; `id` is absent for an unnamed suite. The
  *  runner sets `sha256`, the digest of what it materialized; a request never
  *  does. */
@@ -539,6 +563,10 @@ export type RuntimeConfig = {
     suite_create: string
     suite_update: string
     suite_delete: string
+    stacks_list: string
+    stack_create: string
+    stack_update: string
+    stack_delete: string
     changed_trigger: string
   }
 }
@@ -587,6 +615,16 @@ export type DashboardDataBridge = {
     >,
   ): Promise<Suite>
   deleteSuite(suiteId: string): Promise<void>
+  /** The repository's stacks, then this Console's. */
+  listStacks(): Promise<{ stacks: Stack[] }>
+  /** A stack of this Console that starts as a copy of `from`. */
+  createStack(from: string, label?: string): Promise<Stack>
+  /** Refused only when the YAML does not parse or declares no containers. */
+  updateStack(
+    stackId: string,
+    changes: Partial<Pick<Stack, 'label' | 'yaml'>>,
+  ): Promise<Stack>
+  deleteStack(stackId: string): Promise<void>
   getCatalog(url?: string): Promise<JsonObject>
   /** Starts an execution on this stack; Run tests and Run again alike. */
   startExecution(request: {
@@ -686,6 +724,15 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call(runtime.functions.suite_update, { ...changes, suite_id: suiteId }),
     deleteSuite: (suiteId) =>
       call(runtime.functions.suite_delete, { suite_id: suiteId }).then(
+        () => undefined,
+      ),
+    listStacks: () => call(runtime.functions.stacks_list, {}),
+    createStack: (from, label = '') =>
+      call(runtime.functions.stack_create, { from, label }),
+    updateStack: (stackId, changes) =>
+      call(runtime.functions.stack_update, { ...changes, stack_id: stackId }),
+    deleteStack: (stackId) =>
+      call(runtime.functions.stack_delete, { stack_id: stackId }).then(
         () => undefined,
       ),
     getCatalog: (url) =>

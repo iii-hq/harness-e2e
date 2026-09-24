@@ -18,6 +18,7 @@ export type DashboardRoute =
   | { page: 'versions'; left: string | null; right: string | null }
   | { page: 'test-history'; testId: string }
   | { page: 'suites' }
+  | { page: 'stacks' }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
 const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
@@ -116,6 +117,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
     }
   }
   if (head === 'suites' && !rest[0]) return { page: 'suites' }
+  if (head === 'stacks' && !rest[0]) return { page: 'stacks' }
   return null
 }
 
@@ -173,6 +175,10 @@ export function hashForTestHistory(testId: string): string {
 
 export function hashForSuites(): string {
   return dashboardHash('suites')
+}
+
+export function hashForStacks(): string {
+  return dashboardHash('stacks')
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {

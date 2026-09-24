@@ -25,7 +25,8 @@ pnpm build
 ```
 
 The Console routes live under `#/ext/harness-e2e`. The page exposes Tests,
-Executions and Suites and keeps entity detail inside the same extension route.
+Executions, Suites and Stacks and keeps entity detail inside the same extension
+route.
 
 **Run tests** executes a suite, or scenarios ticked by hand, against the
 Harness already running at `III_URL`. Its first field is the suite (see
@@ -209,6 +210,26 @@ exact-stack workflow records for it; scenarios ticked by hand make an unnamed
 suite. Comparing two executions lists the suite among the parameters that
 differ.
 
+## Stacks
+
+A stack is where a suite runs: an iii Compose project plus the executor's keys
+`iii` (the iii release) and optional `template`, written as
+[`stacks/*.yaml`](../stacks/) writes it. **Stacks** lists the repository's
+stacks (embedded in the binary, read-only) and this Console's, each with the iii
+release, template and containers (with the version or commit each pins) it
+declares. **copy** makes a stack of this Console from any stack and opens its
+YAML to edit; the text is kept exactly as written, comments included, and
+**delete** removes one.
+
+The stack is read with YAML 1.2 rules, as Compose reads it: `on`, `no` and dates
+stay text. Only YAML that does not parse, or a stack without a `containers`
+mapping, is refused. Everything else is a warning next to the editor and on the
+stack, never blocking: a container without a `worker`, a worker that is neither
+`package://` nor `path://`, a `path://` worker (it exists only on this machine),
+a `commit:` pin (it takes effect once the executor runs commit pins) and a
+top-level key neither the executor nor Compose reads. Runs do not take a stack
+from here yet: an execution still runs on this worker's stack.
+
 The shared Rust coordinator persists every child identity before dispatch and
 reserves admission across the whole execution. It cancels active work before
 releasing admission, retains finished evidence and marks remaining slots. Restart
@@ -216,15 +237,18 @@ reconciles retained children and interrupts the execution without resuming it.
 The main execution list shows the parent; its detail links to native artifacts.
 No synthetic results report is created. Missing telemetry stays unavailable.
 
-Suites and composed executions live in the local SQL store, accessed only
-through the database worker. The store carries no version and no migration
+Suites, stacks and composed executions live in the local SQL store, accessed
+only through the database worker. The store carries no version and no migration
 step: at start the worker recreates any table whose layout fingerprint moved,
-keeping every suite, execution and receipt the current binary can still read.
+keeping every suite, stack, execution and receipt the current binary can still
+read.
 The baseline/candidate plans suites replaced are dropped; the executions they
 ran stay, without a suite.
 
 `e2e::dashboard::suites-list`, `suite-create`, `suite-update` and
-`suite-delete` read and change suites; `execution-cancel` stops an execution.
+`suite-delete` read and change suites; `stacks-list`, `stack-create`,
+`stack-update` and `stack-delete` read and change stacks; `execution-cancel`
+stops an execution.
 
 Run deterministic browser acceptance after building the dashboard and Rust binary:
 

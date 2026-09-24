@@ -29,6 +29,7 @@ function renderShell({ narrow = false } = {}) {
 describe('section navigation', () => {
   it('maps every route to a section', () => {
     expect(sectionForRoute({ page: 'suites' })).toBe('suites')
+    expect(sectionForRoute({ page: 'stacks' })).toBe('stacks')
     expect(
       sectionForRoute({
         page: 'execution',
@@ -79,7 +80,7 @@ describe('section navigation', () => {
 
   it('keeps every section reachable from the narrow select', () => {
     const html = renderShell({ narrow: true })
-    for (const label of ['Tests', 'Executions', 'Suites']) {
+    for (const label of ['Tests', 'Executions', 'Suites', 'Stacks']) {
       expect(html).toContain(`>${label}<`)
     }
   })

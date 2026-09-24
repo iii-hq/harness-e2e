@@ -1,5 +1,5 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import { FlaskConical, Layers, ListChecks } from 'lucide-react'
+import { Boxes, FlaskConical, Layers, ListChecks } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -11,6 +11,7 @@ import {
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
 import {
   type DashboardRoute,
+  hashForStacks,
   hashForSuites,
   hashForWorkspace,
   routeRenderIdentity,
@@ -18,7 +19,7 @@ import {
 } from '@/hooks/use-hash-route'
 import './dashboard-shell.css'
 
-export type DashboardSection = 'tests' | 'executions' | 'suites'
+export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
 
 export type DashboardHeaderState = {
   key: string
@@ -48,6 +49,7 @@ export function useDashboardChrome() {
 
 export function sectionForRoute(route: DashboardRoute): DashboardSection {
   if (route.page === 'suites') return 'suites'
+  if (route.page === 'stacks') return 'stacks'
   if (
     route.page === 'execution' ||
     route.page === 'compare' ||
@@ -67,6 +69,7 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
 
 function hashForSection(section: DashboardSection): string {
   if (section === 'suites') return hashForSuites()
+  if (section === 'stacks') return hashForStacks()
   return hashForWorkspace(section as WorkspaceView)
 }
 
@@ -74,18 +77,21 @@ const sectionIcons: Record<DashboardSection, ReactNode> = {
   tests: <FlaskConical size={15} aria-hidden="true" />,
   executions: <ListChecks size={15} aria-hidden="true" />,
   suites: <Layers size={15} aria-hidden="true" />,
+  stacks: <Boxes size={15} aria-hidden="true" />,
 }
 
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
   { value: 'suites', label: 'Suites' },
+  { value: 'stacks', label: 'Stacks' },
 ]
 
 const sectionLabels: Record<DashboardSection, string> = {
   tests: 'Tests',
   executions: 'Executions',
   suites: 'Suites',
+  stacks: 'Stacks',
 }
 
 function HarnessE2eIcon() {

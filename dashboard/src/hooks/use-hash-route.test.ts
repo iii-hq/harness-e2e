@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   hashForComparison,
   hashForExecution,
+  hashForStacks,
   hashForSuites,
   hashForTestHistory,
   hashForVersionComparison,
@@ -68,7 +69,7 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash('#main')).toBeNull()
   })
 
-  it('keeps suites and test metric history as independent routes', () => {
+  it('keeps suites, stacks and test metric history as independent routes', () => {
     expect(hashForTestHistory('direct/answer')).toBe(
       '#/ext/harness-e2e/tests/direct%2Fanswer',
     )
@@ -78,6 +79,8 @@ describe('dashboard hash routes', () => {
     })
     expect(hashForSuites()).toBe('#/ext/harness-e2e/suites')
     expect(routeFromHash(hashForSuites())).toEqual({ page: 'suites' })
+    expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
+    expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()
     expect(routeFromHash('#/ext/harness-e2e/plans/new')).toBeNull()
