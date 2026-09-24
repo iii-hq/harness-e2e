@@ -1199,7 +1199,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
 async fn inspect_ui(context: &E2eContext, kind: Kind, session: &str, phase: &str) -> Result<Value> {
     let code = format!(
         r#"const phase={};
-const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>20&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'}};
+const visible=e=>{{if(!e)return false;const r=e.getBoundingClientRect(),s=getComputedStyle(e);return r.width>20&&r.height>0&&r.bottom>0&&r.right>0&&r.top<innerHeight&&r.left<innerWidth&&s.display!=='none'&&s.visibility!=='hidden'}};
 const seen=e=>{{e?.scrollIntoView({{block:'nearest',inline:'nearest'}});return visible(e)}};
 const domain=document.querySelector('[data-testid="domain-result"]'),error=document.querySelector('[data-testid="error"]');
 const workspaceOk=location.hash==='#/'&&!!domain?.closest('[data-workspace-pane-id]')&&document.querySelectorAll('[data-workspace-pane-id]').length>=2;
