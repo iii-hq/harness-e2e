@@ -10,8 +10,12 @@
 # this checkout's: its root is mounted at the same path, with the target/
 # directory every phase reads and writes, and so is a fresh TMPDIR, so a path
 # a scenario hands the host's Docker daemon through the socket names the same
-# files on both sides. The container runs as the calling user and, without
-# the host's network, starts its engine on 49134 in a namespace of its own.
+# files on both sides. The container runs as the calling user and, by
+# default without the host's network, starts its engine on 49134 in a
+# namespace of its own. HARNESS_E2E_DOCKER_NETWORK=host puts it on the host's
+# network instead, for a host that runs one phase at a time: fixtures that
+# publish a port on the host's loopback (Registry, for its screenshots) are
+# only reachable from the phase there.
 #
 # The environment the phases read passes through by name, never by value on
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
@@ -66,10 +70,11 @@ args=(run --rm --init
   --volume "$root:$root" --workdir "$root"
   --volume "$tmp:$tmp" --env "TMPDIR=$tmp"
   --env "HARNESS_E2E_EXECUTOR_IMAGE=$reference")
+[[ -z "${HARNESS_E2E_DOCKER_NETWORK:-}" ]] || args+=(--network "$HARNESS_E2E_DOCKER_NETWORK")
 [[ -z "$env_file" ]] || args+=(--env-file "$env_file")
 for name in $(compgen -e); do
   case "$name" in
-    HARNESS_E2E_EXECUTOR_IMAGE) ;;
+    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_DOCKER_NETWORK) ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | EXECUTION_KEY | \
       RELEASE_CONTROL_OIDC_AUDIENCE | GITHUB_TOKEN | DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY)
       args+=(--env "$name") ;;

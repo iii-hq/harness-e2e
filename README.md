@@ -253,8 +253,12 @@ checkout at the same path, with a fresh `TMPDIR`, the host's Docker socket and
 the caller's uid, passes the phase's environment through by name, and runs
 [`scripts/executor.sh`](scripts/executor.sh) `prepare [materialize|assemble]`,
 `group` or `finalize` there. Each group's engine listens on 49134 in its own
-container. The workflow keeps on the runner what needs it: checkouts,
-artifacts, the OIDC reports and `gh`.
+container, off the host's network unless `HARNESS_E2E_DOCKER_NETWORK=host`.
+The Registry groups need host networking for their screenshots: the fixture
+publishes the application on the host's loopback, where only a phase on the
+host's network reaches it. The workflow runs every group on its runner's
+network, since each job owns its runner, and keeps on the runner what needs
+it: checkouts, artifacts, the OIDC reports and `gh`.
 
 [`executor-image.yml`](.github/workflows/executor-image.yml) publishes a tag
 from `main` when the Dockerfile changes (or by hand) and never rebuilds an

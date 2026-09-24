@@ -115,6 +115,13 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(run[run.index("--env-file") + 1], "/secrets/providers.env")
         self.assertEqual(run[-5:], [TAG, "bash", "scripts/executor.sh", "prepare", "assemble"])
 
+    def test_a_host_that_runs_one_phase_at_a_time_may_put_it_on_its_network(self):
+        _, _, _, invoked = self.run_wrapper("group", env={"HARNESS_E2E_DOCKER_NETWORK": "host"})
+        run = next(call for call in invoked if call[0] == "run")
+        self.assertEqual(run[run.index("--network") + 1], "host")
+        # The wrapper's own setting, not the phase's.
+        self.assertNotIn("HARNESS_E2E_DOCKER_NETWORK", run)
+
     def test_the_image_is_named_by_the_dockerfile(self):
         _, _, result, invoked = self.run_wrapper("image")
         self.assertEqual(result.stdout, TAG + "\n")

@@ -140,6 +140,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("strategy:\n      fail-fast: false", workflow)
         # Each phase runs in the executor image, which starts the group there.
         self.assertIn("scripts/run_in_image.sh group", workflow)
+        # Each group job owns its runner, and the Registry fixture publishes
+        # the application it screenshots on the runner's loopback.
+        group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
+                     if step.get("id") == "common")
+        self.assertEqual(group["env"]["HARNESS_E2E_DOCKER_NETWORK"], "host")
         self.assertIn("group) exec bash scripts/run_exact_stack_group.sh",
                       (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         self.assertIn("scripts/exact_stack_campaign.py", workflow)

@@ -319,11 +319,14 @@ jobs:
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for
       # alertmanager_route_match, Chromium for the browser worker, and the
-      # host's Docker through its socket.
+      # host's Docker through its socket. On the runner's network: this job
+      # owns the runner, and the Registry fixture publishes the application
+      # it screenshots on the runner's loopback.
       - name: Execute common campaign group
         id: common
         continue-on-error: true
         env:
+          HARNESS_E2E_DOCKER_NETWORK: host
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
