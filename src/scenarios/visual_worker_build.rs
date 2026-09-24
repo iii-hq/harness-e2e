@@ -971,6 +971,30 @@ async fn capture_browser(
     result
 }
 
+/// `browser::navigate` answers only after the page's `load` event, which its CDP
+/// client caps at 30 seconds. The Console workspace renders and runs well before
+/// a still-pending resource lets `load` fire, so that overrun is recorded on the
+/// navigation instead of failing the capture; the readiness checks that follow
+/// decide whether the page is usable.
+async fn navigate(context: &E2eContext, session: &str, url: &str) -> Result<Value> {
+    match context
+        .trigger_value(
+            "browser::navigate",
+            json!({"session_id":session,"url":url,"timeout_ms":30000}),
+        )
+        .await
+    {
+        Err(error) if is_load_timeout(&error) => {
+            Ok(json!({"ok":true,"timed_out":true,"url":url,"error":format!("{error:#}")}))
+        }
+        other => other,
+    }
+}
+
+fn is_load_timeout(error: &anyhow::Error) -> bool {
+    is_remote_failure(error) && format!("{error:#}").contains("Request timed out")
+}
+
 async fn capture_browser_session(
     context: &E2eContext,
     kind: Kind,
@@ -984,13 +1008,8 @@ async fn capture_browser_session(
             json!({"session_id":session,"width":1280,"height":900}),
         )
         .await?;
-    let navigation = context
-        .trigger_value(
-            "browser::navigate",
-            json!({"session_id":session,"url":url,"timeout_ms":30000}),
-        )
-        .await?;
-    if navigation["ok"] != true || navigation["timed_out"] == true {
+    let navigation = navigate(context, session, url).await?;
+    if navigation["ok"] != true {
         return Ok(
             json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"captures":[],"url":url}),
         );
@@ -1093,13 +1112,8 @@ return {{visible,same_id:sameId,rendered_graph:false}};
     context
         .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
         .await?;
-    let reload = context
-        .trigger_value(
-            "browser::navigate",
-            json!({"session_id":session,"url":url,"timeout_ms":30000}),
-        )
-        .await?;
-    let reloaded_state = if reload["ok"] == true && reload["timed_out"] != true {
+    let reload = navigate(context, session, url).await?;
+    let reloaded_state = if reload["ok"] == true {
         inspect_ui(context, kind, session, "reloaded").await?
     } else {
         json!({"passed":false,"reason":"Console page did not reload"})
@@ -1158,7 +1172,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console workspace",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
     )
 }
 
@@ -1521,6 +1535,26 @@ mod tests {
                 100
             );
         }
+    }
+
+    #[test]
+    fn only_a_remote_load_timeout_is_tolerated_on_navigation() {
+        let remote = |message: &str| {
+            anyhow::Error::new(iii_sdk::errors::Error::Remote {
+                code: "invocation_failed".into(),
+                message: message.into(),
+                stacktrace: None,
+            })
+            .context("invoke browser::navigate")
+        };
+        assert!(is_load_timeout(&remote(
+            "handler error: navigation failed: Request timed out."
+        )));
+        assert!(!is_load_timeout(&remote("unknown session_id")));
+        assert!(!is_load_timeout(
+            &anyhow::Error::new(iii_sdk::errors::Error::Timeout)
+                .context("invoke browser::navigate")
+        ));
     }
 
     #[test]
