@@ -501,7 +501,6 @@ describe('comparing two executions', () => {
       scenarios: ['minimal_path', 'timer_wake'],
       runs: 3,
       technical_retries: 1,
-      seed: null,
       // A model id that carries its provider is not prefixed again.
       model: 'deepseek/pro',
       provider: 'deepseek',

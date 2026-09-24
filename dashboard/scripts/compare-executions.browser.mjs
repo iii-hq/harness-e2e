@@ -104,7 +104,6 @@ const parameters = (runs) => ({
   scenarios: ['minimal_path', 'persistent_state', 'timer_wake', ...group],
   runs,
   technical_retries: 2,
-  seed: '18446744073709551615',
   model: 'flash',
   provider: 'deepseek',
   agent: 'tech-lead',
@@ -256,16 +255,14 @@ try {
   await page.getByRole('button', { name: 'rerun selected (3)' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.waitFor()
-  await again.getByText('Advanced · sampling, retries and seed').click()
+  await again.getByText('Advanced · sampling and retries').click()
   assert.equal(await again.locator('#quick-execution-runs').inputValue(), '3')
   assert.equal(
     await again.locator('#quick-execution-retries').inputValue(),
     '2',
   )
-  assert.equal(
-    await again.locator('#quick-execution-seed').inputValue(),
-    '18446744073709551615',
-  )
+  // No seed: the Console always runs the canonical case.
+  assert.equal(await again.locator('#quick-execution-seed').count(), 0)
   assert.equal(
     await again.locator('#quick-execution-agent').inputValue(),
     'tech-lead',
