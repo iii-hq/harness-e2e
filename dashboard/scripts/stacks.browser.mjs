@@ -132,6 +132,20 @@ try {
   }
   const fallback = repository[0]
 
+  // A repository stack opens read-only, as stacks/ writes it.
+  await page.getByRole('button', { name: 'View default', exact: true }).click()
+  const view = page.getByRole('dialog', { name: 'View default' })
+  const shown = view.locator('#stack-editor-yaml')
+  assert.equal(await shown.inputValue(), fallback.yaml)
+  assert.equal(await shown.isEditable(), false)
+  assert.equal(await view.locator('#stack-editor-label').count(), 0)
+  assert.equal(
+    await view.getByRole('button', { name: 'save stack' }).count(),
+    0,
+  )
+  await view.getByRole('button', { name: 'close', exact: true }).click()
+  await view.waitFor({ state: 'hidden' })
+
   // A copy of a repository stack is a stack of this Console, opened to edit
   // with its YAML exactly as the repository writes it.
   await page.getByRole('button', { name: 'Copy default', exact: true }).click()
@@ -222,7 +236,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: repository stacks listed read-only, copy one with its YAML as written, a path worker saved with a warning next to the editor and on the stack, YAML that does not parse refused next to the editor, edit again, delete, narrow viewport.',
+    'Stacks browser flow passed: repository stacks listed and viewed read-only, copy one with its YAML as written, a path worker saved with a warning next to the editor and on the stack, YAML that does not parse refused next to the editor, edit again, delete, narrow viewport.',
   )
 } catch (error) {
   console.error(

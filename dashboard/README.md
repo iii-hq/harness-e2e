@@ -215,20 +215,24 @@ differ.
 A stack is where a suite runs: an iii Compose project plus the executor's keys
 `iii` (the iii release) and optional `template`, written as
 [`stacks/*.yaml`](../stacks/) writes it. **Stacks** lists the repository's
-stacks (embedded in the binary, read-only) and this Console's, each with the iii
-release, template and containers (with the version or commit each pins) it
-declares. **copy** makes a stack of this Console from any stack and opens its
-YAML to edit; the text is kept exactly as written, comments included, and
-**delete** removes one.
+stacks (embedded in the binary; **view** opens their YAML read-only) and this
+Console's, each with the iii release, template and containers (with the version
+or commit each pins) it declares. **copy** makes a stack of this Console from
+any stack and opens its YAML to edit; the text is kept exactly as written,
+comments included, and **delete** removes one.
 
 The stack is read with YAML 1.2 rules, as Compose reads it: `on`, `no` and dates
-stay text. Only YAML that does not parse, or a stack without a `containers`
-mapping, is refused. Everything else is a warning next to the editor and on the
-stack, never blocking: a container without a `worker`, a worker that is neither
-`package://` nor `path://`, a `path://` worker (it exists only on this machine),
-a `commit:` pin (it takes effect once the executor runs commit pins) and a
-top-level key neither the executor nor Compose reads. Runs do not take a stack
-from here yet: an execution still runs on this worker's stack.
+stay text. It is refused only when it is past 32 KiB or its aliases expand past
+1 MiB (integrity), when it does not parse, or when it has no `containers`
+mapping. Everything else is a warning next to the editor and on the stack,
+never blocking: a container that is not a mapping or has no `worker`, a worker
+that is neither `package://` nor `path://`, a `path://` worker (it exists only
+on this machine), a `commit:` pin (it takes effect once the executor runs commit
+pins), a top-level key neither the executor nor Compose reads, a tag the
+executor's loader refuses (`!env`, `!!python/…`), and an `iii`, `template`,
+`version` or `commit` that is not text to the executor (`1.10`, `0123456`:
+quote it). Runs do not take a stack from here yet: an execution still runs on
+this worker's stack.
 
 The shared Rust coordinator persists every child identity before dispatch and
 reserves admission across the whole execution. It cancels active work before

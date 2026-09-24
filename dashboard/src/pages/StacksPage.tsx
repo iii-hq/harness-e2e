@@ -59,8 +59,9 @@ function Warnings({ warnings }: { warnings: string[] }) {
       data-stack-warnings
     >
       <ul className="m-0 grid list-disc gap-1 pl-4">
-        {warnings.map((warning) => (
-          <li key={warning}>{warning}</li>
+        {warnings.map((warning, index) => (
+          // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
+          <li key={index}>{warning}</li>
         ))}
       </ul>
     </Callout>
@@ -68,7 +69,8 @@ function Warnings({ warnings }: { warnings: string[] }) {
 }
 
 /** Edits a stack of this Console: its name and its YAML, as written. Saving
- *  keeps the editor open with the warnings of what was saved. */
+ *  keeps the editor open with the warnings of what was saved. A repository
+ *  stack opens read-only. */
 function StackEditor({
   bridge,
   stack,
@@ -87,6 +89,7 @@ function StackEditor({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState('')
+  const readOnly = stack.source === 'repository'
   const labelError =
     attempted && label.trim() === '' ? 'Name the stack.' : undefined
   const changed = label.trim() !== saved.label || yaml !== saved.yaml
@@ -124,9 +127,13 @@ function StackEditor({
       onClose={() => !saving && onClose()}
       size="lg"
       tall
-      kicker="Stack"
-      title={`Edit ${stack.label}`}
-      description="Where a suite runs: an iii Compose project plus iii and an optional template, as in stacks/*.yaml. Only YAML that does not parse, or no containers, is refused; everything else is a warning."
+      kicker={readOnly ? 'Repository stack' : 'Stack'}
+      title={readOnly ? `View ${stack.label}` : `Edit ${stack.label}`}
+      description={
+        readOnly
+          ? 'A stack of the repository, read-only: copy it to edit a stack of this Console.'
+          : 'Where a suite runs: an iii Compose project plus iii and an optional template, as in stacks/*.yaml. Only YAML that does not parse, or no containers, is refused; everything else is a warning.'
+      }
       closeLabel="Close stack editor"
       className="ds-root"
       footer={
@@ -142,15 +149,17 @@ function StackEditor({
           >
             close
           </button>
-          <button
-            className={buttonClassName({ variant: 'primary' })}
-            type="submit"
-            form="stack-editor-form"
-            disabled={saving}
-            aria-busy={saving}
-          >
-            {saving ? 'saving…' : 'save stack'}
-          </button>
+          {readOnly ? null : (
+            <button
+              className={buttonClassName({ variant: 'primary' })}
+              type="submit"
+              form="stack-editor-form"
+              disabled={saving}
+              aria-busy={saving}
+            >
+              {saving ? 'saving…' : 'save stack'}
+            </button>
+          )}
         </div>
       }
     >
@@ -160,35 +169,42 @@ function StackEditor({
         onSubmit={save}
         noValidate
       >
-        <Field
-          label="Stack name"
-          htmlFor="stack-editor-label"
-          meta="required"
-          error={labelError}
-        >
-          <Input
-            id="stack-editor-label"
-            value={label}
-            maxLength={160}
-            aria-invalid={labelError ? true : undefined}
-            aria-describedby={fieldDescribedBy('stack-editor-label', {
-              error: Boolean(labelError),
-            })}
-            onChange={(event) => setLabel(event.target.value)}
-            disabled={saving}
-          />
-        </Field>
+        {readOnly ? null : (
+          <Field
+            label="Stack name"
+            htmlFor="stack-editor-label"
+            meta="required"
+            error={labelError}
+          >
+            <Input
+              id="stack-editor-label"
+              value={label}
+              maxLength={160}
+              aria-invalid={labelError ? true : undefined}
+              aria-describedby={fieldDescribedBy('stack-editor-label', {
+                error: Boolean(labelError),
+              })}
+              onChange={(event) => setLabel(event.target.value)}
+              disabled={saving}
+            />
+          </Field>
+        )}
         <Warnings warnings={saved.warnings} />
         <Field
           label="Stack YAML"
           htmlFor="stack-editor-yaml"
-          hint="Kept exactly as written, comments included."
+          hint={
+            readOnly
+              ? 'As stacks/ in this runner writes it.'
+              : 'Kept exactly as written, comments included.'
+          }
           error={error}
         >
           <Textarea
             id="stack-editor-yaml"
             className="min-h-[24rem] font-mono text-xs leading-5"
             value={yaml}
+            readOnly={readOnly}
             spellCheck={false}
             autoCapitalize="off"
             autoCorrect="off"
@@ -341,8 +357,9 @@ export function StacksPage() {
                     <td data-label="Warnings" className="text-xs">
                       {stack.warnings.length ? (
                         <ul className="m-0 grid max-w-[28rem] list-none gap-1 p-0 text-warning">
-                          {stack.warnings.map((warning) => (
-                            <li key={warning}>{warning}</li>
+                          {stack.warnings.map((warning, index) => (
+                            // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
+                            <li key={index}>{warning}</li>
                           ))}
                         </ul>
                       ) : (
@@ -363,7 +380,20 @@ export function StacksPage() {
                         >
                           copy
                         </button>
-                        {stack.source === 'local' ? (
+                        {stack.source === 'repository' ? (
+                          <button
+                            className={buttonClassName({
+                              variant: 'secondary',
+                              size: 'compact',
+                            })}
+                            type="button"
+                            aria-label={`View ${stack.label}`}
+                            disabled={!bridge || busy !== null}
+                            onClick={() => setEditing(stack)}
+                          >
+                            view
+                          </button>
+                        ) : (
                           <>
                             <button
                               className={buttonClassName({
@@ -390,7 +420,7 @@ export function StacksPage() {
                               delete
                             </button>
                           </>
-                        ) : null}
+                        )}
                       </span>
                     </td>
                   </tr>
