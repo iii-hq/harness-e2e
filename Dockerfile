@@ -11,13 +11,16 @@ FROM ubuntu:24.04
 LABEL org.opencontainers.image.source=https://github.com/iii-hq/harness-e2e
 ARG DEBIAN_FRONTEND=noninteractive
 
-# The Ubuntu mirrors now and then list a package their pool no longer has:
-# the apt steps try three times.
-RUN for attempt in 1 2 3; do \
-      apt-get update && apt-get install -y --no-install-recommends \
-        build-essential ca-certificates curl git jq procps python3 python3-yaml unzip xz-utils && break; \
-      [ "$attempt" = 3 ] && exit 1; sleep 30; \
-    done \
+# One mirror for every pocket, the one the Actions runners use: behind
+# archive.ubuntu.com and security.ubuntu.com, nodes that lag hours behind the
+# others answer the same name, so an index from one lists packages another's
+# pool does not have yet.
+RUN sed -i 's|http://archive.ubuntu.com|http://azure.archive.ubuntu.com|g; s|http://security.ubuntu.com|http://azure.archive.ubuntu.com|g' \
+      /etc/apt/sources.list.d/ubuntu.sources \
+ && echo 'Acquire::Retries "3";' >/etc/apt/apt.conf.d/80-retries \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl git jq procps python3 python3-yaml unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
@@ -30,10 +33,7 @@ RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v24.18.0/node-v24.18.0-
 # The browser worker drives a system Chromium (/usr/bin/chromium); Playwright
 # brings one and the libraries it needs.
 ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
-RUN for attempt in 1 2 3; do \
-      npx -y playwright@1.62.1 install --with-deps --no-shell chromium && break; \
-      [ "$attempt" = 3 ] && exit 1; sleep 30; \
-    done \
+RUN npx -y playwright@1.62.1 install --with-deps --no-shell chromium \
  && ln -s "$(find /opt/ms-playwright -type f -path '*/chrome-linux*/chrome' | head -n1)" /usr/bin/chromium \
  && chromium --version \
  && rm -rf /root/.npm /var/lib/apt/lists/*
