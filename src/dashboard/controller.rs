@@ -13,12 +13,12 @@ use super::bus::DashboardEvents;
 use super::read_model::DashboardReadModel;
 use super::{Defaults, JobStatus, JobView, RunMetadata, RunRequest, RunSnapshot};
 use crate::control::{
-    ControlPlane, ExecutionPhase, ExecutionRecord, RunRequest as ControlRunRequest,
-    ScenariosListRequest, ScenariosListResponse,
+    ControlPlane, ExecutionPhase, ExecutionRecord, ScenariosListRequest, ScenariosListResponse,
 };
-use crate::plans::store::{GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::store::{
+    ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRole, PlanUpdateRequest};
-use crate::scenarios::ScenarioId;
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
@@ -292,6 +292,18 @@ impl Controller {
             .await
     }
 
+    pub(super) async fn github_run_contracts(
+        &self,
+        request: GithubRunContractsRequest,
+    ) -> Result<Value> {
+        let repository = request
+            .repository
+            .unwrap_or_else(|| self.github_repository.clone());
+        self.plan_store
+            .github_run_contracts(&repository, &request.runs)
+            .await
+    }
+
     /// Answers with the execution at once; the download and installation
     /// continue in the background and end in `completed` or `failed`.
     pub(super) async fn github_run_import(
@@ -342,19 +354,22 @@ impl Controller {
 
     pub(super) async fn delete_execution(&self, id: &str) -> Result<()> {
         super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
-        if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-            bail!("only native control-plane executions can be deleted");
+        if id.starts_with("plan-") {
+            self.plan_store.delete_execution(id).await?;
+        } else {
+            if id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                bail!("only native runs and executions can be deleted");
+            }
+            self.control
+                .as_ref()
+                .context("the E2E control plane is not available")?
+                .delete(id)
+                .await?;
+            let mut state = self.state.lock().await;
+            if state.job.as_ref().is_some_and(|job| job.id == id) {
+                state.job = None;
+            }
         }
-        let control = self
-            .control
-            .as_ref()
-            .context("the E2E control plane is not available")?;
-        control.delete(id).await?;
-        let mut state = self.state.lock().await;
-        if state.job.as_ref().is_some_and(|job| job.id == id) {
-            state.job = None;
-        }
-        drop(state);
         self.invalidate_summaries().await;
         self.emit_change("deleted", id).await;
         Ok(())
@@ -376,22 +391,16 @@ impl Controller {
         }
     }
 
-    pub(super) async fn start(self: &Arc<Self>, mut request: RunRequest) -> Result<String> {
-        validate_request(&mut request).map_err(anyhow::Error::msg)?;
-        self.require_current_url(&request.url)?;
-        let control = self
-            .control
-            .as_ref()
-            .context("the E2E control plane is not available")?;
-        let control_request = control_request(&request).map_err(anyhow::Error::msg)?;
-        let accepted = control.run(control_request).await?;
-        let record = control.record(&accepted.execution_id).await?;
-        let mut metadata = metadata_from_record(&record);
-        metadata.request = request;
-        self.set_current_job(metadata).await;
-        self.invalidate_summaries().await;
-        self.emit_change("started", &accepted.execution_id).await;
-        Ok(accepted.execution_id)
+    /// Start an execution on this stack from its parameters; answers at once
+    /// and runs its slots in the background.
+    pub(super) async fn start_execution(
+        &self,
+        parameters: ExecutionParameters,
+        label: &str,
+    ) -> Result<Value> {
+        let execution = self.plan_store.start_execution(parameters, label).await?;
+        self.emit_change("started", &execution.id).await;
+        Ok(json!({"execution_id": execution.id}))
     }
 
     pub(super) async fn cancel(&self) -> Result<()> {
@@ -482,37 +491,6 @@ impl Controller {
     }
 }
 
-pub(super) fn control_request(
-    request: &RunRequest,
-) -> std::result::Result<ControlRunRequest, String> {
-    let scenarios = request
-        .scenarios
-        .iter()
-        .map(|value| {
-            value
-                .parse::<ScenarioId>()
-                .map_err(|_| format!("unknown scenario '{value}'"))
-        })
-        .collect::<std::result::Result<Vec<_>, _>>()?;
-    Ok(ControlRunRequest {
-        _caller_worker_id: None,
-        idempotency_key: format!("dashboard:{}", uuid::Uuid::new_v4().simple()),
-        label: request.label.clone(),
-        lane: "local".into(),
-        model: request.model.clone(),
-        provider: request.provider.clone(),
-        agent: None,
-        scenarios,
-        runs: request.runs,
-        seed: request.seed,
-        rotating_seeds: Vec::new(),
-        technical_retries: request.technical_retries,
-        progress_interval_seconds: 15,
-        slot_start_deadline_seconds: None,
-        run_contract: None,
-    })
-}
-
 pub(super) fn metadata_from_record(record: &ExecutionRecord) -> RunMetadata {
     let status = job_status(record);
     let label = if record.request.label.trim().is_empty() {
@@ -587,39 +565,6 @@ fn validate_plan_id(value: &str) -> Result<()> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         bail!("plan id is invalid");
-    }
-    Ok(())
-}
-
-pub(super) fn validate_request(request: &mut RunRequest) -> std::result::Result<(), String> {
-    request.label = request.label.trim().to_string();
-    request.url = request.url.trim().to_string();
-    request.model = request.model.trim().to_string();
-    request.provider = request.provider.trim().to_string();
-    validate_stack_url(&request.url).map_err(|error| error.to_string())?;
-    if request.label.len() > 120 || request.label.chars().any(char::is_control) {
-        return Err("label is invalid".into());
-    }
-    for (name, value) in [("model", &request.model), ("provider", &request.provider)] {
-        if value.is_empty() || value.len() > 200 || value.chars().any(char::is_control) {
-            return Err(format!("{name} is invalid"));
-        }
-    }
-    if !(1..=20).contains(&request.runs) {
-        return Err("runs must be between 1 and 20".into());
-    }
-    if request.technical_retries > 3 {
-        return Err("technical_retries must be between 0 and 3".into());
-    }
-    if request.scenarios.is_empty() || request.scenarios.len() > 256 {
-        return Err("select at least one valid scenario".into());
-    }
-    request.scenarios.sort();
-    request.scenarios.dedup();
-    for value in &request.scenarios {
-        value
-            .parse::<ScenarioId>()
-            .map_err(|_| "request contains an unknown scenario".to_string())?;
     }
     Ok(())
 }

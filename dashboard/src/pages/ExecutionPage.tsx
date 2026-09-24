@@ -15,9 +15,9 @@ import {
 } from '@/components/ExecutionConfiguration'
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
-import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { PlanProgress } from '@/components/PlanStatus'
 import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
 import {
@@ -53,14 +53,18 @@ import {
   type DashboardDataBridge,
   type DashboardExecutionDetail,
   type DashboardExecutionSummary,
+  type ExecutionParameters,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
+  type ExecutionModel,
   type ExecutionPresentation,
   executionTitle,
   formatDate,
   formatDuration,
+  providerModel,
+  workerVersion,
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
 import {
@@ -102,6 +106,43 @@ function summaryFromDetail(
     status: detail.status || fallback?.status || 'incomplete',
     subjects: detail.subjects ?? fallback?.subjects ?? [],
   }
+}
+
+/** What running an execution again starts from: its recorded parameters (a
+ *  native run's are its own request), or when nothing was recorded, the
+ *  scenarios and model it reports with the form's defaults. */
+export function rerunParameters(
+  detail: DashboardExecutionDetail,
+  scenarios: string[],
+  subject: ExecutionModel | undefined,
+): ExecutionParameters {
+  return (
+    detail.plan_execution?.parameters ??
+    detail.parameters ?? {
+      scenarios: [...new Set(scenarios)],
+      runs: 1,
+      technical_retries: 1,
+      model: subject?.model ?? '',
+      provider: subject?.provider ?? '',
+      agent: null,
+    }
+  )
+}
+
+/** The Harness and the E2E runner an execution ran on, as its stack
+ *  recorded them; nothing is shown for a run that recorded no stack. */
+export function stackVersions(
+  detail: DashboardExecutionDetail,
+): Array<[string, string]> {
+  const stack = detail.plan_execution?.stack
+  return (
+    [
+      ['harness', workerVersion(stack, 'harness')],
+      ['runner', workerVersion(stack, 'harness-e2e')],
+    ] as const
+  ).flatMap(([label, version]) =>
+    version ? [[label, version] as [string, string]] : [],
+  )
 }
 
 function executionStatus(presentation: ExecutionPresentation): {
@@ -419,6 +460,8 @@ export function ExecutionPage({
   const [cancelling, setCancelling] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // The parameters the Run again form opened with; null while it is closed.
+  const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
   const [transcript, setTranscript] = useState<{
     run: AssessmentRunView
     title: string
@@ -589,9 +632,7 @@ export function ExecutionPage({
   const identity: Array<[string, ReactNode]> = [
     [
       'subject',
-      presentation.subjects
-        .map((model) => `${model.provider}/${model.model}`)
-        .join(', ') || 'not reported',
+      presentation.subjects.map(providerModel).join(', ') || 'not reported',
     ],
     [
       'started',
@@ -608,6 +649,8 @@ export function ExecutionPage({
         'local'
       ),
     ],
+    // What the execution ran on, to compare with another one.
+    ...stackVersions(detail),
     ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
   ]
   const ready = Boolean(bridge)
@@ -695,30 +738,35 @@ export function ExecutionPage({
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
-              {ready ? (
+              {ready && detail.plan_id ? (
                 <a
                   className={buttonClassName({
                     variant: 'secondary',
                     className: 'no-underline',
                   })}
-                  href={
-                    detail.plan_id
-                      ? hashForPlan(detail.plan_id)
-                      : hashForWorkspace()
-                  }
+                  href={hashForPlan(detail.plan_id)}
+                >
+                  back to plan
+                </a>
+              ) : null}
+              {ready ? (
+                <button
+                  className={buttonClassName({ variant: 'secondary' })}
+                  type="button"
                   onClick={() =>
-                    !detail.plan_id &&
-                    requestQuickExecution(
-                      scenarioMatrix?.items.map((item) => item.scenarioId) ??
-                        [],
+                    setRerun(
+                      rerunParameters(
+                        detail,
+                        scenarioMatrix?.items.map((item) => item.scenarioId) ??
+                          [],
+                        presentation.subjects[0],
+                      ),
                     )
                   }
                 >
-                  {!detail.plan_id ? (
-                    <RotateCcw size={15} aria-hidden="true" />
-                  ) : null}
-                  {detail.plan_id ? 'back to plan' : 're-run same scope'}
-                </a>
+                  <RotateCcw size={15} aria-hidden="true" />
+                  run again
+                </button>
               ) : null}
               <button
                 className={buttonClassName({
@@ -737,7 +785,7 @@ export function ExecutionPage({
                 <Link2 size={13} aria-hidden="true" />
                 {copied ? 'link copied' : 'copy link'}
               </button>
-              {ready && !live && !detail.plan_execution ? (
+              {ready && !live && !detail.plan_id ? (
                 <button
                   className={buttonClassName({
                     variant: 'quiet',
@@ -936,6 +984,13 @@ export function ExecutionPage({
             </button>
           </div>
         }
+      />
+      <LocalRunnerDialog
+        bridge={bridge}
+        open={rerun !== null}
+        parameters={rerun}
+        label={detail.plan_execution?.label ?? detail.label ?? ''}
+        onClose={() => setRerun(null)}
       />
       {/* Audit AW-09: the evidence record is a route, so back returns here. */}
       {evidenceRun ? (

@@ -17,7 +17,7 @@ use tokio::process::Command;
 
 use super::{
     finish, now, update_slot, ExecutionParameters, ExecutionSource, PlanExecution, PlanStore,
-    Runner, Slot, StackWorker, WorkerSource,
+    Runner, Slot, StackWorker,
 };
 use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
@@ -32,6 +32,20 @@ pub(crate) struct GithubRunsListRequest {
     pub repository: Option<String>,
     #[serde(default)]
     pub page: Option<u32>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct GithubRunContractsRequest {
+    #[serde(default)]
+    pub repository: Option<String>,
+    /// The runs of one listed page whose contract is not read yet.
+    pub runs: Vec<GithubRunAttempt>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct GithubRunAttempt {
+    pub run_id: u64,
+    pub run_attempt: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -68,8 +82,9 @@ const CONTRACT_DOWNLOADS: usize = 4;
 
 impl PlanStore {
     /// Completed runs of the exact-stack workflow, newest first, with the
-    /// suite and subject their contract names and the local execution that
-    /// already imported them.
+    /// local execution that already imported them. Only one `gh api` call:
+    /// a run whose contract was read before carries its suite and subject,
+    /// the others are `contract_pending` until `github_run_contracts`.
     pub(crate) async fn github_runs(&self, repository: &str, page: u32) -> Result<Value> {
         validate_repository(repository)?;
         ensure!(page >= 1, "page starts at 1");
@@ -91,11 +106,10 @@ impl PlanStore {
             .as_array()
             .cloned()
             .unwrap_or_default();
-        let rows = futures_util::stream::iter(runs)
-            .map(|run| async move { self.run_row(repository, &run).await })
-            .buffered(CONTRACT_DOWNLOADS)
-            .collect::<Vec<_>>()
-            .await;
+        let mut rows = Vec::new();
+        for run in &runs {
+            rows.push(self.run_row(repository, run).await);
+        }
         let more = response["total_count"]
             .as_u64()
             .is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
@@ -107,6 +121,8 @@ impl PlanStore {
         }))
     }
 
+    /// A run as listed: dated by its creation, with the start of its latest
+    /// attempt apart.
     async fn run_row(&self, repository: &str, run: &Value) -> Value {
         let run_id = run["id"].as_u64().unwrap_or_default();
         let attempt = run["run_attempt"].as_u64().unwrap_or(1);
@@ -115,20 +131,17 @@ impl PlanStore {
             "run_id": run_id,
             "run_attempt": attempt,
             "title": title,
-            "created_at": run["run_started_at"].as_str().or(run["created_at"].as_str()),
+            "created_at": run["created_at"].as_str().or(run["run_started_at"].as_str()),
+            "attempt_started_at": run["run_started_at"],
             "conclusion": run["conclusion"],
             "url": run["html_url"],
             "release_control_execution_id": title.strip_prefix("E2E · "),
             "execution_id": null,
             "execution_state": null,
         });
-        match self.contract_summary(repository, run_id, attempt).await {
-            Ok(summary) => {
-                for (key, value) in summary.as_object().into_iter().flatten() {
-                    row[key] = value.clone();
-                }
-            }
-            Err(error) => row["contract_error"] = json!(format!("{error:#}")),
+        match self.cached_contract(repository, run_id, attempt) {
+            Some(summary) => merge(&mut row, &summary),
+            None => row["contract_pending"] = json!(true),
         }
         if let Ok(execution) = self.read_execution(&import_id(repository, run_id)).await {
             row["execution_id"] = json!(execution.id);
@@ -137,19 +150,57 @@ impl PlanStore {
         row
     }
 
+    /// Suite, subject, profile and runner of each run, read from its contract
+    /// artifact (a few at a time) and cached. A failure is that run's
+    /// `contract_error`.
+    pub(crate) async fn github_run_contracts(
+        &self,
+        repository: &str,
+        runs: &[GithubRunAttempt],
+    ) -> Result<Value> {
+        validate_repository(repository)?;
+        ensure!(
+            runs.len() <= PAGE_SIZE,
+            "read at most {PAGE_SIZE} contracts at once"
+        );
+        let runs = runs
+            .iter()
+            .map(|run| (run.run_id, run.run_attempt))
+            .collect::<Vec<_>>();
+        let rows = futures_util::stream::iter(runs)
+            .map(|(run_id, attempt)| async move {
+                let mut row = json!({"run_id": run_id, "run_attempt": attempt});
+                match self.contract_summary(repository, run_id, attempt).await {
+                    Ok(summary) => merge(&mut row, &summary),
+                    Err(error) => row["contract_error"] = json!(format!("{error:#}")),
+                }
+                row
+            })
+            .buffered(CONTRACT_DOWNLOADS)
+            .collect::<Vec<_>>()
+            .await;
+        Ok(json!({"runs": rows}))
+    }
+
+    fn contract_cache(&self, repository: &str, run_id: u64, attempt: u64) -> PathBuf {
+        self.root
+            .join(".github-runs")
+            .join(repository.replace('/', "__"))
+            .join(format!("{run_id}-{attempt}.json"))
+    }
+
+    fn cached_contract(&self, repository: &str, run_id: u64, attempt: u64) -> Option<Value> {
+        fs::read(self.contract_cache(repository, run_id, attempt))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+    }
+
     /// Suite and subject of a run, read from its contract artifact once and
     /// cached under the data directory. A run whose contract is gone
     /// (expired or never uploaded) is cached as such too.
     async fn contract_summary(&self, repository: &str, run_id: u64, attempt: u64) -> Result<Value> {
-        let cache = self
-            .root
-            .join(".github-runs")
-            .join(repository.replace('/', "__"))
-            .join(format!("{run_id}-{attempt}.json"));
-        if let Some(summary) = fs::read(&cache)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        {
+        let cache = self.contract_cache(repository, run_id, attempt);
+        if let Some(summary) = self.cached_contract(repository, run_id, attempt) {
             return Ok(summary);
         }
         let scratch = self.scratch()?;
@@ -230,6 +281,7 @@ impl PlanStore {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: String::new(),
             started_at: now(),
             updated_at: now(),
@@ -250,9 +302,10 @@ impl PlanStore {
         };
         execution.state = "importing".into();
         execution.error = None;
-        execution.started_at = run["run_started_at"]
+        // Dated by the run's creation, as the import list shows it.
+        execution.started_at = run["created_at"]
             .as_str()
-            .or(run["created_at"].as_str())
+            .or(run["run_started_at"].as_str())
             .map(str::to_owned)
             .unwrap_or_else(now);
         execution.finished_at = run["updated_at"].as_str().map(str::to_owned);
@@ -494,7 +547,6 @@ impl PlanStore {
                 .map(|request| request.technical_retries)
                 .max()
                 .unwrap_or_default(),
-            seed: first.and_then(|request| request.seed),
             model: text(&plan["subject"]["model"])
                 .or_else(|| first.map(|request| request.model.clone()))
                 .unwrap_or_default(),
@@ -748,53 +800,17 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
         .ok()
         .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
         .unwrap_or(Value::Null);
-    let mut observed = read_json(&directory.join("stack/workers.json"))
-        .ok()
-        .and_then(|value| value["workers"].as_array().cloned())
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|worker| worker["runtime"] != "engine")
-        .filter_map(|worker| {
-            Some((
-                worker["name"].as_str()?.to_owned(),
-                worker["version"].as_str().map(str::to_owned),
-            ))
-        })
-        .collect::<BTreeMap<_, _>>();
-    let mut workers = Vec::new();
-    for (name, container) in lock["containers"].as_object().into_iter().flatten() {
-        workers.push(StackWorker {
-            name: name.clone(),
-            source: if container["worker"]
-                .as_str()
-                .is_some_and(|worker| worker.starts_with("path:"))
-            {
-                WorkerSource::Path
-            } else {
-                WorkerSource::Package
-            },
-            requested: container["resolved"]["version"]
+    let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
+    super::stack::rows(
+        &lock["containers"],
+        |container| {
+            container["resolved"]["version"]
                 .as_str()
                 .or(container["requested"].as_str())
-                .map(str::to_owned),
-            observed: observed.remove(name).flatten(),
-            commit: None,
-            dirty: None,
-            groups: Vec::new(),
-        });
-    }
-    for (name, version) in observed {
-        workers.push(StackWorker {
-            name,
-            source: WorkerSource::Package,
-            requested: None,
-            observed: version,
-            commit: None,
-            dirty: None,
-            groups: Vec::new(),
-        });
-    }
-    workers
+                .map(str::to_owned)
+        },
+        super::stack::observed_versions(&workers, None),
+    )
 }
 
 /// One row per distinct worker version; groups are listed only for a worker
@@ -830,7 +846,7 @@ fn merge_stacks(groups: Vec<(String, Vec<StackWorker>)>) -> Vec<StackWorker> {
     rows
 }
 
-fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
+pub(super) fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
     Slot {
         round,
         group_id: group_id.into(),
@@ -845,6 +861,12 @@ fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
         passed: 0,
         technical_valid: 0,
         eligible: false,
+    }
+}
+
+fn merge(row: &mut Value, fields: &Value) {
+    for (key, value) in fields.as_object().into_iter().flatten() {
+        row[key] = value.clone();
     }
 }
 
@@ -896,6 +918,7 @@ fn file_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::super::WorkerSource;
     use super::*;
 
     #[test]

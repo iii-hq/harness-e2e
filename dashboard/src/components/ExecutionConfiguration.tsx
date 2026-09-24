@@ -2,6 +2,7 @@ import { ExternalLink } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { DataTable } from '@/design-system'
+import { providerModel } from '@/lib/execution-view'
 import type { PlanExecution } from '@/lib/plan-execution'
 
 /** Where the execution came from, with a link to its GitHub run. */
@@ -25,7 +26,7 @@ export function ExecutionOriginLink({
 }
 
 /** What the execution ran with (what running it again needs), where it came
- *  from, and the stack it ran on. */
+ *  from, the stack it ran on and the warnings recorded with it. */
 export function ExecutionConfiguration({
   execution,
 }: {
@@ -40,15 +41,11 @@ export function ExecutionConfiguration({
     rows.push(['release control', source.release_control_execution_id])
   if (parameters)
     rows.push(
-      ['model', `${parameters.provider}/${parameters.model}`],
+      ['model', providerModel(parameters)],
       ['profile', parameters.agent ?? 'default'],
       ['scenarios', parameters.scenarios.join(', ')],
       ['runs', String(parameters.runs)],
       ['technical retries', String(parameters.technical_retries)],
-      [
-        'seed',
-        parameters.seed === null ? 'canonical' : String(parameters.seed),
-      ],
     )
   const differing = new Set(
     execution.stack
@@ -76,6 +73,17 @@ export function ExecutionConfiguration({
           </div>
         ))}
       </dl>
+      {execution.warnings?.length ? (
+        <ul
+          className="m-0 grid gap-1 pl-4 text-xs text-warning"
+          aria-label="Execution warnings"
+          data-execution-warnings
+        >
+          {execution.warnings.map((warning) => (
+            <li key={warning}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
       {execution.stack.length > 0 ? (
         <DisclosureLayer
           id="stack"

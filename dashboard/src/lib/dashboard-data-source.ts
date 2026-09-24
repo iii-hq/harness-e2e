@@ -75,7 +75,6 @@ export type ExecutionParameters = {
   scenarios: string[]
   runs: number
   technical_retries: number
-  seed: number | null
   model: string
   provider: string
   /** Agent profile the subject ran under. */
@@ -109,7 +108,10 @@ export type GithubRun = {
   run_id: number
   run_attempt: number
   title: string
+  /** When the run was created; the list is ordered and dated by it. */
   created_at: string | null
+  /** When its latest attempt started. */
+  attempt_started_at?: string | null
   conclusion: string | null
   url: string
   release_control_execution_id: string | null
@@ -120,6 +122,8 @@ export type GithubRun = {
   agent?: string | null
   runner_version?: string | null
   contract_error?: string
+  /** Listed before its contract was read; the dialog reads it next. */
+  contract_pending?: boolean
   execution_id: string | null
   execution_state: string | null
 }
@@ -563,14 +567,14 @@ export type RuntimeConfig = {
     execution_delete: string
     execution_rename: string
     github_runs_list: string
+    github_run_contracts: string
     github_run_import: string
     evaluated_versions_list: string
     tests_list: string
     test_version_get: string
     test_history_get: string
     catalog_get: string
-    run_status: string
-    run_start: string
+    execution_start: string
     run_cancel: string
     plan_control: string
     plans_list: string
@@ -598,6 +602,9 @@ export type DashboardDataBridge = {
   deleteExecution(executionId: string): Promise<void>
   renameExecution(executionId: string, label: string): Promise<PlanExecution>
   listGithubRuns(page?: number): Promise<GithubRunsResponse>
+  readGithubRunContracts(
+    runs: Array<Pick<GithubRun, 'run_id' | 'run_attempt'>>,
+  ): Promise<{ runs: Array<Partial<GithubRun> & { run_id: number }> }>
   importGithubRun(
     runId: number,
   ): Promise<{ execution_id: string; state: string }>
@@ -615,8 +622,11 @@ export type DashboardDataBridge = {
   deletePlan(planId: string): Promise<void>
   startPlan(planId: string, role: 'baseline' | 'candidate'): Promise<LocalPlan>
   getCatalog(url?: string): Promise<JsonObject>
-  getRunSnapshot(after?: number): Promise<JsonObject>
-  startRun(request: JsonObject): Promise<JsonObject>
+  /** Starts an execution on this stack; Run tests and Run again alike. */
+  startExecution(request: {
+    parameters: ExecutionParameters
+    label: string
+  }): Promise<{ execution_id: string }>
   cancelRun(): Promise<JsonObject>
   subscribeRunChanges(
     handler: (payload: JsonObject) => void,
@@ -679,6 +689,10 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     listGithubRuns: (page = 1) =>
       call(runtime.functions.github_runs_list, { page }),
+    readGithubRunContracts: (runs) =>
+      call(runtime.functions.github_run_contracts, {
+        runs: runs.map(({ run_id, run_attempt }) => ({ run_id, run_attempt })),
+      }),
     importGithubRun: (runId) =>
       call(runtime.functions.github_run_import, { run_id: runId }),
     listEvaluatedVersions: (input = {}) =>
@@ -709,9 +723,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       }),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
-    getRunSnapshot: (after) =>
-      call(runtime.functions.run_status, after === undefined ? {} : { after }),
-    startRun: (request) => call(runtime.functions.run_start, request),
+    startExecution: (request) =>
+      call(runtime.functions.execution_start, request),
     cancelRun: () => call(runtime.functions.run_cancel, {}),
     subscribeRunChanges: async (handler) => {
       const client = await getDashboardIiiClient()

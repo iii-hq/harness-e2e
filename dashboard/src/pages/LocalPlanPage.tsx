@@ -24,6 +24,7 @@ import {
   type JsonObject,
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
+import { providerModel } from '@/lib/execution-view'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
 import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
 
@@ -95,7 +96,6 @@ export const PLAN_FORM_DEFAULTS = {
   scenarios: [] as string[],
   testQuery: '',
   runs: '1',
-  seed: '',
 }
 
 export type PlanFormValues = typeof PLAN_FORM_DEFAULTS
@@ -112,7 +112,6 @@ export function planFormDirty(
     current.testQuery !== initial.testQuery ||
     current.runs !== initial.runs ||
     current.technicalRetries !== initial.technicalRetries ||
-    current.seed !== initial.seed ||
     current.scenarios.join('\u0000') !== initial.scenarios.join('\u0000')
   )
 }
@@ -146,7 +145,9 @@ export function LocalPlanCreatePage({
   const [technicalRetries, setTechnicalRetries] = useState(
     PLAN_FORM_DEFAULTS.technicalRetries,
   )
-  const [seed, setSeed] = useState(PLAN_FORM_DEFAULTS.seed)
+  // New plans run the canonical cases; a duplicate keeps its source's seed,
+  // as the copy must, and an edit leaves a saved seed as it is.
+  const duplicatedSeed = useRef<number | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [attempted, setAttempted] = useState(false)
@@ -191,7 +192,7 @@ export function LocalPlanCreatePage({
           setScenarios(source.scenario_ids)
           setRuns(String(source.runs))
           setTechnicalRetries(String(source.technical_retries))
-          setSeed(source.seed === null ? '' : String(source.seed))
+          if (duplicateId) duplicatedSeed.current = source.seed
           setSubject(editId ? modelKey(source) : '')
           setTemplateId(source.template_id ?? undefined)
           initialValues.current = {
@@ -203,7 +204,6 @@ export function LocalPlanCreatePage({
             scenarios: source.scenario_ids,
             runs: String(source.runs),
             technicalRetries: String(source.technical_retries),
-            seed: source.seed === null ? '' : String(source.seed),
           }
         } else if (profileId) {
           const template = listed.master_plan?.profiles.find(
@@ -288,7 +288,6 @@ export function LocalPlanCreatePage({
       testQuery,
       runs,
       technicalRetries,
-      seed,
     },
     initialValues.current,
   )
@@ -325,7 +324,7 @@ export function LocalPlanCreatePage({
         scenarios,
         runs: runsPerTest,
         technical_retries: retryCount,
-        seed: seed ? Number(seed) : null,
+        seed: duplicatedSeed.current,
       }
       const plan =
         editId || savedId
@@ -345,7 +344,6 @@ export function LocalPlanCreatePage({
         testQuery,
         runs,
         technicalRetries,
-        seed,
       }
       if (runAfterSave) {
         const checked = await planAction<PlanRequirements>(bridge, {
@@ -369,10 +367,7 @@ export function LocalPlanCreatePage({
     selectedScenarios: scenarios.length,
     runsPerScenario: runsPerTest,
     technicalRetries: retryCount,
-    seed,
-    subject: selectedSubject
-      ? `${selectedSubject.provider} / ${selectedSubject.model}`
-      : '',
+    subject: selectedSubject ? providerModel(selectedSubject) : '',
     url,
   }
 
@@ -463,7 +458,6 @@ export function LocalPlanCreatePage({
             query={testQuery}
             runs={runs}
             technicalRetries={technicalRetries}
-            seed={seed}
             disabled={submitting || loading}
             catalogLoading={loading}
             catalogStatus={
@@ -486,7 +480,6 @@ export function LocalPlanCreatePage({
             onQueryChange={setTestQuery}
             onRunsChange={setRuns}
             onTechnicalRetriesChange={setTechnicalRetries}
-            onSeedChange={setSeed}
           />
           {/* Audit PN-02 / RS-03: the action bar stays in view at every width. */}
           <div className="sticky bottom-0 z-10 border-t border-line bg-panel py-3">

@@ -28,16 +28,35 @@ The Console routes live under `#/ext/harness-e2e`. The page exposes Overview,
 Tests, Executions and Plans and keeps entity detail inside the same extension
 route.
 
-The Console page can execute one or more scenarios against the Harness already
-running at `III_URL`. It discovers registered provider/model pairs from that
-stack and scenario ids from the same E2E binary only when the execution dialog
-opens. The primary form only asks for an optional label, a subject model, and
-scenarios; URL, run count, and technical retries remain under **Advanced
-options** with safe defaults. Use **Refresh
-catalog** after restarting the Harness or changing its URL. The binary runs only
-one experiment at a time, streams incremental log chunks, indexes the resulting
-`results.json`, and keeps run metadata and logs under the worker's configured
-evidence root.
+**Run tests** executes one or more scenarios against the Harness already
+running at `III_URL`. **Run again**, on any execution (local or imported), opens
+the same form with that execution's scenarios, runs, technical retries, model
+and agent profile copied and editable. Both call
+`e2e::dashboard::execution-start`, which creates an execution with a `local`
+origin and no plan on this worker's stack, and the Console follows it on its
+page. The form discovers registered provider/model pairs from the stack and
+scenario ids from the same E2E binary only when it opens, and still sends what
+it holds when that catalog cannot be read; runs, retries and agent profile sit
+under **Advanced**. Run tests starts from the model of the newest execution
+that the catalog still lists, and picks none without one. There is no seed:
+every execution the Console starts runs the canonical cases, so any two pair
+by scenario and repetition when compared (a `seed` an older Console sends is
+ignored). New plans run the canonical cases too; a saved plan keeps its seed
+when edited or duplicated. A scenario of a sequential
+group (such as `registry_implementation` then `registry_verification`) brings
+the whole group: the catalog lists the groups (`scenario_groups`), so the form
+ticks and counts the group before running, and the execution notes it. One
+execution runs at a time: a start while another runs names that execution
+(`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution without a plan can be
+deleted with its native runs; a plan's executions go with the plan.
+
+Before its first slot every local execution records its stack: the containers
+of the compose project that runs this worker (`package://` or `path://`, the
+requested version, and the commit and dirty state of each path checkout) and
+the versions `engine::workers::list` reports in the worker's namespace. What
+cannot be read becomes a warning shown with the execution, never an error. A
+scenario this runner does not know, or a run that fails on this stack, fails
+only its own slot; the others run.
 
 The React page uses the Console host's iii client and change trigger. The initial
 overview receives at most 25 compact
@@ -50,8 +69,12 @@ read model from retained reports, pools raw run scores, and invalidates it on ru
 changes. There is no alternate HTTP or static-data transport.
 
 Executions offers **Import from GitHub**: completed exact-stack workflow runs of
-the worker's `github_repository`, listed through `e2e::dashboard::github-runs-list`
-with their suite, model, profile and conclusion. `github-run-import` answers with
+the worker's `github_repository`, listed at once through
+`e2e::dashboard::github-runs-list` (one `gh api` call), newest creation first,
+with the latest attempt's date and the Release Control execution beside it.
+Each run's suite, model, profile and runner version then fill in per row from
+its contract artifact through `github-run-contracts`, read once and cached; the
+Harness version is known only once the run is imported. `github-run-import` answers with
 an `importing` execution at once; the worker downloads the run's bundle and
 installs its native runs like finished local runs. An imported execution is the
 same record as one planned here: the list, the report, evidence and

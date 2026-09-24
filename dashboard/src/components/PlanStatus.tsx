@@ -51,6 +51,13 @@ export function Requirements({ value }: { value: PlanRequirements }) {
   )
 }
 
+/** A plan's execution names its role; any other is just an execution. */
+export function executionHeading(execution: Pick<PlanExecution, 'role'>) {
+  if (execution.role === 'baseline') return 'Baseline execution'
+  if (execution.role === 'candidate') return 'Candidate execution'
+  return 'Execution'
+}
+
 export function PlanProgress({
   execution,
   actions,
@@ -67,13 +74,10 @@ export function PlanProgress({
   const total = (field: 'passed' | 'completed' | 'technical_valid') =>
     execution.slots.reduce((sum, s) => sum + s[field], 0)
   return (
-    <Panel aria-label="Plan execution progress">
+    <Panel aria-label="Execution progress">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="my-0 text-sm font-semibold text-ink">
-          {execution.role === 'baseline'
-            ? 'Baseline execution'
-            : 'Candidate execution'}{' '}
-          · {execution.state}
+          {executionHeading(execution)} · {execution.state}
         </h2>
         <span className="text-xs text-ink-soft">
           {finished} / {planned} slots finished

@@ -18,17 +18,20 @@ use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
-use super::RunRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::plans::store::{GithubRunImportRequest, GithubRunsListRequest};
+use crate::plans::store::{
+    ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+};
 use crate::plans::{LocalPlan, PlanCreateRequest, PlanRunRequest, PlanUpdateRequest};
 
 pub(super) const EXECUTIONS_LIST: &str = "e2e::dashboard::executions-list";
 pub(super) const EXECUTION_GET: &str = "e2e::dashboard::execution-get";
 pub(super) const EXECUTION_DELETE: &str = "e2e::dashboard::execution-delete";
 pub(super) const EXECUTION_RENAME: &str = "e2e::dashboard::execution-rename";
+pub(super) const EXECUTION_START: &str = "e2e::dashboard::execution-start";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
+pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
@@ -43,8 +46,6 @@ pub(super) const PLAN_CREATE: &str = "e2e::dashboard::plan-create";
 pub(super) const PLAN_UPDATE: &str = "e2e::dashboard::plan-update";
 pub(super) const PLAN_DELETE: &str = "e2e::dashboard::plan-delete";
 pub(super) const PLAN_RUN_START: &str = "e2e::dashboard::plan-run-start";
-pub(super) const RUN_STATUS: &str = "e2e::dashboard::run-status";
-pub(super) const RUN_START: &str = "e2e::dashboard::run-start";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -95,6 +96,15 @@ pub(super) struct ExecutionGetRequest {
 pub(super) struct ExecutionRenameRequest {
     pub execution_id: String,
     /// Empty restores the default name.
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(super) struct ExecutionStartRequest {
+    /// What to run; a previous execution's parameters run it again.
+    pub parameters: ExecutionParameters,
+    /// Empty or absent uses the default name.
+    #[serde(default)]
     pub label: String,
 }
 
@@ -158,12 +168,8 @@ pub(super) struct CatalogResponse {
     url: String,
     models: Vec<CatalogModel>,
     scenarios: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
-pub(super) struct RunStatusRequest {
-    #[serde(default)]
-    pub after: Option<u64>,
+    /// Scenarios that run only together, in this order: picking one runs all.
+    scenario_groups: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -307,7 +313,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_DELETE,
-        "Delete one terminal local E2E execution.",
+        "Delete one finished native run, or one finished execution without a saved plan together with its native runs.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionGetRequest| {
@@ -342,14 +348,50 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        EXECUTION_START,
+        "Start an execution on this stack from its parameters; answers with its id and runs in the background.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: ExecutionStartRequest| {
+                let controller = controller.clone();
+                async move {
+                    let started = controller
+                        .start_execution(request.parameters, &request.label)
+                        .await
+                        .map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(started).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
         GITHUB_RUNS_LIST,
-        "List completed exact-stack workflow runs on GitHub with their suite, subject and local import.",
+        "List completed exact-stack workflow runs on GitHub with their local import; suites and subjects already read come along.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: GithubRunsListRequest| {
                 let controller = controller.clone();
                 async move {
                     let runs = controller.github_runs(request).await.map_err(handler_error)?;
+                    serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        GITHUB_RUN_CONTRACTS,
+        "Read the suite, subject, profile and runner of listed GitHub runs from their contract artifacts.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: GithubRunContractsRequest| {
+                let controller = controller.clone();
+                async move {
+                    let runs = controller
+                        .github_run_contracts(request)
+                        .await
+                        .map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
                 }
             })
@@ -580,33 +622,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             })
         },
     );
-    register(
-        iii,
-        RUN_STATUS,
-        "Read local execution state and only the unread log suffix.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |request: RunStatusRequest| {
-                let controller = controller.clone();
-                async move {
-                    controller
-                        .snapshot(request.after)
-                        .await
-                        .map_err(handler_error)
-                }
-            })
-        },
-    );
-    register(iii, RUN_START, "Start one local E2E execution.", {
-        let controller = controller.clone();
-        RegisterFunction::new_async(move |request: RunRequest| {
-            let controller = controller.clone();
-            async move {
-                controller.start(request).await.map_err(handler_error)?;
-                controller.snapshot(Some(0)).await.map_err(handler_error)
-            }
-        })
-    });
     register(iii, RUN_CANCEL, "Cancel the active local E2E execution.", {
         let controller = controller.clone();
         RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
@@ -827,6 +842,9 @@ pub(super) async fn catalog(
                 url,
                 models,
                 scenarios,
+                scenario_groups: crate::plans::store::sequential_groups(
+                    &crate::test_plan::embedded()?,
+                ),
             });
         }
     }
@@ -860,6 +878,9 @@ pub(super) async fn catalog(
             url,
             models,
             scenarios,
+            scenario_groups: crate::plans::store::sequential_groups(
+                &crate::test_plan::embedded()?,
+            ),
         })
     }
     .await;

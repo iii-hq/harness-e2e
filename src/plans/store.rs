@@ -22,8 +22,9 @@ use crate::report::{E2eReport, ReportState};
 use crate::test_plan::{self, ProfileSnapshot};
 
 mod github;
+mod stack;
 
-pub(crate) use github::{GithubRunImportRequest, GithubRunsListRequest};
+pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct SavedPlan {
@@ -98,6 +99,10 @@ pub(crate) struct PlanExecution {
     pub source: ExecutionSource,
     #[serde(default)]
     pub stack: Vec<StackWorker>,
+    /// What could not be recorded about the stack, and scenarios added to
+    /// complete a sequential group; shown, never blocking.
+    #[serde(default)]
+    pub warnings: Vec<String>,
     /// `running`, `cancelling` or `importing` while active; `completed`,
     /// `interrupted`, `cancelled` or `failed` once done.
     pub state: String,
@@ -113,12 +118,14 @@ pub(crate) struct PlanExecution {
     pub system_under_test: Option<Value>,
 }
 
+/// What an execution ran, to run it again. Always the canonical cases: a
+/// `seed` sent or stored by an older Console is ignored, so every execution
+/// pairs with any other by scenario and repetition.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct ExecutionParameters {
     pub scenarios: Vec<String>,
     pub runs: u32,
     pub technical_retries: u8,
-    pub seed: Option<u64>,
     pub model: String,
     pub provider: String,
     /// Agent profile the subject ran under.
@@ -202,6 +209,8 @@ trait Runner: Send + Sync {
     async fn install(&self, record: ExecutionRecord) -> Result<()>;
     /// Delete a terminal native run and its evidence.
     async fn remove(&self, id: &str) -> Result<()>;
+    /// The stack runs start on now, and what could not be read about it.
+    async fn stack(&self) -> (Vec<StackWorker>, Vec<String>);
 }
 #[async_trait]
 impl Runner for ControlPlane {
@@ -301,6 +310,9 @@ impl Runner for ControlPlane {
     }
     async fn remove(&self, id: &str) -> Result<()> {
         self.delete(id).await
+    }
+    async fn stack(&self) -> (Vec<StackWorker>, Vec<String>) {
+        stack::observe(self.client()).await
     }
 }
 
@@ -645,20 +657,185 @@ impl PlanStore {
         self.get_local(id).await
     }
 
+    /// Start an execution from its parameters alone, on this stack: no saved
+    /// plan, no role. A scenario this runner does not know gets a slot that
+    /// says so; every other slot runs. A scenario of a sequential group brings
+    /// the whole group, and the execution says what was added.
+    pub(crate) async fn start_execution(
+        self: &Arc<Self>,
+        mut parameters: ExecutionParameters,
+        label: &str,
+    ) -> Result<PlanExecution> {
+        let label = clean_label(label)?;
+        parameters.model = parameters.model.trim().into();
+        parameters.provider = parameters.provider.trim().into();
+        parameters.agent = parameters
+            .agent
+            .map(|agent| agent.trim().to_owned())
+            .filter(|agent| !agent.is_empty());
+        ensure!(
+            !parameters.model.is_empty() && !parameters.provider.is_empty(),
+            "Select an execution model."
+        );
+        for (name, value) in [
+            ("model", Some(&parameters.model)),
+            ("provider", Some(&parameters.provider)),
+            ("agent", parameters.agent.as_ref()),
+        ] {
+            let Some(value) = value else { continue };
+            ensure!(
+                value.chars().count() <= 200 && !value.chars().any(char::is_control),
+                "{name} must be at most 200 characters, without control characters"
+            );
+        }
+        let groups = sequential_groups(&test_plan::embedded()?);
+        let mut scenarios: Vec<String> = Vec::new();
+        let mut warnings = Vec::new();
+        for scenario in &parameters.scenarios {
+            let group = groups.iter().find(|group| group.contains(scenario));
+            for member in group.map_or(std::slice::from_ref(scenario), Vec::as_slice) {
+                if !scenarios.contains(member) {
+                    scenarios.push(member.clone());
+                }
+            }
+            if let Some(group) = group.filter(|group| {
+                group
+                    .iter()
+                    .any(|member| !parameters.scenarios.contains(member))
+            }) {
+                let note = format!(
+                    "{} run only together, in this order; the whole group was added.",
+                    group.join(" then ")
+                );
+                if !warnings.contains(&note) {
+                    warnings.push(note);
+                }
+            }
+        }
+        parameters.scenarios = scenarios;
+        ensure!(
+            !parameters.scenarios.is_empty() && parameters.scenarios.len() <= 256,
+            "Select between 1 and 256 scenarios."
+        );
+        ensure!(
+            parameters.scenarios.iter().all(|id| !id.is_empty()
+                && id.len() <= 100
+                && id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))),
+            "Scenario ids hold only letters, digits, '_', '.' and '-'."
+        );
+        ensure!(
+            (1..=20).contains(&parameters.runs),
+            "runs must be between 1 and 20"
+        );
+        ensure!(
+            parameters.technical_retries <= 3,
+            "technical_retries must be between 0 and 3"
+        );
+        let key = format!("execution:{}", uuid::Uuid::new_v4().simple());
+        let id = format!("plan-{}", &artifact::sha256_bytes(key.as_bytes())[7..39]);
+        let execution = PlanExecution {
+            slots: parameter_slots(&parameters, &id, label.as_deref())?,
+            id,
+            plan_id: None,
+            idempotency_key: key,
+            configuration_sha256: artifact::sha256_value(&parameters)?,
+            role: None,
+            label,
+            parameters: Some(parameters),
+            source: ExecutionSource::Local,
+            stack: Vec::new(),
+            warnings,
+            state: "running".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: false,
+            error: None,
+            baseline_eligible: false,
+            measurements: None,
+            system_under_test: None,
+        };
+        let _guard = self.lock.lock().await;
+        let runner = self.runner()?;
+        if let Err(error) = runner.reserve(&execution.id).await {
+            return Err(self.busy(runner, error).await);
+        }
+        if let Err(error) = self.write_execution(&execution).await {
+            runner.release(&execution.id).await;
+            return Err(error);
+        }
+        self.spawn_drive(&execution.id);
+        Ok(execution)
+    }
+
+    /// A runner that refused a reservation is busy: say which execution holds
+    /// it, by name, with its id in parentheses for the Console to open.
+    async fn busy(&self, runner: &Arc<dyn Runner>, error: anyhow::Error) -> anyhow::Error {
+        let Some(id) = runner
+            .active()
+            .await
+            .and_then(|active| active["id"].as_str().map(str::to_owned))
+        else {
+            return error;
+        };
+        let execution = self.read_execution(&id).await.ok();
+        let mut name = execution.as_ref().and_then(|e| e.label.clone());
+        if let (None, Some(plan_id)) = (&name, execution.and_then(|e| e.plan_id)) {
+            name = self
+                .read_plan(&plan_id)
+                .await
+                .ok()
+                .map(|plan| plan.plan.label);
+        }
+        let holder = name.map_or_else(
+            || format!("Another execution ({id})"),
+            |name| format!("\"{name}\" ({id})"),
+        );
+        anyhow::anyhow!("{holder} is still running; wait for it to finish or cancel it.")
+    }
+
+    /// Delete a finished execution that ran no saved plan (a plan's executions
+    /// go with the plan): its native runs first, then the execution.
+    pub(crate) async fn delete_execution(&self, id: &str) -> Result<()> {
+        let _guard = self.lock.lock().await;
+        let execution = self.read_execution(id).await?;
+        ensure!(
+            execution.plan_id.is_none(),
+            "The executions of a saved plan are deleted with the plan."
+        );
+        ensure!(
+            !execution.active() && execution.state != "importing",
+            "Only a finished execution can be deleted."
+        );
+        let runner = self.runner()?;
+        let children = execution
+            .slots
+            .iter()
+            .map(|slot| slot.execution_id.as_str())
+            .filter(|child| !child.is_empty())
+            .collect::<BTreeSet<_>>();
+        for child in children {
+            if runner.record(child).await.is_some() {
+                runner.remove(child).await?;
+            }
+        }
+        if let Some(persistence) = &self.persistence {
+            return persistence.delete_plan_execution(id).await;
+        }
+        #[cfg(not(test))]
+        anyhow::bail!("the E2E control-plane persistence is not available");
+        #[cfg(test)]
+        Ok(fs::remove_file(self.execution_path(id)?)?)
+    }
+
     /// Name any execution; an empty label restores the default name.
     pub(crate) async fn rename(&self, id: &str, label: &str) -> Result<PlanExecution> {
-        let label = label.trim();
-        ensure!(
-            label.chars().count() <= 80,
-            "execution label must be at most 80 characters"
-        );
-        ensure!(
-            !label.chars().any(char::is_control),
-            "execution label must not contain control characters"
-        );
+        let label = clean_label(label)?;
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
-        execution.label = (!label.is_empty()).then(|| label.to_owned());
+        execution.label = label;
         self.write_execution(&execution).await?;
         Ok(execution)
     }
@@ -795,7 +972,9 @@ impl PlanStore {
             return Ok(json!({"blocked": true, "requirements": preflight}));
         }
         let runner = self.runner()?;
-        runner.reserve(&id).await?;
+        if let Err(error) = runner.reserve(&id).await {
+            return Err(self.busy(runner, error).await);
+        }
         let config = &plan.plan;
         let mut execution = PlanExecution {
             id: id.clone(),
@@ -808,13 +987,13 @@ impl PlanStore {
                 scenarios: config.scenario_ids.clone(),
                 runs: config.runs,
                 technical_retries: config.technical_retries,
-                seed: config.seed,
                 model: config.model.clone(),
                 provider: config.provider.clone(),
                 agent: None,
             }),
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "running".into(),
             started_at: now(),
             updated_at: now(),
@@ -846,27 +1025,43 @@ impl PlanStore {
             runner.release(&id).await;
             return Err(error);
         }
+        self.spawn_drive(&id);
+        Ok(json!({"execution_id": id, "duplicate": false, "execution": execution}))
+    }
+    fn spawn_drive(self: &Arc<Self>, id: &str) {
         let manager = self.clone();
-        let worker_id = id.clone();
+        let id = id.to_owned();
         tokio::spawn(async move {
-            if let Err(error) = manager.drive(&worker_id).await {
-                tracing::error!(execution_id = %worker_id, error = %error, "plan coordinator stopped");
+            if let Err(error) = manager.drive(&id).await {
+                tracing::error!(execution_id = %id, error = %error, "plan coordinator stopped");
                 // Keep admission until the active child has actually terminated.
                 manager
-                    .interrupt_after_error(&worker_id, &format!("{error:#}"))
+                    .interrupt_after_error(&id, &format!("{error:#}"))
                     .await;
             }
         });
-        Ok(json!({"execution_id": id, "duplicate": false, "execution": execution}))
     }
     async fn drive(&self, id: &str) -> Result<()> {
         let runner = self.runner()?;
-        let count = self.read_execution(id).await?.slots.len();
+        // The stack is recorded before the first slot; what cannot be read
+        // is a warning on the execution.
+        let (stack, warnings) = runner.stack().await;
+        let count = {
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            execution.stack = stack;
+            execution.warnings.extend(warnings);
+            self.write_execution(&execution).await?;
+            execution.slots.len()
+        };
         for index in 0..count {
             let execution = self.read_execution(id).await?;
-            if execution.slots[..index]
-                .iter()
-                .any(|slot| slot.execution_id == execution.slots[index].execution_id)
+            // A slot without a native run (an unknown scenario) has nothing
+            // to admit; a grouped slot shares its group's run.
+            if execution.slots[index].execution_id.is_empty()
+                || execution.slots[..index]
+                    .iter()
+                    .any(|slot| slot.execution_id == execution.slots[index].execution_id)
             {
                 continue;
             }
@@ -876,12 +1071,13 @@ impl PlanStore {
                 if execution.cancel_requested {
                     break;
                 }
-                let plan = self.execution_plan(&execution).await?;
-                verify_snapshot(&plan)?;
-                ensure!(
-                    plan.configuration_sha256 == execution.configuration_sha256,
-                    "Plan identity changed during execution."
-                );
+                if let Some(plan) = self.execution_plan(&execution).await? {
+                    verify_snapshot(&plan)?;
+                    ensure!(
+                        plan.configuration_sha256 == execution.configuration_sha256,
+                        "Plan identity changed during execution."
+                    );
+                }
                 // This write must succeed before invoking native admission.
                 let execution_id = execution.slots[index].execution_id.clone();
                 for slot in execution
@@ -921,7 +1117,18 @@ impl PlanStore {
                         .iter_mut()
                         .filter(|slot| slot.execution_id == child)
                     {
-                        update_slot(slot, &record, Some(&plan), &self.root)?;
+                        if terminal && record.result_path.is_none() {
+                            // The run ended without results: its slots keep
+                            // the reason and the next slots still run.
+                            slot.state = "finished".into();
+                            slot.error = Some(if record.error.is_empty() {
+                                "The native run ended without results.".into()
+                            } else {
+                                record.error.clone()
+                            });
+                        } else {
+                            update_slot(slot, &record, plan.as_ref(), &self.root)?;
+                        }
                     }
                     execution.updated_at = now();
                     self.write_execution(&execution).await?;
@@ -929,21 +1136,8 @@ impl PlanStore {
                         runner.cancel(&child).await?;
                     }
                 }
+                // A failed or technically invalid run fails only its slots.
                 if terminal {
-                    // Objective failures with a complete native report continue.
-                    ensure!(
-                        record
-                            .report
-                            .as_ref()
-                            .is_some_and(|report| report.report_state == ReportState::Complete
-                                && report.scenarios.iter().all(|s| s
-                                    .aggregate
-                                    .technical_invalid_runs
-                                    == 0
-                                    && s.aggregate.undetermined_runs == 0)),
-                        "Native execution cannot continue safely: {}",
-                        record.error
-                    );
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1009,7 +1203,7 @@ impl PlanStore {
         if let Ok(plan) = self.execution_plan(&execution).await {
             for slot in &mut execution.slots {
                 if let Some(record) = runner.record(&slot.execution_id).await {
-                    let _ = update_slot(slot, &record, Some(&plan), &self.root);
+                    let _ = update_slot(slot, &record, plan.as_ref(), &self.root);
                 }
             }
         }
@@ -1024,15 +1218,12 @@ impl PlanStore {
         }
         runner.release(id).await;
     }
-    /// The saved plan an execution ran; an imported execution has none.
-    async fn execution_plan(&self, execution: &PlanExecution) -> Result<SavedPlan> {
-        self.read_plan(
-            execution
-                .plan_id
-                .as_deref()
-                .context("This execution has no saved plan")?,
-        )
-        .await
+    /// The saved plan an execution ran, if it ran one.
+    async fn execution_plan(&self, execution: &PlanExecution) -> Result<Option<SavedPlan>> {
+        match &execution.plan_id {
+            Some(plan_id) => Ok(Some(self.read_plan(plan_id).await?)),
+            None => Ok(None),
+        }
     }
     async fn reconcile(&self) -> Result<()> {
         // No import runs at start: drop whatever an interrupted one left.
@@ -1060,10 +1251,7 @@ impl PlanStore {
                 continue;
             }
             let finished_at = execution.finished_at.clone();
-            let plan = match execution.plan_id {
-                Some(_) => Some(self.execution_plan(&execution).await?),
-                None => None,
-            };
+            let plan = self.execution_plan(&execution).await?;
             if let Some(runner) = &self.runner {
                 for slot in &mut execution.slots {
                     if let Some(record) = runner.record(&slot.execution_id).await {
@@ -1092,6 +1280,19 @@ impl PlanStore {
     }
 }
 
+/// A label as typed: trimmed, at most 80 characters; empty means none.
+fn clean_label(label: &str) -> Result<Option<String>> {
+    let label = label.trim();
+    ensure!(
+        label.chars().count() <= 80,
+        "execution label must be at most 80 characters"
+    );
+    ensure!(
+        !label.chars().any(char::is_control),
+        "execution label must not contain control characters"
+    );
+    Ok((!label.is_empty()).then(|| label.to_owned()))
+}
 fn safe_id(id: &str) -> Result<()> {
     ensure!(
         !id.is_empty()
@@ -1211,8 +1412,97 @@ fn verify_snapshot(plan: &SavedPlan) -> Result<()> {
     Ok(())
 }
 fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
+    let c = &plan.plan;
+    campaign_slots(
+        &plan.snapshot,
+        owner,
+        &c.label,
+        &c.model,
+        &c.provider,
+        None,
+        c.seed,
+    )
+}
+/// Slots of an execution without a saved plan: its scenarios materialized
+/// like a plan's (the master plan's sequential groups kept together), then
+/// one slot per round for each scenario this runner does not know, carrying
+/// the reason instead of a native run.
+fn parameter_slots(
+    parameters: &ExecutionParameters,
+    owner: &str,
+    label: Option<&str>,
+) -> Result<Vec<Slot>> {
+    let (known, unknown): (Vec<_>, Vec<_>) = parameters
+        .scenarios
+        .iter()
+        .cloned()
+        .partition(|id| id.parse::<crate::scenarios::ScenarioId>().is_ok());
     let mut slots = Vec::new();
-    for (round, campaign) in plan.snapshot.campaigns.iter().enumerate() {
+    if !known.is_empty() {
+        let master = test_plan::embedded()?;
+        let scenario_groups = sequential_groups(&master)
+            .into_iter()
+            .filter(|group| group.iter().all(|id| known.contains(id)))
+            .collect();
+        let label = label.unwrap_or("Execution");
+        let profile = test_plan::Profile {
+            id: "execution".into(),
+            label: label.into(),
+            purpose: String::new(),
+            metrics: Vec::new(),
+            modules: Vec::new(),
+            scenarios: known,
+            scenario_groups,
+            repetitions: parameters.runs,
+            technical_retries: parameters.technical_retries,
+            lane: "local".into(),
+        };
+        let snapshot = master.materialize_scope(profile, None)?;
+        slots = campaign_slots(
+            &snapshot,
+            owner,
+            label,
+            &parameters.model,
+            &parameters.provider,
+            parameters.agent.as_deref(),
+            None,
+        )?;
+    }
+    for round in 1..=parameters.runs {
+        for scenario in &unknown {
+            let mut slot = github::slot(round, scenario, scenario);
+            slot.state = "not_run".into();
+            slot.error = Some(format!(
+                "This runner does not know the scenario '{scenario}'."
+            ));
+            slots.push(slot);
+        }
+    }
+    Ok(slots)
+}
+/// Scenarios the master plan runs only together, in order, in one session.
+pub(crate) fn sequential_groups(master: &test_plan::MasterPlan) -> Vec<Vec<String>> {
+    master
+        .profiles
+        .iter()
+        .flat_map(|profile| &profile.scenario_groups)
+        .cloned()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+/// One slot per scenario of every campaign group.
+fn campaign_slots(
+    snapshot: &ProfileSnapshot,
+    owner: &str,
+    label: &str,
+    model: &str,
+    provider: &str,
+    agent: Option<&str>,
+    seed: Option<u64>,
+) -> Result<Vec<Slot>> {
+    let mut slots = Vec::new();
+    for (round, campaign) in snapshot.campaigns.iter().enumerate() {
         for group in campaign["groups"]
             .as_array()
             .context("Missing campaign groups")?
@@ -1222,10 +1512,10 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
                 .as_array()
                 .context("Native scenarios required")?;
             let key = format!("{owner}:round-{}:{group_id}", round + 1);
-            let c = &plan.plan;
             let request: RunRequest = serde_json::from_value(
-                json!({"idempotency_key": key, "label": format!("{} · round {} · {}", c.label, round+1, group_id), "lane": campaign["lane"], "model": c.model, "provider": c.provider,
-                "scenarios": scenario_ids, "runs": 1, "seed": c.seed, "technical_retries": group["technical_retries"]}),
+                json!({"idempotency_key": key, "label": format!("{label} · round {} · {group_id}", round + 1), "lane": campaign["lane"],
+                "model": model, "provider": provider, "agent": agent,
+                "scenarios": scenario_ids, "runs": 1, "seed": seed, "technical_retries": group["technical_retries"]}),
             )?;
             crate::control::validate_run_request(&request)?;
             for scenario_id in scenario_ids {
@@ -1251,7 +1541,7 @@ fn materialize_slots(plan: &SavedPlan, owner: &str) -> Result<Vec<Slot>> {
         }
     }
     ensure!(
-        Some(slots.len() as u64) == plan.snapshot.budget["planned_runs"].as_u64(),
+        Some(slots.len() as u64) == snapshot.budget["planned_runs"].as_u64(),
         "Materialized slot coverage differs"
     );
     Ok(slots)
@@ -1366,9 +1656,12 @@ fn verify_system_identity(pinned: &mut Option<Value>, report: &E2eReport) -> Res
         let mut right = observed.clone();
         left.as_object_mut().unwrap().remove("contract_hashes");
         right.as_object_mut().unwrap().remove("contract_hashes");
+        let mut changed = Vec::new();
+        identity_changes("", &left, &right, &mut changed);
         ensure!(
-            left == right,
-            "Stack or runner identity changed during the composed execution"
+            changed.is_empty(),
+            "Stack or runner identity changed during the composed execution: {}",
+            changed.join("; ")
         );
         for (id, digest) in observed["contract_hashes"]
             .as_object()
@@ -1388,6 +1681,30 @@ fn verify_system_identity(pinned: &mut Option<Value>, report: &E2eReport) -> Res
     Ok(())
 }
 
+/// Each field that differs between two identities, as `path: before → after`
+/// (`harness_version: 1.8.8 → 1.8.9`, `stack.stack_versions.state: …`).
+fn identity_changes(path: &str, before: &Value, after: &Value, changed: &mut Vec<String>) {
+    match (before, after) {
+        (Value::Object(left), Value::Object(right)) => {
+            for key in left.keys().chain(right.keys()).collect::<BTreeSet<_>>() {
+                let path = if path.is_empty() {
+                    key.clone()
+                } else {
+                    format!("{path}.{key}")
+                };
+                let missing = Value::Null;
+                identity_changes(
+                    &path,
+                    left.get(key).unwrap_or(&missing),
+                    right.get(key).unwrap_or(&missing),
+                    changed,
+                );
+            }
+        }
+        _ if before != after => changed.push(format!("{path}: {before} → {after}")),
+        _ => {}
+    }
+}
 fn result_paths(execution: &PlanExecution, root: &Path) -> Vec<PathBuf> {
     execution
         .slots
@@ -1432,6 +1749,23 @@ fn finish(execution: &mut PlanExecution, error: Option<String>, root: &Path) -> 
             }
         }
     }
+    // Every slot ran, but not all cleanly: the first reason is the
+    // execution's, so a completed execution never hides why.
+    if execution.state == "completed" && execution.error.is_none() {
+        execution.error = execution
+            .slots
+            .iter()
+            .find(|slot| !slot.eligible)
+            .map(|slot| {
+                format!(
+                    "{}: {}",
+                    slot.scenario_id,
+                    slot.error
+                        .as_deref()
+                        .unwrap_or("its run is technically invalid or undetermined")
+                )
+            });
+    }
     Ok(())
 }
 pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
@@ -1469,6 +1803,7 @@ mod tests {
         lose_artifact: AtomicBool,
         wrong_identity: AtomicBool,
         fail_next: AtomicBool,
+        crash_next: AtomicBool,
         fail_receipt: AtomicBool,
     }
     impl FakeRunner {
@@ -1482,6 +1817,7 @@ mod tests {
                 lose_artifact: AtomicBool::new(false),
                 wrong_identity: AtomicBool::new(false),
                 fail_next: AtomicBool::new(false),
+                crash_next: AtomicBool::new(false),
                 fail_receipt: AtomicBool::new(false),
             }
         }
@@ -1653,7 +1989,13 @@ mod tests {
                 "child was not persisted before dispatch"
             );
             self.submitted.fetch_add(1, Ordering::SeqCst);
-            let record = self.native_record(request)?;
+            let mut record = self.native_record(request)?;
+            if self.crash_next.swap(false, Ordering::SeqCst) {
+                // The native run failed before it had results.
+                record.phase = ExecutionPhase::Failed;
+                record.error = "fixture repository unavailable".into();
+                (record.report, record.manifest, record.result_path) = (None, None, None);
+            }
             self.records.lock().await.insert(id.clone(), record);
             Ok(if self.wrong_identity.load(Ordering::SeqCst) {
                 "different-child".into()
@@ -1688,6 +2030,20 @@ mod tests {
                 fs::remove_dir_all(evidence)?;
             }
             Ok(())
+        }
+        async fn stack(&self) -> (Vec<StackWorker>, Vec<String>) {
+            (
+                vec![StackWorker {
+                    name: "queue".into(),
+                    source: WorkerSource::Path,
+                    requested: None,
+                    observed: Some("0.4.1".into()),
+                    commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+                    dirty: Some(true),
+                    groups: Vec::new(),
+                }],
+                vec!["Worker sources were not recorded: compose is unavailable".into()],
+            )
         }
     }
     fn request(profile: &str) -> super::super::PlanCreateRequest {
@@ -2098,6 +2454,7 @@ mod tests {
                 release_control_execution_id: Some("rc-execution".into()),
             },
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "importing".into(),
             started_at: "2026-09-20T10:00:00Z".into(),
             updated_at: now(),
@@ -2130,7 +2487,6 @@ mod tests {
                 scenarios: vec!["context_pressure".into(), "registry_planning".into()],
                 runs: 1,
                 technical_retries: 0,
-                seed: None,
                 model: "model".into(),
                 provider: "provider".into(),
                 agent: Some("tech-lead".into()),
@@ -2424,6 +2780,7 @@ mod tests {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "importing".into(),
             started_at: now(),
             updated_at: now(),
@@ -2529,6 +2886,7 @@ mod tests {
             parameters: None,
             source: ExecutionSource::Local,
             stack: Vec::new(),
+            warnings: Vec::new(),
             state: "running".into(),
             started_at: "2026-09-11T00:00:00Z".into(),
             updated_at: "2026-09-11T00:00:00Z".into(),
@@ -2925,5 +3283,393 @@ mod tests {
             .unwrap()
             .baseline_execution_id
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn an_execution_starts_from_parameters_and_records_the_stack() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        runner.crash_next.store(true, Ordering::SeqCst);
+        let parameters = ExecutionParameters {
+            scenarios: vec![
+                "context_pressure".into(),
+                "retired_scenario".into(),
+                "minimal_path".into(),
+                "context_pressure".into(),
+            ],
+            runs: 1,
+            technical_retries: 0,
+            model: " model ".into(),
+            provider: "provider".into(),
+            agent: Some("tech-lead".into()),
+        };
+        let started = manager
+            .start_execution(parameters, "  Again  ")
+            .await
+            .unwrap();
+        assert_eq!(started.state, "running");
+        let execution = terminal(&manager, &started.id).await;
+
+        assert_eq!(execution.plan_id, None);
+        assert_eq!(execution.role, None);
+        assert_eq!(execution.source, ExecutionSource::Local);
+        assert_eq!(execution.label.as_deref(), Some("Again"));
+        let parameters = execution.parameters.as_ref().unwrap();
+        assert_eq!(parameters.model, "model");
+        assert_eq!(
+            parameters.scenarios,
+            vec!["context_pressure", "retired_scenario", "minimal_path"]
+        );
+        // The stack is recorded before the first slot, with what could not be.
+        assert_eq!(execution.stack[0].name, "queue");
+        assert_eq!(execution.stack[0].dirty, Some(true));
+        assert_eq!(
+            execution.warnings,
+            vec!["Worker sources were not recorded: compose is unavailable"]
+        );
+        // The unknown scenario and the run that failed without results fail
+        // only their slots; the other scenario still runs.
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+        assert_eq!(execution.state, "completed", "{:?}", execution.error);
+        let slot = |id: &str| {
+            execution
+                .slots
+                .iter()
+                .find(|slot| slot.scenario_id == id)
+                .unwrap()
+        };
+        let crashed = slot("context_pressure");
+        assert_eq!(
+            crashed.error.as_deref(),
+            Some("fixture repository unavailable")
+        );
+        assert_eq!(crashed.observed, 0);
+        let unknown = slot("retired_scenario");
+        assert!(unknown.execution_id.is_empty());
+        assert_eq!(unknown.state, "not_run");
+        assert!(unknown
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("does not know the scenario 'retired_scenario'"));
+        let ran = slot("minimal_path");
+        assert_eq!((ran.state.as_str(), ran.observed), ("finished", 1));
+        assert_eq!(ran.request["agent"], "tech-lead");
+        assert!(ran.request["seed"].is_null());
+        assert!(!execution.baseline_eligible);
+        assert!(execution.measurements.is_some());
+        assert!(runner.owner.lock().await.is_none());
+
+        // Nothing without a model or a scenario, or with a model, provider or
+        // agent the old run form refused, starts.
+        let long = "m".repeat(201);
+        for (model, provider, agent, scenarios, reason) in [
+            (
+                "",
+                "provider",
+                None,
+                vec!["minimal_path".into()],
+                "Select an execution model",
+            ),
+            (
+                "model",
+                "provider",
+                None,
+                vec![],
+                "Select between 1 and 256 scenarios",
+            ),
+            (
+                long.as_str(),
+                "provider",
+                None,
+                vec!["minimal_path".into()],
+                "model must be at most 200",
+            ),
+            (
+                "model",
+                "pro\u{7}vider",
+                None,
+                vec!["minimal_path".into()],
+                "provider must be at most 200",
+            ),
+            (
+                "model",
+                "provider",
+                Some("tech\nlead"),
+                vec!["minimal_path".into()],
+                "agent must be at most 200",
+            ),
+        ] {
+            let parameters = ExecutionParameters {
+                scenarios,
+                runs: 1,
+                technical_retries: 0,
+                model: model.into(),
+                provider: provider.into(),
+                agent: agent.map(str::to_owned),
+            };
+            let error = manager
+                .start_execution(parameters, "")
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
+        }
+    }
+
+    #[test]
+    fn parameters_keep_the_sequential_groups_of_the_master_plan() {
+        let parameters = ExecutionParameters {
+            scenarios: vec![
+                "registry_implementation".into(),
+                "registry_verification".into(),
+                "minimal_path".into(),
+            ],
+            runs: 2,
+            technical_retries: 1,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let slots = parameter_slots(&parameters, "plan-grouped", None).unwrap();
+        assert_eq!(slots.len(), 6);
+        for round in [1, 2] {
+            let ids = slots
+                .iter()
+                .filter(|slot| slot.round == round)
+                .map(|slot| slot.execution_id.as_str())
+                .collect::<BTreeSet<_>>();
+            assert_eq!(ids.len(), 2, "one run for the group, one for minimal_path");
+        }
+        // The canonical cases, so every execution pairs with any other.
+        assert!(slots.iter().all(|slot| slot.request["seed"].is_null()));
+    }
+
+    #[tokio::test]
+    async fn a_busy_runner_names_the_execution_that_holds_it() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        runner.hold.store(true, Ordering::SeqCst);
+        let manager = manager(root.path(), runner.clone());
+        let parameters = ExecutionParameters {
+            scenarios: vec!["minimal_path".into()],
+            runs: 1,
+            technical_retries: 0,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let running = manager
+            .start_execution(parameters.clone(), "Nightly")
+            .await
+            .unwrap();
+        let error = manager.start_execution(parameters, "").await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "\"Nightly\" ({}) is still running; wait for it to finish or cancel it.",
+                running.id
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn a_scenario_of_a_sequential_group_brings_the_whole_group() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let parameters = ExecutionParameters {
+            scenarios: vec!["registry_verification".into(), "minimal_path".into()],
+            runs: 1,
+            technical_retries: 0,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let started = manager.start_execution(parameters, "").await.unwrap();
+        assert_eq!(
+            started.parameters.as_ref().unwrap().scenarios,
+            vec![
+                "registry_implementation",
+                "registry_verification",
+                "minimal_path"
+            ]
+        );
+        assert_eq!(
+            started.warnings,
+            vec![
+                "registry_implementation then registry_verification run only together, in this order; the whole group was added."
+            ]
+        );
+        let grouped = started
+            .slots
+            .iter()
+            .filter(|slot| slot.scenario_id.starts_with("registry_"))
+            .map(|slot| slot.execution_id.as_str())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(grouped.len(), 1, "one session for the group");
+        let execution = terminal(&manager, &started.id).await;
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 2);
+        // The note stays next to the stack warnings.
+        assert_eq!(execution.warnings[0], started.warnings[0]);
+    }
+
+    #[tokio::test]
+    async fn a_completed_plan_execution_names_the_slot_that_did_not_run_cleanly() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        runner.crash_next.store(true, Ordering::SeqCst);
+        let (_, id) = admitted(&manager, "pr", "crash").await;
+        let execution = terminal(&manager, &id).await;
+        // No safety stop: every slot ran, and the reason is the execution's.
+        assert_eq!(execution.state, "completed");
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 4);
+        assert!(!execution.baseline_eligible);
+        let first = &execution.slots[0];
+        assert_eq!(
+            execution.error,
+            Some(format!(
+                "{}: fixture repository unavailable",
+                first.scenario_id
+            ))
+        );
+        let (summaries, _) = manager.dashboard_summaries(&[]).await.unwrap();
+        let summary = summaries
+            .iter()
+            .find(|summary| summary["id"] == id)
+            .unwrap();
+        assert_eq!(
+            summary["first_failure"]["message"],
+            json!(execution.error.as_deref().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_finished_execution_without_a_plan_is_deleted_with_its_runs() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let parameters = ExecutionParameters {
+            scenarios: vec!["minimal_path".into(), "retired_scenario".into()],
+            runs: 1,
+            technical_retries: 0,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let started = manager.start_execution(parameters, "").await.unwrap();
+        let execution = terminal(&manager, &started.id).await;
+        let child = execution.slots[0].execution_id.clone();
+        assert!(root.path().join(&child).join("results.json").is_file());
+
+        manager.delete_execution(&execution.id).await.unwrap();
+        assert!(manager.read_execution(&execution.id).await.is_err());
+        assert!(runner.record(&child).await.is_none());
+        assert!(!root.path().join(&child).exists());
+
+        // A plan's executions stay until the plan is deleted.
+        let (_, planned) = admitted(&manager, "pr", "kept").await;
+        terminal(&manager, &planned).await;
+        let error = manager.delete_execution(&planned).await.unwrap_err();
+        assert!(
+            error.to_string().contains("deleted with the plan"),
+            "{error}"
+        );
+        assert!(manager.read_execution(&planned).await.is_ok());
+    }
+
+    #[test]
+    fn a_stack_change_during_an_execution_names_what_changed() {
+        let runner = FakeRunner::new(tempfile::tempdir().unwrap().path().into());
+        let request: RunRequest = serde_json::from_value(json!({
+            "idempotency_key": "identity", "lane": "local", "model": "model",
+            "provider": "provider", "scenarios": ["minimal_path"], "runs": 1,
+        }))
+        .unwrap();
+        let report = runner.native_record(request).unwrap().report.unwrap();
+        let mut pinned = Some(serde_json::to_value(&report.system_under_test).unwrap());
+        verify_system_identity(&mut pinned, &report).unwrap();
+        let identity = pinned.as_mut().unwrap();
+        identity["harness_version"] = json!("1.7.0");
+        identity["stack"]["workers_revision"] = json!("abc");
+        let error = verify_system_identity(&mut pinned, &report)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(r#"harness_version: "1.7.0" → "1.8.0""#),
+            "{error}"
+        );
+        assert!(error.contains("stack.workers_revision"), "{error}");
+    }
+
+    #[test]
+    fn a_seed_from_an_older_console_or_row_is_ignored() {
+        let parameters: ExecutionParameters = serde_json::from_value(json!({
+            "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0,
+            "seed": "18446744073709551615", "model": "m", "provider": "p", "agent": null,
+        }))
+        .unwrap();
+        assert!(serde_json::to_value(&parameters)
+            .unwrap()
+            .get("seed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn runs_list_with_one_call_and_contracts_are_read_apart_and_cached() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let gh = fake_gh(
+            root.path(),
+            r#"echo "$*" >> "$(dirname "$0")/calls"
+case "$1" in
+  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  run) echo "no valid artifacts found to download" >&2; exit 1 ;;
+esac"#,
+        );
+        let calls = || fs::read_to_string(root.path().join("calls")).unwrap();
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        let run = &listed["runs"][0];
+        // Dated by the run's creation; the latest attempt's start apart.
+        assert_eq!(run["created_at"], "2026-09-20T10:00:00Z");
+        assert_eq!(run["attempt_started_at"], "2026-09-21T09:00:00Z");
+        assert_eq!(run["release_control_execution_id"], "366030b3-5f55");
+        assert_eq!(run["contract_pending"], true);
+        assert_eq!(calls().lines().count(), 1, "only the list: {}", calls());
+
+        let read = manager
+            .github_run_contracts(
+                "o/r",
+                &[github::GithubRunAttempt {
+                    run_id: 41,
+                    run_attempt: 2,
+                }],
+            )
+            .await
+            .unwrap();
+        assert_eq!(read["runs"][0]["run_id"], 41);
+        assert!(read["runs"][0]["contract_error"]
+            .as_str()
+            .unwrap()
+            .contains("90 days"));
+
+        // Read once: the next list carries it and downloads nothing.
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        assert!(listed["runs"][0].get("contract_pending").is_none());
+        assert_eq!(
+            listed["runs"][0]["contract_error"],
+            read["runs"][0]["contract_error"]
+        );
+        assert_eq!(
+            calls()
+                .lines()
+                .filter(|call| call.starts_with("run download"))
+                .count(),
+            1
+        );
     }
 }

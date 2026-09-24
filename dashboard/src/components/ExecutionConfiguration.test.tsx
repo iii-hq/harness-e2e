@@ -12,7 +12,6 @@ const execution: PlanExecution = {
     scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
     runs: 1,
     technical_retries: 0,
-    seed: null,
     model: 'deepseek-flash',
     provider: 'deepseek',
     agent: 'tech-lead',
@@ -88,5 +87,31 @@ describe('execution configuration', () => {
     )
     expect(html).toContain('>local<')
     expect(html).not.toContain('data-execution-stack')
+    expect(html).not.toContain('data-execution-warnings')
+  })
+
+  it('shows the checkout a local worker ran from and what was not recorded', () => {
+    const html = renderToStaticMarkup(
+      <ExecutionConfiguration
+        execution={{
+          ...execution,
+          source: { kind: 'local' },
+          stack: [
+            {
+              name: 'queue',
+              source: 'path',
+              requested: null,
+              observed: '0.4.1',
+              commit: '0123456789abcdef0123456789abcdef01234567',
+              dirty: true,
+            },
+          ],
+          warnings: ['harness-e2e: /missing is not a readable Git checkout'],
+        }}
+      />,
+    )
+    expect(html).toContain('path · 0123456789ab · dirty')
+    expect(html).toContain('data-execution-warnings')
+    expect(html).toContain('/missing is not a readable Git checkout')
   })
 })

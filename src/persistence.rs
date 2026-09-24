@@ -489,6 +489,12 @@ impl Persistence {
     pub(crate) async fn delete_plan_and_executions(&self, id: &str) -> Result<()> {
         self.transaction(delete_plan_statements(id)).await
     }
+    pub(crate) async fn delete_plan_execution(&self, id: &str) -> Result<()> {
+        self.transaction(vec![
+            json!({"sql": "DELETE FROM saved_plan_executions WHERE id = ?", "params": [id]}),
+        ])
+        .await
+    }
 
     pub async fn save_execution(&self, record: &ExecutionRecord) -> Result<()> {
         self.transaction(vec![execution_statement(record)?]).await

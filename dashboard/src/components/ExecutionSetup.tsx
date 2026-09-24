@@ -70,26 +70,28 @@ export type ExecutionModelGroup = {
 export type ExecutionSetupField = 'label' | 'subject' | 'scenarios' | 'url'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
-/** Audit PN-05: validation runs on submit and names each pending item. */
+/** Audit PN-05: validation runs on submit and names each pending item. A
+ *  quick run always targets this worker's stack, so it has no endpoint. */
 export function validateExecutionSetup({
   mode,
   label,
   subject,
   selectedScenarios,
-  url,
+  url = '',
 }: {
   mode: ExecutionSetupMode
   label: string
   subject: string
   selectedScenarios: string[]
-  url: string
+  url?: string
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
   if (mode === 'plan' && label.trim() === '') errors.label = 'Add a plan label.'
   if (!subject) errors.subject = 'Choose an execution model.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
-  if (url.trim() === '') errors.url = 'The Harness endpoint is missing.'
+  if (mode === 'plan' && url.trim() === '')
+    errors.url = 'The Harness endpoint is missing.'
   return errors
 }
 
@@ -154,15 +156,21 @@ type ExecutionSetupProps = {
   mode: ExecutionSetupMode
   label: string
   purpose?: string
-  url: string
+  /** Plans only: a quick run always targets this worker's stack. */
+  url?: string
   subject: string
+  /** Where the preselected model came from. */
+  subjectHint?: string
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
   selectedScenarios: string[]
   query: string
   runs: string
   technicalRetries: string
-  seed: string
+  /** Agent profile; the field shows only where the host can send it. */
+  agent?: string
+  /** Open on the "selected" filter (running again: what will run). */
+  initialOnlySelected?: boolean
   disabled?: boolean
   catalogLoading?: boolean
   catalogStatus: { tone: 'ready' | 'loading' | 'unavailable'; text: string }
@@ -172,13 +180,13 @@ type ExecutionSetupProps = {
   onRefreshCatalog?: () => void
   onLabelChange: (value: string) => void
   onPurposeChange?: (value: string) => void
-  onUrlChange: (value: string) => void
+  onUrlChange?: (value: string) => void
   onSubjectChange: (value: string) => void
   onSelectedScenariosChange: (value: string[]) => void
   onQueryChange: (value: string) => void
   onRunsChange: (value: string) => void
   onTechnicalRetriesChange: (value: string) => void
-  onSeedChange: (value: string) => void
+  onAgentChange?: (value: string) => void
 }
 
 function SetupSection({
@@ -224,15 +232,17 @@ export function ExecutionSetup({
   mode,
   label,
   purpose = '',
-  url,
+  url = '',
   subject,
+  subjectHint,
   modelGroups,
   availableScenarios,
   selectedScenarios,
   query,
   runs,
   technicalRetries,
-  seed,
+  agent = '',
+  initialOnlySelected = false,
   disabled = false,
   catalogLoading = false,
   catalogStatus,
@@ -247,9 +257,9 @@ export function ExecutionSetup({
   onQueryChange,
   onRunsChange,
   onTechnicalRetriesChange,
-  onSeedChange,
+  onAgentChange,
 }: ExecutionSetupProps) {
-  const [onlySelected, setOnlySelected] = useState(false)
+  const [onlySelected, setOnlySelected] = useState(initialOnlySelected)
   const normalizedQuery = query.trim().toLocaleLowerCase()
   const matches = (scenario: string) =>
     (!normalizedQuery ||
@@ -398,6 +408,7 @@ export function ExecutionSetup({
             label="Execution model"
             htmlFor={`${idPrefix}-subject`}
             meta="required"
+            hint={subjectHint}
             error={errors.subject}
           >
             <ProviderModelDropdown
@@ -425,16 +436,15 @@ export function ExecutionSetup({
               aria-hidden="true"
             />
             <span className="font-semibold text-ink">
-              Advanced · sampling, retries and seed
+              Advanced · sampling and retries
             </span>
             <span className="ml-auto hidden min-w-0 truncate font-mono text-label text-ink-muted @[560px]:block">
               {runsPerScenario} per test · {retries} retr
-              {retries === 1 ? 'y' : 'ies'} ·{' '}
-              {seed.trim() ? `seed ${seed.trim()}` : 'canonical seed'} ·{' '}
-              {url || 'endpoint not loaded'}
+              {retries === 1 ? 'y' : 'ies'}
+              {mode === 'plan' ? ` · ${url || 'endpoint not loaded'}` : ''}
             </span>
           </summary>
-          <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-3">
+          <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-2">
             <Field
               label="Runs per test"
               htmlFor={`${idPrefix}-runs`}
@@ -479,41 +489,42 @@ export function ExecutionSetup({
                 disabled={disabled}
               />
             </Field>
-            <Field
-              label="Seed"
-              htmlFor={`${idPrefix}-seed`}
-              hint="Leave blank for the canonical case set."
-            >
-              <Input
-                id={`${idPrefix}-seed`}
-                className="font-mono"
-                type="number"
-                min="0"
-                step="1"
-                inputMode="numeric"
-                value={seed}
-                placeholder="canonical"
-                onChange={(event) => onSeedChange(event.target.value)}
-                disabled={disabled}
-              />
-            </Field>
-            <Field
-              label="Harness endpoint"
-              htmlFor={`${idPrefix}-url`}
-              className="sm:col-span-3"
-              hint="Refresh the catalog after changing it."
-              error={errors.url}
-            >
-              <Input
-                id={`${idPrefix}-url`}
-                className="font-mono text-xs"
-                value={url}
-                placeholder="ws://127.0.0.1:49134"
-                aria-invalid={errors.url ? true : undefined}
-                onChange={(event) => onUrlChange(event.target.value)}
-                disabled={disabled}
-              />
-            </Field>
+            {onAgentChange ? (
+              <Field
+                label="Agent profile"
+                htmlFor={`${idPrefix}-agent`}
+                className="sm:col-span-2"
+                hint="Leave blank for the Harness default profile."
+              >
+                <Input
+                  id={`${idPrefix}-agent`}
+                  className="font-mono"
+                  value={agent}
+                  placeholder="default"
+                  onChange={(event) => onAgentChange(event.target.value)}
+                  disabled={disabled}
+                />
+              </Field>
+            ) : null}
+            {mode === 'plan' ? (
+              <Field
+                label="Harness endpoint"
+                htmlFor={`${idPrefix}-url`}
+                className="sm:col-span-3"
+                hint="Refresh the catalog after changing it."
+                error={errors.url}
+              >
+                <Input
+                  id={`${idPrefix}-url`}
+                  className="font-mono text-xs"
+                  value={url}
+                  placeholder="ws://127.0.0.1:49134"
+                  aria-invalid={errors.url ? true : undefined}
+                  onChange={(event) => onUrlChange?.(event.target.value)}
+                  disabled={disabled}
+                />
+              </Field>
+            ) : null}
           </div>
         </details>
       </SetupSection>
@@ -667,8 +678,11 @@ export function ExecutionSetup({
                               : 'cursor-pointer text-ink hover:bg-[var(--surface-fill)]'
                           }`}
                         >
+                          {/* The native control, sized and shown whatever
+                              the host resets: the box, its name and Space all
+                              toggle it. */}
                           <input
-                            className="size-4 shrink-0 accent-[var(--accent)]"
+                            className="m-0 size-4 shrink-0 cursor-pointer appearance-auto accent-[var(--accent)]"
                             type="checkbox"
                             checked={selected}
                             disabled={disabled}
@@ -777,17 +791,17 @@ export type ExecutionSetupSummaryInput = {
   selectedScenarios: number
   runsPerScenario: number
   technicalRetries: number
-  seed: string
   subject: string
-  url: string
+  /** Plans only. */
+  url?: string
 }
 
 /** Audit RS-07 / PN-20: the review is one sentence, not four tiles. */
 export function executionSetupSummary({
+  mode,
   selectedScenarios,
   runsPerScenario,
   technicalRetries,
-  seed,
   subject,
   url,
 }: ExecutionSetupSummaryInput) {
@@ -800,8 +814,7 @@ export function executionSetupSummary({
   const detail = [
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,
     `${technicalRetries} retr${technicalRetries === 1 ? 'y' : 'ies'}`,
-    seed.trim() ? `seed ${seed.trim()}` : 'canonical seed',
-    url || 'endpoint not loaded',
+    ...(mode === 'plan' ? [url || 'endpoint not loaded'] : []),
   ].join(' · ')
   return { headline, detail }
 }

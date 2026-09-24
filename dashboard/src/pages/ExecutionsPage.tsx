@@ -38,6 +38,7 @@ import {
   categoryMessage,
   type ExecutionPresentation,
   executionOrigin,
+  executionProgress,
   executionScore,
   executionTitle,
   formatDate,
@@ -259,10 +260,11 @@ export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
 
 function LedgerRowCells({ row }: { row: LedgerRow }) {
   const { presentation, execution, status } = row
-  const { title, detail } = executionTitle(presentation)
+  const { title } = executionTitle(presentation)
   const tokens = tokensOf(row)
   const origin = executionOrigin(execution)
   const score = executionScore(execution)
+  const progress = executionProgress(execution)
   const scenarios = execution.parameters?.scenarios.length
   const evidenceNote =
     execution.availability === 'aggregate'
@@ -280,6 +282,7 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         >
           {title}
         </a>
+        {/* Every row names its origin the same way: local or GitHub #run. */}
         <span className="font-mono text-label text-ink-muted">
           {origin.href ? (
             <a
@@ -296,12 +299,16 @@ function LedgerRowCells({ row }: { row: LedgerRow }) {
         </span>
         <span className="block truncate font-mono text-label text-ink-muted">
           {formatDate(presentation.completedAt)}
-          {detail ? ` · ${detail}` : ''}
         </span>
       </td>
       <td data-label="Result">
         <StatusBadge status={status.status} label={status.label} />
-        {presentation.primaryIssue ? (
+        {/* A running execution's missing reports are still to come. */}
+        {progress ? (
+          <span className="block font-mono text-label text-ink-soft">
+            {progress}
+          </span>
+        ) : presentation.primaryIssue ? (
           <span className="block font-mono text-label text-ink-soft">
             {categoryMessage(
               presentation.primaryIssue.category,
@@ -760,7 +767,7 @@ export function ExecutionsPage() {
             }
             description={
               rows.length === 0
-                ? 'Run tests or create a plan to start retaining execution evidence.'
+                ? 'Run tests here, import a run from GitHub, or create a plan to start retaining execution evidence.'
                 : 'Widen the result or trigger filter, or clear the search.'
             }
             actions={
@@ -772,6 +779,35 @@ export function ExecutionsPage() {
                 >
                   clear filters
                 </button>
+              ) : rows.length === 0 && bridge ? (
+                <>
+                  <button
+                    className={buttonClassName({ variant: 'primary' })}
+                    type="button"
+                    onClick={() => {
+                      setRunnerScope([])
+                      setRunnerOpen(true)
+                    }}
+                  >
+                    run tests
+                  </button>
+                  <button
+                    className={buttonClassName({ variant: 'secondary' })}
+                    type="button"
+                    onClick={() => setImportOpen(true)}
+                  >
+                    import from GitHub
+                  </button>
+                  <a
+                    className={buttonClassName({
+                      variant: 'quiet',
+                      className: 'no-underline',
+                    })}
+                    href={hashForNewPlan()}
+                  >
+                    new plan
+                  </a>
+                </>
               ) : null
             }
           />
@@ -812,7 +848,6 @@ export function ExecutionsPage() {
         open={runnerOpen}
         initialScenarios={runnerScope}
         onClose={() => setRunnerOpen(false)}
-        onCompleted={() => void load()}
       />
       <GithubImportDialog
         bridge={bridge}

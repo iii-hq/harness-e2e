@@ -58,11 +58,12 @@ impl PlanStore {
                 .map(|p| p.provider.as_str())
                 .or(config.map(|c| c.provider.as_str()))
                 .unwrap_or_default();
+            // Without a name the Console titles it by model and date.
             let label = execution
                 .label
                 .as_deref()
                 .or(config.map(|c| c.label.as_str()))
-                .unwrap_or(id);
+                .unwrap_or_default();
             let lane = plan
                 .as_ref()
                 .map(|plan| json!(plan.snapshot.profile.lane))
@@ -105,7 +106,7 @@ impl PlanStore {
             let mut value = json!({"id": execution.id, "label": label, "run_id": execution.id,
                 "kind": "plan", "plan_id": execution.plan_id, "template_id": config.and_then(|c| c.template_id.as_deref()), "plan_execution": summary,
                 "state": execution.state, "parameters": execution.parameters, "source": execution.source, "stack": execution.stack,
-                "attempt": 1, "workflow_name": "Harness plan", "workflow_url": null,
+                "attempt": 1, "workflow_name": null, "workflow_url": null,
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
                 "status": status, "conclusion": if status == "passed" { "success" } else { "" }, "availability": "available", "lane": lane,
                 "subjects": [{"id": model, "model": model, "provider": provider, "scenarios": []}],

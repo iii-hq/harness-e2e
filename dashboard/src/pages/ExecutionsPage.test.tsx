@@ -172,13 +172,14 @@ describe('executions ledger', () => {
       summary({
         id: 'plan-imported',
         label: 'Software engineering',
+        // What an older worker still sends for every execution row.
+        workflow_name: 'Harness plan',
         completed_at: '2026-08-26T20:30:00Z',
         source: github(123),
         parameters: {
           scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
           runs: 1,
           technical_retries: 0,
-          seed: null,
           model: 'gpt-5.6-terra',
           provider: 'openai-codex',
           agent: 'tech-lead',
@@ -201,7 +202,11 @@ describe('executions ledger', () => {
         state: 'importing',
         source: github(124),
       }),
-      summary({ id: 'local-run', completed_at: '2026-08-26T20:10:00Z' }),
+      summary({
+        id: 'local-run',
+        workflow_name: 'Harness E2E Local',
+        completed_at: '2026-08-26T20:10:00Z',
+      }),
     ])
     const grouped = groupLedgerRows(
       filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
@@ -238,6 +243,9 @@ describe('executions ledger', () => {
     expect(html).toContain('2 scenarios')
     expect(html).toContain('>85<')
     expect(html).toContain('>local<')
+    // Every row names its origin; none names a workflow.
+    expect(html).not.toContain('Harness plan')
+    expect(html).not.toContain('Harness E2E Local')
   })
 
   // Audit O-03 / E-11: the row carries every column with a label, and a

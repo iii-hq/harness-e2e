@@ -24,7 +24,6 @@ const sharedProps = {
   query: '',
   runs: '2',
   technicalRetries: '1',
-  seed: '',
   catalogStatus: {
     tone: 'ready' as const,
     text: 'catalog ready · 1 model · 1 test',
@@ -36,7 +35,6 @@ const sharedProps = {
   onQueryChange: () => undefined,
   onRunsChange: () => undefined,
   onTechnicalRetriesChange: () => undefined,
-  onSeedChange: () => undefined,
 }
 
 describe('execution setup sheet', () => {
@@ -57,16 +55,15 @@ describe('execution setup sheet', () => {
       expect(html).toContain('Choose the model')
       expect(html).not.toContain('Judge')
       expect(html).toContain('Pick the tests')
-      expect(html).toContain('Advanced · sampling, retries and seed')
+      expect(html).toContain('Advanced · sampling and retries')
+      // Every execution runs the canonical cases, so runs pair up.
+      expect(html).not.toMatch(/seed/i)
       expect(html).toContain('Search by name or id')
       expect(html).toContain('2 runs in total')
       expect(html).toContain('catalog ready · 1 model · 1 test')
       expect(html).not.toContain('logical')
       // Audit RS-04: no 01/02/03 numerals.
       expect(html).not.toContain('>01<')
-      // Audit PN-21: the endpoint lives under advanced, read from the summary.
-      expect(html).toContain('Harness endpoint')
-      expect(html).toContain('ws://127.0.0.1:49134')
       // Audit PN-12: the model trigger is a labelled 36px control.
       expect(html).toContain('for="test-setup-subject"')
       expect(html).toContain('id="test-setup-subject"')
@@ -82,6 +79,12 @@ describe('execution setup sheet', () => {
       expect(html).not.toContain('type="search"')
       expect(html).toContain('1 of 1 shown · 1 selected · 2 runs in total')
     }
+    // Audit PN-21: a plan's endpoint lives under advanced, read from the
+    // summary. A quick run always targets this worker's stack.
+    expect(plan).toContain('Harness endpoint')
+    expect(plan).toContain('ws://127.0.0.1:49134')
+    expect(quick).not.toContain('Harness endpoint')
+    expect(quick).not.toContain('ws://127.0.0.1:49134')
     expect(plan).toContain('Plan label')
     expect(plan).toContain('Name the plan')
     expect(plan).toContain('Purpose')
@@ -105,13 +108,13 @@ describe('execution setup sheet', () => {
       scenarios: 'Select at least one test.',
       url: 'The Harness endpoint is missing.',
     })
+    // A quick run needs no endpoint, so a failed catalog does not block it.
     expect(
       validateExecutionSetup({
         mode: 'quick',
         label: '',
         subject: 'openai\ngpt-5',
         selectedScenarios: ['a'],
-        url: 'ws://x',
       }),
     ).toEqual({})
     const html = renderToStaticMarkup(
@@ -131,6 +134,25 @@ describe('execution setup sheet', () => {
     expect(html).toContain('Select at least one test.')
   })
 
+  it('opens on the selected tests when asked, as Run again does', () => {
+    const props = {
+      ...sharedProps,
+      mode: 'quick' as const,
+      availableScenarios: ['minimal_path', 'context_pressure', 'trend_blog'],
+      selectedScenarios: ['minimal_path'],
+    }
+    const all = renderToStaticMarkup(<ExecutionSetup {...props} />)
+    const selected = renderToStaticMarkup(
+      <ExecutionSetup {...props} initialOnlySelected />,
+    )
+    expect(all).toContain('3 of 3 shown')
+    expect(selected).toContain('1 of 3 shown')
+    expect(selected).toContain('>minimal_path<')
+    expect(selected).not.toContain('>trend_blog<')
+    // The native box stays a visible, clickable control.
+    expect(selected).toContain('appearance-auto')
+  })
+
   // Audit RS-07 / PN-20: the review is one sentence plus a detail line.
   it('summarises the setup in one sentence for the footer', () => {
     const summary = executionSetupSummary({
@@ -138,16 +160,13 @@ describe('execution setup sheet', () => {
       selectedScenarios: 2,
       runsPerScenario: 1,
       technicalRetries: 1,
-      seed: '',
       subject: 'anthropic / claude-fable-5',
       url: 'ws://127.0.0.1:49134',
     })
     expect(summary.headline).toBe(
       '2 tests · 2 runs · anthropic / claude-fable-5',
     )
-    expect(summary.detail).toBe(
-      '1 run per test · 1 retry · canonical seed · ws://127.0.0.1:49134',
-    )
+    expect(summary.detail).toBe('1 run per test · 1 retry')
     const html = renderToStaticMarkup(
       <ExecutionSetupFooter
         summary={{
@@ -155,7 +174,6 @@ describe('execution setup sheet', () => {
           selectedScenarios: 0,
           runsPerScenario: 2,
           technicalRetries: 0,
-          seed: '7',
           subject: '',
           url: 'ws://x',
         }}
@@ -165,7 +183,7 @@ describe('execution setup sheet', () => {
       </ExecutionSetupFooter>,
     )
     expect(html).toContain('0 tests · 0 runs · no model')
-    expect(html).toContain('2 runs per test · 0 retries · seed 7 · ws://x')
+    expect(html).toContain('2 runs per test · 0 retries · ws://x')
     expect(html).toContain(
       'Before creating: Add a plan label. Select at least one test.',
     )
@@ -182,7 +200,6 @@ describe('execution setup sheet', () => {
           selectedScenarios: 1,
           runsPerScenario: 1,
           technicalRetries: 0,
-          seed: '',
           subject: 'openai / gpt-5',
           url: 'ws://x',
         }}
