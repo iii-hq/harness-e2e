@@ -948,7 +948,7 @@ async fn stop_workspace_workers(context: &E2eContext, root: &Path) -> Result<()>
             }
         }
     }
-    kill_processes_under(root).await;
+    super::common::kill_processes_under(root).await;
     for _ in 0..40 {
         if !context.function_exists(FUNCTION_ID).await.unwrap_or(true) {
             return Ok(());
@@ -1014,29 +1014,6 @@ async fn workspace_containers(context: &E2eContext, root: &str) -> Vec<(String, 
         }
     }
     found
-}
-
-/// SIGTERM every process whose working directory is inside the workspace.
-async fn kill_processes_under(root: &Path) {
-    let Ok(entries) = fs::read_dir("/proc") else {
-        return;
-    };
-    let pids = entries
-        .filter_map(|entry| entry.ok()?.file_name().into_string().ok())
-        .filter(|pid| pid.bytes().all(|byte| byte.is_ascii_digit()))
-        .filter(|pid| {
-            fs::read_link(format!("/proc/{pid}/cwd")).is_ok_and(|cwd| cwd.starts_with(root))
-        })
-        .collect::<Vec<_>>();
-    if pids.is_empty() {
-        return;
-    }
-    let _ = Command::new("kill")
-        .arg("-TERM")
-        .args(&pids)
-        .stdin(Stdio::null())
-        .output()
-        .await;
 }
 
 async fn git_diff_empty(cwd: &Path, revision: &str, extra: &[&str]) -> bool {
@@ -1435,22 +1412,6 @@ mod tests {
         let (wired, detail) = delegation_probe_at(&url, "probe", &checkout).await;
         assert!(wired, "{detail}");
         assert!(!temporary.path().join(".delegation-probe").exists());
-    }
-
-    #[tokio::test]
-    async fn cleanup_stops_processes_inside_the_workspace() {
-        let temporary = tempfile::tempdir().unwrap();
-        let mut child = tokio::process::Command::new("sleep")
-            .arg("60")
-            .current_dir(temporary.path())
-            .spawn()
-            .unwrap();
-        kill_processes_under(temporary.path()).await;
-        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
-            .await
-            .expect("the workspace process stopped")
-            .unwrap();
-        assert!(!status.success());
     }
 
     #[tokio::test]
