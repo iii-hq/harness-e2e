@@ -51,7 +51,7 @@ import {
   yourCodeWorkers,
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
-import { formatPlanMetricDelta } from '@/lib/plan-comparison'
+import { formatMetricDelta } from '@/lib/metric-comparison'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
 
@@ -381,7 +381,7 @@ function ScenarioDetail({
 
 /** A difference, or a dash where one side has no figure to take it from. */
 function differenceText(metric: ComparedMetric) {
-  return metric.delta === null ? '—' : formatPlanMetricDelta(metric)
+  return metric.delta === null ? '—' : formatMetricDelta(metric)
 }
 
 function formatPoints(value: number) {

@@ -134,12 +134,12 @@ Featured suites:
 `config/test-plan.json` groups the catalog into modules (state, context,
 wakes, coordination, software engineering, integration, security, adaptive
 operations, continuous engineering, and the incremental Kanban application)
-plus a diagnostic set that profiles can opt into.
+plus a diagnostic set that suites can opt into.
 
 ## Test plans
 
 [config/test-plan.json](config/test-plan.json) is the executable plan. Rust
-materializes templates and execution rules from that source and from the
+materializes its suites and execution rules from that source and from the
 native scenario contracts. There is no generated catalog to keep in sync.
 
 | Suite | Purpose |
@@ -149,12 +149,10 @@ native scenario contracts. There is no generated catalog to keep in sync.
 | `pr` | Four essential checks of a candidate stack before merging a change. |
 | `after-release` | Five essential checks of the published stack. |
 
-In the Console these suites are starting templates for the same plan form
-and the same baseline/candidate view used by saved plans. Choose **New plan**,
-optionally pick a template, edit the scope, and select the model. **Save
-draft**, **Save and run**, and **Duplicate plan** share one lifecycle and keep
-native evidence. See
-[executable profile plans](dashboard/README.md#executable-profile-plans).
+A suite is only what to test: scenarios, runs of each and technical retries.
+In the Console these suites are read-only; **Suites** copies any of them into
+a suite of the Console to edit, and **Run tests** runs a suite with a model on
+the current Harness. See [suites](dashboard/README.md#suites).
 
 ```bash
 cargo run --locked -- test-plan list
@@ -197,16 +195,7 @@ optional `template`
 (`<id>` or `<id>@<revision>` of `iii-hq/templates`). Credentials never go in a
 stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.
-
-Release Control's older inputs (`plan`, a stack policy, `runner_sha`,
-`cli_version`) still work. Preparation translates them first: the plan's
-profile is the suite, its subject the model, its agent the profile; the stack
-is `default` with the policy's versions on the workers it declares, the plan's
-runner release on `harness-e2e`, the plan's template, and `cli_version` as
-`iii`. A pinned worker `default` does not declare (Canvas, the subject's
-provider, a template package) is declared with its pin, and the applied pins
-are reported as `stack_overrides`. Scripts always come from the dispatched
-ref.
+Scripts always come from the dispatched ref.
 
 Preparation resolves the rest, once:
 
@@ -217,8 +206,7 @@ Preparation resolves the rest, once:
    pins that release in the stack and fetches it. That binary materializes the
    suite (`suite.json`, also kept as `profile.json`), so the suite always comes
    from the runner every group runs, and the finalizer aggregates with it. The
-   runner's identity in the reports is its revision (an older dispatch keeps
-   its `runner_sha`).
+   runner's identity in the reports is its revision.
 3. `contracts` writes one contract per campaign.
 4. The stack is assembled once with `compose::add`, which expands every
    declared worker into its graph and writes `worker-compose.lock`; it gets
@@ -256,14 +244,8 @@ campaigns.
 
 ### Agent profile and project template
 
-A dispatch can name an existing Directory agent profile (`profile`; in an
-older Release Control plan, `agent_profile`):
-
-```json
-{ "agent_profile": "console-ui" }
-```
-
-`console-ui` is **Console UI Engineer**. The runner reads that profile from
+A dispatch can name an existing Directory agent profile (`profile`), such as
+`console-ui`. `console-ui` is **Console UI Engineer**. The runner reads that profile from
 the group's Directory and sends its id as `agent` to `e2e::run`. The profile,
 its parents, skills, functions, and model or provider must exist in that
 stack. The runner downloads the stack's versioned skill bundles into an
@@ -272,7 +254,7 @@ missing fails resolution. A profile model overrides the plan model;
 `provider::model` also selects its provider. Results record the resolved
 subject model and the profile configuration hash. **Run again** resolves the
 same profile id in its test stack. Comparisons stay manual in Release Control.
-Omitting `agent_profile` keeps the built-in agent.
+Omitting `profile` keeps the built-in agent.
 
 A project template belongs to the stack and is independent of the suite and
 the agent profile:
@@ -299,8 +281,8 @@ scaffold and container roles; the selected template's base and agent assets
 are applied separately. With no template, the run keeps the existing generated
 stack (or the required fixture).
 
-To measure a profile, compare the same plan, template commit, model, and stack
-with and without `agent_profile`. Changing the template as well measures the
+To measure a profile, compare the same suite, template commit, model, and stack
+with and without `profile`. Changing the template as well measures the
 combined effect. Non-Compose templates and templates that ask for an
 interactive language choice are rejected before boot.
 
@@ -313,9 +295,9 @@ cargo build --locked --bin harness-e2e
 ```
 
 When Console connects to the same iii namespace, the worker registers the page
-assets and the `e2e::dashboard::*` functions for read, plan, run, status, and
-cancellation. The page lives under `#/ext/harness-e2e` and exposes Overview,
-Tests, Executions, and Plans. See [dashboard/README.md](dashboard/README.md).
+assets and the `e2e::dashboard::*` functions for read, suites, run, status, and
+cancellation. The page lives under `#/ext/harness-e2e` and exposes Tests,
+Executions, and Suites. See [dashboard/README.md](dashboard/README.md).
 
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight.
@@ -339,8 +321,10 @@ release, date and conclusion. The worker calls the `gh` CLI, so sign it in once 
 **Import** answers at once with an execution in the `importing` state; the
 worker downloads the run's highest-attempt bundle into its data directory and
 installs every group's native run as an ordinary retained run. The execution
-records its parameters, the stack each group resolved and observed, and its
-GitHub origin. A group that left only `failure.json` is kept as a slot with
+records its parameters with its suite (name and snapshot digest), the stack its
+contract names, the workers each group resolved and observed, and its GitHub
+origin. Contracts from before the workflow stated its execution (plan and
+profile only) import too. A group that left only `failure.json` is kept as a slot with
 that error. Importing a run again replaces the runs of the earlier import; the
 execution keeps its name. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
@@ -410,16 +394,17 @@ observations, so lists and history do not load native reports.
 Storage has no version number and no migration step. Every table records the
 fingerprint of the statements that create it. At start, the worker recreates
 tables whose fingerprint moved, in one transaction. It keeps the execution
-records, local plans, and receipts it can still read, and rebuilds run
+records, local suites, and receipts it can still read, and rebuilds run
 projections from the native bundles. Rows it cannot read, missing bundles, and
 tables this binary no longer writes (such as the retired `history_*` import
-tables) are dropped and logged as warnings. Nothing is reconstructed as a
-scored result. A report or plan written under another results contract is read
-with a warning.
+tables and the `saved_plans` of the retired baseline/candidate plans) are
+dropped and logged as warnings. Nothing is reconstructed as a scored result. A
+report written under another results contract is read with a warning.
 
-Plan definitions and executions (planned here or imported from GitHub) live in
-`saved_plans` and `saved_plan_executions`. A saved plan or receipt this binary cannot read is
-deleted on the next read. Plans written by another binary are not migrated.
+The Console's suites live in `local_suites`, and executions (run here or
+imported from GitHub) in `saved_plan_executions`. A suite or execution this
+binary cannot read is deleted on the next read. An execution a retired plan ran
+stays, without a suite.
 
 Native bundles keep full reports, manifests, and transcripts, loaded on
 demand. The runner has no S3, GCS, R2, SQL-driver, or Harness dependency.

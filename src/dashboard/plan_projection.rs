@@ -29,50 +29,22 @@ impl PlanStore {
                 match self.read_execution(id).await {
                     Ok(execution) => values.push(execution),
                     Err(error) => {
-                        tracing::warn!(path = %path.display(), %error, "ignoring an unsupported or corrupt local E2E plan execution")
+                        tracing::warn!(path = %path.display(), %error, "ignoring an unsupported or corrupt local E2E execution")
                     }
                 }
             }
             values
         };
         for execution in executions {
-            let id = &execution.id;
-            let plan = match &execution.plan_id {
-                Some(plan_id) => match self.read_plan(plan_id).await {
-                    Ok(plan) => Some(plan),
-                    Err(error) => {
-                        tracing::warn!(execution_id = %id, %plan_id, error = %error,
-                            "ignoring a local E2E plan execution without a readable plan");
-                        continue;
-                    }
-                },
-                None => None,
-            };
-            let config = plan.as_ref().map(|plan| &plan.plan);
             let parameters = execution.parameters.as_ref();
-            let model = parameters
-                .map(|p| p.model.as_str())
-                .or(config.map(|c| c.model.as_str()))
-                .unwrap_or_default();
-            let provider = parameters
-                .map(|p| p.provider.as_str())
-                .or(config.map(|c| c.provider.as_str()))
-                .unwrap_or_default();
+            let model = parameters.map(|p| p.model.as_str()).unwrap_or_default();
+            let provider = parameters.map(|p| p.provider.as_str()).unwrap_or_default();
             // Without a name the Console titles it by model and date.
-            let label = execution
-                .label
-                .as_deref()
-                .or(config.map(|c| c.label.as_str()))
-                .unwrap_or_default();
-            let lane = plan
-                .as_ref()
-                .map(|plan| json!(plan.snapshot.profile.lane))
-                .or_else(|| {
-                    execution
-                        .slots
-                        .first()
-                        .map(|slot| slot.request["lane"].clone())
-                });
+            let label = execution.label.as_deref().unwrap_or_default();
+            let lane = execution
+                .slots
+                .first()
+                .map(|slot| slot.request["lane"].clone());
             let summary = execution_summary(&execution);
             // A slot without a native run (a group that failed before one
             // existed) has no child to hide; a previous attempt is hidden too.
@@ -100,7 +72,7 @@ impl PlanStore {
                 other => other,
             };
             let mut value = json!({"id": execution.id, "label": label, "run_id": execution.id,
-                "kind": "plan", "plan_id": execution.plan_id, "template_id": config.and_then(|c| c.template_id.as_deref()), "plan_execution": summary,
+                "plan_execution": summary,
                 "state": execution.state, "parameters": execution.parameters, "source": execution.source, "stack": execution.stack,
                 "attempt": 1, "workflow_name": null, "workflow_url": null,
                 "started_at": execution.started_at, "completed_at": execution.finished_at.as_deref().unwrap_or(""), "generated_at": execution.updated_at,
@@ -109,7 +81,7 @@ impl PlanStore {
                 "requested_runs": execution.slots.len(), "scenario_metrics": [], "execution": {"id": execution.id},
                 "totals": {"expected_reports": execution.slots.len(), "received_reports": summary["observed"], "missing_reports": execution.slots.len() as u64 - summary["observed"].as_u64().unwrap_or(0),
                     "report_coverage": summary["observed"].as_f64().map(|observed| observed / execution.slots.len().max(1) as f64), "passed_scenarios": summary["passed"], "total_tokens": null, "total_cost_usd": null},
-                "first_failure": execution.error.as_ref().map(|error| json!({"kind": "plan_execution", "message": error}))});
+                "first_failure": execution.error.as_ref().map(|error| json!({"kind": "execution", "message": error}))});
             project_measurements(&mut value, &execution, native_summaries);
             values.push(value);
         }
@@ -127,7 +99,7 @@ impl PlanStore {
         let mut summary = summaries
             .into_iter()
             .find(|value| value["id"] == id)
-            .context("Plan execution missing")?;
+            .context("Execution missing")?;
         let execution = self.read_execution(id).await?;
         let subject = summary["subjects"][0]["id"].clone();
         let mut reports = Vec::new();
@@ -313,5 +285,4 @@ fn project_measurements(value: &mut Value, execution: &PlanExecution, native_sum
     }
     value["subjects"][0]["scenarios"] = json!(scenarios);
     value["scenario_metrics"] = json!(metrics);
-    value["baseline_comparable"] = json!(execution.baseline_eligible);
 }

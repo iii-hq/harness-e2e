@@ -17,17 +17,15 @@ const BASES = {
 }
 
 // Detail routes are discovered from the lists so the script keeps working
-// as executions, tests and plans change.
+// as executions and tests change.
 const ROUTES = [
   { name: 'tests', route: 'tests' },
   { name: 'executions', route: 'executions' },
-  { name: 'plans', route: 'plans' },
-  { name: 'plan-new', route: 'plans/new' },
+  { name: 'suites', route: 'suites' },
   { name: 'compare', route: 'compare' },
   { name: 'versions', route: 'versions' },
   { name: 'execution', discover: 'execution/' },
   { name: 'test-history', discover: 'tests/' },
-  { name: 'plan-detail', discover: 'plans/' },
 ]
 
 const args = parseArgs(process.argv.slice(2))
@@ -48,10 +46,7 @@ try {
   const targets = ROUTES.flatMap((entry) => {
     if (only && !only.has(entry.name)) return []
     if (entry.route) return [{ name: entry.name, route: entry.route }]
-    const found = discovered.find(
-      (href) =>
-        href.startsWith(entry.discover) && !href.startsWith('plans/new'),
-    )
+    const found = discovered.find((href) => href.startsWith(entry.discover))
     return found ? [{ name: entry.name, route: found }] : []
   })
 
@@ -110,7 +105,7 @@ async function newPage(browser, theme, width) {
 
 async function discoverRoutes(browser) {
   const hrefs = new Set()
-  for (const route of ['executions', 'tests', 'plans']) {
+  for (const route of ['executions', 'tests']) {
     const { context, page } = await newPage(browser, 'light', 1440)
     try {
       await page.goto(`${base}${route}`, {

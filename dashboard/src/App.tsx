@@ -3,8 +3,7 @@ import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
 import { ExecutionComparePage } from '@/pages/ExecutionComparePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
-import { LocalPlanCreatePage, LocalPlanDetailPage } from '@/pages/LocalPlanPage'
-import { PlansPage } from '@/pages/PlansPage'
+import { SuitesPage } from '@/pages/SuitesPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
 import { TestsPage } from '@/pages/TestsPage'
@@ -31,19 +30,8 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
       return <TestsPage initialFrom={route.left} initialTo={route.right} />
     case 'test-history':
       return <TestHistoryPage key={route.testId} testId={route.testId} />
-    case 'plans':
-      return <PlansPage />
-    case 'plan-create':
-      return (
-        <LocalPlanCreatePage
-          key={route.editId ?? route.duplicateId ?? route.profileId ?? 'new'}
-          profileId={route.profileId}
-          duplicateId={route.duplicateId}
-          editId={route.editId}
-        />
-      )
-    case 'plan-detail':
-      return <LocalPlanDetailPage key={route.planId} planId={route.planId} />
+    case 'suites':
+      return <SuitesPage />
     case 'workspace':
       if (route.view === 'tests') return <TestsCatalogPage />
       return <ExecutionsPage />

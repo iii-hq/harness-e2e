@@ -8,14 +8,13 @@ import {
   FilterChipGroup,
   fieldDescribedBy,
   Input,
-  Textarea,
 } from '@/design-system'
 import '@/design-system/styles.css'
 
-export type ExecutionSetupMode = 'quick' | 'plan'
+/** `quick` runs tests with a model; `suite` edits what a suite tests. */
+export type ExecutionSetupMode = 'quick' | 'suite'
 
 export const QUICK_EXECUTION_INTENT_KEY = 'harness-e2e:quick-execution'
-export const PLAN_SCOPE_INTENT_KEY = 'harness-e2e:plan-scope'
 
 export function requestQuickExecution(scenarioIds: string[] = []) {
   window.sessionStorage.setItem(
@@ -40,58 +39,33 @@ export function consumeQuickExecutionRequest(): string[] | null {
   }
 }
 
-/** Audit RS-13: a selection made in the run-suite dialog travels to plans/new. */
-export function requestPlanFromSelection(scenarioIds: string[]) {
-  window.sessionStorage.setItem(
-    PLAN_SCOPE_INTENT_KEY,
-    JSON.stringify(scenarioIds),
-  )
-}
-
-export function consumePlanScopeRequest(): string[] {
-  const raw = window.sessionStorage.getItem(PLAN_SCOPE_INTENT_KEY)
-  if (!raw) return []
-  window.sessionStorage.removeItem(PLAN_SCOPE_INTENT_KEY)
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
-
 export type ExecutionModelGroup = {
   provider: string
   models: { label: string; value: string }[]
 }
 
-export type ExecutionSetupField = 'label' | 'subject' | 'scenarios' | 'url'
+export type ExecutionSetupField = 'label' | 'subject' | 'scenarios'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
 /** Audit PN-05: validation runs on submit and names each pending item. A
- *  quick run always targets this worker's stack, so it has no endpoint. */
+ *  run needs a model; a suite needs a name and holds no model. */
 export function validateExecutionSetup({
   mode,
   label,
-  subject,
+  subject = '',
   selectedScenarios,
-  url = '',
 }: {
   mode: ExecutionSetupMode
   label: string
-  subject: string
+  subject?: string
   selectedScenarios: string[]
-  url?: string
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
-  if (mode === 'plan' && label.trim() === '') errors.label = 'Add a plan label.'
-  if (!subject) errors.subject = 'Choose an execution model.'
+  if (mode === 'suite' && label.trim() === '') errors.label = 'Name the suite.'
+  if (mode === 'quick' && !subject)
+    errors.subject = 'Choose an execution model.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
-  if (mode === 'plan' && url.trim() === '')
-    errors.url = 'The Harness endpoint is missing.'
   return errors
 }
 
@@ -104,7 +78,6 @@ export function focusFirstInvalid(
     ['label', `${idPrefix}-label`],
     ['subject', `${idPrefix}-subject`],
     ['scenarios', `${idPrefix}-scenario-search`],
-    ['url', `${idPrefix}-url`],
   ]
   for (const [field, id] of order) {
     if (!errors[field]) continue
@@ -155,13 +128,11 @@ type ExecutionSetupProps = {
   idPrefix: string
   mode: ExecutionSetupMode
   label: string
-  purpose?: string
-  /** Plans only: a quick run always targets this worker's stack. */
-  url?: string
-  subject: string
+  /** Runs only: a suite holds no model. */
+  subject?: string
   /** Where the preselected model came from. */
   subjectHint?: string
-  modelGroups: ExecutionModelGroup[]
+  modelGroups?: ExecutionModelGroup[]
   availableScenarios: string[]
   selectedScenarios: string[]
   query: string
@@ -179,9 +150,7 @@ type ExecutionSetupProps = {
   stickyOffset?: 'page' | 'dialog'
   onRefreshCatalog?: () => void
   onLabelChange: (value: string) => void
-  onPurposeChange?: (value: string) => void
-  onUrlChange?: (value: string) => void
-  onSubjectChange: (value: string) => void
+  onSubjectChange?: (value: string) => void
   onSelectedScenariosChange: (value: string[]) => void
   onQueryChange: (value: string) => void
   onRunsChange: (value: string) => void
@@ -231,11 +200,9 @@ export function ExecutionSetup({
   idPrefix,
   mode,
   label,
-  purpose = '',
-  url = '',
-  subject,
+  subject = '',
   subjectHint,
-  modelGroups,
+  modelGroups = [],
   availableScenarios,
   selectedScenarios,
   query,
@@ -250,8 +217,6 @@ export function ExecutionSetup({
   stickyOffset = 'page',
   onRefreshCatalog,
   onLabelChange,
-  onPurposeChange,
-  onUrlChange,
   onSubjectChange,
   onSelectedScenariosChange,
   onQueryChange,
@@ -293,6 +258,52 @@ export function ExecutionSetup({
       selectedScenarios.filter((scenario) => !scenarios.includes(scenario)),
     )
   }
+
+  // Part of a suite; tucked under "Advanced" when running tests.
+  const sampling = (
+    <>
+      <Field
+        label="Runs per test"
+        htmlFor={`${idPrefix}-runs`}
+        hint="Each test runs this many times. More runs make comparisons more reliable. Max 20."
+      >
+        <Input
+          id={`${idPrefix}-runs`}
+          className="font-mono"
+          type="number"
+          min="1"
+          max="20"
+          inputMode="numeric"
+          value={runs}
+          onChange={(event) => onRunsChange(event.target.value)}
+          onBlur={(event) =>
+            onRunsChange(clampNumber(event.target.value, 1, 20))
+          }
+          disabled={disabled}
+        />
+      </Field>
+      <Field
+        label="Technical retries"
+        htmlFor={`${idPrefix}-retries`}
+        hint="Reruns a test after a crash. Does not add a sample. Max 3."
+      >
+        <Input
+          id={`${idPrefix}-retries`}
+          className="font-mono"
+          type="number"
+          min="0"
+          max="3"
+          inputMode="numeric"
+          value={technicalRetries}
+          onChange={(event) => onTechnicalRetriesChange(event.target.value)}
+          onBlur={(event) =>
+            onTechnicalRetriesChange(clampNumber(event.target.value, 0, 3))
+          }
+          disabled={disabled}
+        />
+      </Field>
+    </>
+  )
 
   const statusDot =
     catalogStatus.tone === 'ready'
@@ -345,27 +356,27 @@ export function ExecutionSetup({
 
       <SetupSection
         id={`${idPrefix}-details`}
-        title={mode === 'plan' ? 'Name the plan' : 'Name this run'}
+        title={mode === 'suite' ? 'Name the suite' : 'Name this run'}
         description={
-          mode === 'plan'
-            ? 'The label identifies this baseline and candidate workflow in the plans list.'
+          mode === 'suite'
+            ? 'The name the suite is listed and run by.'
             : 'An optional label makes the result easier to find later.'
         }
       >
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field
-            label={mode === 'plan' ? 'Plan label' : 'Execution label'}
+            label={mode === 'suite' ? 'Suite name' : 'Execution label'}
             htmlFor={`${idPrefix}-label`}
-            meta={mode === 'plan' ? 'required' : 'optional'}
+            meta={mode === 'suite' ? 'required' : 'optional'}
             error={errors.label}
           >
             <Input
               id={`${idPrefix}-label`}
               value={label}
-              maxLength={120}
+              maxLength={mode === 'suite' ? 160 : 80}
               placeholder={
-                mode === 'plan'
-                  ? 'Validate prompt routing change'
+                mode === 'suite'
+                  ? 'Regression without the slow tests'
                   : 'Before system prompt change'
               }
               aria-invalid={errors.label ? true : undefined}
@@ -376,165 +387,94 @@ export function ExecutionSetup({
               disabled={disabled}
             />
           </Field>
-          {mode === 'plan' && onPurposeChange ? (
-            <Field
-              label="Purpose"
-              htmlFor={`${idPrefix}-purpose`}
-              meta="optional"
-            >
-              <Textarea
-                id={`${idPrefix}-purpose`}
-                className="min-h-[4.5rem]"
-                value={purpose}
-                rows={2}
-                placeholder="Describe the behavior or change under test"
-                onChange={(event) => onPurposeChange(event.target.value)}
-                disabled={disabled}
-              />
-            </Field>
-          ) : null}
         </div>
       </SetupSection>
 
-      <SetupSection
-        id={`${idPrefix}-models`}
-        title="Choose the model"
-        description="The execution model is saved with the result."
-      >
-        {/* One field keeps the two-column rhythm of the label section, where
-            quick executions also leave the second cell empty. */}
-        <div className="grid items-start gap-4 sm:grid-cols-2">
-          <Field
-            label="Execution model"
-            htmlFor={`${idPrefix}-subject`}
-            meta="required"
-            hint={subjectHint}
-            error={errors.subject}
-          >
-            <ProviderModelDropdown
-              id={`${idPrefix}-subject`}
-              ariaLabel="Execution model"
-              required
-              value={subject}
-              onChange={onSubjectChange}
-              disabled={disabled || modelGroups.length === 0}
-              groups={modelGroups}
-              placeholder={
-                modelGroups.length === 0
-                  ? 'No models in the catalog'
-                  : 'Choose a model'
-              }
-            />
-          </Field>
-        </div>
-        {/* Audit PN-13 / PN-21: advanced controls with a real chevron; the
-            endpoint is read-only here and editable inside. */}
-        <details className="group min-w-0 rounded-[6px] bg-[var(--surface-fill)]">
-          <summary className="flex min-h-9 min-w-0 cursor-pointer list-none items-center gap-3 px-3 text-xs marker:hidden">
-            <ChevronDown
-              className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
-              aria-hidden="true"
-            />
-            <span className="font-semibold text-ink">
-              Advanced · sampling and retries
-            </span>
-            <span className="ml-auto hidden min-w-0 truncate font-mono text-label text-ink-muted @[560px]:block">
-              {runsPerScenario} per test · {retries} retr
-              {retries === 1 ? 'y' : 'ies'}
-              {mode === 'plan' ? ` · ${url || 'endpoint not loaded'}` : ''}
-            </span>
-          </summary>
-          <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-2">
+      {mode === 'suite' ? (
+        <SetupSection
+          id={`${idPrefix}-sampling`}
+          title="Runs and retries"
+          description="How many times each test runs, and how many times a crash is retried."
+        >
+          <div className="grid gap-4 sm:grid-cols-2">{sampling}</div>
+        </SetupSection>
+      ) : (
+        <SetupSection
+          id={`${idPrefix}-models`}
+          title="Choose the model"
+          description="The execution model is saved with the result."
+        >
+          {/* One field keeps the two-column rhythm of the label section, where
+              quick executions also leave the second cell empty. */}
+          <div className="grid items-start gap-4 sm:grid-cols-2">
             <Field
-              label="Runs per test"
-              htmlFor={`${idPrefix}-runs`}
-              hint="Each test runs this many times. More runs make comparisons more reliable. Max 20."
+              label="Execution model"
+              htmlFor={`${idPrefix}-subject`}
+              meta="required"
+              hint={subjectHint}
+              error={errors.subject}
             >
-              <Input
-                id={`${idPrefix}-runs`}
-                className="font-mono"
-                type="number"
-                min="1"
-                max="20"
-                inputMode="numeric"
-                value={runs}
-                onChange={(event) => onRunsChange(event.target.value)}
-                onBlur={(event) =>
-                  onRunsChange(clampNumber(event.target.value, 1, 20))
+              <ProviderModelDropdown
+                id={`${idPrefix}-subject`}
+                ariaLabel="Execution model"
+                required
+                value={subject}
+                onChange={(value) => onSubjectChange?.(value)}
+                disabled={disabled || modelGroups.length === 0}
+                groups={modelGroups}
+                placeholder={
+                  modelGroups.length === 0
+                    ? 'No models in the catalog'
+                    : 'Choose a model'
                 }
-                disabled={disabled}
               />
             </Field>
-            <Field
-              label="Technical retries"
-              htmlFor={`${idPrefix}-retries`}
-              hint="Reruns a test after a crash. Does not add a sample. Max 3."
-            >
-              <Input
-                id={`${idPrefix}-retries`}
-                className="font-mono"
-                type="number"
-                min="0"
-                max="3"
-                inputMode="numeric"
-                value={technicalRetries}
-                onChange={(event) =>
-                  onTechnicalRetriesChange(event.target.value)
-                }
-                onBlur={(event) =>
-                  onTechnicalRetriesChange(
-                    clampNumber(event.target.value, 0, 3),
-                  )
-                }
-                disabled={disabled}
-              />
-            </Field>
-            {onAgentChange ? (
-              <Field
-                label="Agent profile"
-                htmlFor={`${idPrefix}-agent`}
-                className="sm:col-span-2"
-                hint="Leave blank for the Harness default profile."
-              >
-                <Input
-                  id={`${idPrefix}-agent`}
-                  className="font-mono"
-                  value={agent}
-                  placeholder="default"
-                  onChange={(event) => onAgentChange(event.target.value)}
-                  disabled={disabled}
-                />
-              </Field>
-            ) : null}
-            {mode === 'plan' ? (
-              <Field
-                label="Harness endpoint"
-                htmlFor={`${idPrefix}-url`}
-                className="sm:col-span-3"
-                hint="Refresh the catalog after changing it."
-                error={errors.url}
-              >
-                <Input
-                  id={`${idPrefix}-url`}
-                  className="font-mono text-xs"
-                  value={url}
-                  placeholder="ws://127.0.0.1:49134"
-                  aria-invalid={errors.url ? true : undefined}
-                  onChange={(event) => onUrlChange?.(event.target.value)}
-                  disabled={disabled}
-                />
-              </Field>
-            ) : null}
           </div>
-        </details>
-      </SetupSection>
+          {/* Audit PN-13 / PN-21: advanced controls with a real chevron. */}
+          <details className="group min-w-0 rounded-[6px] bg-[var(--surface-fill)]">
+            <summary className="flex min-h-9 min-w-0 cursor-pointer list-none items-center gap-3 px-3 text-xs marker:hidden">
+              <ChevronDown
+                className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
+                aria-hidden="true"
+              />
+              <span className="font-semibold text-ink">
+                Advanced · sampling and retries
+              </span>
+              <span className="ml-auto hidden min-w-0 truncate font-mono text-label text-ink-muted @[560px]:block">
+                {runsPerScenario} per test · {retries} retr
+                {retries === 1 ? 'y' : 'ies'}
+              </span>
+            </summary>
+            <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-2">
+              {sampling}
+              {onAgentChange ? (
+                <Field
+                  label="Agent profile"
+                  htmlFor={`${idPrefix}-agent`}
+                  className="sm:col-span-2"
+                  hint="Leave blank for the Harness default profile."
+                >
+                  <Input
+                    id={`${idPrefix}-agent`}
+                    className="font-mono"
+                    value={agent}
+                    placeholder="default"
+                    onChange={(event) => onAgentChange(event.target.value)}
+                    disabled={disabled}
+                  />
+                </Field>
+              ) : null}
+            </div>
+          </details>
+        </SetupSection>
+      )}
 
       <SetupSection
         id={`${idPrefix}-scope`}
         title="Pick the tests"
         description={
-          mode === 'plan'
-            ? 'Choose the smallest useful set. The scope freezes when the baseline starts.'
+          mode === 'suite'
+            ? 'The tests the suite runs.'
             : 'Only the tests selected here run.'
         }
       >
@@ -791,9 +731,8 @@ export type ExecutionSetupSummaryInput = {
   selectedScenarios: number
   runsPerScenario: number
   technicalRetries: number
-  subject: string
-  /** Plans only. */
-  url?: string
+  /** Runs only. */
+  subject?: string
 }
 
 /** Audit RS-07 / PN-20: the review is one sentence, not four tiles. */
@@ -802,19 +741,17 @@ export function executionSetupSummary({
   selectedScenarios,
   runsPerScenario,
   technicalRetries,
-  subject,
-  url,
+  subject = '',
 }: ExecutionSetupSummaryInput) {
   const runs = selectedScenarios * runsPerScenario
   const headline = [
     `${selectedScenarios} test${selectedScenarios === 1 ? '' : 's'}`,
     `${runs} run${runs === 1 ? '' : 's'}`,
-    subject || 'no model',
+    ...(mode === 'quick' ? [subject || 'no model'] : []),
   ].join(' · ')
   const detail = [
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,
     `${technicalRetries} retr${technicalRetries === 1 ? 'y' : 'ies'}`,
-    ...(mode === 'plan' ? [url || 'endpoint not loaded'] : []),
   ].join(' · ')
   return { headline, detail }
 }
@@ -862,7 +799,7 @@ export function ExecutionSetupFooter({
           {error
             ? error
             : pending.length > 0
-              ? `Before ${summary.mode === 'plan' ? 'creating' : 'running'}: ${pending.join(' ')}`
+              ? `Before ${summary.mode === 'suite' ? 'saving' : 'running'}: ${pending.join(' ')}`
               : (status ?? '')}
         </p>
       </div>

@@ -158,8 +158,6 @@ function localExecution(phase) {
         : [],
     plan_execution: {
       id: localId,
-      plan_id: null,
-      role: null,
       label: 'nightly smoke',
       parameters,
       source,
@@ -169,7 +167,6 @@ function localExecution(phase) {
       started_at: '2026-09-23T10:00:00Z',
       finished_at: null,
       error: null,
-      baseline_eligible: false,
       measurements: null,
       rerun:
         phase === 'running'
@@ -213,19 +210,6 @@ const imported = {
   },
 }
 
-// A saved plan's execution runs again whole, never one scenario.
-const plannedId = 'plan-cccccccccccccccccccccccccccccccc'
-const planned = {
-  ...localExecution('before'),
-  id: plannedId,
-  plan_id: 'plan-saved',
-  plan_execution: {
-    ...localExecution('before').plan_execution,
-    id: plannedId,
-    plan_id: 'plan-saved',
-  },
-}
-
 let phase = 'before'
 let busy = true
 const reruns = []
@@ -234,15 +218,13 @@ const detailOf = (id) =>
     ? localExecution(phase)
     : id === importedId
       ? imported
-      : id === plannedId
-        ? planned
-        : {
-            id: nightly,
-            label: 'Nightly',
-            status: 'running',
-            subjects: [],
-            reports: [],
-          }
+      : {
+          id: nightly,
+          label: 'Nightly',
+          status: 'running',
+          subjects: [],
+          reports: [],
+        }
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
@@ -378,11 +360,6 @@ try {
   )
   await page.getByText('previous attempts · not counted').waitFor()
 
-  // A saved plan's execution offers no rerun of one scenario.
-  await page.goto(`${server.url}#/ext/harness-e2e/execution/${plannedId}`)
-  await page.locator('[aria-label="Minimal Path scenario result"]').waitFor()
-  assert.equal(await page.locator('[data-rerun-scenario]').count(), 0)
-
   // An imported execution runs again on GitHub, never here.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${importedId}`)
   await page
@@ -408,7 +385,7 @@ try {
   assert.equal(reruns.length, 1)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, none on a saved plan, imported execution sent to GitHub.',
+    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, imported execution sent to GitHub.',
   )
 } finally {
   await browser.close()

@@ -17,7 +17,6 @@ import {
   Select,
 } from '@/design-system'
 import {
-  hashForNewPlan,
   hashForTestHistory,
   hashForVersionComparison,
   replaceRouteParams,
@@ -303,26 +302,15 @@ export function groupCatalogRows(rows: TestCatalogRow[]) {
   })).filter((group) => group.rows.length > 0)
 }
 
-export function TestsCatalogActions({ local }: { local: boolean }) {
+export function TestsCatalogActions() {
   return (
-    <>
-      {local ? (
-        <a
-          className={dashboardHeaderActionClassName({ primary: true })}
-          href={hashForNewPlan()}
-          aria-label="New local plan"
-        >
-          new plan
-        </a>
-      ) : null}
-      <a
-        className={dashboardHeaderActionClassName()}
-        href={hashForVersionComparison()}
-        aria-label="Compare system versions"
-      >
-        compare versions
-      </a>
-    </>
+    <a
+      className={dashboardHeaderActionClassName()}
+      href={hashForVersionComparison()}
+      aria-label="Compare system versions"
+    >
+      compare versions
+    </a>
   )
 }
 
@@ -729,7 +717,7 @@ export function TestsCatalogPage() {
       <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
-        actions={<TestsCatalogActions local={local} />}
+        actions={<TestsCatalogActions />}
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader

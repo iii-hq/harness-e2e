@@ -375,18 +375,16 @@ impl MasterPlan {
     }
 
     pub fn catalog(&self) -> Result<Value> {
-        let mut profiles = Vec::new();
-        for profile in &self.suites {
-            let snapshot = self.materialize(&profile.id)?;
-            profiles.push(json!({"id": profile.id, "label": profile.label, "purpose": profile.purpose, "metrics": profile.metrics,
-                "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
-                "technical_retries": profile.technical_retries, "budget": snapshot.budget,
-                "profile_sha256": snapshot.profile_sha256,
+        let mut suites = Vec::new();
+        for suite in &self.suites {
+            let snapshot = self.materialize(&suite.id)?;
+            suites.push(json!({"id": suite.id, "label": suite.label, "purpose": suite.purpose, "metrics": suite.metrics,
+                "scenario_ids": snapshot.scenario_ids, "repetitions": suite.repetitions,
+                "technical_retries": suite.technical_retries, "budget": snapshot.budget,
+                "sha256": snapshot.profile_sha256,
                 "cases": snapshot.cases}));
         }
-        Ok(
-            json!({"plan_id": self.plan_id, "definition_sha256": self.digest()?, "profiles": profiles}),
-        )
+        Ok(json!({"plan_id": self.plan_id, "definition_sha256": self.digest()?, "suites": suites}))
     }
 
     pub fn campaign_catalog(&self) -> Result<Value> {

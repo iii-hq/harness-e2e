@@ -6,6 +6,7 @@ import { buildExecutionPresentation } from '@/lib/execution-view'
 import {
   EvidenceBundleUnavailable,
   executionOutcome,
+  executionSuite,
   provenanceEntries,
   rerunParameters,
   stackVersions,
@@ -239,5 +240,42 @@ describe('versions in the header', () => {
       ['runner', 'path @abcdef012345'],
     ])
     expect(stackVersions(detail)).toEqual([])
+  })
+
+  it('names the suite with its digest, and the stack an imported contract names', () => {
+    const imported = {
+      ...detail,
+      plan_execution: {
+        parameters: {
+          suite: {
+            id: 'regression',
+            label: 'Regression',
+            sha256: 'sha256:0123456789abcdef0123',
+          },
+        },
+        source: {
+          kind: 'github',
+          run_id: 42,
+          url: 'https://github.com/o/r/actions/runs/42',
+          stack: 'default',
+        },
+        stack: [],
+      },
+    } as unknown as DashboardExecutionDetail
+    expect(executionSuite(imported)).toBe('Regression · 0123456789ab')
+    expect(stackVersions(imported)).toEqual([['stack', 'default']])
+    // Ticked by hand, and from before suites.
+    const unnamed = {
+      ...detail,
+      parameters: { suite: { label: '', sha256: 'sha256:fedcba9876543210' } },
+    } as unknown as DashboardExecutionDetail
+    expect(executionSuite(unnamed)).toBe('unnamed suite · fedcba987654')
+    expect(executionSuite(detail)).toBe('not recorded')
+    // An older import knew only the suite's id: named, digest unknown.
+    const byId = {
+      ...detail,
+      parameters: { suite: { id: 'pr', label: 'pr', sha256: '' } },
+    } as unknown as DashboardExecutionDetail
+    expect(executionSuite(byId)).toBe('pr')
   })
 })

@@ -1,65 +1,10 @@
 import type { ReactNode } from 'react'
 import { Callout, Panel } from '@/design-system'
-import { hashForExecution, hashForPlan } from '@/hooks/use-hash-route'
 import { formatDate, formatDuration } from '@/lib/execution-view'
-import {
-  type PlanExecution,
-  type PlanRequirements,
-  running,
-} from '@/lib/plan-execution'
+import { type PlanExecution, running } from '@/lib/plan-execution'
 
-export function Requirements({ value }: { value: PlanRequirements }) {
-  const active = value.active_execution
-  return (
-    <Panel aria-label="Execution requirements">
-      <h2 className="mt-0 text-sm font-semibold text-ink">
-        Execution requirements
-      </h2>
-      {active ? (
-        <Callout tone="warning" title="Another execution is active">
-          Your saved draft is preserved.{' '}
-          <a
-            className="underline"
-            href={
-              active.plan_id
-                ? hashForPlan(active.plan_id)
-                : hashForExecution(active.id)
-            }
-          >
-            Follow active execution
-          </a>
-        </Callout>
-      ) : null}
-      <ul className="m-0 grid gap-2 pl-5 text-xs leading-5 text-ink-soft">
-        {value.checks.map((check) => (
-          <li key={check.id}>
-            <strong
-              className={
-                check.status === 'blocked' ? 'text-danger' : 'text-ink'
-              }
-            >
-              {check.status === 'pending'
-                ? 'Pending'
-                : check.status === 'blocked'
-                  ? 'Blocked'
-                  : 'Ready'}
-            </strong>{' '}
-            · {check.message}
-          </li>
-        ))}
-      </ul>
-    </Panel>
-  )
-}
-
-/** A plan's execution names its role; any other is just an execution. */
-export function executionHeading(execution: Pick<PlanExecution, 'role'>) {
-  if (execution.role === 'baseline') return 'Baseline execution'
-  if (execution.role === 'candidate') return 'Candidate execution'
-  return 'Execution'
-}
-
-export function PlanProgress({
+/** A running execution: how many of its slots finished, and which runs now. */
+export function ExecutionProgress({
   execution,
   actions,
 }: {
@@ -78,7 +23,7 @@ export function PlanProgress({
     <Panel aria-label="Execution progress">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="my-0 text-sm font-semibold text-ink">
-          {executionHeading(execution)} · {execution.state}
+          Execution · {execution.state}
         </h2>
         <span className="text-xs text-ink-soft">
           {finished} / {planned} slots finished

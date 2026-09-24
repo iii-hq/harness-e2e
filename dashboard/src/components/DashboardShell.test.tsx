@@ -28,8 +28,7 @@ function renderShell({ narrow = false } = {}) {
 
 describe('section navigation', () => {
   it('maps every route to a section', () => {
-    expect(sectionForRoute({ page: 'plans' })).toBe('plans')
-    expect(sectionForRoute({ page: 'plan-create' })).toBe('plans')
+    expect(sectionForRoute({ page: 'suites' })).toBe('suites')
     expect(
       sectionForRoute({
         page: 'execution',
@@ -80,7 +79,7 @@ describe('section navigation', () => {
 
   it('keeps every section reachable from the narrow select', () => {
     const html = renderShell({ narrow: true })
-    for (const label of ['Tests', 'Executions', 'Plans']) {
+    for (const label of ['Tests', 'Executions', 'Suites']) {
       expect(html).toContain(`>${label}<`)
     }
   })
@@ -92,7 +91,7 @@ describe('section navigation', () => {
 })
 
 describe('page actions in the section bar', () => {
-  const actions = <button type="button">new plan</button>
+  const actions = <button type="button">run tests</button>
 
   // Audit S-05 / S-07: a section's primary action lives in the page, next to
   // the section links, not in the console header.
@@ -103,7 +102,7 @@ describe('page actions in the section bar', () => {
     expect(html).toContain('harness-e2e-page-actions')
     expect(html).toContain('<section class="harness-e2e-page-actions')
     expect(html).toContain('aria-label="Overview actions"')
-    expect(html).toContain('>new plan<')
+    expect(html).toContain('>run tests<')
   })
 
   it('renders nothing when a page has no actions', () => {

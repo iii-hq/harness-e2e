@@ -7,9 +7,6 @@ run-name: ${{ inputs.execution_id && format('E2E · {0}', inputs.execution_id) |
 # Everything else is resolved here, once, from the dispatched ref: the suite's
 # groups, the iii release `latest` means today, and the stack Compose assembles
 # and locks, which every group then starts frozen.
-#
-# Release Control's older inputs (plan, stack policy, runner_sha, cli_version)
-# still work: preparation translates them into the ones above first.
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +15,7 @@ on:
         required: false
         type: string
       stack:
-        description: Stack name in stacks/ or stack YAML (default); older dispatches send a stack policy JSON
+        description: Stack name in stacks/ or stack YAML (default)
         required: false
         type: string
       model:
@@ -31,18 +28,6 @@ on:
         type: string
       execution_id:
         description: Release Control execution UUID; without one the run only produces artifacts
-        required: false
-        type: string
-      plan:
-        description: Older Release Control dispatch — the test plan JSON
-        required: false
-        type: string
-      runner_sha:
-        description: Older Release Control dispatch — executor commit it resolved
-        required: false
-        type: string
-      cli_version:
-        description: Older Release Control dispatch — iii CLI release
         required: false
         type: string
 
@@ -84,14 +69,12 @@ jobs:
         env:
           RELEASE_CONTROL_BOT_LOGIN: ${{ vars.RELEASE_CONTROL_BOT_LOGIN }}
           EXECUTION_ID: ${{ inputs.execution_id }}
-          RUNNER_SHA: ${{ inputs.runner_sha }}
         run: |
           set -euo pipefail
           test -n "$RELEASE_CONTROL_BOT_LOGIN"
           test "$GITHUB_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"
           test "$GITHUB_TRIGGERING_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"
           [[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]
-          [[ -z "$RUNNER_SHA" || "$RUNNER_SHA" =~ ^[0-9a-f]{40}$ ]]
 
       - name: Install stack tooling
         run: python3 -m pip install --quiet pyyaml
@@ -103,9 +86,6 @@ jobs:
           DISPATCH_MODEL: ${{ inputs.model }}
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
-          DISPATCH_PLAN: ${{ inputs.plan }}
-          DISPATCH_RUNNER_SHA: ${{ inputs.runner_sha }}
-          DISPATCH_CLI_VERSION: ${{ inputs.cli_version }}
         run: python3 scripts/prepare_execution.py dispatch --contract-dir target/harness-e2e-contract
 
       - name: Resolve the iii release and the template
@@ -116,8 +96,7 @@ jobs:
       # The suite is materialized by the runner the stack runs, never by a
       # build of this checkout: its master plan and scenario catalog are the
       # ones every group executes. Its exact release is pinned in the stack.
-      # The reports name it by the commit Release Control resolved for an
-      # older dispatch, else by the revision the runner reports.
+      # The reports name it by the revision the runner reports.
       - name: Fetch the stack's runner
         id: stack_runner
         run: |

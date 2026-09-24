@@ -30,10 +30,7 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
-import {
-  requestPlanFromSelection,
-  requestQuickExecution,
-} from '@/components/ExecutionSetup'
+import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
@@ -55,7 +52,6 @@ import {
 } from '@/design-system'
 import {
   hashForExecution,
-  hashForNewPlan,
   hashForTestHistory,
   hashForTests,
   hashForVersionComparison,
@@ -1183,30 +1179,18 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           <EmptyState
             className="mt-6"
             title="no retained executions yet"
-            description="This test has never run on this dashboard. Run it once to start the metric history, or add it to a plan to capture a baseline you can compare against later."
+            description="This test has never run on this dashboard. Run it once to start the metric history."
             actions={
-              <>
-                <a
-                  className={buttonClassName({
-                    variant: 'primary',
-                    className: 'no-underline',
-                  })}
-                  href={hashForWorkspace()}
-                  onClick={() => requestQuickExecution([testId])}
-                >
-                  run this test
-                </a>
-                <a
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    className: 'no-underline',
-                  })}
-                  href={hashForNewPlan()}
-                  onClick={() => requestPlanFromSelection([testId])}
-                >
-                  add to a new plan
-                </a>
-              </>
+              <a
+                className={buttonClassName({
+                  variant: 'primary',
+                  className: 'no-underline',
+                })}
+                href={hashForWorkspace()}
+                onClick={() => requestQuickExecution([testId])}
+              >
+                run this test
+              </a>
             }
           />
         ) : null}

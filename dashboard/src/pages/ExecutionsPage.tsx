@@ -24,7 +24,6 @@ import {
 import {
   hashForComparison,
   hashForExecution,
-  hashForNewPlan,
   replaceRouteParams,
   routeParams,
 } from '@/hooks/use-hash-route'
@@ -653,12 +652,6 @@ export function ExecutionsPage() {
               >
                 Import from GitHub
               </button>
-              <a
-                className={dashboardHeaderActionClassName()}
-                href={hashForNewPlan()}
-              >
-                New plan
-              </a>
               <button
                 className={dashboardHeaderActionClassName({ primary: true })}
                 type="button"
@@ -719,7 +712,7 @@ export function ExecutionsPage() {
                 style={{ paddingInline: '2.25rem' }}
                 type="text"
                 value={filters.query}
-                placeholder="Search label, model, plan, id or date…"
+                placeholder="Search label, model, id or date…"
                 aria-label="Search executions"
                 onChange={(event) => setFilter('query', event.target.value)}
               />
@@ -854,7 +847,7 @@ export function ExecutionsPage() {
             }
             description={
               rows.length === 0
-                ? 'Run tests here, import a run from GitHub, or create a plan to start retaining execution evidence.'
+                ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
                 : 'Widen the result or trigger filter, or clear the search.'
             }
             actions={
@@ -885,15 +878,6 @@ export function ExecutionsPage() {
                   >
                     import from GitHub
                   </button>
-                  <a
-                    className={buttonClassName({
-                      variant: 'quiet',
-                      className: 'no-underline',
-                    })}
-                    href={hashForNewPlan()}
-                  >
-                    new plan
-                  </a>
                 </>
               ) : null
             }

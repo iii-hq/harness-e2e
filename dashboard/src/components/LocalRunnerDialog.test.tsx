@@ -1,17 +1,27 @@
 import { describe, expect, it } from 'vitest'
 import {
+  choiceValue,
   executionStartRequest,
   lastUsedModel,
+  namedSuite,
+  pickedSuite,
   runnerForm,
   runningExecutionId,
+  suiteChoices,
   withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
 import type {
   DashboardExecutionSummary,
   ExecutionParameters,
+  Suite,
 } from '@/lib/dashboard-data-source'
 
 const imported: ExecutionParameters = {
+  suite: {
+    id: 'software-engineering',
+    label: 'Software engineering',
+    sha256: 'sha256:recorded',
+  },
   scenarios: ['minimal_path', 'context_pressure', 'kanban_c1_foundation'],
   runs: 3,
   technical_retries: 0,
@@ -21,20 +31,26 @@ const imported: ExecutionParameters = {
 }
 
 describe('run form', () => {
-  it('runs an execution again from its own parameters', () => {
+  it('runs an execution again from its own parameters and suite', () => {
     const form = runnerForm(imported)
     expect(form).toMatchObject({
       label: '',
       subject: 'openai-codex\ngpt-5.6-terra',
+      suite: 'recorded:software-engineering',
       scenarios: imported.scenarios,
       runs: '3',
       technicalRetries: '0',
       agent: 'tech-lead',
     })
-    // Unchanged, the form starts the same parameters again.
-    expect(executionStartRequest(form)).toEqual({
+    // Unchanged, the form starts the same parameters again, under the same
+    // suite; the runner records its digest.
+    const suite = namedSuite(form, suiteChoices([], imported))
+    expect(executionStartRequest(form, suite)).toEqual({
       label: '',
-      parameters: imported,
+      parameters: {
+        ...imported,
+        suite: { id: 'software-engineering', label: 'Software engineering' },
+      },
     })
   })
 
@@ -46,8 +62,14 @@ describe('run form', () => {
   it('opens with only a chosen subset of the scenarios marked', () => {
     const form = runnerForm(imported, ['context_pressure'])
     expect(form.scenarios).toEqual(['context_pressure'])
-    expect(executionStartRequest(form).parameters).toEqual({
+    // Ticked by hand: an unnamed suite.
+    expect(form.suite).toBe('')
+    expect(
+      executionStartRequest(form, namedSuite(form, suiteChoices([], imported)))
+        .parameters,
+    ).toEqual({
       ...imported,
+      suite: null,
       scenarios: ['context_pressure'],
     })
   })
@@ -62,6 +84,7 @@ describe('run form', () => {
     expect(executionStartRequest(form)).toEqual({
       label: 'Before the prompt change',
       parameters: {
+        suite: null,
         scenarios: ['minimal_path'],
         runs: 1,
         technical_retries: 1,
@@ -70,6 +93,91 @@ describe('run form', () => {
         agent: null,
       },
     })
+  })
+})
+
+describe('suite field', () => {
+  const regression: Suite = {
+    id: 'regression',
+    label: 'Regression',
+    source: 'repository',
+    purpose: '',
+    scenarios: ['minimal_path', 'context_pressure'],
+    repetitions: 1,
+    technical_retries: 1,
+    sha256: 'sha256:regression',
+    updated_at: null,
+  }
+
+  it('keeps a picked suite named only while the form holds what it does', () => {
+    const form = {
+      ...runnerForm(null),
+      suite: 'regression',
+      scenarios: ['context_pressure', 'minimal_path'],
+      runs: '1',
+      technicalRetries: '1',
+    }
+    expect(namedSuite(form, [regression])?.id).toBe('regression')
+    for (const changed of [
+      { ...form, scenarios: ['minimal_path'] },
+      { ...form, runs: '2' },
+      { ...form, technicalRetries: '0' },
+      { ...form, suite: '' },
+    ])
+      expect(namedSuite(changed, [regression])).toBeNull()
+  })
+
+  it('offers the suite an execution ran when this runner does not list it', () => {
+    expect(suiteChoices([regression], imported)).toEqual([
+      regression,
+      {
+        id: 'software-engineering',
+        label: 'Software engineering',
+        scenarios: imported.scenarios,
+        repetitions: 3,
+        technical_retries: 0,
+        recorded: true,
+      },
+    ])
+    // An unnamed one adds nothing.
+    expect(suiteChoices([regression], { ...imported, suite: null })).toEqual([
+      regression,
+    ])
+  })
+
+  it('runs again under the suite it ran, holding the same or not', () => {
+    // Listed holding the same: the listed suite is the one picked.
+    const same: ExecutionParameters = {
+      ...imported,
+      suite: { id: 'regression', label: 'Regression', sha256: 'sha256:a' },
+      scenarios: ['context_pressure', 'minimal_path'],
+      runs: 1,
+      technical_retries: 1,
+    }
+    const choices = suiteChoices([regression], same)
+    expect(choices).toEqual([regression])
+    const form = runnerForm(same)
+    expect(pickedSuite(form.suite, choices)).toBe(regression)
+    expect(choiceValue(regression)).toBe('regression')
+    expect(namedSuite(form, choices)).toBe(regression)
+
+    // Edited since, or read otherwise by this runner (an import whose
+    // retries differ): the suite as it ran is picked, under its name.
+    const edited: ExecutionParameters = { ...same, technical_retries: 0 }
+    const offered = suiteChoices([regression], edited)
+    expect(offered).toHaveLength(2)
+    const again = runnerForm(edited)
+    const suite = namedSuite(again, offered)
+    expect(suite?.recorded).toBe(true)
+    expect(choiceValue(suite as NonNullable<typeof suite>)).toBe(
+      'recorded:regression',
+    )
+    expect(executionStartRequest(again, suite).parameters).toMatchObject({
+      suite: { id: 'regression', label: 'Regression' },
+      technical_retries: 0,
+    })
+    // Picking the listed suite fills what it holds now.
+    expect(pickedSuite('regression', offered)).toBe(regression)
   })
 })
 

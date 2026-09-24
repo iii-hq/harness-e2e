@@ -17,14 +17,7 @@ export type DashboardRoute =
   /** Two evaluated system versions of the test catalog. */
   | { page: 'versions'; left: string | null; right: string | null }
   | { page: 'test-history'; testId: string }
-  | { page: 'plans' }
-  | {
-      page: 'plan-create'
-      profileId?: string
-      duplicateId?: string
-      editId?: string
-    }
-  | { page: 'plan-detail'; planId: string }
+  | { page: 'suites' }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
 const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
@@ -122,19 +115,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
       right: rest[1] ?? null,
     }
   }
-  if (head === 'plans') {
-    if (!rest[0]) return { page: 'plans' }
-    if (rest[0] === 'new') {
-      if (rest[1] === 'profile' && rest[2])
-        return { page: 'plan-create', profileId: rest[2] }
-      if (rest[1] === 'duplicate' && rest[2])
-        return { page: 'plan-create', duplicateId: rest[2] }
-      if (rest[1] === 'edit' && rest[2])
-        return { page: 'plan-create', editId: rest[2] }
-      return rest[1] ? null : { page: 'plan-create' }
-    }
-    return { page: 'plan-detail', planId: rest[0] }
-  }
+  if (head === 'suites' && !rest[0]) return { page: 'suites' }
   return null
 }
 
@@ -190,16 +171,8 @@ export function hashForTestHistory(testId: string): string {
   return dashboardHash(`tests/${encodeSegment(testId)}`)
 }
 
-export function hashForNewPlan(): string {
-  return dashboardHash('plans/new')
-}
-
-export function hashForPlans(): string {
-  return dashboardHash('plans')
-}
-
-export function hashForPlan(planId: string): string {
-  return dashboardHash(`plans/${encodeSegment(planId)}`)
+export function hashForSuites(): string {
+  return dashboardHash('suites')
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {
@@ -208,8 +181,6 @@ export function routeRenderIdentity(route: DashboardRoute): string {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
   }
   if (route.page === 'test-history') return `${route.page}:${route.testId}`
-  if (route.page === 'plan-detail') return `${route.page}:${route.planId}`
-  if (route.page === 'plan-create') return route.page
   if (route.page === 'workspace') return `workspace:${route.view}`
   return route.page
 }

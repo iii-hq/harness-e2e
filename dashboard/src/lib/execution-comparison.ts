@@ -9,14 +9,15 @@ import {
   buildExecutionPresentation,
   executionTitle,
   providerModel,
+  suiteText,
 } from '@/lib/execution-view'
 import {
   comparisonMetric,
-  formatPlanMetricDelta,
-  formatPlanMetricValue,
+  formatMetricDelta,
+  formatMetricValue,
+  type MetricComparison,
   type MetricFormat,
-  type PlanMetricComparison,
-} from '@/lib/plan-comparison'
+} from '@/lib/metric-comparison'
 import { scenarioReruns } from '@/lib/plan-execution'
 import { primaryRunValues } from '@/lib/primary-metrics'
 
@@ -93,7 +94,7 @@ export type ComparisonChoice = {
 }
 
 /** A figure, and whether a side's value is short of runs (then no difference is given). */
-export type ComparedMetric = PlanMetricComparison & {
+export type ComparedMetric = MetricComparison & {
   partial: { baseline: boolean; candidate: boolean }
   /** For figures over every run: how many of those runs are out of the totals. */
   outside?: { baseline: number; candidate: number }
@@ -668,11 +669,13 @@ function stackOf(detail: DashboardExecutionDetail): StackWorker[] {
 }
 
 /** What running the execution again would take: parameters when recorded,
- *  else what the report says. A profile is known only from parameters. */
+ *  else what the report says. A suite and a profile are known only from
+ *  parameters. */
 function parametersOf(detail: DashboardExecutionDetail) {
   const recorded = detail.parameters ?? detail.plan_execution?.parameters
   const subject = detail.subjects[0]
   return {
+    suite: suiteText(recorded?.suite),
     scenarios:
       recorded?.scenarios ??
       distinct(detail.reports.map((record) => record.scenario_id)),
@@ -729,6 +732,9 @@ function parameterChanges(
   const a = parametersOf(left)
   const b = parametersOf(right)
   const changes: ComparisonChange[] = []
+  // A suite not recorded is unknown, not a difference.
+  if (a.suite !== null && b.suite !== null && a.suite !== b.suite)
+    changes.push({ field: 'suite', a: a.suite, b: b.suite })
   const onlyA = a.scenarios.filter((id) => !b.scenarios.includes(id))
   const onlyB = b.scenarios.filter((id) => !a.scenarios.includes(id))
   if (onlyA.length > 0 || onlyB.length > 0) {
@@ -1127,7 +1133,7 @@ export function comparedValue(
   unavailable = '—',
 ) {
   if (metric[side] === null) return unavailable
-  const value = formatPlanMetricValue(metric, side)
+  const value = formatMetricValue(metric, side)
   const outside = metric.outside?.[side] ?? 0
   return metric.partial[side]
     ? `${value} (partial)`
@@ -1138,7 +1144,7 @@ export function comparedValue(
 
 function markdownDelta(metric: ComparedMetric) {
   if (metric.delta === null) return '—'
-  const [absolute, relative] = formatPlanMetricDelta(metric).split(' · ')
+  const [absolute, relative] = formatMetricDelta(metric).split(' · ')
   return relative ? `${absolute} (${relative})` : absolute
 }
 
