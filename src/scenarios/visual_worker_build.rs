@@ -7,7 +7,6 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use base64::Engine as _;
 use iii_sdk::protocol::TriggerRequest;
 use iii_sdk::IIIClient;
 use serde_json::{json, Value};
@@ -17,6 +16,7 @@ use crate::context::E2eContext;
 use crate::report::{CompletionState, EvaluationDimension};
 
 use super::assessment::{self, AssessmentSpec};
+use super::common;
 use super::{
     async_trait, ArtifactExpectation, Capability, CapturedDeliverable, CapturedDeliverableContent,
     CapturedInvariant, DeliverableContract, ExecutionPolicy, InvariantSpec, ObjectiveEvaluation,
@@ -28,8 +28,7 @@ pub const STATE_MACHINE_ID: &str = "state_machine_canvas_build";
 pub const FORM_FLOW_SUMMARY: &str = "Build a visual SWE issue-form Worker with deterministic bug and feature fields, live editing and preview, and a flowchart projection stored through Canvas.";
 pub const STATE_MACHINE_SUMMARY: &str = "Build a visual CI state-machine Worker with deterministic simulation, live transition editing, and a stateDiagram-v2 projection stored through Canvas.";
 
-const EVIDENCE_LIMIT: u64 = 24 * 1024 * 1024;
-const MAX_SCREENSHOT_BYTES: usize = 4 * 1024 * 1024;
+const EVIDENCE_LIMIT: u64 = 8 * 1024 * 1024;
 
 const RUNTIME: AssessmentSpec = AssessmentSpec::scored_in(
     "runtime_contract",
@@ -74,10 +73,10 @@ const INTERACTION: AssessmentSpec = AssessmentSpec::scored_in(
     "The real Console page completes the required live-preview interaction.",
     EvaluationDimension::Deliverable,
 );
-const EVIDENCE: AssessmentSpec = AssessmentSpec::scored_in(
-    "evidence_complete",
+const WORKER_TRACE: AssessmentSpec = AssessmentSpec::scored_in(
+    "worker_trace",
     5,
-    "Portable screenshots show the Worker and rendered Canvas graph in the full Console workspace.",
+    "The session records loading the ADE Worker Design skill and calls to the run-scoped Worker.",
     EvaluationDimension::StructuralIntegrity,
 );
 const ASSESSMENTS: &[AssessmentSpec] = &[
@@ -89,7 +88,7 @@ const ASSESSMENTS: &[AssessmentSpec] = &[
     CANVAS_UPDATE,
     CONSOLE,
     INTERACTION,
-    EVIDENCE,
+    WORKER_TRACE,
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -165,17 +164,28 @@ macro_rules! scenario_impl {
             async fn capture(
                 &self,
                 context: &E2eContext,
-                _observation: &ScenarioObservation,
+                observation: &ScenarioObservation,
                 run_id: &str,
             ) -> Result<Vec<CapturedDeliverable>> {
-                let evidence = validate_candidate(context, $kind, run_id).await?;
+                let mut evidence = validate_candidate(context, $kind, run_id).await?;
+                let trace = worker_trace(observation, $kind, run_id);
+                evidence["checks"]["worker_trace"] = json!({
+                    "passed":trace["skill_loaded"] == true && trace["successful_worker_call"] == true,
+                    "reason":if trace["skill_loaded"] == true && trace["successful_worker_call"] == true {"session records the ADE Worker Design skill and a successful run-scoped Worker call"} else {"session did not record the required skill lookup and a successful Worker call"},
+                    "observed":trace,
+                });
+                evidence["session"] = json!({
+                    "root_session_id":observation.metrics.root_session_id,
+                    "worker_calls":trace["worker_calls"],
+                    "skill_reads":trace["skill_reads"],
+                });
                 let invariants = [
                     "runtime_contract",
                     "canvas_initial",
                     "canvas_update",
                     "console_delivery",
                     "browser_interaction",
-                    "evidence_complete",
+                    "worker_trace",
                 ]
                 .into_iter()
                 .map(|id| CapturedInvariant {
@@ -193,6 +203,10 @@ macro_rules! scenario_impl {
                         kind: "filesystem_path".into(),
                         source_id: workspace_root($kind, run_id).display().to_string(),
                         relation: "validated_before_cleanup".into(),
+                    }, ProvenanceEvidence {
+                        kind: "session".into(),
+                        source_id: observation.metrics.root_session_id.clone(),
+                        relation: "captured_skill_and_worker_calls".into(),
                     }],
                 }])
             }
@@ -295,8 +309,8 @@ fn deliverable_contract(kind: Kind) -> DeliverableContract {
             media_type: "application/json".into(),
             schema: json!({
                 "type":"object",
-                "required":["identity","checks","files"],
-                "properties":{"identity":{"type":"object"},"checks":{"type":"object"},"files":{"type":"object"}}
+                "required":["identity","checks","session"],
+                "properties":{"identity":{"type":"object"},"checks":{"type":"object"},"session":{"type":"object"}}
             }),
             max_size_bytes: EVIDENCE_LIMIT,
         }],
@@ -319,8 +333,8 @@ fn deliverable_contract(kind: Kind) -> DeliverableContract {
                 "The live preview responds to a real browser interaction.",
             ),
             (
-                "evidence_complete",
-                "Screenshots show the Worker and Canvas graph in the full Console workspace.",
+                "worker_trace",
+                "The session records the ADE Worker Design skill and calls to the run-scoped Worker.",
             ),
         ]
         .into_iter()
@@ -604,7 +618,7 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
         )
         .await?
     } else {
-        json!({"passed":false,"status":"blocked","reason":format!("Not verified: ready={ready}, console={console_delivery}"),"captures":[]})
+        json!({"passed":false,"status":"blocked","reason":format!("Not verified: ready={ready}, console={console_delivery}")})
     };
     let browser_blocked = browser["status"] == "blocked";
     checks.insert("browser_interaction".into(), json!({"passed":browser["passed"],"status":if browser_blocked {"blocked"} else if browser["passed"] == true {"passed"} else {"failed"},"reason":browser["reason"],"observed":browser["interaction"]}));
@@ -654,32 +668,49 @@ async fn validate_candidate(context: &E2eContext, kind: Kind, run_id: &str) -> R
     checks.insert("domain_branch".into(), json!({"passed":branch_ok,"reason":if branch_ok {"edited domain path matches the oracle"} else {"edited domain path differs from the oracle"},"observed":result_value(branch)}));
     checks.insert("invalid_inputs".into(), json!({"passed":invalid_ok,"reason":if invalid_ok {"invalid input was rejected and the domain edit persisted into a later call"} else {"invalid-input rejection or edited-state persistence failed"},"observed":{"invalid":result_value(invalid),"health":result_value(health)}}));
 
-    let mut files = serde_json::Map::new();
-    insert_text_file(
-        &mut files,
-        "screenshots/captures.json",
-        &serde_json::to_string_pretty(
-            &json!({"identity":identity,"viewport":{"width":1280,"height":900},"captures":browser["captures"],"url":browser["url"]}),
-        )?,
-    );
-    for name in ["before", "after", "canvas", "narrow_dark"] {
-        if let Some(data) = browser[name]["data"].as_str() {
-            insert_binary_file(
-                &mut files,
-                &format!("screenshots/{name}.png"),
-                &base64::engine::general_purpose::STANDARD.decode(data)?,
-            );
-        }
-    }
-    let evidence_ok = browser["workspace_evidence"] == true
-        && files.contains_key("screenshots/before.png")
-        && files.contains_key("screenshots/after.png")
-        && files.contains_key("screenshots/canvas.png")
-        && files.contains_key("screenshots/narrow_dark.png")
-        && source_sha256.is_some()
-        && compose_sha256.is_some();
-    checks.insert("evidence_complete".into(), json!({"passed":evidence_ok,"status":if browser_blocked {"blocked"} else if evidence_ok {"passed"} else {"failed"},"reason":if browser_blocked {"Not verified: browser prerequisites failed"} else if evidence_ok {"Worker and Canvas graph screenshots show the full Console workspace and are identity-bound"} else {"full Console screenshot or identity evidence is incomplete"}}));
-    Ok(json!({"identity":identity,"checks":checks,"files":files}))
+    Ok(json!({"identity":identity,"checks":checks}))
+}
+
+fn worker_trace(observation: &ScenarioObservation, kind: Kind, run_id: &str) -> Value {
+    let worker_functions = WorkerContract::new(kind, run_id)
+        .functions
+        .into_values()
+        .collect::<Vec<_>>();
+    let outcomes = common::function_outcomes(&observation.transcript);
+    let skill_reads = outcomes
+        .iter()
+        .filter(|outcome| outcome.function_id == "directory::skills::get")
+        .map(|outcome| {
+            json!({
+                "ordinal":outcome.ordinal,
+                "function_id":outcome.function_id,
+                "arguments":bounded_value(outcome.arguments.clone()),
+                "is_error":outcome.is_error,
+                "error_code":outcome.error_code,
+            })
+        })
+        .collect::<Vec<_>>();
+    let skill_loaded = skill_reads.iter().any(|read| {
+        read["is_error"] == false
+            && read["arguments"]
+                .to_string()
+                .contains("harness/ade-worker-design/index")
+    });
+    let worker_calls = outcomes
+        .iter()
+        .filter(|outcome| worker_functions.contains(&outcome.function_id))
+        .map(|outcome| {
+            json!({
+                "ordinal":outcome.ordinal,
+                "function_id":outcome.function_id,
+                "arguments":bounded_value(outcome.arguments.clone()),
+                "is_error":outcome.is_error,
+                "error_code":outcome.error_code,
+            })
+        })
+        .collect::<Vec<_>>();
+    let successful_worker_call = worker_calls.iter().any(|call| call["is_error"] == false);
+    json!({"skill_loaded":skill_loaded,"successful_worker_call":successful_worker_call,"skill_reads":skill_reads,"worker_calls":worker_calls})
 }
 
 async fn form_probes(
@@ -911,7 +942,7 @@ async fn capture_browser(
     context
         .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
         .await
-        .context("clear an earlier Canvas panel before visual evidence")?;
+        .context("clear an earlier Canvas panel before browser interaction")?;
     let workspace = context
         .trigger_value(
             "console::workspace::open",
@@ -972,12 +1003,11 @@ async fn capture_browser_session(
         .await?;
     if navigation["ok"] != true || navigation["timed_out"] == true {
         return Ok(
-            json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"captures":[],"url":url}),
+            json!({"passed":false,"reason":format!("Worker Console page could not be rendered: {navigation}"),"url":url}),
         );
     }
     context.trigger_value("browser::execute", json!({"session_id":session,"timeout_ms":30000,"code":r#"return await (async()=>{for(let i=0;i<200;i++){if(document.querySelector('[data-testid="domain-result"]'))return true;await new Promise(r=>setTimeout(r,50));}return false})();"#})).await?;
     let before_state = inspect_ui(context, kind, session, "initial").await?;
-    let before = screenshot_png(context, session).await?;
     let interaction_code = match kind {
         Kind::Form => {
             r#"return await (async()=>{
@@ -1044,7 +1074,6 @@ return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorde
         )
         .await?;
     let after_state = inspect_ui(context, kind, session, "edited").await?;
-    let after = screenshot_png(context, session).await?;
     let expected_canvas_id = serde_json::to_string(&identity["canvas_id"])?;
     let open_canvas = context
         .trigger_value(
@@ -1069,7 +1098,6 @@ return {{visible,same_id:sameId,rendered_graph:false}};
 }})();"#, serde_json::to_string(if kind == Kind::Form { "Environment" } else { "cancelled" })?)}),
         )
         .await?;
-    let canvas = screenshot_png(context, session).await?;
     context
         .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
         .await?;
@@ -1117,28 +1145,17 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
 })();"#}),
         )
         .await?;
-    let narrow_dark = screenshot_png(context, session).await?;
-    let workspace_evidence = before_state["passed"] == true
+    let ui_contract = before_state["passed"] == true
         && after_state["passed"] == true
-        && before["data"].is_string()
-        && after["data"].is_string()
-        && canvas["data"].is_string()
-        && narrow_dark["data"].is_string()
         && open_canvas["result"]["visible"] == true
         && open_canvas["result"]["same_id"] == true
         && open_canvas["result"]["rendered_graph"] == true
         && reloaded_state["passed"] == true
         && persisted_canvas_id["result"] == true
         && mobile["result"]["passed"] == true;
-    let passed = workspace_evidence && interaction["result"].get("error").is_none();
-    let captures = json!([
-        {"id":"before","caption":format!("{} in the full Console workspace before editing",kind.summary()),"url":url,"status":"captured","screenshot":"before.png","session_id":session,"identity":identity,"sha256":before["sha256"]},
-        {"id":"after","caption":format!("{} in the full Console workspace after editing",kind.summary()),"url":url,"status":"captured","screenshot":"after.png","session_id":session,"identity":identity,"sha256":after["sha256"]},
-        {"id":"canvas","caption":"The edited graph rendered by Canvas beside the Worker in the full Console workspace","url":url,"status":"captured","screenshot":"canvas.png","session_id":session,"identity":identity,"sha256":canvas["sha256"]},
-        {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console workspace",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
-    ]);
+    let passed = ui_contract && interaction["result"].get("error").is_none();
     Ok(
-        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"reason":if passed {"Worker UI edits domain state and Canvas, restores state after reload, and adapts to a narrow dark pane"} else {"Console UI interaction, Canvas update, reload persistence, or narrow dark layout failed"},"url":url,"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]},"layout":{"initial":before_state,"edited":after_state,"ui_contract":ui_contract}}),
     )
 }
 
@@ -1171,36 +1188,6 @@ return {{passed:workspaceOk&&visible(domain)&&branchOk&&noOverflow&&(!error||!er
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     Ok(observed)
-}
-
-async fn screenshot_png(context: &E2eContext, session: &str) -> Result<Value> {
-    let value = context
-        .trigger_value(
-            "browser::screenshot",
-            json!({"session_id":session,"full_page":true,"format":"png"}),
-        )
-        .await?;
-    if value["details"]["session_id"] != session {
-        bail!("browser screenshot session identity mismatch");
-    }
-    let block = value["content"]
-        .as_array()
-        .and_then(|items| {
-            items
-                .iter()
-                .find(|item| item["type"] == "image" && item["mime"] == "image/png")
-        })
-        .context("browser screenshot omitted PNG")?;
-    let data = block["data"].as_str().context("browser PNG data missing")?;
-    let bytes = base64::engine::general_purpose::STANDARD.decode(data)?;
-    if bytes.len() > MAX_SCREENSHOT_BYTES {
-        return Ok(
-            json!({"oversized":true,"size_bytes":bytes.len(),"maximum_bytes":MAX_SCREENSHOT_BYTES,"details":value["details"]}),
-        );
-    }
-    Ok(
-        json!({"data":data,"sha256":crate::artifact::sha256_bytes(&bytes),"details":value["details"]}),
-    )
 }
 
 fn evaluate_evidence(evidence: &Value, complete: bool) -> ObjectiveEvaluation {
@@ -1435,15 +1422,6 @@ fn reason(evidence: &Value, id: &str) -> String {
         .into()
 }
 
-fn insert_text_file(files: &mut serde_json::Map<String, Value>, name: &str, text: &str) {
-    let bytes = text.as_bytes();
-    files.insert(name.into(),json!({"encoding":"utf8","content":text,"size_bytes":bytes.len(),"sha256":crate::artifact::sha256_bytes(bytes)}));
-}
-
-fn insert_binary_file(files: &mut serde_json::Map<String, Value>, name: &str, bytes: &[u8]) {
-    files.insert(name.into(),json!({"encoding":"base64","content":base64::engine::general_purpose::STANDARD.encode(bytes),"size_bytes":bytes.len(),"sha256":crate::artifact::sha256_bytes(bytes)}));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1498,7 +1476,7 @@ mod tests {
     #[test]
     fn blocked_browser_preserves_domain_and_canvas_scores() {
         let checks=ASSESSMENTS.iter().map(|spec| {
-            let blocked=matches!(spec.id(),"canvas_update"|"browser_interaction"|"evidence_complete");
+            let blocked=matches!(spec.id(),"canvas_update"|"browser_interaction");
             (spec.id().to_string(),json!({"passed":!blocked,"status":if blocked{"blocked"}else{"evaluated"},"reason":"probe"}))
         }).collect::<serde_json::Map<_,_>>();
         let evaluation = evaluate_evidence(&json!({"checks":checks}), true);
@@ -1508,15 +1486,12 @@ mod tests {
                 .iter()
                 .filter_map(|award| award.awarded)
                 .sum::<u8>(),
-            75
+            80
         );
         assert!(evaluation
             .awards
             .iter()
-            .filter(|award| matches!(
-                award.id.as_str(),
-                "canvas_update" | "browser_interaction" | "evidence_complete"
-            ))
+            .filter(|award| matches!(award.id.as_str(), "canvas_update" | "browser_interaction"))
             .all(|award| award.awarded.is_none()));
     }
 
