@@ -446,7 +446,7 @@ cancel -> cancelled. Reject every other pair and unknown edits.
 
 The page is a CI state-machine workbench: edit transition rules, run a simulator, and inspect
 history. Start at queued with Start, Pass, Fail, Retry, and a transition editor. Invalid events
-must be visibly unavailable without changing state or history. Exercise the pass and fail/retry
+must be visibly unavailable (`disabled` or `aria-disabled="true"`) without changing state or history. Exercise the pass and fail/retry
 paths. Applying `add_cancel` must update the simulator and the same Canvas id. Show state in
 `data-testid="current-state"` and retain visible history.
 Use `data-event` for event buttons, `data-testid="reset"`, `data-testid="history"`, and
@@ -977,15 +977,34 @@ async fn capture_browser(
 /// navigation instead of failing the capture; the readiness checks that follow
 /// decide whether the page is usable.
 async fn navigate(context: &E2eContext, session: &str, url: &str) -> Result<Value> {
-    match context
-        .trigger_value(
-            "browser::navigate",
-            json!({"session_id":session,"url":url,"timeout_ms":30000}),
-        )
-        .await
-    {
+    tolerate_load_timeout(
+        context
+            .trigger_value(
+                "browser::navigate",
+                json!({"session_id":session,"url":url,"timeout_ms":30000}),
+            )
+            .await,
+    )
+}
+
+/// Navigating to the current `#/` URL is a same-document fragment navigation
+/// that keeps the page as it is, so persistence is checked across a real reload.
+async fn reload(context: &E2eContext, session: &str) -> Result<Value> {
+    let reloaded = tolerate_load_timeout(
+        context
+            .trigger_value(
+                "browser::history",
+                json!({"session_id":session,"action":"reload"}),
+            )
+            .await,
+    )?;
+    Ok(json!({"ok":reloaded["moved"] == true || reloaded["timed_out"] == true,"reload":reloaded}))
+}
+
+fn tolerate_load_timeout(result: Result<Value>) -> Result<Value> {
+    match result {
         Err(error) if is_load_timeout(&error) => {
-            Ok(json!({"ok":true,"timed_out":true,"url":url,"error":format!("{error:#}")}))
+            Ok(json!({"ok":true,"timed_out":true,"error":format!("{error:#}")}))
         }
         other => other,
     }
@@ -1029,7 +1048,8 @@ const choose=async value=>{
   const pick=document.querySelector('[data-testid="work-type"]');if(!pick)return false;
   if(pick.tagName==='SELECT')set(pick,value);
   else {
-    const segment=[...pick.querySelectorAll('button,[role="radio"]')].find(e=>e.textContent.trim().toLowerCase()===value);
+    const radio=[...pick.querySelectorAll('input[type="radio"]')].find(e=>e.value.toLowerCase()===value||[...e.labels].some(l=>l.textContent.trim().toLowerCase()===value));
+    const segment=radio||[...pick.querySelectorAll('button,[role="radio"]')].find(e=>e.textContent.trim().toLowerCase()===value);
     if(segment)segment.click();
     else {
       pick.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,pointerId:1,pointerType:'mouse',isPrimary:true,button:0,buttons:1}));
@@ -1060,7 +1080,8 @@ return feature&&partial&&bug&&environment&&complete&&cleared&&restored?{feature,
 const state=()=>document.querySelector('[data-testid="current-state"]')?.textContent?.trim();
 const history=()=>document.querySelector('[data-testid="history"]')?.textContent?.trim()||'';
 const wait=async expected=>{for(let i=0;i<100;i++){if(state()===expected)return true;await new Promise(r=>setTimeout(r,50))}return false};
-const click=async(event,expected)=>{const b=document.querySelector(`[data-event="${event}"]`);if(!b)return false;b.click();return wait(expected)};
+const enabled=async event=>{for(let i=0;i<100;i++){const b=document.querySelector(`[data-event="${event}"]`);if(b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true')return b;await new Promise(r=>setTimeout(r,50))}return null};
+const click=async(event,expected)=>{const b=await enabled(event);if(!b)return false;b.click();return wait(expected)};
 const invalid=document.querySelector('[data-event="pass"]');const before=history();invalid?.click();
 const guarded=!!invalid&&(invalid.disabled||invalid.getAttribute('aria-disabled')==='true')&&state()==='queued'&&history()===before;
 const pass=await click('start','running')&&await click('pass','passed')&&history()!==before;
@@ -1069,8 +1090,7 @@ const retry=await click('start','running')&&await click('fail','failed')&&await 
 document.querySelector('[data-edit="add_cancel"]')?.click();
 const edited=!!await (async()=>{for(let i=0;i<100;i++){if(document.querySelector('[data-event="cancel"]'))return true;await new Promise(r=>setTimeout(r,50))}return false})();
 const started=edited&&await click('start','running');
-const enabled=started&&!!await (async()=>{for(let i=0;i<100;i++){const b=document.querySelector('[data-event="cancel"]');if(b&&!b.disabled&&b.getAttribute('aria-disabled')!=='true')return true;await new Promise(r=>setTimeout(r,50))}return false})();
-const cancel=enabled&&await click('cancel','cancelled');
+const cancel=started&&await click('cancel','cancelled');
 const recorded=history().toLowerCase().includes('cancel');
 return guarded&&pass&&retry&&cancel&&recorded?{guarded,pass,retry,cancel,recorded}:{error:'transition guard, CI paths, edit, or history failed',guarded,pass,retry,cancel,recorded};
 })();"#
@@ -1112,7 +1132,7 @@ return {{visible,same_id:sameId,rendered_graph:false}};
     context
         .trigger_value("console::workspace::close", json!({"screen":"ext:canvas"}))
         .await?;
-    let reload = navigate(context, session, url).await?;
+    let reload = reload(context, session).await?;
     let reloaded_state = if reload["ok"] == true {
         inspect_ui(context, kind, session, "reloaded").await?
     } else {
@@ -1172,7 +1192,7 @@ return {passed:!!pane&&pane.scrollWidth<=pane.clientWidth+1&&document.documentEl
         {"id":"narrow_dark","caption":format!("{} after reload in a narrow dark Console workspace",kind.summary()),"url":url,"status":"captured","screenshot":"narrow_dark.png","session_id":session,"identity":identity,"sha256":narrow_dark["sha256"]}
     ]);
     Ok(
-        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
+        json!({"passed":passed,"workspace_evidence":workspace_evidence,"reason":if passed {"Worker, persisted edit, and Canvas graph rendered in the full Console workspace"} else {"Console layout, Worker interaction, reload persistence, Canvas graph, or narrow dark check failed"},"url":url,"captures":captures,"before":before,"after":after,"canvas":canvas,"narrow_dark":narrow_dark,"navigation":{"initial":navigation,"reload":reload},"interaction":{"domain":interaction["result"],"open_canvas_action":open_canvas["result"],"initial":before_state,"edited":after_state,"reloaded":reloaded_state,"persisted_canvas_id":persisted_canvas_id["result"],"workspace":identity["workspace"],"mobile":mobile["result"]}}),
     )
 }
 
