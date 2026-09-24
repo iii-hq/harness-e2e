@@ -145,12 +145,20 @@ pub(crate) struct ExecutionSuite {
     pub sha256: String,
 }
 
-/// A suite stored in another shape (an import before suites had a label and
-/// a digest named only its id) is left out rather than failing the execution.
+/// An import from before suites had a name and a digest stored only the
+/// suite's id: it reads as that suite, named by its id, digest unknown.
 fn readable_suite<'de, D: serde::Deserializer<'de>>(
     value: D,
 ) -> std::result::Result<Option<ExecutionSuite>, D::Error> {
-    Ok(Option::<Value>::deserialize(value)?.and_then(|value| serde_json::from_value(value).ok()))
+    use serde::de::Error;
+    match Option::<Value>::deserialize(value)? {
+        Some(Value::String(id)) => Ok(Some(ExecutionSuite {
+            label: id.clone(),
+            id: Some(id),
+            sha256: String::new(),
+        })),
+        value => serde_json::from_value(value.unwrap_or(Value::Null)).map_err(D::Error::custom),
+    }
 }
 
 /// A suite as the Console lists it.
@@ -517,6 +525,7 @@ impl PlanStore {
     }
 
     pub(crate) async fn update_suite(&self, update: SuiteUpdateRequest) -> Result<SuiteView> {
+        local_only(&update.suite_id)?;
         let mut suite = self.read_suite(&update.suite_id).await?;
         suite.apply(&update);
         suite.updated_at = now();
@@ -526,6 +535,7 @@ impl PlanStore {
 
     /// Only a suite of this Console; executions that ran it keep its name.
     pub(crate) async fn delete_suite(&self, id: &str) -> Result<()> {
+        local_only(id)?;
         self.read_suite(id).await?;
         if let Some(persistence) = &self.persistence {
             return persistence.delete_local_suite(id).await;
@@ -1065,6 +1075,17 @@ impl PlanStore {
     }
 }
 
+/// Only a suite of this Console changes; the master plan's are read-only.
+fn local_only(id: &str) -> Result<()> {
+    ensure!(
+        !test_plan::embedded()?
+            .suites
+            .iter()
+            .any(|suite| suite.id == id),
+        "{id} is a repository suite, read-only; copy it to edit a suite of this Console."
+    );
+    Ok(())
+}
 /// A label as typed: trimmed, at most 80 characters; empty means none.
 fn clean_label(label: &str) -> Result<Option<String>> {
     let label = label.trim();
@@ -2391,7 +2412,20 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("between 1 and 20"), "{error}");
         // The master plan's suites are read-only and every suite is known by id.
-        for (id, action) in [("pr", "update"), ("pr", "delete"), ("unknown", "create")] {
+        for (id, action, reason) in [
+            (
+                "pr",
+                "update",
+                "pr is a repository suite, read-only; copy it",
+            ),
+            (
+                "pr",
+                "delete",
+                "pr is a repository suite, read-only; copy it",
+            ),
+            ("unknown", "create", "unknown suite"),
+            ("suite-unknown", "update", "unknown suite"),
+        ] {
             let error = match action {
                 "update" => manager
                     .update_suite(SuiteUpdateRequest {
@@ -2411,7 +2445,7 @@ mod tests {
                     .map(|_| ()),
             }
             .unwrap_err();
-            assert!(error.to_string().contains("unknown suite"), "{error}");
+            assert!(error.to_string().contains(reason), "{error}");
         }
     }
 
@@ -2471,12 +2505,25 @@ mod tests {
     }
 
     #[test]
-    fn a_suite_stored_in_another_shape_is_left_out() {
+    fn a_suite_an_older_import_stored_by_id_reads_as_that_suite() {
         let mut stored = serde_json::to_value(suite_parameters("pr")).unwrap();
         stored["suite"] = json!("pr");
-        let read: ExecutionParameters = serde_json::from_value(stored).unwrap();
-        assert_eq!(read.suite, None);
+        let read: ExecutionParameters = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(
+            read.suite,
+            Some(ExecutionSuite {
+                id: Some("pr".into()),
+                label: "pr".into(),
+                sha256: String::new(),
+            })
+        );
         assert_eq!(read.scenarios, suite_parameters("pr").scenarios);
+        // Absent is no suite; any other shape is not a suite this runner reads.
+        stored.as_object_mut().unwrap().remove("suite");
+        let read: ExecutionParameters = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(read.suite, None);
+        stored["suite"] = json!(42);
+        assert!(serde_json::from_value::<ExecutionParameters>(stored).is_err());
     }
 
     /// A campaign bundle as the exact-stack workflow uploads it: one group

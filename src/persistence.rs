@@ -38,10 +38,7 @@ const SCHEMA: &[&str] = &[
     "CREATE TABLE IF NOT EXISTS artifacts (execution_id TEXT NOT NULL, artifact_id TEXT NOT NULL, kind TEXT NOT NULL, relative_path TEXT NOT NULL, sha256 TEXT NOT NULL, size_bytes INTEGER NOT NULL, media_type TEXT NOT NULL, available INTEGER NOT NULL CHECK (available IN (0, 1)), archive_uri TEXT NULL, PRIMARY KEY (execution_id, artifact_id, sha256))",
     "CREATE TABLE IF NOT EXISTS archives (execution_id TEXT PRIMARY KEY, archive_id TEXT NOT NULL UNIQUE, manifest_uri TEXT NOT NULL, manifest_sha256 TEXT NOT NULL, expires_at TEXT NULL, payload_json TEXT NOT NULL)",
     "CREATE TABLE IF NOT EXISTS local_suites (id TEXT PRIMARY KEY, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
-    // ponytail: `origin` is read by no code here; it exists only so an older
-    // build opened on this database keeps the executions instead of dropping
-    // every row without it. Drop it with those builds.
-    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, origin TEXT NOT NULL DEFAULT 'local', idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS saved_plan_executions (id TEXT PRIMARY KEY, idempotency_key TEXT NOT NULL UNIQUE, state TEXT NOT NULL, started_at TEXT NOT NULL, updated_at TEXT NOT NULL, payload_json TEXT NOT NULL, payload_sha256 TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS saved_plan_executions_started_idx ON saved_plan_executions(started_at DESC)",
 ];
 
@@ -853,12 +850,6 @@ mod tests {
         assert!(!names.contains(&"saved_plans"));
         let runs = layouts.iter().find(|layout| layout.name == "runs").unwrap();
         assert_eq!(runs.statements.len(), 2);
-        // Older builds drop execution rows without `origin`; keep it for them.
-        let layout = layouts
-            .iter()
-            .find(|layout| layout.name == "saved_plan_executions")
-            .unwrap();
-        assert!(layout.statements[0].contains("origin TEXT NOT NULL DEFAULT 'local'"));
         assert!(runs.fingerprint().starts_with("sha256:"));
     }
 
