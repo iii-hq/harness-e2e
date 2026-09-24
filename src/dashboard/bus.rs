@@ -20,6 +20,7 @@ use super::read_model::{
 };
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
+use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
     SuiteView,
@@ -47,6 +48,10 @@ pub(super) const SUITES_LIST: &str = "e2e::dashboard::suites-list";
 pub(super) const SUITE_CREATE: &str = "e2e::dashboard::suite-create";
 pub(super) const SUITE_UPDATE: &str = "e2e::dashboard::suite-update";
 pub(super) const SUITE_DELETE: &str = "e2e::dashboard::suite-delete";
+pub(super) const STACKS_LIST: &str = "e2e::dashboard::stacks-list";
+pub(super) const STACK_CREATE: &str = "e2e::dashboard::stack-create";
+pub(super) const STACK_UPDATE: &str = "e2e::dashboard::stack-update";
+pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -162,6 +167,17 @@ struct SuiteDeleteRequest {
 struct SuitesListResponse {
     /// The master plan's suites, then this Console's.
     suites: Vec<SuiteView>,
+}
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+struct StackDeleteRequest {
+    stack_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+struct StacksListResponse {
+    /// The repository's stacks, then this Console's.
+    stacks: Vec<StackView>,
 }
 
 type PlanControlResponse = BTreeMap<String, Value>;
@@ -615,6 +631,69 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             async move {
                 controller
                     .delete_suite(&request.suite_id)
+                    .await
+                    .map(|()| PlanControlResponse::new())
+                    .map_err(handler_error)
+            }
+        })
+    });
+    register(
+        iii,
+        STACKS_LIST,
+        "List the stacks an execution can run on: the repository's (read-only) and this Console's, each with its YAML, what it declares and its warnings.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
+                let controller = controller.clone();
+                async move {
+                    Ok(StacksListResponse {
+                        stacks: controller.stacks().await.map_err(handler_error)?,
+                    })
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        STACK_CREATE,
+        "Create a stack of this Console as a copy of another stack.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: StackCreateRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .create_stack(request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        STACK_UPDATE,
+        "Change the name or the YAML of a stack of this Console; refused only when the YAML does not parse or declares no containers.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: StackUpdateRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .update_stack(request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(iii, STACK_DELETE, "Delete a stack of this Console.", {
+        let controller = controller.clone();
+        RegisterFunction::new_async(move |request: StackDeleteRequest| {
+            let controller = controller.clone();
+            async move {
+                controller
+                    .delete_stack(&request.stack_id)
                     .await
                     .map(|()| PlanControlResponse::new())
                     .map_err(handler_error)

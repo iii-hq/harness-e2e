@@ -329,9 +329,9 @@ cargo build --locked --bin harness-e2e
 ```
 
 When Console connects to the same iii namespace, the worker registers the page
-assets and the `e2e::dashboard::*` functions for read, suites, run, status, and
-cancellation. The page lives under `#/ext/harness-e2e` and exposes Tests,
-Executions, and Suites. See [dashboard/README.md](dashboard/README.md).
+assets and the `e2e::dashboard::*` functions for read, suites, stacks, run,
+status, and cancellation. The page lives under `#/ext/harness-e2e` and exposes
+Tests, Executions, Suites, and Stacks. See [dashboard/README.md](dashboard/README.md).
 
 The running Harness must publish request and response schemas compatible with
 the current typed surface. Missing or incompatible fields fail preflight.
@@ -428,17 +428,17 @@ observations, so lists and history do not load native reports.
 Storage has no version number and no migration step. Every table records the
 fingerprint of the statements that create it. At start, the worker recreates
 tables whose fingerprint moved, in one transaction. It keeps the execution
-records, local suites, and receipts it can still read, and rebuilds run
-projections from the native bundles. Rows it cannot read, missing bundles, and
-tables this binary no longer writes (such as the retired `history_*` import
+records, local suites and stacks, and receipts it can still read, and rebuilds
+run projections from the native bundles. Rows it cannot read, missing bundles,
+and tables this binary no longer writes (such as the retired `history_*` import
 tables and the `saved_plans` of the retired baseline/candidate plans) are
 dropped and logged as warnings. Nothing is reconstructed as a scored result. A
 report written under another results contract is read with a warning.
 
-The Console's suites live in `local_suites`, and executions (run here or
-imported from GitHub) in `saved_plan_executions`. A suite or execution this
-binary cannot read is deleted on the next read. An execution a retired plan ran
-stays, without a suite.
+The Console's suites live in `local_suites`, its stacks in `local_stacks`, and
+executions (run here or imported from GitHub) in `saved_plan_executions`. A
+suite, stack or execution this binary cannot read is deleted on the next read.
+An execution a retired plan ran stays, without a suite.
 
 Native bundles keep full reports, manifests, and transcripts, loaded on
 demand. The runner has no S3, GCS, R2, SQL-driver, or Harness dependency.

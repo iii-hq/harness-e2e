@@ -1,4 +1,5 @@
-//! Executions composed of native runs, and the suites this Console keeps.
+//! Executions composed of native runs, and the suites and stacks this
+//! Console keeps.
 //! Every planned child and its idempotency key is durable before admission.
 use std::collections::BTreeSet;
 use std::fs;
@@ -15,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::Mutex;
 
+use super::stacks::{self, LocalStack, StackCreateRequest, StackUpdateRequest, StackView};
 use super::{LocalSuite, SuiteCreateRequest, SuiteUpdateRequest};
 use crate::artifact;
 use crate::control::{execution_id_for_key, ControlPlane, ExecutionRecord, RunRequest};
@@ -323,6 +325,7 @@ impl PlanStore {
         #[cfg(test)]
         if control.is_none() {
             fs::create_dir_all(root.join("plan-store/suites"))?;
+            fs::create_dir_all(root.join("plan-store/stacks"))?;
             fs::create_dir_all(root.join("plan-store/executions"))?;
         }
         let manager = Arc::new(Self {
@@ -399,6 +402,55 @@ impl PlanStore {
                 .then_with(|| a.id.cmp(&b.id))
         });
         Ok(suites)
+    }
+    #[cfg(test)]
+    fn stack_path(&self, id: &str) -> Result<PathBuf> {
+        safe_id(id)?;
+        Ok(self
+            .root
+            .join("plan-store/stacks")
+            .join(format!("{id}.json")))
+    }
+    async fn read_stack(&self, id: &str) -> Result<LocalStack> {
+        safe_id(id)?;
+        if let Some(persistence) = &self.persistence {
+            return persistence
+                .local_stack(id)
+                .await?
+                .with_context(|| format!("unknown stack {id}"));
+        }
+        #[cfg(not(test))]
+        anyhow::bail!("the E2E control-plane persistence is not available");
+        #[cfg(test)]
+        serde_json::from_slice(
+            &fs::read(self.stack_path(id)?).with_context(|| format!("unknown stack {id}"))?,
+        )
+        .context("decode stack")
+    }
+    async fn write_stack(&self, stack: &LocalStack) -> Result<()> {
+        if let Some(persistence) = &self.persistence {
+            return persistence.save_local_stack(stack).await;
+        }
+        #[cfg(not(test))]
+        anyhow::bail!("the E2E control-plane persistence is not available");
+        #[cfg(test)]
+        write_json(&self.stack_path(&stack.id)?, stack)
+    }
+    async fn local_stacks(&self) -> Result<Vec<LocalStack>> {
+        let mut stacks = if let Some(persistence) = &self.persistence {
+            persistence.local_stacks().await?
+        } else {
+            #[cfg(not(test))]
+            anyhow::bail!("the E2E control-plane persistence is not available");
+            #[cfg(test)]
+            read_json_directory(&self.root.join("plan-store/stacks"))?
+        };
+        stacks.sort_by(|a, b| {
+            b.updated_at
+                .cmp(&a.updated_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
@@ -561,6 +613,81 @@ impl PlanStore {
             .into_iter()
             .find(|suite| suite.id == id)
             .with_context(|| format!("unknown suite {id}"))
+    }
+
+    /// Every stack: the repository's, read-only, then this Console's, newest
+    /// first, each with what it declares and its warnings.
+    pub(crate) async fn stacks(&self) -> Result<Vec<StackView>> {
+        let mut listed = stacks::REPOSITORY
+            .iter()
+            .map(|(id, yaml)| StackView::new(id, id, "repository", yaml, None))
+            .collect::<Vec<_>>();
+        for stack in self.local_stacks().await? {
+            listed.push(StackView::new(
+                &stack.id,
+                &stack.label,
+                "local",
+                &stack.yaml,
+                Some(stack.updated_at),
+            ));
+        }
+        Ok(listed)
+    }
+
+    /// A local stack that starts as a copy of another one, repository or local.
+    pub(crate) async fn create_stack(&self, request: StackCreateRequest) -> Result<StackView> {
+        let source = self
+            .stacks()
+            .await?
+            .into_iter()
+            .find(|stack| stack.id == request.from)
+            .with_context(|| format!("unknown stack {}", request.from))?;
+        let label = match request.label.trim() {
+            "" => format!("{} copy", source.label),
+            label => label.to_owned(),
+        };
+        let id = format!("stack-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
+        let stack = LocalStack {
+            id: id.clone(),
+            label,
+            yaml: source.yaml,
+            created_at: now(),
+            updated_at: now(),
+        };
+        stack.validate()?;
+        self.write_stack(&stack).await?;
+        self.stack_view(&id).await
+    }
+
+    pub(crate) async fn update_stack(&self, update: StackUpdateRequest) -> Result<StackView> {
+        stack_local_only(&update.stack_id)?;
+        let mut stack = self.read_stack(&update.stack_id).await?;
+        stack.apply(&update);
+        stack.updated_at = now();
+        stack.validate()?;
+        self.write_stack(&stack).await?;
+        self.stack_view(&update.stack_id).await
+    }
+
+    /// Only a stack of this Console.
+    pub(crate) async fn delete_stack(&self, id: &str) -> Result<()> {
+        stack_local_only(id)?;
+        self.read_stack(id).await?;
+        if let Some(persistence) = &self.persistence {
+            return persistence.delete_local_stack(id).await;
+        }
+        #[cfg(not(test))]
+        anyhow::bail!("the E2E control-plane persistence is not available");
+        #[cfg(test)]
+        Ok(fs::remove_file(self.stack_path(id)?)?)
+    }
+
+    async fn stack_view(&self, id: &str) -> Result<StackView> {
+        self.stacks()
+            .await?
+            .into_iter()
+            .find(|stack| stack.id == id)
+            .with_context(|| format!("unknown stack {id}"))
     }
 
     /// Start an execution from its parameters alone, on this stack. What runs
@@ -1083,6 +1210,14 @@ fn local_only(id: &str) -> Result<()> {
             .iter()
             .any(|suite| suite.id == id),
         "{id} is a repository suite, read-only; copy it to edit a suite of this Console."
+    );
+    Ok(())
+}
+/// Only a stack of this Console changes; the repository's are read-only.
+fn stack_local_only(id: &str) -> Result<()> {
+    ensure!(
+        !stacks::REPOSITORY.iter().any(|(name, _)| *name == id),
+        "{id} is a repository stack, read-only; copy it to edit a stack of this Console."
     );
     Ok(())
 }
@@ -2061,6 +2196,7 @@ mod tests {
         github: github::GithubCli,
     ) -> Arc<PlanStore> {
         fs::create_dir_all(root.join("plan-store/suites")).unwrap();
+        fs::create_dir_all(root.join("plan-store/stacks")).unwrap();
         fs::create_dir_all(root.join("plan-store/executions")).unwrap();
         Arc::new(PlanStore {
             root: root.into(),
@@ -2447,6 +2583,129 @@ mod tests {
             .unwrap_err();
             assert!(error.to_string().contains(reason), "{error}");
         }
+    }
+
+    #[tokio::test]
+    async fn stacks_list_the_repository_then_this_console_and_copy_edit_or_delete_one() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        let listed = manager.stacks().await.unwrap();
+        assert_eq!(
+            listed
+                .iter()
+                .map(|stack| (stack.id.as_str(), stack.source.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("default", "repository"),
+                ("harness-template", "repository")
+            ]
+        );
+        assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
+        let copy = manager
+            .create_stack(StackCreateRequest {
+                from: "default".into(),
+                label: " ".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (copy.label.as_str(), copy.source.as_str()),
+            ("default copy", "local")
+        );
+        assert!(copy.id.starts_with("stack-"));
+        assert_eq!(copy.yaml, listed[0].yaml);
+        assert_eq!(copy.containers, listed[0].containers);
+
+        // The text stays as written; what may not run as written is a warning.
+        let yaml = "# mine\niii: latest\ncontainers:\n  harness:\n    worker: path://../harness # a local build\n";
+        let edited = manager
+            .update_stack(StackUpdateRequest {
+                stack_id: copy.id.clone(),
+                label: Some("Mine".into()),
+                yaml: Some(yaml.into()),
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (edited.label.as_str(), edited.yaml.as_str()),
+            ("Mine", yaml)
+        );
+        assert_eq!(edited.warnings.len(), 1, "{:?}", edited.warnings);
+        assert!(edited.warnings[0].contains("a path on this machine"));
+        // Only YAML that does not parse or declares no containers is refused,
+        // and it changes nothing.
+        for (refused, reason) in [
+            ("containers: [", "not YAML"),
+            ("iii: latest\n", "`containers` mapping"),
+        ] {
+            let error = manager
+                .update_stack(StackUpdateRequest {
+                    stack_id: copy.id.clone(),
+                    yaml: Some(refused.into()),
+                    ..StackUpdateRequest::default()
+                })
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+        assert_eq!(manager.stacks().await.unwrap()[2].yaml, yaml);
+        let again = manager
+            .create_stack(StackCreateRequest {
+                from: copy.id.clone(),
+                label: "Again".into(),
+            })
+            .await
+            .unwrap();
+        assert_eq!((again.label.as_str(), again.yaml.as_str()), ("Again", yaml));
+
+        // The repository's stacks are read-only and every stack is known by id.
+        for (id, action, reason) in [
+            (
+                "default",
+                "update",
+                "default is a repository stack, read-only; copy it",
+            ),
+            (
+                "harness-template",
+                "delete",
+                "harness-template is a repository stack, read-only; copy it",
+            ),
+            ("unknown", "create", "unknown stack"),
+            ("stack-unknown", "update", "unknown stack"),
+            ("stack-unknown", "delete", "unknown stack"),
+        ] {
+            let error = match action {
+                "update" => manager
+                    .update_stack(StackUpdateRequest {
+                        stack_id: id.into(),
+                        label: Some("Renamed".into()),
+                        ..StackUpdateRequest::default()
+                    })
+                    .await
+                    .map(|_| ()),
+                "delete" => manager.delete_stack(id).await,
+                _ => manager
+                    .create_stack(StackCreateRequest {
+                        from: id.into(),
+                        label: String::new(),
+                    })
+                    .await
+                    .map(|_| ()),
+            }
+            .unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+        manager.delete_stack(&copy.id).await.unwrap();
+        assert_eq!(
+            manager
+                .stacks()
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|stack| stack.id)
+                .collect::<Vec<_>>(),
+            vec!["default".to_owned(), "harness-template".into(), again.id]
+        );
     }
 
     #[tokio::test]
