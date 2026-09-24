@@ -1,0 +1,43 @@
+name: Publish the executor image
+
+# The image every phase of an execution runs in (Dockerfile). Its tag is a
+# digest of the Dockerfile, so a change there is a new tag, published once
+# from main; an existing tag is never rebuilt. Until a tag is published,
+# scripts/run_in_image.sh builds it where it runs, with a warning.
+on:
+  push:
+    branches: [main]
+    paths: [Dockerfile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: executor-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+
+      - name: Build and push the tag this Dockerfile names
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          image=$(scripts/run_in_image.sh image)
+          printf '%s\n' "$GITHUB_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          if docker manifest inspect "$image" >/dev/null 2>&1; then
+            echo "::notice::$image is already published"
+            exit 0
+          fi
+          docker build --tag "$image" - <Dockerfile
+          docker push "$image"
+          echo "::notice::published $(docker image inspect --format '{{index .RepoDigests 0}}' "$image")"
