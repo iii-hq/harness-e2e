@@ -242,6 +242,40 @@ one. A group that produced neither still reports that fact.
 `workers` supplies versioned stack components. It does not orchestrate
 campaigns.
 
+### Executor image
+
+Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first
+12 hex of the Dockerfile's sha256>` ([`Dockerfile`](Dockerfile)): git, curl, jq,
+gh, Python 3 with pip and PyYAML, Node 24 with pnpm, Go 1.25, Rust 1.98.1,
+Playwright's Chromium at `/usr/bin/chromium` and the Docker CLI with buildx and
+compose, much of what the `ubuntu-latest` runner gave the groups before.
+Bases, the Ubuntu archive snapshot and every download are pinned, so one
+Dockerfile is one set of tools. It holds no scripts:
+[`scripts/run_in_image.sh`](scripts/run_in_image.sh) `<phase>` mounts the
+checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
+with `no-new-privileges`, passes the phase's environment through by name, and
+runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
+[materialize|assemble]`, `group` or `finalize` there. Only `group` gets the
+host's Docker socket, and only `prepare` a `GITHUB_TOKEN`: a group's subject
+has a shell. Interrupted, the wrapper stops its container; a group whose
+image or container never started still writes its `failure.json`.
+
+Each group's engine listens on 49134 in its own container, off the host's
+network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
+host networking for their screenshots: the fixture publishes the application
+on the host's loopback, where only a phase on the host's network reaches it.
+The workflow runs every group on its runner's network, since each job owns
+its runner, and keeps on the runner what needs it: checkouts, artifacts, the
+OIDC reports, `gh`, and removing a cancelled phase's container before
+anything is reported or packaged.
+
+[`executor-image.yml`](.github/workflows/executor-image.yml) publishes a tag
+from `main` when the Dockerfile changes (or by hand) and never rebuilds an
+existing one. A tag that is not published yet is built where it runs, with a
+warning. `resolution.json` records the image the execution was prepared in,
+the registry digest or the tag when it was built locally, and the reports
+carry it as `identity.executor_image`.
+
 ### Agent profile and project template
 
 A dispatch can name an existing Directory agent profile (`profile`), such as

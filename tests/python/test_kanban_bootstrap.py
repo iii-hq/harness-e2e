@@ -35,7 +35,8 @@ class KanbanBootstrapTest(unittest.TestCase):
         self.assertIn('repository: iii-hq/kanban-e2e-fixture', workflow)
         self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow)
         self.assertIn('fetch-depth: 0', workflow)
-        self.assertIn('node-version: 24.18.0', workflow)
+        # The group runs with the executor image's Node.
+        self.assertIn('node-v24.18.0-linux-x64', (ROOT / 'Dockerfile').read_text())
         kanban_checkout = next(
             step for step in workflow.split('\n      - ')
             if 'name: Checkout Kanban fixture' in step
@@ -46,6 +47,10 @@ class KanbanBootstrapTest(unittest.TestCase):
             if 'uses: actions/checkout@' in step:
                 self.assertIn('persist-credentials: false', step)
         self.assertIn('if [[ "$campaign_group_id" == case-kanban-* ]]', group)
+        # Its containers mount node through the host's Docker daemon: a copy
+        # under the run root, the one path the executor image shares with it.
+        self.assertIn('kanban_node="$run_root/kanban-node"', group)
+        self.assertIn('--node "$kanban_node"', group)
         self.assertIn('HARNESS_E2E_KANBAN_RUNTIME', group)
         self.assertIn('Kanban fixture checkout is unavailable', group)
 

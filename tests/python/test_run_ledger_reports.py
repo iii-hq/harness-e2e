@@ -120,6 +120,14 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["template"], template)
         self.assertNotIn("template", report_execution.identity_of(Args(plan=self.plan), None))
 
+    def test_identity_names_the_executor_image_the_resolution_recorded(self):
+        image = "ghcr.io/iii-hq/harness-e2e@sha256:" + "e" * 64
+        resolution = self.tmp / "resolution.json"
+        resolution.write_text(json.dumps({"executor_image": image}))
+        self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["executor_image"], image)
+        # An execution prepared outside the image states none.
+        self.assertNotIn("executor_image", report_execution.identity_of(Args(plan=self.plan), None))
+
     def test_materialized_states_the_shards_and_planned_runs(self):
         """Release Control reads only these fields; it must find all of them."""
         payload = report_execution.materialized_payload(
@@ -517,6 +525,26 @@ class StackResolutionTests(unittest.TestCase):
         # No difficulty weight travels: every case counts the same.
         self.assertEqual(sorted(group), ["execution_kind", "id", "runs", "scenarios", "technical_retries"])
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
+
+    def test_the_resolution_names_the_executor_image_the_execution_was_prepared_in(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
+            (root / "execution.json").write_text(json.dumps({
+                "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None}))
+            (root / "stack.yaml").write_text("containers: {}\n")
+            args = SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e")
+            image = "ghcr.io/iii-hq/harness-e2e@sha256:" + "e" * 64
+            with patch.dict(os.environ, {"HARNESS_E2E_EXECUTOR_IMAGE": image}):
+                prepare_execution.command_contracts(args)
+            resolution = json.loads((root / "contracts/resolution.json").read_text())
+            self.assertEqual(resolution["executor_image"], image)
+            self.assertEqual(resolution["cli_version"], "0.24.2")
+            # Prepared outside the image, it names none.
+            with patch.dict(os.environ):
+                os.environ.pop("HARNESS_E2E_EXECUTOR_IMAGE", None)
+                prepare_execution.command_contracts(args)
+            self.assertNotIn("executor_image", json.loads((root / "contracts/resolution.json").read_text()))
 
     def test_every_contract_carries_the_stack_assembled_once_and_its_lock(self):
         import yaml

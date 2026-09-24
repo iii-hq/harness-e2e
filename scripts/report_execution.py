@@ -163,6 +163,9 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "subject": obj(results.get("subject")) or obj(plan.get("subject")) or None,
             "template": resolution.get("template"),
             "result_contract_sha256": results.get("result_contract_sha256"),
+            # Informational: where the execution ran. Release Control reads
+            # the identity fields it knows and ignores the rest.
+            "executor_image": resolution.get("executor_image"),
         }
     )
 

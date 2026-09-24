@@ -76,49 +76,24 @@ jobs:
           test "$GITHUB_TRIGGERING_ACTOR" = "$RELEASE_CONTROL_BOT_LOGIN"
           [[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]
 
-      - name: Install stack tooling
-        run: python3 -m pip install --quiet pyyaml
-
-      - name: Read the dispatch
+      # Every phase runs in the executor image (Dockerfile) with this
+      # checkout's scripts; see scripts/executor.sh. This half reads the
+      # dispatch, resolves the iii release and the template, and has the
+      # stack's own runner, pinned in the stack, materialize the suite. The
+      # reports name that runner by the revision it reports.
+      - name: Materialize the suite with the stack's runner
+        id: stack_runner
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
           DISPATCH_STACK: ${{ inputs.stack }}
           DISPATCH_MODEL: ${{ inputs.model }}
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
-        run: python3 scripts/prepare_execution.py dispatch --contract-dir target/harness-e2e-contract
-
-      - name: Resolve the iii release and the template
-        env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: python3 scripts/prepare_execution.py runtime --contract-dir target/harness-e2e-contract
-
-      # The suite is materialized by the runner the stack runs, never by a
-      # build of this checkout: its master plan and scenario catalog are the
-      # ones every group executes. Its exact release is pinned in the stack.
-      # The reports name it by the revision the runner reports.
-      - name: Fetch the stack's runner
-        id: stack_runner
         run: |
           set -euo pipefail
-          contract=target/harness-e2e-contract
-          binary=$(python3 scripts/prepare_execution.py runner --contract-dir "$contract" --work-dir "$RUNNER_TEMP/harness-e2e-runner")
-          printf 'binary=%s\n' "$binary" >>"$GITHUB_OUTPUT"
-          printf 'revision=%s\n' "$(jq -r '.runner_revision' "$contract/execution.json")" >>"$GITHUB_OUTPUT"
-
-      # suite.json is the snapshot; profile.json is the same file under the
-      # name older Console imports and the ledger reports read. `--profile`
-      # is the flag every runner release knows.
-      - name: Materialize the requested suite
-        env:
-          RUNNER_BINARY: ${{ steps.stack_runner.outputs.binary }}
-        run: |
-          set -euo pipefail
-          contract=target/harness-e2e-contract
-          suite=$(jq -r '.suite | if type == "string" then . else tojson end' "$contract/execution.json")
-          "$RUNNER_BINARY" test-plan materialize --profile "$suite" >"$contract/suite.json"
-          jq -e '.campaigns | length > 0' "$contract/suite.json" >/dev/null
-          cp "$contract/suite.json" "$contract/profile.json"
+          scripts/run_in_image.sh prepare materialize
+          printf 'revision=%s\n' "$(jq -r '.runner_revision' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
 
       # Posted before anything runs and before the stack is assembled: this is
       # what tells Release Control which shards to expect, so a campaign that
@@ -141,66 +116,33 @@ jobs:
             --cli-version "$(jq -r '.iii' target/harness-e2e-contract/execution.json)"
           echo "posted=true" >>"$GITHUB_OUTPUT"
 
-      - name: Write one contract per campaign
+      # The other half writes one contract per campaign and assembles the
+      # stack once, with the credentials the groups get and one more try:
+      # compose::add expands every declared worker into its graph and writes
+      # worker-compose.lock, which goes into every contract. The groups start
+      # exactly that project, frozen, so they all run the same versions.
+      - name: Assemble the stack and lock every contract to it
+        id: contracts
         env:
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
-        run: |
-          python3 scripts/prepare_execution.py contracts \
-            --contract-dir target/harness-e2e-contract \
-            --execution-key "$EXECUTION_KEY" \
-            --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE"
-
-      # Once for the whole execution: compose::add expands every declared
-      # worker into its graph and writes worker-compose.lock. The groups start
-      # exactly that project, frozen, so they all run the same versions. It
-      # gets the credentials the groups get, and one more try before the
-      # execution fails.
-      - name: Assemble and lock the stack
-        id: assemble
-        env:
-          HARNESS_E2E_ASSEMBLE_ONLY: "1"
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           set -euo pipefail
-          contracts=target/harness-e2e-contract/contracts
-          HARNESS_E2E_CONTRACT="$contracts/$(jq -r '.campaign_ids[0]' "$contracts/resolution.json").json"
-          HARNESS_E2E_CAMPAIGN_GROUP_ID=$(jq -r '.matrix.include[0].group_id' "$contracts/resolution.json")
-          export HARNESS_E2E_CONTRACT HARNESS_E2E_CAMPAIGN_GROUP_ID
-          for attempt in 1 2; do
-            export HARNESS_E2E_ARTIFACTS_DIR="$GITHUB_WORKSPACE/target/harness-e2e-assembly/attempt-$attempt"
-            if scripts/run_exact_stack_group.sh; then
-              printf 'stack=%s\n' "$HARNESS_E2E_ARTIFACTS_DIR/stack" >>"$GITHUB_OUTPUT"
-              exit 0
-            fi
-            echo "::warning::stack assembly attempt $attempt failed"
-          done
-          exit 1
-
-      - name: Lock every contract to the assembled stack
-        id: contracts
-        env:
-          ASSEMBLED: ${{ steps.assemble.outputs.stack }}
-        run: |
-          set -euo pipefail
-          python3 scripts/prepare_execution.py lock \
-            --contract-dir target/harness-e2e-contract \
-            --assembled "$ASSEMBLED"
+          scripts/run_in_image.sh prepare assemble
           summary=target/harness-e2e-contract/contracts/resolution.json
-          # A missing or empty matrix means no shard runs and every later job is
-          # skipped. Say so here rather than let it surface as a glob that
-          # matched nothing three steps downstream.
-          jq -e '.matrix.include | length > 0' "$summary" >/dev/null
           printf 'matrix=%s\n' "$(jq -c '.matrix' "$summary")" >>"$GITHUB_OUTPUT"
 
-      - name: Validate every materialized contract
+      # Cancelled or timed out, the assembly's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the assembly's executor container
+        if: always()
         run: |
-          set -euo pipefail
-          for contract in target/harness-e2e-contract/contracts/*.json; do
-            [[ "$(basename "$contract")" == resolution.json ]] && continue
-            python3 scripts/exact_stack_campaign.py validate --contract "$contract" >/dev/null
-          done
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=prepare")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: contract_upload
@@ -214,7 +156,7 @@ jobs:
       # the same checks a group's does before it is uploaded.
       - name: Package the stack assembly evidence
         id: assembly_package
-        if: always() && steps.assemble.outcome != 'skipped'
+        if: always() && steps.contracts.outcome != 'skipped'
         # Evidence is best effort: it never fails a prepared execution.
         continue-on-error: true
         run: |
@@ -290,13 +232,20 @@ jobs:
           persist-credentials: false
           path: .registry-sources/e2e-fixture
 
+      # The group runs in the executor image, where git reads this routing
+      # from the environment (GIT_CONFIG_COUNT) the wrapper passes through.
       - name: Route Registry fixture clones to prepared sources
         if: startsWith(matrix.group_id, 'case-registry-')
         run: |
           set -euo pipefail
           test "$(git -C .registry-sources/registry rev-parse HEAD)" = 662eb87c1bdbb395f36264d5d26bf823e2ace783
-          git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/registry".insteadOf https://github.com/iii-hq/registry.git
-          git config --global url."file://${GITHUB_WORKSPACE}/.registry-sources/e2e-fixture".insteadOf https://github.com/iii-hq/e2e-fixture.git
+          {
+            echo "GIT_CONFIG_COUNT=2"
+            echo "GIT_CONFIG_KEY_0=url.file://${GITHUB_WORKSPACE}/.registry-sources/registry.insteadOf"
+            echo "GIT_CONFIG_VALUE_0=https://github.com/iii-hq/registry.git"
+            echo "GIT_CONFIG_KEY_1=url.file://${GITHUB_WORKSPACE}/.registry-sources/e2e-fixture.insteadOf"
+            echo "GIT_CONFIG_VALUE_1=https://github.com/iii-hq/e2e-fixture.git"
+          } >>"$GITHUB_ENV"
 
       - name: Mint private trending topics fixture token
         id: trending_fixture_token
@@ -324,7 +273,11 @@ jobs:
         run: |
           set -euo pipefail
           test "$(git -C .trending-topics-fixture rev-parse HEAD)" = 3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
-          git config --global url."file://${GITHUB_WORKSPACE}/.trending-topics-fixture".insteadOf git@github.com:iii-hq/e2e-fixture.git
+          {
+            echo "GIT_CONFIG_COUNT=1"
+            echo "GIT_CONFIG_KEY_0=url.file://${GITHUB_WORKSPACE}/.trending-topics-fixture.insteadOf"
+            echo "GIT_CONFIG_VALUE_0=git@github.com:iii-hq/e2e-fixture.git"
+          } >>"$GITHUB_ENV"
 
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
@@ -373,35 +326,34 @@ jobs:
           path: target/execution-template
           persist-credentials: false
 
-      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
-        if: matrix.template_revision != '' || startsWith(matrix.group_id, 'case-kanban-') || matrix.group_id == 'case-linkly-tutorial'
-        with:
-          node-version: 24.18.0
-
-      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v5
-        if: matrix.template_revision != ''
-        with:
-          version: 11.13.1
-
-      # Workers run on this runner, so the subject's shell and the scenario
-      # runner share its PATH. alertmanager_route_match builds Go 1.25 code.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.25.x"
-          cache: false
-
-      - name: Install iii project scaffold tooling
-        run: python3 -m pip install --quiet pyyaml
-
+      # The workers run in the executor image, so the subject's shell and the
+      # scenario runner share its tools: Node and pnpm, Go 1.25 for
+      # alertmanager_route_match, Chromium for the browser worker, and the
+      # host's Docker through its socket. On the runner's network: this job
+      # owns the runner, and the Registry fixture publishes the application
+      # it screenshots on the runner's loopback.
       - name: Execute common campaign group
         id: common
         continue-on-error: true
         env:
+          HARNESS_E2E_DOCKER_NETWORK: host
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           HARNESS_E2E_CONTRACT: target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
-        run: scripts/run_exact_stack_group.sh
+        run: scripts/run_in_image.sh group
+
+      # Cancelled or timed out, the group's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the group's executor container
+        if: always()
+        env:
+          GROUP_ID: ${{ matrix.group_id }}
+        run: |
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.group=$GROUP_ID")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
 
       # Whatever the group did, its runs reach the ledger: from results.json
       # when the group finished, from the journal checkpoints when it did not,
@@ -563,17 +515,6 @@ jobs:
           path: ${{ steps.group_artifacts.outputs.download_path }}
           merge-multiple: false
 
-      # Aggregated by the runner the stack ran, as the suite was materialized
-      # by it: one release scores what it executed.
-      - name: Fetch the stack's runner
-        id: stack_runner
-        run: |
-          set -euo pipefail
-          python3 -m pip install --quiet pyyaml
-          printf 'binary=%s\n' "$(python3 scripts/prepare_execution.py runner-binary \
-            --lock target/harness-e2e-contract/worker-compose.lock \
-            --work-dir "$RUNNER_TEMP/harness-e2e-runner")" >>"$GITHUB_OUTPUT"
-
       - name: Restore deterministic group paths
         if: always()
         run: |
@@ -602,27 +543,22 @@ jobs:
             done < <(python3 scripts/exact_stack_campaign.py groups --contract "$contract")
           done < <(find target/harness-e2e-contract/contracts -name '*.json' ! -name resolution.json | sort)
 
+      # Aggregated in the executor image by the runner the stack ran, as the
+      # suite was materialized by it: one release scores what it executed.
       - name: Aggregate with exact Harness scoring implementation
         id: aggregate
         continue-on-error: true
-        env:
-          RUNNER_BINARY: ${{ steps.stack_runner.outputs.binary }}
+        run: scripts/run_in_image.sh finalize
+
+      # Cancelled or timed out, the finalizer's executor container may still be
+      # running: it goes before anything is reported or packaged, so what is
+      # uploaded is what was hashed.
+      - name: Remove the finalizer's executor container
+        if: always()
         run: |
-          set -euo pipefail
-          for root in target/harness-e2e-campaign/*/; do
-            python3 scripts/exact_stack_campaign.py manifest \
-              --contract "$root/stack-lock.json" \
-              --output "$root/campaign-manifest.json"
-            python3 scripts/run_e2e_campaign.py \
-              "$root/campaign-manifest.json" \
-              --e2e-bin "$RUNNER_BINARY" \
-              --aggregate-existing-root "$root/groups" \
-              --execution-id "$EXECUTION_KEY" \
-              --summary "$root/campaign-summary.json" \
-              --bundle "$root/campaign-bundle.json"
-          done
-          jq -s '{campaigns: .}' target/harness-e2e-campaign/*/campaign-summary.json \
-            >target/harness-e2e-campaign/execution-summary.json
+          containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=finalize")
+          echo "executor containers left: ${containers:-none}"
+          [[ -z "$containers" ]] || docker rm -f $containers
 
       - name: Report the campaign summary
         if: always() && inputs.execution_id != ''

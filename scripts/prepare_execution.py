@@ -426,6 +426,7 @@ def command_contracts(args: argparse.Namespace) -> None:
                 }
             )
     # The workflow and report_execution.py read this by name.
+    image = os.environ.get("HARNESS_E2E_EXECUTOR_IMAGE")
     write_json(
         directory / "contracts" / "resolution.json",
         {
@@ -433,6 +434,9 @@ def command_contracts(args: argparse.Namespace) -> None:
             "cli_version": cli["version"],
             "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
             **({"template": template} if template else {}),
+            # The executor image the execution was prepared in, as
+            # scripts/run_in_image.sh resolved it.
+            **({"executor_image": image} if image else {}),
         },
     )
 
