@@ -279,23 +279,22 @@ function unavailableScenario(
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)
+  // A slot running, or waiting to run again, has no report yet.
+  const running = record?.state === 'running'
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason:
-      nonEmptyString(record?.error) ??
-      'The expected report for this scenario was not retained.',
+    reason: running
+      ? null
+      : (nonEmptyString(record?.error) ??
+        'The expected report for this scenario was not retained.'),
     reportIndex,
     scenarioIndex: null,
     subjectId: record?.subject_id ?? 'Unknown subject',
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: {
-      status: 'unavailable',
-      label: 'Unavailable',
-      raw: 'unavailable',
-    },
+    objective: objectiveStatus(running ? 'running' : 'unavailable'),
     durationMs: null,
     durationKind: null,
     runCount: 0,

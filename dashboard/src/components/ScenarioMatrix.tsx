@@ -567,7 +567,7 @@ function ScenarioResult({
           {previous.length > 0 ? (
             <PreviousAttempts previous={previous} />
           ) : null}
-          {!item.available ? (
+          {!item.available && item.objective.status !== 'running' ? (
             <p className="m-0 mt-3 text-sm text-ink-muted">
               The expected report for this scenario is unavailable. Runtime and
               workflow data are intentionally not inferred.

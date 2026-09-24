@@ -73,6 +73,32 @@ describe('executable plan journey', () => {
       'Observation coverage',
     ])
       expect(html).toContain(label)
+    expect(html).not.toContain('data-rerun-progress')
+  })
+  it('times a rerun from when it started, not from the execution', () => {
+    const started = new Date(Date.now() - 90_000).toISOString()
+    const html = renderToStaticMarkup(
+      <PlanProgress
+        execution={
+          {
+            state: 'running',
+            role: null,
+            slots: [],
+            rerun: {
+              scenarios: ['timer_wake'],
+              runs: ['native'],
+              started_at: started,
+              state: 'completed',
+              error: null,
+              finished_at: '2026-09-20T10:00:00Z',
+            },
+          } as unknown as PlanExecution
+        }
+      />,
+    )
+    expect(html).toContain('timer_wake running again since')
+    expect(html).toMatch(/· 1m 3\ds elapsed/)
+    expect(html).toContain('totals update when it finishes')
   })
   it('preserves the draft and links to the active execution when admission is busy', () => {
     const html = renderToStaticMarkup(

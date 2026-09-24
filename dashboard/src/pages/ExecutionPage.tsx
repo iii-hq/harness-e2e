@@ -233,10 +233,19 @@ export function provenanceEntries(
 ): Array<[string, string]> {
   const started = Date.parse(presentation.startedAt)
   const completed = Date.parse(presentation.completedAt)
-  const duration =
-    Number.isFinite(started) &&
-    Number.isFinite(completed) &&
-    completed >= started
+  // After a scenario ran again, start to finish spans the pause and the
+  // replaced attempt: the time is the current runs' own.
+  const reran = detail.plan_execution?.slots.some(
+    (slot) => (slot.previous_attempts?.length ?? 0) > 0,
+  )
+  const runTime = finiteMetric(detail.totals?.wall_time_seconds)
+  const duration = reran
+    ? runTime === null
+      ? 'after running a scenario again'
+      : `after running a scenario again · ${formatDuration(runTime)} of current runs`
+    : Number.isFinite(started) &&
+        Number.isFinite(completed) &&
+        completed >= started
       ? formatDuration((completed - started) / 1000)
       : null
   const rows: Array<[string, string | null | undefined]> = [
@@ -524,6 +533,8 @@ export function ExecutionPage({
     presentation?.attention === 'running' ||
     presentation?.attention === 'cancelling'
   const importing = detail?.status === 'importing'
+  // Running a scenario again: the other scenarios keep their results on screen.
+  const rerunning = live && Boolean(detail?.plan_execution?.rerun)
 
   // Audit ED-12: a live execution follows the run instead of waiting for F5.
   useEffect(() => {
@@ -923,7 +934,7 @@ export function ExecutionPage({
         {detail.plan_execution && !live ? (
           <ExecutionConfiguration execution={detail.plan_execution} />
         ) : null}
-        {!noRun && !live ? (
+        {!noRun && (!live || rerunning) ? (
           <div className="execution-layers mt-6 grid min-w-0 gap-3">
             <section
               id="results"
@@ -946,8 +957,9 @@ export function ExecutionPage({
                   detail={resultDetail ?? detail}
                   onTranscript={(run, title) => setTranscript({ run, title })}
                   showContract={false}
+                  // Offered once finished; a saved plan's executions run again whole.
                   onRerun={
-                    ready && detail.plan_execution
+                    ready && !live && detail.plan_execution && !detail.plan_id
                       ? setScenarioRerun
                       : undefined
                   }

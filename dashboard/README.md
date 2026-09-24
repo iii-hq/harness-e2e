@@ -50,19 +50,29 @@ execution runs at a time: a start while another runs names that execution
 (`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution without a plan can be
 deleted with its native runs, previous attempts included; a plan's executions go with the plan.
 
-**Run this scenario again**, on any scenario of a finished local execution,
-calls `e2e::dashboard::execution-slot-rerun`: the scenario's slots run again
-as new native runs with the requests they ran (every round, the canonical
-case, a sequential group whole) and the execution is `running` until it is
-`completed` again. The last attempt counts, as a re-run job does on GitHub,
-even when it does worse: the run it replaced stays on the slot
-(`previous_attempts`) and in the detail (`previous_reports`), listed under the
-scenario with its result, score, reason and evidence record, and outside the
-score, totals, measurements and comparison. The scenario reads `rerun ×N` on
-its execution and in a comparison and its summary. A rerun keeps the stack
-the execution recorded and warns when it ran on another one. An imported
-execution is not run here, which would mix stacks: re-run its job on GitHub
-and import the run again (the import takes the highest attempt).
+**Run this scenario again**, on any scenario of a finished local execution
+without a saved plan, calls `e2e::dashboard::execution-slot-rerun`. Every
+check runs first and nothing changes: the recorded requests must still be
+valid, and the stack's identity (Harness and engine versions, runner
+revision, native contracts) must be the one the execution pinned, or the call
+is refused with what differs and Run again (a new execution) is the way. The
+scenario's slots then run again with the requests they ran (every round, the
+canonical case, a sequential group whole) and the execution is `running`. A
+slot's run is replaced only when its new run is admitted; the last attempt
+counts, as a re-run job does on GitHub, even when it does worse. The replaced
+run stays on the slot (`previous_attempts`) and in the detail
+(`previous_reports`), listed under the scenario with its result, score,
+reason and evidence record, and outside the score, totals, measurements,
+comparison and test history. A rerun that is cancelled or stops (a restart, a
+failed admission, a run that reports another identity, which is removed and
+never counted) leaves the rounds it did not replace as they were and returns
+the execution to its finished state with a warning; an execution with slots
+that never ran stays cancelled or interrupted until they do. The scenario
+reads `rerun ×N` on its execution and in a comparison and its summary. A
+rerun keeps the stack the execution recorded and warns, once, when workers
+differ. An imported execution is not run here, which would mix stacks:
+re-run its job on GitHub and import the run again (the import takes the
+highest attempt).
 
 Before its first slot every local execution records its stack: the containers
 of the compose project that runs this worker (`package://` or `path://`, the

@@ -143,6 +143,25 @@ describe('execution layers', () => {
     expect(byKey.completed).not.toContain('2026-08-26T20:11:31Z')
     expect(byKey.actor).toBe('layon')
   })
+
+  it('times an execution with a scenario run again by its current runs, not start to finish', () => {
+    const reran = {
+      ...detail,
+      started_at: '2026-08-26T20:07:31Z',
+      completed_at: '2026-08-28T09:00:00Z',
+      totals: { ...detail.totals, wall_time_seconds: 150 },
+      plan_execution: {
+        slots: [{ previous_attempts: [{ execution_id: 'old', error: null }] }],
+      },
+    } as unknown as DashboardExecutionDetail
+    const byKey = Object.fromEntries(
+      provenanceEntries(reran, buildExecutionPresentation(reran)),
+    )
+    expect(byKey.completed).toMatch(
+      /· after running a scenario again · 2m 30s of current runs$/,
+    )
+    expect(byKey.completed).not.toContain('36h')
+  })
 })
 
 describe('run again', () => {

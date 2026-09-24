@@ -108,7 +108,17 @@ function localExecution(phase) {
   const timer =
     phase === 'after'
       ? report('timer_wake', 'native-timer-2', run('timer-2', { score: 75 }))
-      : report('timer_wake', 'native-timer-1', invalidTimer)
+      : phase === 'running'
+        ? // Admitted and running: nothing to report yet.
+          {
+            subject_id: 'flash',
+            scenario_id: 'timer_wake',
+            native_execution_id: 'native-timer-2',
+            round: 1,
+            available: false,
+            state: 'running',
+          }
+        : report('timer_wake', 'native-timer-1', invalidTimer)
   const state = phase === 'running' ? 'running' : 'completed'
   const timerSlot =
     phase === 'before'
@@ -118,7 +128,7 @@ function localExecution(phase) {
             { execution_id: 'native-timer-1', error: null },
           ]),
           ...(phase === 'running'
-            ? { state: 'pending', observed: 0, completed: 0, passed: 0 }
+            ? { state: 'running', observed: 0, completed: 0, passed: 0 }
             : {}),
         }
   const source = { kind: 'local' }
@@ -161,6 +171,17 @@ function localExecution(phase) {
       error: null,
       baseline_eligible: false,
       measurements: null,
+      rerun:
+        phase === 'running'
+          ? {
+              scenarios: ['timer_wake'],
+              runs: ['native-timer-1'],
+              started_at: new Date().toISOString(),
+              state: 'completed',
+              error: null,
+              finished_at: '2026-09-23T11:00:00Z',
+            }
+          : null,
       slots: [
         slot('minimal_path', 'native-minimal'),
         timerSlot,
@@ -192,6 +213,19 @@ const imported = {
   },
 }
 
+// A saved plan's execution runs again whole, never one scenario.
+const plannedId = 'plan-cccccccccccccccccccccccccccccccc'
+const planned = {
+  ...localExecution('before'),
+  id: plannedId,
+  plan_id: 'plan-saved',
+  plan_execution: {
+    ...localExecution('before').plan_execution,
+    id: plannedId,
+    plan_id: 'plan-saved',
+  },
+}
+
 let phase = 'before'
 let busy = true
 const reruns = []
@@ -200,13 +234,15 @@ const detailOf = (id) =>
     ? localExecution(phase)
     : id === importedId
       ? imported
-      : {
-          id: nightly,
-          label: 'Nightly',
-          status: 'running',
-          subjects: [],
-          reports: [],
-        }
+      : id === plannedId
+        ? planned
+        : {
+            id: nightly,
+            label: 'Nightly',
+            status: 'running',
+            subjects: [],
+            reports: [],
+          }
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
@@ -301,6 +337,18 @@ try {
   assert.deepEqual(reruns, [
     { execution_id: localId, scenario_id: 'timer_wake' },
   ])
+  // While it runs: timed from the rerun, the scenario reads as running, the
+  // others keep their results, and nothing can run again.
+  await page
+    .getByText('timer_wake running again since', { exact: false })
+    .waitFor()
+  const running = page.locator('[aria-label="Timer Wake scenario result"]')
+  await running.getByText('Running', { exact: true }).waitFor()
+  await page
+    .locator('[aria-label="Minimal Path scenario result"]')
+    .getByText('90/100')
+    .waitFor()
+  assert.equal(await page.locator('[data-rerun-scenario]').count(), 0)
 
   // Finished: the last attempt counts, the previous one is listed apart.
   phase = 'after'
@@ -330,6 +378,11 @@ try {
   )
   await page.getByText('previous attempts · not counted').waitFor()
 
+  // A saved plan's execution offers no rerun of one scenario.
+  await page.goto(`${server.url}#/ext/harness-e2e/execution/${plannedId}`)
+  await page.locator('[aria-label="Minimal Path scenario result"]').waitFor()
+  assert.equal(await page.locator('[data-rerun-scenario]').count(), 0)
+
   // An imported execution runs again on GitHub, never here.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${importedId}`)
   await page
@@ -355,7 +408,7 @@ try {
   assert.equal(reruns.length, 1)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed, last attempt counted with the previous one listed and linked, imported execution sent to GitHub.',
+    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, none on a saved plan, imported execution sent to GitHub.',
   )
 } finally {
   await browser.close()

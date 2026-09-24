@@ -40,6 +40,16 @@ export type PlanExecution = {
   error: string | null
   baseline_eligible: boolean
   slots: PlanSlot[]
+  /** A scenario of this finished execution running again, and the finished
+   *  state it returns to if the rerun stops before replacing anything. */
+  rerun?: {
+    scenarios: string[]
+    runs: string[]
+    started_at: string
+    state: string
+    error: string | null
+    finished_at: string | null
+  } | null
   measurements: null | {
     cohorts: Array<{
       cohort_sha256: string

@@ -475,6 +475,29 @@ describe('ScenarioMatrix', () => {
     ).not.toContain('data-rerun')
   })
 
+  it('shows a scenario running again as running, not unavailable', () => {
+    const running = {
+      ...detail,
+      reports: [
+        {
+          subject_id: 'terra',
+          scenario_id: 'security_review',
+          available: false,
+          state: 'running',
+          error: null,
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+    const model = buildScenarioMatrix(running)
+    expect(model.items[0].objective.status).toBe('running')
+    expect(model.items[0].reason).toBeNull()
+    expect(model.summary).toMatchObject({ running: 1, unavailable: 0 })
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={running} onTranscript={() => {}} />,
+    )
+    expect(html).not.toContain('The expected report for this scenario')
+  })
+
   it('keeps incomplete outcomes and evidence access visible with secondary details collapsed', () => {
     const failedOnly = {
       ...detail,
