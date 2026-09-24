@@ -39,11 +39,41 @@ DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
 EXECUTOR_KEYS = ("iii", "template")
 
 
-def declared_base() -> dict[str, Any]:
-    """The Compose project of the default stack."""
+def load_yaml(text: str) -> Any:
+    """YAML the way Compose reads it (1.2 core schema).
+
+    PyYAML resolves YAML 1.1: `on`, `no` and `yes` become booleans and an
+    unquoted date a datetime, which then reach Compose as something the
+    author did not write (or do not serialize at all). Only `true`/`false`
+    are booleans here, and a date stays text. Writing back with
+    `yaml.safe_dump` quotes those strings, which 1.2 reads as strings too.
+    """
     import yaml
 
-    stack = yaml.safe_load(DEFAULT_STACK.read_text())
+    class Loader(yaml.SafeLoader):
+        pass
+
+    ambiguous = {"tag:yaml.org,2002:bool", "tag:yaml.org,2002:timestamp"}
+    Loader.yaml_implicit_resolvers = {
+        first: [(tag, pattern) for tag, pattern in resolvers if tag not in ambiguous]
+        for first, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+    Loader.add_implicit_resolver(
+        "tag:yaml.org,2002:bool", re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$"), list("tTfF")
+    )
+    return yaml.load(text, Loader=Loader)
+
+
+def worker_name(source: str) -> str:
+    """The name a package is known by, whatever registry host its reference
+    names: Compose records `package://api.workers.iii.dev/<name>` as readily
+    as `package://<name>`."""
+    return str(source).removeprefix("package://").rsplit("/", 1)[-1]
+
+
+def declared_base() -> dict[str, Any]:
+    """The Compose project of the default stack."""
+    stack = load_yaml(DEFAULT_STACK.read_text())
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
 
 
@@ -358,9 +388,7 @@ def assignments(values: list[str], label: str) -> dict[str, str]:
 
 def declared_workers(compose_path: Path) -> dict[str, str]:
     """The workers a compose project declares, with the selector each carries."""
-    import yaml
-
-    project = yaml.safe_load(compose_path.read_text())
+    project = load_yaml(compose_path.read_text())
     if not isinstance(project, dict):
         raise ValueError("compose project must be an object")
     declared: dict[str, str] = {}
@@ -369,8 +397,7 @@ def declared_workers(compose_path: Path) -> dict[str, str]:
         if source.startswith("package://"):
             # Compose rewrites a declaration with the registry host it resolved
             # against, so workers are compared by the name they are known by.
-            package = source.removeprefix("package://").rsplit("/", 1)[-1]
-            declared[package] = str(container.get("version", DEFAULT_SELECTOR))
+            declared[worker_name(source)] = str(container.get("version", DEFAULT_SELECTOR))
     return dict(sorted(declared.items()))
 
 
@@ -471,7 +498,7 @@ def project_scaffold(
 
     runtime = contract.get("runtime") or {}
     locked = {
-        entry["worker"].removeprefix("package://"): entry["resolved"]["version"]
+        worker_name(entry["worker"]): entry["resolved"]["version"]
         for entry in ((runtime.get("lock") or {}).get("containers") or {}).values()
     }
 
@@ -483,7 +510,14 @@ def project_scaffold(
         raise ValueError("env file must be absolute")
     manifest = copy.deepcopy(template if template is not None else (runtime.get("compose") or declared_base()))
     containers = manifest.setdefault("containers", {})
-    containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
+    def declares(package: str) -> bool:
+        return any(
+            str(item.get("worker", "")).startswith("package://") and worker_name(item["worker"]) == package
+            for item in containers.values()
+        )
+
+    if not declares(RUNNER):
+        containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
     group_scenarios = scenarios
     if group_id is not None:
         group = next((group for group in contract["suite"]["groups"] if group["id"] == group_id), None)
@@ -494,7 +528,7 @@ def project_scaffold(
     # whole suite carries it when any group needs it; a group that does not
     # leaves it out again, with what only Canvas brought in.
     if {"form_flow_build", "state_machine_canvas_build"} & group_scenarios:
-        if not any(item.get("worker") == "package://canvas" for item in containers.values()):
+        if not declares("canvas"):
             if "canvas" in containers:
                 raise ValueError("container canvas is already used by another worker")
             containers["canvas"] = {"worker": "package://canvas", "version": DEFAULT_SELECTOR}
@@ -507,11 +541,10 @@ def project_scaffold(
     if not re.fullmatch(r"[a-z][a-z0-9-]*", provider):
         raise ValueError("suite.subject.provider must be a provider package name")
     provider_package = f"provider-{provider}"
-    provider_source = f"package://{provider_package}"
-    if not any(container.get("worker") == provider_source for container in containers.values()):
+    if not declares(provider_package):
         if provider_package in containers:
             raise ValueError(f"container {provider_package} is already used by another worker")
-        containers[provider_package] = {"worker": provider_source, "version": DEFAULT_SELECTOR}
+        containers[provider_package] = {"worker": f"package://{provider_package}", "version": DEFAULT_SELECTOR}
     package_names: dict[str, list[str]] = {}
     for name, container in containers.items():
         source = container.get("worker", "")
@@ -522,11 +555,13 @@ def project_scaffold(
             if not path.is_absolute() and (not source.startswith("path://./") or ".." in path.parts):
                 raise ValueError(f"declared worker {name} must stay inside its project")
             continue
-        package = source.removeprefix("package://")
-        package = (template_packages or {}).get(package, package)
         if not source.startswith("package://"):
             raise ValueError(f"declared worker {name} has an unsupported source: {source}")
-        container["worker"] = f"package://{package}"
+        package = worker_name(source)
+        renamed = (template_packages or {}).get(package, package)
+        if renamed != package:
+            container["worker"] = source[: -len(package)] + renamed
+            package = renamed
         if template is not None:
             # A template's own pin is its author's, not ours: a fixture checked
             # out at an old commit would otherwise downgrade the very
@@ -545,7 +580,8 @@ def project_scaffold(
                     for dependency in container["start_after"]
                 ]
     for name, container in containers.items():
-        worker = container["worker"].removeprefix("package://")
+        source = str(container["worker"])
+        worker = worker_name(source) if source.startswith("package://") else None
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
@@ -608,7 +644,6 @@ def compose_evidence(
     worker_rows = workers_payload.get("workers")
     if not isinstance(worker_rows, list):
         raise ValueError("engine worker evidence must contain a workers array")
-    import yaml
 
     # What the project was asked to run is the compose it was assembled from.
     requested = declared_workers(compose_path)
@@ -617,7 +652,7 @@ def compose_evidence(
     # freely (Linkly runs `ade` as `console`). Compose already gated the start;
     # a container the engine does not report is drift to show, never a reason
     # to discard a finished run.
-    containers = (yaml.safe_load(compose_path.read_text()) or {}).get("containers") or {}
+    containers = (load_yaml(compose_path.read_text()) or {}).get("containers") or {}
     missing = sorted(
         name for name, container in containers.items()
         if str(container.get("worker", "")).startswith("package://") and name not in observed
@@ -804,7 +839,7 @@ def main() -> int:
                 import yaml
             except ImportError as error:  # pragma: no cover - CI installs PyYAML explicitly.
                 raise ValueError("PyYAML is required to create the iii project scaffold") from error
-            template = yaml.safe_load(args.template_compose.read_text()) if args.template_compose else None
+            template = load_yaml(args.template_compose.read_text()) if args.template_compose else None
             if args.fixture_compose:
                 if template is None:
                     raise ValueError("fixture-compose requires template-compose")
@@ -814,7 +849,7 @@ def main() -> int:
                     source = container.get("worker", "")
                     if source.startswith("path://./"):
                         container["worker"] = f"path://{(args.template_compose.parent / source.removeprefix('path://')).resolve()}"
-                template = with_fixture(template, yaml.safe_load(args.fixture_compose.read_text()))
+                template = with_fixture(template, load_yaml(args.fixture_compose.read_text()))
             manifest = project_scaffold(
                 contract,
                 args.namespace,

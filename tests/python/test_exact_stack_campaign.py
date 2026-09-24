@@ -114,9 +114,10 @@ def catalog():
 
 
 def lock_of(versions: dict[str, str]):
-    """A worker-compose.lock resolving each package to one version."""
+    """A worker-compose.lock resolving each package to one version, with the
+    registry host Compose records."""
     return {"version": 1, "containers": {
-        worker: {"worker": f"package://{worker}", "requested": "latest", "resolved": {
+        worker: {"worker": f"package://api.workers.iii.dev/{worker}", "requested": "latest", "resolved": {
             "name": worker, "version": version, "type": "binary",
             "artifacts": {"x86_64-unknown-linux-gnu": {"sha256": "0" * 64, "url": f"https://registry.example/{worker}"}},
         }}
@@ -343,9 +344,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         selector, so the group stamps what is per group and nothing else."""
         assembled = {"namespace": "e2e-prepare", "containers": {
             "harness": {"worker": "package://harness", "version": "latest"},
-            "harness-e2e": {"worker": "package://harness-e2e", "version": "latest",
-                            "config_name": "e2e-prepare-harness-e2e", "config_override": {"data_dir": "/prepare"}},
-            "provider-deepseek": {"worker": "package://provider-deepseek", "version": "latest"},
+            # Named with the registry host: still the runner, the provider and
+            # the Directory, never a second declaration of them.
+            "e2e": {"worker": "package://api.workers.iii.dev/harness-e2e", "version": "0.12.3",
+                    "config_name": "e2e-prepare-harness-e2e", "config_override": {"data_dir": "/prepare"}},
+            "provider-deepseek": {"worker": "package://api.workers.iii.dev/provider-deepseek", "version": "latest"},
+            "directory": {"worker": "package://api.workers.iii.dev/iii-directory", "version": "0.3.1"},
             "state": {"worker": "package://state", "version": "0.22.8", "env_file": ["/prepare/.env"]},
             "llm-router": {"worker": "package://llm-router"},
         }}
@@ -359,7 +363,9 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             result = subprocess.run(
                 ["python3", str(SCRIPT), "project", "--contract", str(root / "contract.json"),
                  "--namespace", "e2e-group", "--data-dir", str(root / "native"),
-                 "--env-file", str(root / ".env"), "--output", str(output)],
+                 "--env-file", str(root / ".env"), "--output", str(output),
+                 "--profile-root", str(root / "project"),
+                 "--environment", "harness-e2e.HARNESS_E2E_LANE=local-pr"],
                 capture_output=True, text=True,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -371,9 +377,12 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             {name: (c["worker"], c.get("version")) for name, c in project["containers"].items()},
             {name: (c["worker"], c.get("version")) for name, c in assembled["containers"].items()},
         )
-        runner = project["containers"]["harness-e2e"]
+        runner = project["containers"]["e2e"]
         self.assertEqual(runner["config_name"], "e2e-group-harness-e2e")
         self.assertEqual(runner["config_override"]["data_dir"], str(root / "native"))
+        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr"})
+        self.assertEqual(project["containers"]["directory"]["config_override"]["agents_folder"],
+                         str(root / "project/agents"))
         self.assertEqual({tuple(c["env_file"]) for c in project["containers"].values()}, {(str(root / ".env"),)})
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
@@ -1006,6 +1015,68 @@ fail() {
         self.assertNotIn("exact-stack-scaffold", block)
         self.assertIn("await_compose_add", block)
         self.assertNotIn("runner_dependencies", MODULE.__dict__)
+
+    def test_a_group_starts_the_locked_stack_frozen_and_preparation_only_assembles_it(self):
+        """What the launcher does with the lock, without an engine: the frozen
+        decision, compose::add only where a project is still to be assembled,
+        and preparation stopping once the stack and its lock exist."""
+        source = RUNNER_SCRIPT.read_text()
+        decide = source[source.index("if [[ -n \"$assemble_only\" ]]; then"):source.index("profile_assets=")]
+        start = source.index("failure_phase=project_assembly")
+        assembly = source[start:source.index("jq -e '.status == \"ok\"' \"$artifact_dir/stack/up.json\"")]
+        stubs = """set -Eeuo pipefail
+artifact_dir=$1
+contract_path=$1/contract.json
+compose_file=$1/$3/worker-compose.yaml
+contract_tool=$2
+log() { :; }
+await_compose_add() { :; }
+compose_trigger() { printf '%s\\n' "$*" >>"$artifact_dir/calls"; echo '{"status":"ok"}'; }
+"""
+        compose = {"containers": {
+            "harness": {"worker": "package://harness", "version": "latest"},
+            "harness-e2e": {"worker": "package://harness-e2e", "version": "0.12.3"},
+        }}
+        cases = (
+            # (lock in contract, assemble_only, project template) -> (frozen, calls)
+            (True, "", "", "true", ["compose::up --json"]),
+            (False, "1", "", "false", ["compose::add file="]),
+            # Preparation assembles the stack itself, never a template project.
+            (False, "1", "linkly-agentic", "false", ["compose::add file="]),
+            (True, "", "linkly-agentic", "false", ["compose::add file=", "compose::up --json"]),
+        )
+        for locked, assemble_only, template, frozen, calls in cases:
+            with self.subTest(locked=locked, assemble_only=assemble_only, template=template), \
+                    tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                # A template project lives in the run tree, a stack in the evidence.
+                project = "project" if template and not assemble_only else "stack"
+                (root / "stack").mkdir()
+                (root / project).mkdir(exist_ok=True)
+                (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(compose))
+                (root / "contract.json").write_text(json.dumps({"runtime": {"lock": lock_of({}) if locked else None}}))
+                variables = f"assemble_only={assemble_only!r}\nproject_template={template!r}\nexecution_template=''\nlinkly_fixture=false\n"
+                result = subprocess.run(
+                    ["bash", "-c", stubs + variables + decide + 'printf "%s\\n" "$frozen" >"$artifact_dir/frozen"\n' + assembly,
+                     "runner", str(root), str(SCRIPT), project],
+                    capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual((root / "frozen").read_text().strip(), frozen)
+                made = (root / "calls").read_text().splitlines()
+                self.assertEqual(len(made), len(calls), made)
+                for call, expected in zip(made, calls):
+                    self.assertTrue(call.startswith(expected), (call, expected))
+                if frozen == "true":
+                    self.assertEqual(json.loads((root / "stack/add.json").read_text())["status"], "skipped")
+                    self.assertIn('"frozen":true', made[-1])
+                if assemble_only:
+                    self.assertFalse(any("compose::up" in call for call in made), "preparation stops at the lock")
+                if project == "project":
+                    self.assertIn("worker=harness-e2e@0.12.3", made[0])
+                    self.assertNotIn("worker=harness@", made[0])
+                elif not locked:
+                    self.assertIn("worker=harness@latest", made[0])
 
     def test_identity_travels_verbatim_while_requested_values_keep_their_shape(self):
         contract = campaign_contract()
