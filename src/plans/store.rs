@@ -792,13 +792,41 @@ impl PlanStore {
         };
         let _guard = self.lock.lock().await;
         let runner = self.runner()?;
-        runner.reserve(&execution.id).await?;
+        if let Err(error) = runner.reserve(&execution.id).await {
+            return Err(self.busy(runner, error).await);
+        }
         if let Err(error) = self.write_execution(&execution).await {
             runner.release(&execution.id).await;
             return Err(error);
         }
         self.spawn_drive(&execution.id);
         Ok(execution)
+    }
+
+    /// A runner that refused a reservation is busy: say which execution holds
+    /// it, by name, with its id in parentheses for the Console to open.
+    async fn busy(&self, runner: &Arc<dyn Runner>, error: anyhow::Error) -> anyhow::Error {
+        let Some(id) = runner
+            .active()
+            .await
+            .and_then(|active| active["id"].as_str().map(str::to_owned))
+        else {
+            return error;
+        };
+        let execution = self.read_execution(&id).await.ok();
+        let mut name = execution.as_ref().and_then(|e| e.label.clone());
+        if let (None, Some(plan_id)) = (&name, execution.and_then(|e| e.plan_id)) {
+            name = self
+                .read_plan(&plan_id)
+                .await
+                .ok()
+                .map(|plan| plan.plan.label);
+        }
+        let holder = name.map_or_else(
+            || format!("Another execution ({id})"),
+            |name| format!("\"{name}\" ({id})"),
+        );
+        anyhow::anyhow!("{holder} is still running; wait for it to finish or cancel it.")
     }
 
     /// Delete a finished execution that ran no saved plan (a plan's executions
@@ -977,7 +1005,9 @@ impl PlanStore {
             return Ok(json!({"blocked": true, "requirements": preflight}));
         }
         let runner = self.runner()?;
-        runner.reserve(&id).await?;
+        if let Err(error) = runner.reserve(&id).await {
+            return Err(self.busy(runner, error).await);
+        }
         let config = &plan.plan;
         let mut execution = PlanExecution {
             id: id.clone(),
@@ -1485,7 +1515,7 @@ fn parameter_slots(
     Ok(slots)
 }
 /// Scenarios the master plan runs only together, in order, in one session.
-fn sequential_groups(master: &test_plan::MasterPlan) -> Vec<Vec<String>> {
+pub(crate) fn sequential_groups(master: &test_plan::MasterPlan) -> Vec<Vec<String>> {
     master
         .profiles
         .iter()
@@ -3451,6 +3481,35 @@ mod tests {
             assert_eq!(ids.len(), 2, "one run for the group, one for minimal_path");
         }
         assert!(slots.iter().all(|slot| slot.request["seed"] == 7));
+    }
+
+    #[tokio::test]
+    async fn a_busy_runner_names_the_execution_that_holds_it() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        runner.hold.store(true, Ordering::SeqCst);
+        let manager = manager(root.path(), runner.clone());
+        let parameters = ExecutionParameters {
+            scenarios: vec!["minimal_path".into()],
+            runs: 1,
+            technical_retries: 0,
+            seed: None,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        };
+        let running = manager
+            .start_execution(parameters.clone(), "Nightly")
+            .await
+            .unwrap();
+        let error = manager.start_execution(parameters, "").await.unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "\"Nightly\" ({}) is still running; wait for it to finish or cancel it.",
+                running.id
+            )
+        );
     }
 
     #[tokio::test]

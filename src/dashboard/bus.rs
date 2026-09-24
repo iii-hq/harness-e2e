@@ -168,6 +168,8 @@ pub(super) struct CatalogResponse {
     url: String,
     models: Vec<CatalogModel>,
     scenarios: Vec<String>,
+    /// Scenarios that run only together, in this order: picking one runs all.
+    scenario_groups: Vec<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -840,6 +842,9 @@ pub(super) async fn catalog(
                 url,
                 models,
                 scenarios,
+                scenario_groups: crate::plans::store::sequential_groups(
+                    &crate::test_plan::embedded()?,
+                ),
             });
         }
     }
@@ -873,6 +878,9 @@ pub(super) async fn catalog(
             url,
             models,
             scenarios,
+            scenario_groups: crate::plans::store::sequential_groups(
+                &crate::test_plan::embedded()?,
+            ),
         })
     }
     .await;
