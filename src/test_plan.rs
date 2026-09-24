@@ -21,7 +21,7 @@ pub struct MasterPlan {
     pub modules: Vec<CapabilityModule>,
     pub diagnostics: Vec<String>,
     pub requirements: BTreeMap<String, Vec<String>>,
-    pub profiles: Vec<Profile>,
+    pub suites: Vec<Suite>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -32,20 +32,35 @@ pub struct CapabilityModule {
     pub scenarios: Vec<String>,
 }
 
+/// What a campaign tests: its scenarios and how often. Where it runs (the
+/// stack) and with whom (model, agent profile) are named per execution.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct Profile {
+pub struct Suite {
     pub id: String,
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub purpose: String,
+    #[serde(default)]
     pub metrics: Vec<String>,
+    #[serde(default)]
     pub modules: Vec<String>,
+    #[serde(default)]
     pub scenarios: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub scenario_groups: Vec<Vec<String>>,
+    #[serde(default = "one_repetition")]
     pub repetitions: u32,
+    #[serde(default)]
     pub technical_retries: u8,
+    /// Internal: the admission budget, always `local-<id>`.
+    #[serde(default)]
     pub lane: String,
+}
+
+fn one_repetition() -> u32 {
+    1
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -54,7 +69,7 @@ pub struct ProfileSnapshot {
     pub plan_id: String,
     pub definition_sha256: String,
     pub profile_sha256: String,
-    pub profile: Profile,
+    pub profile: Suite,
     pub scenario_ids: Vec<String>,
     pub cases: Vec<Value>,
     pub campaigns: Vec<Value>,
@@ -137,58 +152,68 @@ impl MasterPlan {
             self.requirements.keys().all(|id| native.contains(id)),
             "requirements reference unknown scenario"
         );
-        let mut profiles = BTreeSet::new();
-        for profile in &self.profiles {
+        let mut suites = BTreeSet::new();
+        for suite in &self.suites {
             ensure!(
-                safe_id(&profile.id) && profiles.insert(profile.id.as_str()),
-                "invalid or repeated profile"
+                safe_id(&suite.id) && suites.insert(suite.id.as_str()),
+                "invalid or repeated suite"
             );
             ensure!(
-                profile.lane == format!("local-{}", profile.id),
-                "profile lane must use the supported local budget"
+                suite.lane == format!("local-{}", suite.id),
+                "suite lane must use the supported local budget"
             );
             ensure!(
-                (1..=20).contains(&profile.repetitions) && profile.technical_retries <= 1,
-                "invalid profile sample or retries"
+                (1..=20).contains(&suite.repetitions) && suite.technical_retries <= 1,
+                "invalid suite sample or retries"
             );
             ensure!(
-                !profile.metrics.is_empty() && !profile.purpose.trim().is_empty(),
-                "profile must declare purpose and metrics"
+                !suite.metrics.is_empty() && !suite.purpose.trim().is_empty(),
+                "suite must declare purpose and metrics"
             );
-            let selected = self.select(profile)?;
-            ensure!(!selected.is_empty(), "profile has no scenarios");
-            ensure!(
-                selected.iter().all(|id| native.contains(id)),
-                "profile selects an unknown scenario"
-            );
+            self.selected_scenarios(suite, &native)?;
         }
         ensure!(
-            !profiles.is_empty(),
-            "master plan must declare at least one reviewed profile"
+            !suites.is_empty(),
+            "master plan must declare at least one reviewed suite"
         );
         Ok(())
     }
 
-    fn select(&self, profile: &Profile) -> Result<Vec<String>> {
+    fn selected_scenarios(&self, suite: &Suite, native: &BTreeSet<String>) -> Result<Vec<String>> {
+        let selected = self.select(suite)?;
+        ensure!(!selected.is_empty(), "suite {} has no scenarios", suite.id);
+        let unknown = selected
+            .iter()
+            .filter(|id| !native.contains(*id))
+            .collect::<Vec<_>>();
+        ensure!(
+            unknown.is_empty(),
+            "suite {} selects unknown scenarios {unknown:?}",
+            suite.id
+        );
+        Ok(selected)
+    }
+
+    fn select(&self, suite: &Suite) -> Result<Vec<String>> {
         let mut selected = Vec::new();
         let mut seen = BTreeSet::new();
-        for module_id in &profile.modules {
+        for module_id in &suite.modules {
             let module = self
                 .modules
                 .iter()
                 .find(|m| &m.id == module_id)
-                .context("unknown profile module")?;
+                .with_context(|| format!("unknown suite module {module_id}"))?;
             for id in &module.scenarios {
-                ensure!(seen.insert(id.clone()), "duplicate profile scenario {id}");
+                ensure!(seen.insert(id.clone()), "duplicate suite scenario {id}");
                 selected.push(id.clone());
             }
         }
-        for id in &profile.scenarios {
-            ensure!(seen.insert(id.clone()), "duplicate profile scenario {id}");
+        for id in &suite.scenarios {
+            ensure!(seen.insert(id.clone()), "duplicate suite scenario {id}");
             selected.push(id.clone());
         }
         let mut grouped = BTreeSet::new();
-        for group in &profile.scenario_groups {
+        for group in &suite.scenario_groups {
             ensure!(
                 group.len() > 1,
                 "scenario group must contain multiple cases"
@@ -201,27 +226,43 @@ impl MasterPlan {
                 ensure!(
                     id.parse::<ScenarioId>()?.execution_kind()
                         == ScenarioExecutionKind::HarnessTurn,
-                    "sequential profile groups require ordinary harness turns"
+                    "sequential suite groups require ordinary harness turns"
                 );
             }
         }
         Ok(selected)
     }
 
+    /// One reviewed suite of the master plan, by id.
     pub fn materialize(&self, id: &str) -> Result<ProfileSnapshot> {
         self.validate()?;
-        let profile = self
-            .profiles
+        let suite = self
+            .suites
             .iter()
-            .find(|p| p.id == id)
-            .context("unknown test profile")?
+            .find(|s| s.id == id)
+            .with_context(|| format!("unknown suite {id}"))?
             .clone();
-        self.materialize_scope(profile, None)
+        self.materialize_scope(suite, None)
+    }
+
+    /// A suite stated in full by whoever dispatches the execution. Only what
+    /// materializing needs is checked: a known scenario set and the id the
+    /// campaigns are named after. Its lane is always the local budget.
+    pub fn materialize_suite(&self, mut suite: Suite) -> Result<ProfileSnapshot> {
+        self.validate()?;
+        ensure!(safe_id(&suite.id), "suite id must be lowercase kebab-case");
+        if suite.label.trim().is_empty() {
+            suite.label = suite.id.clone();
+        }
+        suite.lane = format!("local-{}", suite.id);
+        let native: BTreeSet<_> = ScenarioId::ALL.iter().map(ToString::to_string).collect();
+        self.selected_scenarios(&suite, &native)?;
+        self.materialize_scope(suite, None)
     }
 
     pub(crate) fn materialize_scope(
         &self,
-        profile: Profile,
+        profile: Suite,
         seed: Option<u64>,
     ) -> Result<ProfileSnapshot> {
         let scenario_ids = self.select(&profile)?;
@@ -330,7 +371,7 @@ impl MasterPlan {
 
     pub fn catalog(&self) -> Result<Value> {
         let mut profiles = Vec::new();
-        for profile in &self.profiles {
+        for profile in &self.suites {
             let snapshot = self.materialize(&profile.id)?;
             profiles.push(json!({"id": profile.id, "label": profile.label, "purpose": profile.purpose, "metrics": profile.metrics,
                 "scenario_ids": snapshot.scenario_ids, "repetitions": profile.repetitions,
@@ -439,7 +480,7 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.profiles.len(), 4);
+        assert_eq!(plan.suites.len(), 4);
         for (id, cases, runs) in [
             ("regression", 9, 9),
             ("software-engineering", 15, 15),
@@ -587,15 +628,13 @@ mod tests {
         changed.modules[0].scenarios.pop();
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
-        changed.profiles[0]
-            .scenarios
-            .push("persistent_state".into());
+        changed.suites[0].scenarios.push("persistent_state".into());
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
-        changed.profiles[0].repetitions = 21;
+        changed.suites[0].repetitions = 21;
         assert!(changed.validate().is_err());
         let mut changed = plan.clone();
-        changed.profiles[0].scenarios[0] = "local_invented".into();
+        changed.suites[0].scenarios[0] = "local_invented".into();
         assert!(changed.validate().is_err());
     }
 
@@ -608,7 +647,7 @@ mod tests {
             plan.materialize("regression").unwrap().profile_sha256
         );
         let mut changed = plan;
-        changed.profiles[0].repetitions = 6;
+        changed.suites[0].repetitions = 6;
         assert_ne!(
             first.profile_sha256,
             changed.materialize("regression").unwrap().profile_sha256
@@ -618,6 +657,38 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn a_dispatched_suite_materializes_like_a_reviewed_one() {
+        let plan = embedded().unwrap();
+        let suite: Suite = serde_json::from_value(json!({
+            "id": "smoke", "scenarios": ["minimal_path", "persistent_state"]
+        }))
+        .unwrap();
+        let snapshot = plan.materialize_suite(suite).unwrap();
+        assert_eq!(snapshot.scenario_ids, ["minimal_path", "persistent_state"]);
+        assert_eq!(snapshot.profile.lane, "local-smoke");
+        assert_eq!(snapshot.profile.label, "smoke");
+        assert_eq!(snapshot.profile.repetitions, 1);
+        assert_eq!(snapshot.campaigns[0]["campaign_id"], "smoke-r01");
+
+        let reviewed = plan.materialize("pr").unwrap();
+        let mut copy = reviewed.profile.clone();
+        copy.lane = String::new();
+        assert_eq!(
+            plan.materialize_suite(copy).unwrap().profile_sha256,
+            reviewed.profile_sha256
+        );
+
+        for invalid in [
+            json!({"id": "smoke", "scenarios": ["local_invented"]}),
+            json!({"id": "smoke"}),
+            json!({"id": "Not Kebab", "scenarios": ["minimal_path"]}),
+        ] {
+            let suite: Suite = serde_json::from_value(invalid).unwrap();
+            assert!(plan.materialize_suite(suite).is_err());
+        }
     }
 
     #[test]

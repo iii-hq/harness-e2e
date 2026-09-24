@@ -54,11 +54,11 @@ enum TestPlanCommand {
     List,
     /// Print native execution kinds and weights for campaign admission.
     Catalog,
-    /// Print the immutable snapshot of one profile: its digests, cases and campaigns.
+    /// Print the immutable snapshot of one suite: its digests, cases and campaigns.
     Materialize {
-        /// Profile id from the master test plan.
-        #[arg(long)]
-        profile: String,
+        /// Suite id from the master test plan, or one whole suite as JSON.
+        #[arg(long, alias = "profile")]
+        suite: String,
     },
 }
 
@@ -67,11 +67,15 @@ fn test_plan(command: TestPlanCommand) -> Result<()> {
     let value = match command {
         TestPlanCommand::List => plan.catalog()?,
         TestPlanCommand::Catalog => plan.campaign_catalog()?,
-        // The composition of a campaign is the runner's: Release Control names
-        // a profile, this prints exactly what that profile expands to at this
-        // commit, digests included, and the workflow reports it back.
-        TestPlanCommand::Materialize { profile } => {
-            serde_json::to_value(plan.materialize(&profile)?)?
+        // The composition of a campaign is the runner's: a dispatch names a
+        // suite (or states one), this prints exactly what it expands to at
+        // this commit, digests included, and the workflow reports it back.
+        TestPlanCommand::Materialize { suite } => {
+            serde_json::to_value(if suite.trim_start().starts_with('{') {
+                plan.materialize_suite(serde_json::from_str(&suite)?)?
+            } else {
+                plan.materialize(&suite)?
+            })?
         }
     };
     println!("{}", serde_json::to_string(&value)?);

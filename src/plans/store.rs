@@ -1342,13 +1342,13 @@ pub(crate) fn prepared_plan(
 }
 fn snapshot_for_plan(
     plan: &super::LocalPlan,
-    base: Option<test_plan::Profile>,
+    base: Option<test_plan::Suite>,
 ) -> Result<ProfileSnapshot> {
     let master = test_plan::embedded()?;
     let mut profile = base
         .or_else(|| {
             master
-                .profiles
+                .suites
                 .iter()
                 .find(|profile| profile.id == plan.template_id.as_deref().unwrap_or("pr"))
                 .cloned()
@@ -1445,7 +1445,7 @@ fn parameter_slots(
             .filter(|group| group.iter().all(|id| known.contains(id)))
             .collect();
         let label = label.unwrap_or("Execution");
-        let profile = test_plan::Profile {
+        let profile = test_plan::Suite {
             id: "execution".into(),
             label: label.into(),
             purpose: String::new(),
@@ -1483,9 +1483,9 @@ fn parameter_slots(
 /// Scenarios the master plan runs only together, in order, in one session.
 pub(crate) fn sequential_groups(master: &test_plan::MasterPlan) -> Vec<Vec<String>> {
     master
-        .profiles
+        .suites
         .iter()
-        .flat_map(|profile| &profile.scenario_groups)
+        .flat_map(|suite| &suite.scenario_groups)
         .cloned()
         .collect::<BTreeSet<_>>()
         .into_iter()
@@ -2973,7 +2973,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let runner = Arc::new(FakeRunner::new(root.path().into()));
         let manager = manager(root.path(), runner);
-        for profile in &test_plan::embedded().unwrap().profiles {
+        for profile in &test_plan::embedded().unwrap().suites {
             let profile = profile.id.as_str();
             let value = manager.create_local(request(profile)).await.unwrap();
             let id = value.id.as_str();
