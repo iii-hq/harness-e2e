@@ -37,10 +37,14 @@ origin and no plan on this worker's stack, and the Console follows it on its
 page. The form discovers registered provider/model pairs from the stack and
 scenario ids from the same E2E binary only when it opens, and still sends what
 it holds when that catalog cannot be read; runs, retries, seed and agent
-profile sit under **Advanced**. Seeds travel as text so values above 2^53 stay
-exact. A scenario of a sequential group (such as `registry_implementation`
-then `registry_verification`) brings the whole group, noted on the execution.
-One execution runs at a time. A finished execution without a plan can be
+profile sit under **Advanced**. Run tests starts from the model of the newest
+execution that the catalog still lists, and picks none without one. Seeds
+travel as text so values above 2^53 stay exact. A scenario of a sequential
+group (such as `registry_implementation` then `registry_verification`) brings
+the whole group: the catalog lists the groups (`scenario_groups`), so the form
+ticks and counts the group before running, and the execution notes it. One
+execution runs at a time: a start while another runs names that execution
+(`"<label>" (<id>) is still running`), and the form offers to open it. A finished execution without a plan can be
 deleted with its native runs; a plan's executions go with the plan.
 
 Before its first slot every local execution records its stack: the containers

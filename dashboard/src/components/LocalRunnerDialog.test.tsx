@@ -1,9 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   executionStartRequest,
+  lastUsedModel,
   runnerForm,
+  runningExecutionId,
+  withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
-import type { ExecutionParameters } from '@/lib/dashboard-data-source'
+import type {
+  DashboardExecutionSummary,
+  ExecutionParameters,
+} from '@/lib/dashboard-data-source'
 
 const imported: ExecutionParameters = {
   scenarios: ['minimal_path', 'context_pressure', 'kanban_c1_foundation'],
@@ -74,5 +80,72 @@ describe('run form', () => {
         agent: null,
       },
     })
+  })
+})
+
+describe('Run tests from scratch', () => {
+  const catalog = [
+    { provider: 'claude-code', model: 'claude-code/claude-fable-5' },
+    { provider: 'deepseek', model: 'deepseek-v4-flash' },
+  ]
+  const execution = (model: string, provider: string) =>
+    ({
+      id: model,
+      parameters: { ...imported, model, provider },
+      subjects: [],
+    }) as unknown as DashboardExecutionSummary
+
+  it('starts from the model of the latest execution this stack lists', () => {
+    expect(
+      lastUsedModel(
+        [
+          // Newest first; the imported model is not in this catalog.
+          execution('gpt-5.6-terra', 'openai-codex'),
+          execution('deepseek-v4-flash', 'deepseek'),
+          execution('claude-code/claude-fable-5', 'claude-code'),
+        ],
+        catalog,
+      ),
+    ).toEqual({ provider: 'deepseek', model: 'deepseek-v4-flash' })
+    // Without history no model is chosen for the user.
+    expect(lastUsedModel([], catalog)).toBeNull()
+  })
+
+  it('finds the execution a busy runner is running', () => {
+    expect(
+      runningExecutionId(
+        'handler error: "Nightly" (plan-0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.',
+      ),
+    ).toBe('plan-0123456789abcdef0123456789abcdef')
+    expect(
+      runningExecutionId(
+        'Another execution (0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.',
+      ),
+    ).toBe('0123456789abcdef0123456789abcdef')
+    expect(runningExecutionId('Select an execution model.')).toBeNull()
+  })
+
+  it('ticks and unticks a sequential group whole', () => {
+    const groups = [['registry_implementation', 'registry_verification']]
+    const ticked = withSequentialGroups(
+      ['minimal_path', 'registry_verification'],
+      ['minimal_path'],
+      groups,
+    )
+    expect(ticked).toEqual([
+      'minimal_path',
+      'registry_verification',
+      'registry_implementation',
+    ])
+    expect(
+      withSequentialGroups(
+        ['minimal_path', 'registry_verification'],
+        ticked,
+        groups,
+      ),
+    ).toEqual(['minimal_path'])
+    expect(withSequentialGroups(['minimal_path'], [], groups)).toEqual([
+      'minimal_path',
+    ])
   })
 })

@@ -24,6 +24,7 @@ import {
   type JsonObject,
   type MasterTestProfile,
 } from '@/lib/dashboard-data-source'
+import { providerModel } from '@/lib/execution-view'
 import { type PlanRequirements, planAction } from '@/lib/plan-execution'
 import { LocalPlanDetailPage as LocalPlanDetail } from '@/pages/PlanDetailPage'
 
@@ -372,9 +373,7 @@ export function LocalPlanCreatePage({
     runsPerScenario: runsPerTest,
     technicalRetries: retryCount,
     seed,
-    subject: selectedSubject
-      ? `${selectedSubject.provider} / ${selectedSubject.model}`
-      : '',
+    subject: selectedSubject ? providerModel(selectedSubject) : '',
     url,
   }
 

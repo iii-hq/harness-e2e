@@ -108,10 +108,36 @@ const running = (id) => ({
     ],
   },
 })
+const nightly = 'plan-22222222222222222222222222222222'
 const runningSummary = {
-  ...running('plan-22222222222222222222222222222222'),
+  ...running(nightly),
+  // The last execution: Run tests starts from its model.
+  parameters: {
+    ...imported.plan_execution.parameters,
+    model: 'deepseek-v4-flash',
+    provider: 'deepseek',
+  },
   plan_execution: { planned: 9, finished: 1 },
   totals: { expected_reports: 9, received_reports: 1, missing_reports: 8 },
+}
+/** Stopped by its user after three slots; the stopped run failed technically. */
+const cancelledSummary = {
+  ...imported,
+  id: 'plan-33333333333333333333333333333333',
+  label: 'Stopped early',
+  status: 'cancelled',
+  state: 'cancelled',
+  started_at: '2026-09-22T09:58:00Z',
+  completed_at: '2026-09-22T10:00:00Z',
+  parameters: imported.plan_execution.parameters,
+  plan_execution: { planned: 9, finished: 3 },
+  totals: {
+    expected_reports: 9,
+    received_reports: 3,
+    missing_reports: 6,
+    technical_failures: 1,
+    wall_time_seconds: 119.6,
+  },
 }
 const githubRuns = [
   {
@@ -164,19 +190,34 @@ const trigger = async (name, request = {}) => {
       detail:
         request.execution_id === imported.id
           ? imported
-          : running(request.execution_id),
+          : request.execution_id === nightly
+            ? { ...running(nightly), label: 'Nightly' }
+            : running(request.execution_id),
     }
   if (id === 'catalog-get') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return {
-      scenarios: ['minimal_path', 'context_pressure', 'trend_blog'],
-      models: [{ provider: 'deepseek', model: 'deepseek-v4-flash' }],
+      scenarios: [
+        'minimal_path',
+        'context_pressure',
+        'trend_blog',
+        'registry_implementation',
+        'registry_verification',
+      ],
+      // Alphabetically first, never picked for the user.
+      models: [
+        { provider: 'claude-code', model: 'claude-code/claude-fable-5' },
+        { provider: 'deepseek', model: 'deepseek-v4-flash' },
+      ],
+      scenario_groups: [['registry_implementation', 'registry_verification']],
     }
   }
   if (id === 'execution-start') {
     if (busy) {
       busy = false
-      throw new Error('plan execution plan-busy is active')
+      throw new Error(
+        `handler error: "Nightly" (${nightly}) is still running; wait for it to finish or cancel it.`,
+      )
     }
     started.push(request)
     return { execution_id: `plan-${String(started.length).padStart(32, 'f')}` }
@@ -225,6 +266,17 @@ try {
     await empty.getByRole('button', { name: action, exact: true }).waitFor()
   await empty.getByRole('link', { name: 'new plan', exact: true }).waitFor()
 
+  // Without an earlier execution Run tests picks no model for the user.
+  await empty.getByRole('button', { name: 'run tests', exact: true }).click()
+  const fresh = page.getByRole('dialog', { name: 'Run tests' })
+  await fresh.getByText('catalog ready').waitFor()
+  await fresh.getByText('0 tests · 0 runs · no model').waitFor()
+  assert.equal(
+    await fresh.getByText('The model of your last execution.').count(),
+    0,
+  )
+  await page.keyboard.press('Escape')
+
   // Import from GitHub: the runs show at once, oldest creation last, and
   // each row fills in when its contract is read.
   await empty
@@ -249,21 +301,45 @@ try {
   assert.equal(await importDialog.getByText('0.11.28').count(), 2)
   await page.keyboard.press('Escape')
 
-  // Run tests: the box, its name and Space all toggle a test; a bad seed and
-  // a busy runner are named in the footer; the next submit starts an
-  // execution and follows it on its page.
-  executions = [runningSummary]
+  // The ledger: a running row reads its progress; a cancelled one reads as
+  // cancelled with how far it got, and its runtime rounds whole.
+  executions = [runningSummary, cancelledSummary]
   await page.reload()
   await page.getByText('1 of 9 done', { exact: true }).waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
+  const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
+  await stopped.getByText('cancelled', { exact: true }).waitFor()
+  await stopped.getByText('3 of 9 done', { exact: true }).waitFor()
+  await stopped.getByText('2m 00s', { exact: true }).waitFor()
+  assert.equal(await page.getByText(/infrastructure event/).count(), 0)
+  assert.equal(await page.getByText('1m 60s').count(), 0)
+
+  // Run tests: it starts from the last execution's model; a sequential group
+  // ticks whole before running; the box, its name and Space all toggle a
+  // test; a bad seed and a busy runner are named in the footer; the next
+  // submit starts an execution and follows it on its page.
   await page
     .getByRole('button', { name: 'Run tests', exact: true })
     .first()
     .click()
-  const runTests = page.getByRole('dialog', { name: 'Run suite' })
+  const runTests = page.getByRole('dialog', { name: 'Run tests' })
   await runTests.getByText('catalog ready').waitFor()
   assert.equal(await runTests.getByText('Harness endpoint').count(), 0)
+  await runTests.getByText('The model of your last execution.').waitFor()
+  await runTests
+    .getByText('0 tests · 0 runs · deepseek/deepseek-v4-flash')
+    .waitFor()
   const box = (name) => runTests.getByRole('checkbox', { name, exact: true })
+  await box('registry_verification').click()
+  assert.ok(await box('registry_implementation').isChecked())
+  await runTests.getByText('2 tests · 2 runs', { exact: false }).waitFor()
+  await runTests
+    .getByText(
+      'registry_implementation then registry_verification run only together, in this order.',
+    )
+    .waitFor()
+  await box('registry_verification').click()
+  assert.ok(!(await box('registry_implementation').isChecked()))
   await runTests
     .locator('label', { hasText: 'trend_blog' })
     .locator('input[type=checkbox]')
@@ -288,7 +364,20 @@ try {
   assert.equal(started.length, 0)
   await runTests.locator('#quick-execution-seed').fill('')
   await submit.click()
-  await runTests.getByText('plan execution plan-busy is active').waitFor()
+  // A busy runner names what runs, by its title, and offers to open it.
+  await runTests
+    .getByText(
+      '"Nightly" is still running. Wait for it to finish or cancel it.',
+    )
+    .waitFor()
+  assert.equal(await runTests.getByText(/handler error/).count(), 0)
+  assert.ok(
+    (
+      await runTests
+        .getByRole('link', { name: 'open Nightly', exact: true })
+        .getAttribute('href')
+    ).includes(nightly),
+  )
   assert.equal(started.length, 0)
   await submit.click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-f'))
@@ -351,7 +440,7 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
-  await again.getByText('2 of 4 shown', { exact: false }).waitFor()
+  await again.getByText('2 of 6 shown', { exact: false }).waitFor()
   assert.equal(
     await again.getByRole('checkbox', { name: 'trend_blog' }).count(),
     0,
@@ -369,7 +458,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, quick list with contracts read per row, progress, box/label/Space toggles, seed check, busy runner, start and follow, versions, selected-first prefill without a catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, seed check, busy runner named with a link, start and follow, versions, selected-first prefill without a catalog, delete.',
   )
 } finally {
   await browser.close()

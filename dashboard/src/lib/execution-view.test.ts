@@ -6,7 +6,9 @@ import {
   executionProgress,
   executionTitle,
   failureBreakdown,
+  formatDuration,
   primaryIssue,
+  providerModel,
   workerVersion,
 } from '@/lib/execution-view'
 
@@ -216,5 +218,47 @@ describe('an execution as it runs', () => {
     )
     expect(workerVersion(stack, 'state')).toBeNull()
     expect(workerVersion(undefined, 'harness')).toBeNull()
+  })
+})
+
+describe('list details', () => {
+  it('names a model once when its id already carries the provider', () => {
+    expect(
+      providerModel({
+        provider: 'claude-code',
+        model: 'claude-code/claude-fable-5',
+      }),
+    ).toBe('claude-code/claude-fable-5')
+    expect(
+      providerModel({ provider: 'deepseek', model: 'deepseek-v4-flash' }),
+    ).toBe('deepseek/deepseek-v4-flash')
+    expect(providerModel({ provider: '', model: 'gpt-5.6-terra' })).toBe(
+      'gpt-5.6-terra',
+    )
+  })
+
+  it('rounds a runtime before splitting minutes from seconds', () => {
+    expect(formatDuration(119.6)).toBe('2m 00s')
+    expect(formatDuration(59.7)).toBe('1m 00s')
+    expect(formatDuration(75.2)).toBe('1m 15s')
+    expect(formatDuration(8.25)).toBe('8.3s')
+  })
+
+  it('shows a cancelled execution as cancelled, not as an infrastructure event', () => {
+    const cancelled = execution({
+      status: 'cancelled',
+      assessment_summary: undefined,
+      totals: {
+        expected_reports: 9,
+        received_reports: 1,
+        technical_failures: 1,
+      },
+      plan_execution: { planned: 9, finished: 1 },
+    } as Partial<DashboardExecutionSummary>)
+    const presentation = buildExecutionPresentation(cancelled)
+    expect(presentation.attention).toBe('cancelled')
+    expect(presentation.primaryIssue).toBeNull()
+    // How far it got before it was stopped.
+    expect(executionProgress(cancelled)).toBe('1 of 9 done')
   })
 })

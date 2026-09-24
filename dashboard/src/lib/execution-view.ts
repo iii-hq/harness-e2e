@@ -218,13 +218,18 @@ export function buildExecutionPresentation(
 ): ExecutionPresentation {
   const totals = totalsFor(execution)
   const breakdown = failureBreakdown(execution)
+  const attention = attentionState(execution, breakdown)
   return {
     execution,
     label: executionLabel(execution),
     subjects: executionSubjects(execution),
-    attention: attentionState(execution, breakdown),
+    attention,
     breakdown,
-    primaryIssue: primaryIssue(breakdown),
+    // A run stopped by its user reads as cancelled, not as a failure.
+    primaryIssue:
+      attention === 'cancelled' || attention === 'cancelling'
+        ? null
+        : primaryIssue(breakdown),
     expectedReports: numberValue(totals.expected_reports),
     receivedReports: numberValue(totals.received_reports),
     passRate: numberValue(totals.scenario_pass_rate),
@@ -255,10 +260,10 @@ export function formatPercent(value: number | null, fraction = true): string {
 
 export function formatDuration(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return 'Not reported'
-  if (seconds < 60) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
-  const minutes = Math.floor(seconds / 60)
-  const remainder = Math.round(seconds % 60)
-  return `${minutes}m ${String(remainder).padStart(2, '0')}s`
+  if (seconds < 59.5) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
+  // Round the total first, so 119.6s reads "2m 00s", never "1m 60s".
+  const total = Math.round(seconds)
+  return `${Math.floor(total / 60)}m ${String(total % 60).padStart(2, '0')}s`
 }
 
 export function formatDate(value: string): string {
@@ -341,13 +346,13 @@ export function executionOrigin(execution: DashboardExecutionSummary): {
   return { label: 'local', href: null }
 }
 
-/** How far a running execution is, as its slots (or a native run's slots)
- *  finished of those planned; null when it is not running or has no plan. */
+/** How far a running (or cancelled) execution got, as its slots (or a
+ *  native run's slots) finished of those planned; null otherwise. */
 export function executionProgress(
   execution: DashboardExecutionSummary,
 ): string | null {
   const status = stringValue(execution.status)
-  if (status !== 'running' && status !== 'cancelling') return null
+  if (!['running', 'cancelling', 'cancelled'].includes(status)) return null
   const plan = objectValue(execution.plan_execution)
   const live = objectValue(execution.live_progress)
   const done =
@@ -389,9 +394,22 @@ export function executionScore(
     : null
 }
 
+/** "provider/model", without repeating a provider the model id carries. */
+export function providerModel({
+  provider,
+  model,
+}: {
+  provider?: string | null
+  model: string
+}) {
+  return !provider || model.startsWith(`${provider}/`)
+    ? model
+    : `${provider}/${model}`
+}
+
 export function modelNames(models: ExecutionPresentation['subjects']) {
   if (models.length === 0) return 'not reported'
-  return models.map((model) => `${model.provider}/${model.model}`).join(', ')
+  return models.map(providerModel).join(', ')
 }
 
 export function executionTitle(presentation: ExecutionPresentation): {

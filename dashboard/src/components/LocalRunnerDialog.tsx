@@ -10,14 +10,22 @@ import { buttonClassName, Dialog } from '@/design-system'
 import { hashForExecution, hashForNewPlan } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
+  DashboardExecutionSummary,
   ExecutionParameters,
   JsonObject,
 } from '@/lib/dashboard-data-source'
+import {
+  buildExecutionPresentation,
+  executionTitle,
+  providerModel,
+} from '@/lib/execution-view'
 
 type RunnerModel = { provider: string; model: string }
 type RunnerCatalog = {
   models: RunnerModel[]
   scenarios: string[]
+  /** Scenarios that run only together, in order. */
+  groups: string[][]
 }
 
 export type RunnerForm = {
@@ -66,6 +74,44 @@ export function runnerForm(
     seed: parameters.seed ?? '',
     agent: parameters.agent ?? '',
   }
+}
+
+/** Run tests starts from the model of the newest execution (newest first)
+ *  whose model this stack still lists; without one, no model is chosen. */
+export function lastUsedModel(
+  executions: DashboardExecutionSummary[],
+  models: RunnerModel[],
+): RunnerModel | null {
+  for (const { parameters } of executions) {
+    const listed =
+      parameters &&
+      models.find((model) => modelKey(model) === modelKey(parameters))
+    if (listed) return listed
+  }
+  return null
+}
+
+/** The execution a busy runner names: its id, in parentheses, before "is
+ *  still running". */
+export function runningExecutionId(message: string): string | null {
+  return /\(([\w-]+)\) is still running/.exec(message)?.[1] ?? null
+}
+
+/** A sequential group runs whole: ticking one of its tests ticks the group,
+ *  unticking one unticks it. */
+export function withSequentialGroups(
+  next: string[],
+  previous: string[],
+  groups: string[][],
+): string[] {
+  let result = next
+  for (const group of groups) {
+    if (group.some((id) => previous.includes(id) && !next.includes(id)))
+      result = result.filter((id) => !group.includes(id))
+    else if (group.some((id) => result.includes(id)))
+      result = [...result, ...group.filter((id) => !result.includes(id))]
+  }
+  return result
 }
 
 /** What `execution-start` receives for the form. */
@@ -120,12 +166,14 @@ function asCatalog(value: JsonObject): RunnerCatalog {
         return [{ model: model.model, provider: model.provider }]
       })
     : []
-  const scenarios = Array.isArray(value.scenarios)
-    ? value.scenarios.filter(
-        (scenario): scenario is string => typeof scenario === 'string',
-      )
+  const strings = (list: unknown) =>
+    Array.isArray(list)
+      ? list.filter((item): item is string => typeof item === 'string')
+      : []
+  const groups = Array.isArray(value.scenario_groups)
+    ? value.scenario_groups.map(strings).filter((group) => group.length > 1)
     : []
-  return { models, scenarios }
+  return { models, scenarios: strings(value.scenarios), groups }
 }
 
 function errorMessage(cause: unknown) {
@@ -159,6 +207,12 @@ export function LocalRunnerDialog({
   const [submitting, setSubmitting] = useState(false)
   const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // The execution holding a busy runner, to open.
+  const [running, setRunning] = useState<{ id: string; title: string } | null>(
+    null,
+  )
+  // The model taken from the last execution, said so under the field.
+  const [lastSubject, setLastSubject] = useState('')
   // A new setup sheet per opening, so its filters start fresh.
   const [opening, setOpening] = useState(0)
 
@@ -167,15 +221,27 @@ export function LocalRunnerDialog({
     setLoadingCatalog(true)
     setError(null)
     try {
-      const next = asCatalog(await bridge.getCatalog())
+      const [next, recent] = await Promise.all([
+        bridge.getCatalog().then(asCatalog),
+        // Running again brings its own model.
+        parameters
+          ? []
+          : bridge
+              .listExecutions({ limit: 20 })
+              .then((manifest) => manifest.executions)
+              .catch(() => []),
+      ])
+      const last = lastUsedModel(recent, next.models)
+      setLastSubject(last ? modelKey(last) : '')
       setCatalog(next)
       setForm((current) => ({
         ...current,
-        subject:
-          current.subject || (next.models[0] ? modelKey(next.models[0]) : ''),
+        // Never a model the user did not pick or run last: without one the
+        // field asks for it.
+        subject: current.subject || (last ? modelKey(last) : ''),
         // Keep the local loop deliberate: selecting every scenario is too
         // expensive for the default path. The developer chooses the scope.
-        scenarios: current.scenarios,
+        scenarios: withSequentialGroups(current.scenarios, [], next.groups),
       }))
     } catch (cause) {
       setCatalog(null)
@@ -183,11 +249,12 @@ export function LocalRunnerDialog({
     } finally {
       setLoadingCatalog(false)
     }
-  }, [bridge])
+  }, [bridge, parameters])
 
   useEffect(() => {
     if (!open) return
     setOpening((count) => count + 1)
+    setRunning(null)
     if (parameters) setForm(runnerForm(parameters, initialScenarios, label))
     else if (initialScenarios.length > 0)
       setForm((current) => ({
@@ -264,12 +331,23 @@ export function LocalRunnerDialog({
     }
     setSubmitting(true)
     setError(null)
+    setRunning(null)
     try {
       const started = await bridge.startExecution(executionStartRequest(form))
       onClose()
       window.location.hash = hashForExecution(started.execution_id)
     } catch (cause) {
-      setError(errorMessage(cause))
+      const message = errorMessage(cause)
+      // A busy runner: name the execution by its title and offer to open it.
+      const id = runningExecutionId(message)
+      const detail = id ? await bridge.getExecution(id).catch(() => null) : null
+      if (id && detail) {
+        const { title } = executionTitle(buildExecutionPresentation(detail))
+        setRunning({ id, title })
+        setError(
+          `"${title}" is still running. Wait for it to finish or cancel it.`,
+        )
+      } else setError(message)
     } finally {
       setSubmitting(false)
     }
@@ -282,10 +360,13 @@ export function LocalRunnerDialog({
     runsPerScenario,
     technicalRetries,
     seed: form.seed,
-    subject: form.subject
-      ? `${request.parameters.provider} / ${request.parameters.model}`
-      : '',
+    subject: form.subject ? providerModel(request.parameters) : '',
   }
+  // Said before running: a sequential group always runs whole.
+  const groupNote = (catalog?.groups ?? [])
+    .filter((group) => group.some((id) => form.scenarios.includes(id)))
+    .map((group) => `${group.join(' then ')} run only together, in this order.`)
+    .join(' ')
 
   return (
     <Dialog
@@ -294,11 +375,11 @@ export function LocalRunnerDialog({
       size="lg"
       tall
       kicker="Execution setup"
-      title={parameters ? 'Run again' : 'Run suite'}
+      title={parameters ? 'Run again' : 'Run tests'}
       description={
         parameters
           ? 'Starts a new execution on this stack with the parameters of this one. Change anything before running.'
-          : 'Runs the selected tests on this stack as a new execution. Use a plan when you need a fixed baseline and candidate comparison.'
+          : 'Runs the selected tests on this stack as a new execution. To compare, tick two executions in the list.'
       }
       closeLabel="Close execution form"
       className="ds-root"
@@ -307,7 +388,20 @@ export function LocalRunnerDialog({
           summary={summary}
           pending={Object.values(errors)}
           error={error}
+          status={groupNote || null}
         >
+          {running ? (
+            <a
+              className={buttonClassName({
+                variant: 'secondary',
+                className: 'no-underline',
+              })}
+              href={hashForExecution(running.id)}
+              onClick={onClose}
+            >
+              open {running.title}
+            </a>
+          ) : null}
           <a
             className={buttonClassName({
               variant: 'quiet',
@@ -352,6 +446,11 @@ export function LocalRunnerDialog({
           stickyOffset="dialog"
           label={form.label}
           subject={form.subject}
+          subjectHint={
+            form.subject && form.subject === lastSubject && !parameters
+              ? 'The model of your last execution.'
+              : undefined
+          }
           modelGroups={modelOptions}
           availableScenarios={scenarios}
           selectedScenarios={form.scenarios}
@@ -376,7 +475,16 @@ export function LocalRunnerDialog({
           onRefreshCatalog={() => void refreshCatalog()}
           onLabelChange={(value) => update('label', value)}
           onSubjectChange={(value) => update('subject', value)}
-          onSelectedScenariosChange={(value) => update('scenarios', value)}
+          onSelectedScenariosChange={(value) =>
+            update(
+              'scenarios',
+              withSequentialGroups(
+                value,
+                form.scenarios,
+                catalog?.groups ?? [],
+              ),
+            )
+          }
           onQueryChange={setScenarioQuery}
           onRunsChange={(value) => update('runs', value)}
           onTechnicalRetriesChange={(value) =>

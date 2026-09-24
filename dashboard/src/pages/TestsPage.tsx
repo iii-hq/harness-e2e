@@ -43,6 +43,7 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
+import { providerModel } from '@/lib/execution-view'
 import type {
   CohortDescriptor,
   EvaluatedVersion,
@@ -1406,7 +1407,7 @@ export function TestsPage({
               </Select>
               <span className="font-mono text-label text-ink-muted">
                 {activeCohort
-                  ? `subject ${activeCohort.subject_provider}/${activeCohort.subject_model} · lane ${activeCohort.lane}`
+                  ? `subject ${providerModel({ provider: activeCohort.subject_provider, model: activeCohort.subject_model })} · lane ${activeCohort.lane}`
                   : 'system version = the workers under test · cohort = which model ran in which lane'}
                 {evaluated
                   ? ` · ${cohortsWithPairs} of ${evaluated.cohorts.length} cohorts have ≥ 2 versions`

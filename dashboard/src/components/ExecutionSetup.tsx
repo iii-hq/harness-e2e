@@ -175,6 +175,8 @@ type ExecutionSetupProps = {
   /** Plans only: a quick run always targets this worker's stack. */
   url?: string
   subject: string
+  /** Where the preselected model came from. */
+  subjectHint?: string
   modelGroups: ExecutionModelGroup[]
   availableScenarios: string[]
   selectedScenarios: string[]
@@ -250,6 +252,7 @@ export function ExecutionSetup({
   purpose = '',
   url = '',
   subject,
+  subjectHint,
   modelGroups,
   availableScenarios,
   selectedScenarios,
@@ -425,6 +428,7 @@ export function ExecutionSetup({
             label="Execution model"
             htmlFor={`${idPrefix}-subject`}
             meta="required"
+            hint={subjectHint}
             error={errors.subject}
           >
             <ProviderModelDropdown

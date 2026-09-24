@@ -63,6 +63,7 @@ import {
   executionTitle,
   formatDate,
   formatDuration,
+  providerModel,
   workerVersion,
 } from '@/lib/execution-view'
 import { planAction } from '@/lib/plan-execution'
@@ -632,9 +633,7 @@ export function ExecutionPage({
   const identity: Array<[string, ReactNode]> = [
     [
       'subject',
-      presentation.subjects
-        .map((model) => `${model.provider}/${model.model}`)
-        .join(', ') || 'not reported',
+      presentation.subjects.map(providerModel).join(', ') || 'not reported',
     ],
     [
       'started',

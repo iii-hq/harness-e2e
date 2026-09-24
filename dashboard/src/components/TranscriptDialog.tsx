@@ -7,6 +7,7 @@ import {
   FilterChipGroup,
   Input,
 } from '@/design-system'
+import { providerModel } from '@/lib/execution-view'
 import {
   formatTranscriptPayload,
   normalizeTranscript,
@@ -335,7 +336,12 @@ function TranscriptEventCard({
         <div className="grid min-w-0 gap-2 rounded-[6px] bg-[var(--surface-fill)] p-3">
           {event.provider || event.model ? (
             <span className="font-mono text-label text-ink-muted">
-              {[event.provider, event.model].filter(Boolean).join('/')}
+              {event.model
+                ? providerModel({
+                    provider: event.provider,
+                    model: event.model,
+                  })
+                : event.provider}
             </span>
           ) : null}
           <p className="m-0 whitespace-pre-wrap break-words text-sm leading-6 text-ink">
