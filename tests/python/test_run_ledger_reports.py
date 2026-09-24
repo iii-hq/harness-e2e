@@ -120,6 +120,14 @@ class ReportPayloadTests(unittest.TestCase):
         self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["template"], template)
         self.assertNotIn("template", report_execution.identity_of(Args(plan=self.plan), None))
 
+    def test_identity_names_the_executor_image_the_resolution_recorded(self):
+        image = "ghcr.io/iii-hq/harness-e2e@sha256:" + "e" * 64
+        resolution = self.tmp / "resolution.json"
+        resolution.write_text(json.dumps({"executor_image": image}))
+        self.assertEqual(report_execution.identity_of(Args(plan=self.plan, resolution=resolution), None)["executor_image"], image)
+        # An execution prepared outside the image states none.
+        self.assertNotIn("executor_image", report_execution.identity_of(Args(plan=self.plan), None))
+
     def test_materialized_states_the_shards_and_planned_runs(self):
         """Release Control reads only these fields; it must find all of them."""
         payload = report_execution.materialized_payload(
