@@ -18,6 +18,9 @@ export type PlanSlot = {
   technical_valid: number
   result_path: string | null
   error: string | null
+  /** The runs this slot ran before its current one, oldest first. Only the
+   *  last attempt counts; these stay visible, outside every total. */
+  previous_attempts?: Array<{ execution_id: string; error: string | null }>
 }
 /** One execution, planned here or imported: the origin is `source`. */
 export type PlanExecution = {
@@ -70,6 +73,39 @@ export async function planAction<T>(
 ): Promise<T> {
   return (await bridge.planControl(request)) as T
 }
+/** How many times a scenario of the execution ran again: its most rerun slot. */
+export function scenarioReruns(
+  execution: Pick<PlanExecution, 'slots'> | undefined,
+  scenarioId: string,
+): number {
+  return Math.max(
+    0,
+    ...(execution?.slots ?? [])
+      .filter((slot) => slot.scenario_id === scenarioId)
+      .map((slot) => slot.previous_attempts?.length ?? 0),
+  )
+}
+
+/** The scenarios that run again with this one: those sharing its native runs
+ *  (a sequential group), in order, itself included. */
+export function rerunGroup(
+  execution: Pick<PlanExecution, 'slots'>,
+  scenarioId: string,
+): string[] {
+  const runs = new Set(
+    execution.slots
+      .filter((slot) => slot.scenario_id === scenarioId && slot.execution_id)
+      .map((slot) => slot.execution_id),
+  )
+  return [
+    ...new Set(
+      execution.slots
+        .filter((slot) => runs.has(slot.execution_id))
+        .map((slot) => slot.scenario_id),
+    ),
+  ]
+}
+
 export function running(state: string) {
   return state === 'running' || state === 'cancelling'
 }

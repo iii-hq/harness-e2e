@@ -1,4 +1,4 @@
-import { ChevronDown, Eye } from 'lucide-react'
+import { ChevronDown, Eye, RotateCcw } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
@@ -23,6 +23,8 @@ import {
   buildScenarioMatrix,
   detailForScenario,
   formatScenarioDuration,
+  type PreviousAttempt,
+  previousAttempts,
   type ScenarioMatrixItem,
   stepSignals,
 } from '@/lib/scenario-matrix'
@@ -31,12 +33,15 @@ export function ScenarioMatrix({
   detail,
   onTranscript,
   showContract = true,
+  onRerun,
 }: {
   detail: DashboardExecutionDetail
   onTranscript: (run: AssessmentRunView, title: string) => void
   /** The results contract is provenance; the layered execution page renders
    *  it in the provenance layer instead of above the table (audit ED-29). */
   showContract?: boolean
+  /** Run one scenario of the execution again; offered on every row. */
+  onRerun?: (scenarioId: string) => void
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
   if (model.items.length === 0) {
@@ -84,8 +89,10 @@ export function ScenarioMatrix({
               key={item.key}
               detail={detailForScenario(detail, item)}
               item={item}
+              previous={previousAttempts(detail, item)}
               executionId={detail.id}
               onTranscript={onTranscript}
+              onRerun={onRerun}
             />
           ))}
         </tbody>
@@ -253,13 +260,18 @@ function ScenarioSummary({
 function ScenarioResult({
   detail,
   item,
+  previous,
   executionId,
   onTranscript,
+  onRerun,
 }: {
   detail: DashboardExecutionDetail
   item: ScenarioMatrixItem
+  /** Attempts the last one replaced: listed, counted nowhere. */
+  previous: PreviousAttempt[]
   executionId: string
   onTranscript: (run: AssessmentRunView, title: string) => void
+  onRerun?: (scenarioId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
   const panelId = useId()
@@ -373,6 +385,15 @@ function ScenarioResult({
                   definition {definition}
                 </span>
               ) : null}
+              {previous.length > 0 ? (
+                <span
+                  className="mt-1 block font-mono text-label text-warning"
+                  data-reruns={previous.length}
+                  title="Ran again; only the last attempt counts"
+                >
+                  rerun ×{previous.length}
+                </span>
+              ) : null}
             </span>
           </button>
         </th>
@@ -443,6 +464,24 @@ function ScenarioResult({
               scenarioId={item.scenarioId}
               subjectId={item.subjectId}
             />
+            {onRerun ? (
+              // Offered on every row, prominent where the scenario did not pass.
+              <button
+                type="button"
+                className={buttonClassName({
+                  variant:
+                    item.objective.status === 'passed' ? 'quiet' : 'secondary',
+                  size: 'compact',
+                })}
+                aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                title="Run this scenario again"
+                data-rerun-scenario={item.scenarioId}
+                onClick={() => onRerun(item.scenarioId)}
+              >
+                <RotateCcw size={15} aria-hidden="true" />
+                {item.objective.status === 'passed' ? null : 'run again'}
+              </button>
+            ) : null}
           </div>
         </td>
       </tr>
@@ -525,6 +564,9 @@ function ScenarioResult({
               })}
             </ul>
           ) : null}
+          {previous.length > 0 ? (
+            <PreviousAttempts previous={previous} />
+          ) : null}
           {!item.available ? (
             <p className="m-0 mt-3 text-sm text-ink-muted">
               The expected report for this scenario is unavailable. Runtime and
@@ -537,6 +579,64 @@ function ScenarioResult({
         </td>
       </tr>
     </>
+  )
+}
+
+/** The attempts the last one replaced, oldest first, each with its result,
+ *  score, reason and evidence; none of them counts anywhere. */
+function PreviousAttempts({ previous }: { previous: PreviousAttempt[] }) {
+  return (
+    <section
+      className="mt-4 grid gap-2"
+      aria-label="Previous attempts"
+      data-previous-attempts
+    >
+      <h4 className="m-0 ds-label">previous attempts · not counted</h4>
+      <p className="m-0 text-xs text-ink-muted">
+        Only the last attempt counts; these stay out of the score, the totals
+        and the comparison.
+      </p>
+      <ol className="m-0 grid list-none gap-2 p-0">
+        {previous.map(({ executionId, item }, index) => (
+          <li
+            key={executionId}
+            className="flex flex-wrap items-center gap-3"
+            data-previous-attempt={executionId}
+          >
+            <span className="font-mono text-label text-ink-muted">
+              attempt {index + 1}
+            </span>
+            <StatusBadge
+              status={item.objective.status}
+              label={item.objective.label}
+            />
+            <strong className="font-mono text-xs">
+              {scoreLabel(item.primaryRun?.score)}
+            </strong>
+            {item.reason ? (
+              <span className="min-w-0 break-words text-xs text-ink-muted">
+                {item.reason}
+              </span>
+            ) : null}
+            {item.primaryRun ? (
+              <a
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                href={hashForExecution(
+                  executionId,
+                  null,
+                  item.primaryRun.run_id,
+                )}
+              >
+                evidence record
+              </a>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
   )
 }
 

@@ -535,17 +535,21 @@ export type DashboardReportProjection = JsonObject & {
   >
 }
 
+/** What one native run reports for one slot, or why it reports nothing. */
+export type DashboardReportRecord = JsonObject & {
+  subject_id: string
+  scenario_id: string
+  available: boolean
+  report?: DashboardReportProjection
+}
+
 export type DashboardExecutionDetail = DashboardExecutionSummary & {
   plan_execution?: PlanExecution
   evidence_error?: string
-  reports: Array<
-    JsonObject & {
-      subject_id: string
-      scenario_id: string
-      available: boolean
-      report?: DashboardReportProjection
-    }
-  >
+  reports: DashboardReportRecord[]
+  /** The attempts a scenario ran before its current one, per slot: shown,
+   *  counted nowhere. */
+  previous_reports?: DashboardReportRecord[]
 }
 
 export type ExecutionManifest = JsonObject & {
@@ -576,6 +580,7 @@ export type RuntimeConfig = {
     test_history_get: string
     catalog_get: string
     execution_start: string
+    execution_slot_rerun: string
     run_cancel: string
     plan_control: string
     plans_list: string
@@ -634,6 +639,11 @@ export type DashboardDataBridge = {
     parameters: ExecutionParameters
     label: string
   }): Promise<{ execution_id: string }>
+  /** Runs one scenario of a finished local execution again, its group whole. */
+  rerunScenario(
+    executionId: string,
+    scenarioId: string,
+  ): Promise<{ execution_id: string }>
   cancelRun(): Promise<JsonObject>
   subscribeRunChanges(
     handler: (payload: JsonObject) => void,
@@ -733,6 +743,11 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call(runtime.functions.catalog_get, url ? { url } : {}),
     startExecution: (request) =>
       call(runtime.functions.execution_start, request),
+    rerunScenario: (executionId, scenarioId) =>
+      call(runtime.functions.execution_slot_rerun, {
+        execution_id: executionId,
+        scenario_id: scenarioId,
+      }),
     cancelRun: () => call(runtime.functions.run_cancel, {}),
     subscribeRunChanges: async (handler) => {
       const client = await getDashboardIiiClient()

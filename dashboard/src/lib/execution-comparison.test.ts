@@ -7,6 +7,7 @@ import {
   compareRuns,
   comparisonMarkdown,
   exclusionPhrase,
+  rerunPhrase,
   runnerWarning,
   scenarioScore,
   stackSummary,
@@ -743,6 +744,50 @@ describe('comparison summary', () => {
         '',
       ].join('\n'),
     )
+  })
+
+  it('marks a scenario that ran again and compares only its last attempt', () => {
+    const a = imported()
+    const b = local()
+    const before = compareExecutions(a, b)
+    // B ran minimal_path twice more: its earlier attempts scored far lower.
+    const slot = (previous: number) => ({
+      round: 1,
+      scenario_id: 'minimal_path',
+      execution_id: 'current',
+      previous_attempts: Array.from({ length: previous }, (_, index) => ({
+        execution_id: `attempt-${index + 1}`,
+        error: null,
+      })),
+    })
+    Object.assign(b.plan_execution ?? {}, {
+      slots: [slot(2), { ...slot(0), scenario_id: 'persistent_state' }],
+    })
+    b.previous_reports = execution('attempt-1', [
+      { scenario: 'minimal_path', score: 5, tokens: 9000 },
+    ]).reports
+    const comparison = compareExecutions(a, b)
+    const scenario = comparison.scenarios.find(
+      (entry) => entry.id === 'minimal_path',
+    )
+    expect(scenario?.sides.b.reruns).toBe(2)
+    expect(scenario && rerunPhrase(scenario)).toBe('rerun ×2 in B')
+    expect(scenarioScore(scenario ?? before.scenarios[0], 'b')).toBe('94')
+    expect(comparison.totals).toEqual(before.totals)
+    expect(
+      comparison.scenarios
+        .filter((entry) => entry.id !== 'minimal_path')
+        .map(rerunPhrase),
+    ).toEqual([null, null])
+    expect(comparisonMarkdown(comparison)).toContain(
+      '\n\nRun again (only the last attempt is compared):\n- minimal_path: rerun ×2 in B\n',
+    )
+    expect(comparisonMarkdown(before)).not.toContain('Run again')
+    // Swapped, the mark follows the execution.
+    const swapped = compareExecutions(b, a).scenarios.find(
+      (entry) => entry.id === 'minimal_path',
+    )
+    expect(swapped && rerunPhrase(swapped)).toBe('rerun ×2 in A')
   })
 
   it('states no profile difference when a side did not record its parameters', () => {

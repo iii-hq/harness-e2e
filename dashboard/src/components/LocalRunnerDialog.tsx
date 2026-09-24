@@ -175,6 +175,23 @@ function errorMessage(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+/** Why a run did not start: a busy runner names the execution that holds it
+ *  by its title, to open; any other error reads as it came. */
+export async function describeStartError(
+  bridge: DashboardDataBridge,
+  cause: unknown,
+): Promise<{ error: string; running: { id: string; title: string } | null }> {
+  const message = errorMessage(cause)
+  const id = runningExecutionId(message)
+  const detail = id ? await bridge.getExecution(id).catch(() => null) : null
+  if (!id || !detail) return { error: message, running: null }
+  const { title } = executionTitle(buildExecutionPresentation(detail))
+  return {
+    error: `"${title}" is still running. Wait for it to finish or cancel it.`,
+    running: { id, title },
+  }
+}
+
 /** Run tests and Run again: one form that starts an execution on this stack
  *  and then follows it on its page. */
 export function LocalRunnerDialog({
@@ -331,17 +348,9 @@ export function LocalRunnerDialog({
       onClose()
       window.location.hash = hashForExecution(started.execution_id)
     } catch (cause) {
-      const message = errorMessage(cause)
-      // A busy runner: name the execution by its title and offer to open it.
-      const id = runningExecutionId(message)
-      const detail = id ? await bridge.getExecution(id).catch(() => null) : null
-      if (id && detail) {
-        const { title } = executionTitle(buildExecutionPresentation(detail))
-        setRunning({ id, title })
-        setError(
-          `"${title}" is still running. Wait for it to finish or cancel it.`,
-        )
-      } else setError(message)
+      const described = await describeStartError(bridge, cause)
+      setRunning(described.running)
+      setError(described.error)
     } finally {
       setSubmitting(false)
     }

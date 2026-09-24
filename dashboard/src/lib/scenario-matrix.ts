@@ -123,6 +123,33 @@ export function buildScenarioMatrix(
   return { items, summary, contracts }
 }
 
+/** A run a scenario's slot ran before its current one: shown, never counted. */
+export type PreviousAttempt = {
+  /** The native execution that holds its evidence. */
+  executionId: string
+  item: ScenarioMatrixItem
+}
+
+/** The earlier attempts of the slot an item reports, oldest first. */
+export function previousAttempts(
+  detail: DashboardExecutionDetail,
+  item: ScenarioMatrixItem,
+): PreviousAttempt[] {
+  const round = detail.reports[item.reportIndex]?.round
+  const records = (detail.previous_reports ?? []).filter(
+    (record) =>
+      record.scenario_id === item.scenarioId && record.round === round,
+  )
+  return buildScenarioMatrix({
+    ...detail,
+    reports: records,
+    previous_reports: [],
+  }).items.map((attempt) => ({
+    executionId: String(records[attempt.reportIndex]?.native_execution_id),
+    item: attempt,
+  }))
+}
+
 function resultContracts(
   detail: DashboardExecutionDetail,
 ): ResultContractSummary[] {

@@ -2,6 +2,9 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
+import { compareRuns } from '@/lib/execution-comparison'
+import { buildExecutionMetrics } from '@/lib/execution-metrics'
+import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import {
@@ -385,6 +388,91 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('Recorded runs')
     expect(html).not.toContain('This scenario has no persisted workflow')
     expect(html).not.toMatch(/<button[^>]*data-scenario-row/)
+  })
+
+  it('marks a scenario that ran again and lists its previous attempts outside every figure', () => {
+    const current = detail.reports[0]
+    const scenario = current.report?.scenarios[0]
+    const replaced = {
+      ...current,
+      native_execution_id: 'old-native',
+      round: 1,
+      report: {
+        ...current.report,
+        objective_outcome: 'failed',
+        scenarios: [
+          {
+            ...scenario,
+            passed: false,
+            aggregate: aggregate({
+              completed_runs: 0,
+              task_incomplete_runs: 1,
+            }),
+            runs: [
+              {
+                ...scenario?.runs[0],
+                run_id: 'run-old',
+                attempt_id: 'attempt-old',
+                status: 'hard_gate_failed',
+                completion: 'task_incomplete',
+                score: 20,
+                failures: [
+                  { phase: 'evaluation', message: 'scan never ended' },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    }
+    const crashed = {
+      subject_id: 'terra',
+      scenario_id: 'security_review',
+      native_execution_id: 'crashed-native',
+      round: 1,
+      available: false,
+      error: 'fixture repository unavailable',
+    }
+    const reran = {
+      ...detail,
+      reports: [{ ...current, round: 1 }, ...detail.reports.slice(1)],
+      previous_reports: [replaced, crashed],
+    } as unknown as DashboardExecutionDetail
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix
+        detail={reran}
+        onTranscript={() => {}}
+        onRerun={() => {}}
+      />,
+    )
+
+    expect(html).toContain('data-reruns="2"')
+    expect(html).toContain('rerun ×2')
+    expect(html).toContain('previous attempts · not counted')
+    expect(html).toContain('20/100')
+    expect(html).toContain('scan never ended')
+    expect(html).toMatch(/href="[^"]*execution\/old-native\/run\/run-old"/)
+    expect(html).toContain('fixture repository unavailable')
+    // Every row can run again; one that did not pass says so in words.
+    expect(html).toContain('aria-label="Run Security Review again"')
+    expect(html).toMatch(
+      /data-rerun-scenario="persistent_state"[^>]*>.*?run again<\/button>/,
+    )
+    // The attempts it replaced reach no figure, summary or comparison run.
+    const without = { ...reran, previous_reports: [] }
+    expect(buildPrimaryMetrics(reran)).toEqual(buildPrimaryMetrics(without))
+    expect(buildExecutionMetrics(reran)).toEqual(buildExecutionMetrics(without))
+    expect(buildScenarioMatrix(reran).summary).toEqual(
+      buildScenarioMatrix(without).summary,
+    )
+    expect(compareRuns(reran).map((run) => run.runId)).toEqual(
+      compareRuns(without).map((run) => run.runId),
+    )
+    expect(
+      renderToStaticMarkup(
+        <ScenarioMatrix detail={without} onTranscript={() => {}} />,
+      ),
+    ).not.toContain('data-rerun')
   })
 
   it('keeps incomplete outcomes and evidence access visible with secondary details collapsed', () => {
