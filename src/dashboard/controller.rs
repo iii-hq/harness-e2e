@@ -417,6 +417,15 @@ impl Controller {
         Ok(json!({"execution_id": execution.id}))
     }
 
+    /// Run one scenario of a finished local execution again; answers at once
+    /// and runs it in the background.
+    pub(super) async fn rerun_scenario(&self, id: &str, scenario_id: &str) -> Result<Value> {
+        super::presenter::validate_execution_id(id).map_err(anyhow::Error::msg)?;
+        let execution = self.plan_store.rerun_scenario(id, scenario_id).await?;
+        self.emit_change("started", &execution.id).await;
+        Ok(json!({"execution_id": execution.id}))
+    }
+
     pub(super) async fn cancel(&self) -> Result<()> {
         let control = self
             .control

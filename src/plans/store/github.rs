@@ -861,6 +861,7 @@ pub(super) fn slot(round: u32, group_id: &str, scenario_id: &str) -> Slot {
         passed: 0,
         technical_valid: 0,
         eligible: false,
+        previous_attempts: Vec::new(),
     }
 }
 

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 #[cfg(test)]
 use std::fs;
 
-use crate::plans::store::{execution_summary, PlanExecution, PlanStore};
+use crate::plans::store::{execution_summary, native_runs, PlanExecution, PlanStore, Slot};
 
 impl PlanStore {
     pub(crate) async fn dashboard_summaries(
@@ -75,13 +75,9 @@ impl PlanStore {
                 });
             let summary = execution_summary(&execution);
             // A slot without a native run (a group that failed before one
-            // existed) has no child to hide.
-            for slot in execution
-                .slots
-                .iter()
-                .filter(|s| !s.execution_id.is_empty())
-            {
-                children.insert(slot.execution_id.clone(), execution.id.clone());
+            // existed) has no child to hide; a previous attempt is hidden too.
+            for child in native_runs(&execution).filter(|id| !id.is_empty()) {
+                children.insert(child.to_owned(), execution.id.clone());
             }
             let status = match execution.state.as_str() {
                 "completed"
@@ -133,7 +129,9 @@ impl PlanStore {
             .find(|value| value["id"] == id)
             .context("Plan execution missing")?;
         let execution = self.read_execution(id).await?;
+        let subject = summary["subjects"][0]["id"].clone();
         let mut reports = Vec::new();
+        let mut previous = Vec::new();
         let mut assessments = Vec::new();
         let mut assessed = BTreeSet::new();
         for slot in &execution.slots {
@@ -152,28 +150,34 @@ impl PlanStore {
             } else {
                 Ok(None)
             };
-            match native {
-                Ok(Some(detail)) if detail["reports"].as_array().is_some_and(|reports| !reports.is_empty()) => {
-                    for mut report in detail["reports"].as_array().unwrap().iter()
-                        .filter(|report| report["scenario_id"] == slot.scenario_id)
-                        .cloned() {
-                        report["subject_id"] = summary["subjects"][0]["id"].clone();
-                        report["native_execution_id"] = json!(slot.execution_id);
-                        report["round"] = json!(slot.round);
-                        reports.push(report);
-                    }
-                }
-                result => reports.push(json!({
-                    "subject_id": summary["subjects"][0]["id"], "scenario_id": slot.scenario_id,
-                    "native_execution_id": slot.execution_id, "round": slot.round,
-                    "available": false, "report": null,
-                    "error": result.err().map(|error| format!("{error:#}")).or_else(|| slot.error.clone()),
-                })),
+            reports.extend(slot_reports(
+                native,
+                slot,
+                &slot.execution_id,
+                slot.error.as_ref(),
+                &subject,
+            ));
+            // Earlier attempts are shown with their slot and counted nowhere:
+            // not in the assessment, the totals or the measurements.
+            for attempt in &slot.previous_attempts {
+                let native = super::store::read_stored_run(&self.root.join(&attempt.execution_id))
+                    .and_then(|run| {
+                        run.map(|run| super::presenter::stored_execution_detail(&run))
+                            .transpose()
+                    });
+                previous.extend(slot_reports(
+                    native,
+                    slot,
+                    &attempt.execution_id,
+                    attempt.error.as_ref(),
+                    &subject,
+                ));
             }
         }
         summary["assessment_summary"] =
             json!(super::assessment_projection::summarize(assessments.iter()));
         summary["reports"] = json!(reports);
+        summary["previous_reports"] = json!(previous);
         summary["plan_execution"] = serde_json::to_value(&execution)?;
         summary["native_execution_ids"] = json!(execution
             .slots
@@ -184,6 +188,44 @@ impl PlanStore {
             .into_iter()
             .collect::<Vec<_>>());
         Ok(Some(summary))
+    }
+}
+
+/// What one native run reports for a slot's scenario, or one unavailable
+/// entry that says why.
+fn slot_reports(
+    native: Result<Option<Value>>,
+    slot: &Slot,
+    native_id: &str,
+    error: Option<&String>,
+    subject: &Value,
+) -> Vec<Value> {
+    match native {
+        Ok(Some(detail))
+            if detail["reports"]
+                .as_array()
+                .is_some_and(|reports| !reports.is_empty()) =>
+        {
+            detail["reports"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|report| report["scenario_id"] == slot.scenario_id)
+                .map(|report| {
+                    let mut report = report.clone();
+                    report["subject_id"] = subject.clone();
+                    report["native_execution_id"] = json!(native_id);
+                    report["round"] = json!(slot.round);
+                    report
+                })
+                .collect()
+        }
+        result => vec![json!({
+            "subject_id": subject, "scenario_id": slot.scenario_id,
+            "native_execution_id": native_id, "round": slot.round,
+            "available": false, "report": null,
+            "error": result.err().map(|error| format!("{error:#}")).or_else(|| error.cloned()),
+        })],
     }
 }
 

@@ -73,6 +73,18 @@ pub(crate) struct Slot {
     pub passed: u32,
     pub technical_valid: u32,
     pub eligible: bool,
+    /// The runs this slot ran before its current one, oldest first. Only the
+    /// last attempt counts; these stay visible, outside every total.
+    #[serde(default)]
+    pub previous_attempts: Vec<SlotAttempt>,
+}
+
+/// A run a slot ran before its current one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct SlotAttempt {
+    pub execution_id: String,
+    /// Why it ended as it did, when the run said.
+    pub error: Option<String>,
 }
 
 /// One execution, whatever produced it: a saved plan run here or a run
@@ -766,7 +778,114 @@ impl PlanStore {
             runner.release(&execution.id).await;
             return Err(error);
         }
-        self.spawn_drive(&execution.id);
+        self.spawn_drive(&execution.id, None);
+        Ok(execution)
+    }
+
+    /// Run one scenario of a finished local execution again, on this stack,
+    /// with the requests its slots ran (every round, the canonical case). The
+    /// last attempt counts, as a re-run job does on GitHub: the run it
+    /// replaces stays on the slot as a previous attempt, outside every total.
+    /// A scenario of a sequential group runs again with its whole group.
+    pub(crate) async fn rerun_scenario(
+        self: &Arc<Self>,
+        id: &str,
+        scenario_id: &str,
+    ) -> Result<PlanExecution> {
+        let _guard = self.lock.lock().await;
+        let mut execution = self.read_execution(id).await?;
+        if let ExecutionSource::Github { url, .. } = &execution.source {
+            anyhow::bail!(
+                "This execution was imported from GitHub; running a scenario here would mix this stack with the one it ran on. Re-run its job on GitHub ({url}) and import the run again: the import takes the highest attempt."
+            );
+        }
+        ensure!(
+            !execution.active() && execution.state != "importing",
+            "Only a finished execution can run a scenario again."
+        );
+        let runs = execution
+            .slots
+            .iter()
+            .filter(|slot| slot.scenario_id == scenario_id && !slot.execution_id.is_empty())
+            .map(|slot| slot.execution_id.clone())
+            .collect::<BTreeSet<_>>();
+        if runs.is_empty() {
+            anyhow::bail!(execution
+                .slots
+                .iter()
+                .find_map(|slot| (slot.scenario_id == scenario_id)
+                    .then(|| slot.error.clone())
+                    .flatten())
+                .unwrap_or_else(|| format!(
+                    "This execution did not run the scenario '{scenario_id}'."
+                )));
+        }
+        let runner = self.runner()?;
+        // A run that was never admitted (cancelled before its turn) is not an attempt.
+        let mut retained = BTreeSet::new();
+        for run in &runs {
+            if runner.record(run).await.is_some() {
+                retained.insert(run.clone());
+            }
+        }
+        if let Err(error) = runner.reserve(id).await {
+            return Err(self.busy(runner, error).await);
+        }
+        let mut scenarios = Vec::new();
+        for slot in execution
+            .slots
+            .iter_mut()
+            .filter(|slot| runs.contains(&slot.execution_id))
+        {
+            if !scenarios.contains(&slot.scenario_id) {
+                scenarios.push(slot.scenario_id.clone());
+            }
+            if retained.contains(&slot.execution_id) {
+                slot.previous_attempts.push(SlotAttempt {
+                    execution_id: slot.execution_id.clone(),
+                    error: slot.error.take(),
+                });
+            }
+            let key = format!(
+                "{id}:round-{}:{}:attempt-{}",
+                slot.round,
+                slot.group_id,
+                slot.previous_attempts.len() + 1
+            );
+            slot.request["idempotency_key"] = json!(key);
+            slot.execution_id = execution_id_for_key(&key);
+            slot.state = "pending".into();
+            (slot.result_path, slot.error) = (None, None);
+            (
+                slot.observed,
+                slot.completed,
+                slot.passed,
+                slot.technical_valid,
+            ) = (0, 0, 0, 0);
+            slot.eligible = false;
+        }
+        if scenarios.len() > 1 {
+            let note = format!(
+                "{} run only together, in this order; the whole group ran again.",
+                scenarios.join(" then ")
+            );
+            if !execution.warnings.contains(&note) {
+                execution.warnings.push(note);
+            }
+        }
+        execution.state = "running".into();
+        execution.cancel_requested = false;
+        execution.error = None;
+        execution.finished_at = None;
+        execution.baseline_eligible = false;
+        // Consolidated again from the current attempts once they finish.
+        execution.measurements = None;
+        execution.updated_at = now();
+        if let Err(error) = self.write_execution(&execution).await {
+            runner.release(id).await;
+            return Err(error);
+        }
+        self.spawn_drive(id, Some(scenarios));
         Ok(execution)
     }
 
@@ -797,7 +916,8 @@ impl PlanStore {
     }
 
     /// Delete a finished execution that ran no saved plan (a plan's executions
-    /// go with the plan): its native runs first, then the execution.
+    /// go with the plan): its native runs first, previous attempts included,
+    /// then the execution.
     pub(crate) async fn delete_execution(&self, id: &str) -> Result<()> {
         let _guard = self.lock.lock().await;
         let execution = self.read_execution(id).await?;
@@ -810,10 +930,7 @@ impl PlanStore {
             "Only a finished execution can be deleted."
         );
         let runner = self.runner()?;
-        let children = execution
-            .slots
-            .iter()
-            .map(|slot| slot.execution_id.as_str())
+        let children = native_runs(&execution)
             .filter(|child| !child.is_empty())
             .collect::<BTreeSet<_>>();
         for child in children {
@@ -1025,14 +1142,16 @@ impl PlanStore {
             runner.release(&id).await;
             return Err(error);
         }
-        self.spawn_drive(&id);
+        self.spawn_drive(&id, None);
         Ok(json!({"execution_id": id, "duplicate": false, "execution": execution}))
     }
-    fn spawn_drive(self: &Arc<Self>, id: &str) {
+    /// Run the pending slots in the background; `again` names the scenarios
+    /// a finished execution runs again.
+    fn spawn_drive(self: &Arc<Self>, id: &str, again: Option<Vec<String>>) {
         let manager = self.clone();
         let id = id.to_owned();
         tokio::spawn(async move {
-            if let Err(error) = manager.drive(&id).await {
+            if let Err(error) = manager.drive(&id, again.as_deref()).await {
                 tracing::error!(execution_id = %id, error = %error, "plan coordinator stopped");
                 // Keep admission until the active child has actually terminated.
                 manager
@@ -1041,27 +1160,42 @@ impl PlanStore {
             }
         });
     }
-    async fn drive(&self, id: &str) -> Result<()> {
+    async fn drive(&self, id: &str, again: Option<&[String]>) -> Result<()> {
         let runner = self.runner()?;
         // The stack is recorded before the first slot; what cannot be read
-        // is a warning on the execution.
+        // is a warning on the execution. A scenario run again keeps the
+        // recorded stack and says when it ran on another one.
         let (stack, warnings) = runner.stack().await;
         let count = {
             let _guard = self.lock.lock().await;
             let mut execution = self.read_execution(id).await?;
-            execution.stack = stack;
-            execution.warnings.extend(warnings);
+            match again {
+                None => {
+                    execution.stack = stack;
+                    execution.warnings.extend(warnings);
+                }
+                Some(scenarios) => {
+                    let changed = stack_changes(&execution.stack, &stack);
+                    if !changed.is_empty() {
+                        execution.warnings.push(format!(
+                            "{} ran again on a stack that differs from the recorded one: {}.",
+                            scenarios.join(", "),
+                            changed.join(", ")
+                        ));
+                    }
+                }
+            }
             self.write_execution(&execution).await?;
             execution.slots.len()
         };
         for index in 0..count {
             let execution = self.read_execution(id).await?;
-            // A slot without a native run (an unknown scenario) has nothing
-            // to admit; a grouped slot shares its group's run.
+            // Only a pending slot is admitted: one without a native run (an
+            // unknown scenario) has nothing to admit, one of a group was
+            // admitted with the group's first slot, and a finished one keeps
+            // its run when another scenario runs again.
             if execution.slots[index].execution_id.is_empty()
-                || execution.slots[..index]
-                    .iter()
-                    .any(|slot| slot.execution_id == execution.slots[index].execution_id)
+                || execution.slots[index].state != "pending"
             {
                 continue;
             }
@@ -1536,6 +1670,7 @@ fn campaign_slots(
                     passed: 0,
                     technical_valid: 0,
                     eligible: false,
+                    previous_attempts: Vec::new(),
                 });
             }
         }
@@ -1704,6 +1839,39 @@ fn identity_changes(path: &str, before: &Value, after: &Value, changed: &mut Vec
         _ if before != after => changed.push(format!("{path}: {before} → {after}")),
         _ => {}
     }
+}
+/// The workers whose recorded entry differs between two observations of the
+/// stack; nothing when either could not be read.
+fn stack_changes(recorded: &[StackWorker], now: &[StackWorker]) -> Vec<String> {
+    if recorded.is_empty() || now.is_empty() {
+        return Vec::new();
+    }
+    let entries = |stack: &[StackWorker], name: &str| {
+        stack
+            .iter()
+            .filter(|worker| worker.name == name)
+            .cloned()
+            .collect::<Vec<_>>()
+    };
+    recorded
+        .iter()
+        .chain(now)
+        .map(|worker| worker.name.as_str())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|name| entries(recorded, name) != entries(now, name))
+        .map(str::to_owned)
+        .collect()
+}
+/// Every native run an execution's slots ran, previous attempts included.
+pub(crate) fn native_runs(execution: &PlanExecution) -> impl Iterator<Item = &str> {
+    execution.slots.iter().flat_map(|slot| {
+        std::iter::once(slot.execution_id.as_str()).chain(
+            slot.previous_attempts
+                .iter()
+                .map(|attempt| attempt.execution_id.as_str()),
+        )
+    })
 }
 fn result_paths(execution: &PlanExecution, root: &Path) -> Vec<PathBuf> {
     execution
@@ -1995,6 +2163,7 @@ mod tests {
                 record.phase = ExecutionPhase::Failed;
                 record.error = "fixture repository unavailable".into();
                 (record.report, record.manifest, record.result_path) = (None, None, None);
+                fs::remove_dir_all(self.root.join(&id))?;
             }
             self.records.lock().await.insert(id.clone(), record);
             Ok(if self.wrong_identity.load(Ordering::SeqCst) {
@@ -2909,6 +3078,7 @@ mod tests {
                     passed: 0,
                     technical_valid: 0,
                     eligible: false,
+                    previous_attempts: Vec::new(),
                 },
                 // A group that failed before it had a native run.
                 Slot {
@@ -2925,6 +3095,7 @@ mod tests {
                     passed: 0,
                     technical_valid: 0,
                     eligible: false,
+                    previous_attempts: Vec::new(),
                 },
             ],
             measurements: Some(json!({"cohorts": [{
@@ -3578,6 +3749,295 @@ mod tests {
             "{error}"
         );
         assert!(manager.read_execution(&planned).await.is_ok());
+    }
+
+    fn parameters(scenarios: &[&str]) -> ExecutionParameters {
+        ExecutionParameters {
+            scenarios: scenarios.iter().map(|id| (*id).into()).collect(),
+            runs: 1,
+            technical_retries: 0,
+            model: "model".into(),
+            provider: "provider".into(),
+            agent: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scenario_runs_again_and_only_its_last_attempt_counts() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        // The first attempt has results: it fails its task.
+        runner.fail_next.store(true, Ordering::SeqCst);
+        let started = manager
+            .start_execution(parameters(&["minimal_path", "context_pressure"]), "")
+            .await
+            .unwrap();
+        let first = terminal(&manager, &started.id).await;
+        assert_eq!(first.slots[0].scenario_id, "minimal_path");
+        let (failed, other) = (first.slots[0].clone(), first.slots[1].clone());
+
+        // The second ends without results: it still replaces the first.
+        runner.crash_next.store(true, Ordering::SeqCst);
+        let rerun = manager
+            .rerun_scenario(&first.id, "minimal_path")
+            .await
+            .unwrap();
+        assert_eq!(rerun.state, "running");
+        assert!(rerun.measurements.is_none());
+        let second = terminal(&manager, &first.id).await;
+        assert_eq!(second.state, "completed");
+        let slot = &second.slots[0];
+        assert_ne!(slot.execution_id, failed.execution_id);
+        assert!(slot.request["idempotency_key"]
+            .as_str()
+            .unwrap()
+            .ends_with(":attempt-2"));
+        assert_eq!(
+            slot.previous_attempts,
+            vec![SlotAttempt {
+                execution_id: failed.execution_id.clone(),
+                error: None,
+            }]
+        );
+        assert_eq!(
+            slot.error.as_deref(),
+            Some("fixture repository unavailable")
+        );
+        // The other scenario kept its run, and the measurements hold only
+        // the current attempts: the failed one is out.
+        assert_eq!(
+            serde_json::to_value(&second.slots[1]).unwrap(),
+            serde_json::to_value(&other).unwrap()
+        );
+        assert_eq!(
+            second.measurements.as_ref().unwrap()["cohorts"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+
+        manager
+            .rerun_scenario(&first.id, "minimal_path")
+            .await
+            .unwrap();
+        let third = terminal(&manager, &first.id).await;
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 4);
+        let slot = &third.slots[0];
+        assert_eq!((slot.observed, slot.error.as_deref()), (1, None));
+        assert_eq!(
+            slot.previous_attempts
+                .iter()
+                .map(|attempt| (attempt.execution_id.as_str(), attempt.error.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![
+                (failed.execution_id.as_str(), None),
+                (
+                    second.slots[0].execution_id.as_str(),
+                    Some("fixture repository unavailable")
+                ),
+            ]
+        );
+
+        // Totals, assessment and runtime count the current attempts only;
+        // the previous ones are listed apart, with their reason.
+        let natives = crate::dashboard::read_model::DashboardReadModel::load(root.path())
+            .unwrap()
+            .summaries;
+        let detail = manager
+            .execution_detail(&third.id, &natives)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(detail["reports"].as_array().unwrap().len(), 2);
+        assert_eq!(detail["assessment_summary"]["run_count"], 2);
+        assert_eq!(detail["totals"]["total_cost_usd"], json!(0.5));
+        assert_eq!(detail["totals"]["wall_time_seconds"], json!(0.2));
+        let previous = detail["previous_reports"].as_array().unwrap();
+        assert_eq!(previous.len(), 2);
+        assert_eq!(
+            previous[0]["native_execution_id"],
+            json!(failed.execution_id)
+        );
+        assert_eq!(previous[0]["available"], true);
+        assert_eq!(previous[1]["available"], false);
+        assert_eq!(previous[1]["error"], "fixture repository unavailable");
+        // Previous attempts are the execution's, never runs of their own.
+        let (_, children) = manager.dashboard_summaries(&natives).await.unwrap();
+        assert_eq!(children.get(&failed.execution_id), Some(&third.id));
+
+        // Deleting the execution deletes every attempt.
+        manager.delete_execution(&third.id).await.unwrap();
+        for attempt in &third.slots[0].previous_attempts {
+            assert!(runner.record(&attempt.execution_id).await.is_none());
+            assert!(!root.path().join(&attempt.execution_id).exists());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_scenario_of_a_sequential_group_runs_again_with_its_group() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let started = manager
+            .start_execution(
+                parameters(&[
+                    "registry_implementation",
+                    "registry_verification",
+                    "minimal_path",
+                ]),
+                "",
+            )
+            .await
+            .unwrap();
+        let before = terminal(&manager, &started.id).await;
+        let group = before
+            .slots
+            .iter()
+            .find(|slot| slot.scenario_id == "registry_verification")
+            .unwrap()
+            .execution_id
+            .clone();
+        manager
+            .rerun_scenario(&before.id, "registry_verification")
+            .await
+            .unwrap();
+        let after = terminal(&manager, &before.id).await;
+        assert_eq!(runner.submitted.load(Ordering::SeqCst), 3);
+        let grouped = after
+            .slots
+            .iter()
+            .filter(|slot| slot.scenario_id.starts_with("registry_"))
+            .collect::<Vec<_>>();
+        assert_eq!(grouped.len(), 2);
+        assert_eq!(grouped[0].execution_id, grouped[1].execution_id);
+        assert_ne!(grouped[0].execution_id, group);
+        assert!(grouped
+            .iter()
+            .all(|slot| slot.previous_attempts[0].execution_id == group && slot.observed == 1));
+        let other = after
+            .slots
+            .iter()
+            .find(|slot| slot.scenario_id == "minimal_path")
+            .unwrap();
+        assert!(other.previous_attempts.is_empty());
+        assert!(after.warnings.contains(
+            &"registry_implementation then registry_verification run only together, in this order; the whole group ran again."
+                .to_string()
+        ));
+    }
+
+    #[tokio::test]
+    async fn only_a_finished_local_execution_runs_a_scenario_again() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager(root.path(), runner.clone());
+        let mut imported = import_stub();
+        imported.state = "completed".into();
+        imported.source = ExecutionSource::Github {
+            repository: "o/r".into(),
+            run_id: 42,
+            run_attempt: 1,
+            url: "https://github.com/o/r/actions/runs/42".into(),
+            release_control_execution_id: None,
+        };
+        imported.slots = vec![github::slot(1, "case-minimal", "minimal_path")];
+        imported.slots[0].execution_id = "0123456789abcdef0123456789abcdef".into();
+        manager.write_execution(&imported).await.unwrap();
+        let error = manager
+            .rerun_scenario(&imported.id, "minimal_path")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("imported from GitHub"), "{error}");
+        assert!(
+            error.contains("https://github.com/o/r/actions/runs/42"),
+            "{error}"
+        );
+        assert!(error.contains("import the run again"), "{error}");
+
+        let started = manager
+            .start_execution(parameters(&["minimal_path", "retired_scenario"]), "Nightly")
+            .await
+            .unwrap();
+        let finished = terminal(&manager, &started.id).await;
+        for (scenario, reason) in [
+            (
+                "retired_scenario",
+                "does not know the scenario 'retired_scenario'",
+            ),
+            ("trend_blog", "did not run the scenario 'trend_blog'"),
+        ] {
+            let error = manager
+                .rerun_scenario(&finished.id, scenario)
+                .await
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
+        }
+
+        // A busy runner names what holds it, as a start does; a running
+        // execution cannot run a scenario again.
+        runner.hold.store(true, Ordering::SeqCst);
+        let running = manager
+            .start_execution(parameters(&["minimal_path"]), "Other")
+            .await
+            .unwrap();
+        let error = manager
+            .rerun_scenario(&finished.id, "minimal_path")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            error,
+            format!(
+                "\"Other\" ({}) is still running; wait for it to finish or cancel it.",
+                running.id
+            )
+        );
+        let error = manager
+            .rerun_scenario(&running.id, "minimal_path")
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Only a finished execution"), "{error}");
+        assert!(manager
+            .read_execution(&finished.id)
+            .await
+            .unwrap()
+            .slots
+            .iter()
+            .all(|slot| slot.previous_attempts.is_empty()));
+    }
+
+    #[test]
+    fn a_scenario_run_again_names_the_workers_that_changed() {
+        let worker = |name: &str, dirty| StackWorker {
+            name: name.into(),
+            source: WorkerSource::Path,
+            requested: None,
+            observed: Some("0.4.1".into()),
+            commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
+            dirty: Some(dirty),
+            groups: Vec::new(),
+        };
+        let recorded = [worker("queue", true), worker("state", false)];
+        assert!(stack_changes(&recorded, &recorded).is_empty());
+        assert_eq!(
+            stack_changes(
+                &recorded,
+                &[
+                    worker("queue", false),
+                    worker("state", false),
+                    worker("stream", false)
+                ]
+            ),
+            vec!["queue", "stream"]
+        );
+        // What could not be read is not a change.
+        assert!(stack_changes(&recorded, &[]).is_empty());
+        assert!(stack_changes(&[], &recorded).is_empty());
     }
 
     #[test]
