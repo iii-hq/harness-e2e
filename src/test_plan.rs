@@ -21,6 +21,11 @@ pub struct MasterPlan {
     pub modules: Vec<CapabilityModule>,
     pub diagnostics: Vec<String>,
     pub requirements: BTreeMap<String, Vec<String>>,
+    /// Serialized under its former name: the plan's digest
+    /// (`definition_sha256`, and through it every `profile_sha256`) is the
+    /// cohort key Release Control groups executions by, so a rename must not
+    /// move it.
+    #[serde(rename = "profiles", alias = "suites")]
     pub suites: Vec<Suite>,
 }
 
@@ -657,6 +662,51 @@ mod tests {
             .as_array()
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn renaming_profiles_to_suites_keeps_every_digest_release_control_keys_on() {
+        // Release Control groups executions by `profile_sha256`, which folds in
+        // `definition_sha256`: the digest of the plan document as the `main`
+        // before the rename hashed it, with the list under `profiles`.
+        let mut document: Value = serde_json::from_str(SOURCE).unwrap();
+        let object = document.as_object_mut().unwrap();
+        let suites = object.remove("suites").unwrap();
+        object.insert("profiles".into(), suites);
+        let plan = embedded().unwrap();
+        assert_eq!(
+            plan.digest().unwrap(),
+            artifact::sha256_value(&document).unwrap()
+        );
+        // Either name reads the same plan.
+        let older: MasterPlan = serde_json::from_value(document).unwrap();
+        assert_eq!(older.digest().unwrap(), plan.digest().unwrap());
+        // A suite serializes as a profile did: the same fields, nothing more.
+        for suite in &plan.suites {
+            let keys = serde_json::to_value(suite).unwrap();
+            let mut keys = keys
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.retain(|key| key != "scenario_groups");
+            keys.sort();
+            assert_eq!(
+                keys,
+                [
+                    "id",
+                    "label",
+                    "lane",
+                    "metrics",
+                    "modules",
+                    "purpose",
+                    "repetitions",
+                    "scenarios",
+                    "technical_retries"
+                ]
+            );
+        }
     }
 
     #[test]
