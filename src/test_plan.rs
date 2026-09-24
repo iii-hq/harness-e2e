@@ -439,10 +439,11 @@ mod tests {
     #[test]
     fn profile_samples_preserve_independent_execution_and_retry_boundaries() {
         let plan = embedded().unwrap();
-        assert_eq!(plan.profiles.len(), 4);
+        assert_eq!(plan.profiles.len(), 5);
         for (id, cases, runs) in [
             ("regression", 9, 9),
             ("software-engineering", 15, 15),
+            ("ade-worker-design", 1, 5),
             ("pr", 4, 4),
             ("after-release", 5, 5),
         ] {

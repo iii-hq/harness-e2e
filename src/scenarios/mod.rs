@@ -13,6 +13,7 @@ use crate::context::E2eContext;
 use crate::report::CompletionState;
 use crate::wire::SessionMetricsResponse;
 
+pub mod ade_incident_board;
 pub mod alertmanager_route_match;
 mod assessment;
 pub mod browser_cross_site;
@@ -489,6 +490,7 @@ scenarios! {
     ChessEngineBuild = "chess_engine_build" => chess_engine_build::ChessEngineBuild,
     FormFlowBuild = "form_flow_build" => visual_worker_build::FormFlowBuild,
     StateMachineCanvasBuild = "state_machine_canvas_build" => visual_worker_build::StateMachineCanvasBuild,
+    AdeIncidentBoard = "ade_incident_board" => ade_incident_board::AdeIncidentBoard,
     ChessPlayLadder = "chess_play_ladder" => chess_play_ladder::ChessPlayLadder,
     TrendBlog = "trend_blog" => trend_blog::TrendBlog,
     TrendingTopicsBuild = "trending_topics_build" => trending_topics_build::TrendingTopicsBuild,
@@ -663,7 +665,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_contains_fifty_nine_unique_valid_scenarios() {
+    fn registry_contains_sixty_unique_valid_scenarios() {
         let mut ids = HashSet::new();
         for scenario in ScenarioId::ALL {
             assert!(ids.insert(scenario.as_str()));
@@ -672,7 +674,7 @@ mod tests {
                 .materialize("run", scenario.canonical_seed())
                 .unwrap();
         }
-        assert_eq!(ids.len(), 59);
+        assert_eq!(ids.len(), 60);
     }
 
     #[test]

@@ -65,13 +65,14 @@
     },
     {
       "id": "m5",
-      "label": "Software engineering",
+      "label": "Software engineering and Console UI design",
       "scenarios": [
         "shell_coder_sandbox",
         "performance_regression",
         "chess_engine_build",
         "form_flow_build",
         "state_machine_canvas_build",
+        "ade_incident_board",
         "git_regression_forensics",
         "typescript_chat_service",
         "alertmanager_route_match"
@@ -140,6 +141,10 @@
     "state_machine_canvas_build": [
       "Compose daemon with Canvas Worker, running iii Console, writable run-scoped worker project, and interactive browser",
       "Node and npm; cold npm caches require Registry access for the pinned iii SDK"
+    ],
+    "ade_incident_board": [
+      "Compose daemon, running iii Console, writable run-scoped worker project, and interactive browser",
+      "Node and npm; cold package caches require access to npm and the configured iii Registry"
     ],
     "trend_blog": [
       "Pinned shared engineering fixture"
@@ -247,6 +252,28 @@
           "registry_verification"
         ]
       ]
+    },
+    {
+      "id": "ade-worker-design",
+      "label": "ADE Worker Design skill evaluation",
+      "purpose": "One execution runs five repetitions for one agent profile. Run it once with the skill and once without it on the same frozen case; hold model, provider, reasoning, template, stack, and cache policy fixed. Pair repetitions by index and rotate condition order between campaigns.",
+      "metrics": [
+        "execution_reliability",
+        "completion_rate",
+        "deliverable_success",
+        "completion_evidence_coverage",
+        "tokens_per_completion",
+        "wall_time_ms",
+        "function_calls",
+        "cost_usd"
+      ],
+      "modules": [],
+      "scenarios": [
+        "ade_incident_board"
+      ],
+      "repetitions": 5,
+      "technical_retries": 0,
+      "lane": "local-ade-worker-design"
     },
     {
       "id": "pr",
