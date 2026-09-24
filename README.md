@@ -95,8 +95,8 @@ cargo run --locked --bin harness-e2e -- catalog
 | `run` | Execute one or more scenarios against a running stack. |
 | `report` | Summarize a saved `results.json`. |
 | `models` | List models registered in the running stack. |
-| `test-plan list` | List profile templates and their coverage. |
-| `test-plan materialize` | Expand one profile into campaigns, groups, and cases. |
+| `test-plan list` | List suites and their coverage. |
+| `test-plan materialize` | Expand one suite into campaigns, groups, and cases. |
 | `--manifest` | Print the Registry worker manifest as JSON. |
 
 Run one scenario against an existing stack:
@@ -142,14 +142,14 @@ plus a diagnostic set that profiles can opt into.
 materializes templates and execution rules from that source and from the
 native scenario contracts. There is no generated catalog to keep in sync.
 
-| Profile | Purpose |
+| Suite | Purpose |
 | --- | --- |
 | `regression` | Daily runtime, recovery, context and safety checks; one technical retry where safe. |
 | `software-engineering` | Kanban, Registry delivery, the trending-topics blog, Linkly, Alertmanager route migration and a playable chess Worker. |
 | `pr` | Four essential checks of a candidate stack before merging a change. |
 | `after-release` | Five essential checks of the published stack. |
 
-In the Console these profiles are starting templates for the same plan form
+In the Console these suites are starting templates for the same plan form
 and the same baseline/candidate view used by saved plans. Choose **New plan**,
 optionally pick a template, edit the scope, and select the model. **Save
 draft**, **Save and run**, and **Duplicate plan** share one lifecycle and keep
@@ -158,10 +158,10 @@ native evidence. See
 
 ```bash
 cargo run --locked -- test-plan list
-cargo run --locked -- test-plan materialize --profile software-engineering
+cargo run --locked -- test-plan materialize --suite software-engineering
 ```
 
-The `software-engineering` profile runs each selected case once, with no
+The `software-engineering` suite runs each selected case once, with no
 technical retries: the seven Kanban cases, Registry implementation and verification,
 the trending-topics build, the Linkly tutorial, Alertmanager route migration,
 and the playable chess Worker in the Console. That is 13 cases and 13 planned runs,
@@ -176,27 +176,52 @@ ceiling.
 
 ## Release Control
 
-Operational campaigns are dispatched only by Release Control, through
+Operational campaigns run through
 [`.github/workflows/exact-stack-e2e.yml`](.github/workflows/exact-stack-e2e.yml).
 This repository does not publish independent daily, weekly, post-deploy, or
 fault-stress dispatch workflows.
 
-Release Control passes five inputs and makes no further decisions:
-`execution_id`, the `plan` (one profile id from `config/test-plan.json`), a
-`stack` policy (`{"policy":"latest"}` or exact versions), the executor commit
-`runner_sha`, and the `cli_version` to install.
+A dispatch names what to test, where, and with whom:
 
-This repository resolves the rest from the commit pinned by `runner_sha`:
+| Input | Meaning |
+| --- | --- |
+| `suite` | A suite id from `config/test-plan.json`, or one suite as JSON. |
+| `stack` | A stack in [`stacks/`](stacks/) by name (default `default`), or stack YAML. |
+| `model` | `provider/model` the subject runs. |
+| `profile` | Optional Directory agent profile the subject runs as. |
+| `execution_id` | Optional Release Control execution. Without it the run only produces artifacts. |
 
-1. `harness-e2e test-plan materialize --profile <id>` expands the profile into
-   campaigns, groups, and cases, with a `profile_sha256` over the result.
-2. `scripts/resolve_stack_lock.py` turns the stack policy into one exact
-   `rc-e2e/v2` contract per campaign. Every Registry version is resolved;
-   `latest` does not survive into a contract. `scripts/exact_stack_campaign.py`
-   validates that contract.
-3. Each group runs in an isolated ephemeral stack. Fault groups go to the
-   protected runner. One root bundle is produced without rebuilding the native
-   Harness artifacts.
+A stack is an iii Compose project plus `iii` (a release, or `latest` for the
+newest `iii/v*` tag, pre-releases included) and an optional `template`
+(`<id>` or `<id>@<revision>` of `iii-hq/templates`). Credentials never go in a
+stack: the executor stamps the namespace, the runner's data directory, the
+model's provider, what the suite needs and the private env file per group.
+
+Release Control's older inputs (`plan`, a stack policy, `runner_sha`,
+`cli_version`) still work. Preparation translates them first: the plan's
+profile is the suite, its subject the model, its agent the profile; the stack
+is `default` with the policy's versions on the workers it declares, the plan's
+runner release on `harness-e2e`, the plan's template, and `cli_version` as
+`iii`. Scripts always come from the dispatched ref.
+
+Preparation resolves the rest, once:
+
+1. `scripts/prepare_execution.py dispatch` reads the inputs into
+   `execution.json`, `stack.yaml` and `plan.json`.
+2. `harness-e2e test-plan materialize --suite <id|json>` expands the suite into
+   campaigns, groups, and cases (`suite.json`, also kept as `profile.json`),
+   with a `profile_sha256` over the result.
+3. `scripts/prepare_execution.py contracts` resolves `iii` and the template and
+   writes one contract per campaign.
+4. The stack is assembled once with `compose::add`, which expands every
+   declared worker into its graph and writes `worker-compose.lock`;
+   `scripts/prepare_execution.py lock` puts that project and lock into every
+   contract. Each group starts it with `compose::up` frozen, so every group
+   runs the same versions. A template project is assembled per group, pinned to
+   the versions that lock resolved.
+
+The contract artifact carries the suite snapshot, the final `stack.yaml`, the
+lock, the model, the profile and the iii release.
 
 Campaign manifests never select or rotate seeds. They keep replay-safe turns
 separate from scripted dialogue and composite flows, persist a summary for
@@ -222,8 +247,8 @@ campaigns.
 
 ### Agent profile and project template
 
-Release Control can name an existing Directory agent profile in the frozen
-plan:
+A dispatch can name an existing Directory agent profile (`profile`; in an
+older Release Control plan, `agent_profile`):
 
 ```json
 { "agent_profile": "console-ui" }
@@ -240,23 +265,23 @@ subject model and the profile configuration hash. **Run again** resolves the
 same profile id in its test stack. Comparisons stay manual in Release Control.
 Omitting `agent_profile` keeps the built-in agent.
 
-A project template is independent of the test-plan profile and the agent
-profile:
+A project template belongs to the stack and is independent of the suite and
+the agent profile:
 
-```json
-{ "template": "harness", "agent_profile": "tech-lead" }
+```yaml
+template: harness # or harness@<revision>
 ```
 
-The runner reads `iii/template.yaml` in `iii-hq/templates` from `main`,
-resolves it to one commit before sharding, and records that commit as
-`identity.template.revision`. Every group uses that source. The selected
-Compose project supplies the base. Test-stack versions override its package
-selectors, extra packages enter the stack lock, and local workers stay local.
+The runner reads `iii/template.yaml` in `iii-hq/templates` at that revision
+(`main` when none is given), resolves it to one commit before sharding, and
+records that commit as `identity.template.revision`. Every group uses that
+source. The selected Compose project supplies the base. The versions the
+execution's stack lock resolved override its package selectors, extra packages
+enter the lock, and local workers stay local.
 Template skills replace whole downloaded namespaces, and its agent files take
 precedence over downloaded profiles. Machine-global profiles and skills are
 unused when a template or agent override is selected. The runner also enables
-the campaign's provider when the project does not already have it, honoring
-any provider version override in the stack contract.
+the campaign's provider when the project does not already have it.
 
 Scenarios, prompts, permissions, fixtures, seeds, and repetitions stay the
 same. The evaluated agent applies to ordinary sessions and to workflow or
@@ -298,8 +323,8 @@ used by CI. It does not publish a standalone Harness E2E web application.
 
 On Executions, **Import from GitHub** lists the completed runs of the
 `exact-stack-e2e.yml` workflow in `github_repository` (worker config, default
-`iii-hq/harness-e2e`) with their suite, model, agent profile, date and
-conclusion. The worker calls the `gh` CLI, so sign it in once with
+`iii-hq/harness-e2e`) with their suite, model, agent profile, stack, iii
+release, date and conclusion. The worker calls the `gh` CLI, so sign it in once with
 `gh auth login`; its errors are shown as they come.
 
 **Import** answers at once with an execution in the `importing` state; the
@@ -435,6 +460,7 @@ the canonical deterministic validation portion, which is aggregated into
 | --- | --- |
 | `src/` | Runner, wire adapters, scenarios, evaluation, longitudinal comparison, and the E2E control worker. |
 | `config/` | Comparison and cutover policies, fault profiles, and the master test plan. |
+| `stacks/` | Stacks a campaign runs on: iii Compose projects plus the iii release. |
 | `tests/` | Test-only fixtures, golden wire schemas, and the Node and Python suites. |
 | `schemas/` | Public contracts for generated E2E artifacts. |
 | `dashboard/` | React, TypeScript, Vite, and Tailwind Console page embedded in the worker. |
@@ -450,10 +476,9 @@ are parity fixtures, not a linked product API.
 ## Package boundary
 
 This repository executes exact-stack test plans and publishes immutable
-`harness-e2e` Registry releases from `main`. Release Control supplies a stack
-policy and an immutable executor SHA to `exact-stack-e2e.yml`. The contract
-assembled from those inputs pins every Registry version, including historical
-candidates, so a campaign can state afterwards exactly what it ran.
+`harness-e2e` Registry releases from `main`. A dispatch names a suite, a stack
+and a model; the stack is assembled and locked once, and the contract carries
+that lock, so a campaign can state afterwards exactly what it ran.
 
 ## Releases
 

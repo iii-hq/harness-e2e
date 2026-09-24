@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-: "${HARNESS_E2E_STACK_LOCK:?HARNESS_E2E_STACK_LOCK is required}"
+: "${HARNESS_E2E_CONTRACT:?HARNESS_E2E_CONTRACT (the campaign contract file) is required}"
 : "${HARNESS_E2E_CAMPAIGN_GROUP_ID:?HARNESS_E2E_CAMPAIGN_GROUP_ID is required}"
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 contract_tool="$repo_root/scripts/exact_stack_campaign.py"
-base_compose=${HARNESS_E2E_BASE_COMPOSE:-"$repo_root/worker-compose.base.yaml"}
+# Set by the execution's preparation: assemble the stack once through
+# compose::add, leave it and its worker-compose.lock under the artifact
+# directory, and stop there. Groups then start that stack frozen.
+assemble_only=${HARNESS_E2E_ASSEMBLE_ONLY:-}
 artifact_dir=${HARNESS_E2E_ARTIFACTS_DIR:-"$repo_root/target/harness-e2e-shadow"}
 engine_port=${HARNESS_E2E_ENGINE_PORT:-49134}
 wait_seconds=${HARNESS_E2E_WAIT_SECONDS:-300}
@@ -27,7 +30,9 @@ case "$artifact_dir" in
   *) echo "artifact directory escapes the canonical target directory" >&2; exit 2 ;;
 esac
 contract_path="$artifact_dir/stack-lock.json"
-printf '%s\n' "$HARNESS_E2E_STACK_LOCK" >"$contract_path"
+# A file, not a variable: the contract carries the assembled stack and its
+# lock, which outgrow what one environment string may hold.
+cp "$HARNESS_E2E_CONTRACT" "$contract_path"
 python3 "$contract_tool" validate --contract "$contract_path" >/dev/null
 
 campaign_group_id=$HARNESS_E2E_CAMPAIGN_GROUP_ID
@@ -37,6 +42,17 @@ jq -e --arg group "$campaign_group_id" \
 project_template=$(python3 "$contract_tool" group-template --contract "$contract_path" --group-id "$campaign_group_id")
 execution_template=$(jq -r '.runtime.template.id // empty' "$contract_path")
 linkly_fixture=$(jq -r --arg id "$campaign_group_id" '.suite.groups[] | select(.id == $id) | any(.scenarios[]?; . == "linkly_tutorial")' "$contract_path")
+if [[ -n "$assemble_only" ]]; then
+  project_template=""
+  execution_template=""
+  linkly_fixture=false
+fi
+# A stack the execution already assembled starts from its lock; a template
+# project is assembled here, pinned to the versions that lock resolved.
+frozen=false
+if [[ -z "$project_template" ]] && jq -e '.runtime.lock != null' "$contract_path" >/dev/null; then
+  frozen=true
+fi
 profile_assets=$(jq -r '.runtime.template != null or .suite.agent_profile != null' "$contract_path")
 seed=$(jq -r '.suite.seed' "$contract_path")
 execution_id=$(jq -r '.execution_id' "$contract_path")
@@ -268,7 +284,7 @@ if find "$tools_dir" -type f -name "$forbidden_name" -print -quit | grep -q .; t
   fail "forbidden lifecycle helper was installed"
 fi
 
-if [[ "$campaign_group_id" == case-kanban-* ]]; then
+if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; then
   fixture_root=${HARNESS_E2E_KANBAN_FIXTURE_ROOT:-"$repo_root/target/kanban-fixture"}
   [[ -f "$kanban_bootstrap" ]] || fail "Kanban bootstrap is unavailable: $kanban_bootstrap"
   [[ -d "$fixture_root/.git" ]] || fail "Kanban fixture checkout is unavailable: $fixture_root"
@@ -331,9 +347,7 @@ done
 
 project_args=(
   --contract "$contract_path"
-  --group-id "$campaign_group_id"
   --env-file "$env_file"
-  --base-compose "$base_compose"
   --namespace "$namespace"
   --data-dir "$e2e_data"
   --environment "harness-e2e.HARNESS_E2E_RUN_DIR=$evaluation_dir"
@@ -343,6 +357,8 @@ project_args=(
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
+# Without a group the scaffold is the stack the whole suite shares.
+[[ -n "$assemble_only" ]] || project_args+=(--group-id "$campaign_group_id")
 if [[ -n "$project_template" ]]; then
   project_args+=(--template-compose "$template_project/worker-compose.yaml"
     --template-package shell=ide --template-package console=ade)
@@ -373,28 +389,41 @@ compose_started=true
 wait_for_compose
 
 failure_phase=project_assembly
-# Without a template every declared worker is asked for and the engine
-# expands each. With one, the template's roles must not be passed — renamed
-# ones would expand into duplicate packages — so only the runner is: it is
-# this repository's addition, and the engine installs what it needs with it.
-add_args=("file=$compose_file")
-if [[ -n "$project_template" ]]; then
-  add_args+=("worker=harness-e2e@$(jq -r '.runtime.stack["harness-e2e"] // "latest"' "$contract_path")")
+if [[ "$frozen" == true ]]; then
+  jq -n '{status:"skipped",reason:"the execution assembled this stack once; the group starts it from its worker-compose.lock"}' \
+    >"$artifact_dir/stack/add.json"
 else
-  while IFS= read -r root; do
-    add_args+=("worker=$root")
-  done < <(python3 "$contract_tool" roots --compose "$compose_file")
+  # Without a template every declared worker is asked for and the engine
+  # expands each. With one, the template's roles must not be passed — renamed
+  # ones would expand into duplicate packages — so only the runner is: it is
+  # this repository's addition, and the engine installs what it needs with it.
+  add_args=("file=$compose_file")
+  if [[ -n "$project_template" ]]; then
+    add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@')")
+  else
+    while IFS= read -r root; do
+      add_args+=("worker=$root")
+    done < <(python3 "$contract_tool" roots --compose "$compose_file")
+  fi
+  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
-compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
-[[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
+if [[ -n "$assemble_only" ]]; then
+  # compose::add expanded every root into its graph and wrote the lock beside
+  # the file; the exit handler takes the project down.
+  log "Assembled $compose_file and its worker-compose.lock"
+  failure_phase=complete
+  exit 0
+fi
 
 python3 "$contract_tool" roots --compose "$compose_file" \
   | jq -Rc 'split("@") | {worker: .[0], version: .[1]}' \
   | jq -sc '.' >"$artifact_dir/stack/declared-workers.json"
 
 failure_phase=project_start
-compose_trigger compose::up "file=$compose_file" >"$artifact_dir/stack/up.json"
+compose_trigger compose::up --json "$(jq -cn --arg file "$compose_file" --argjson frozen "$frozen" '{file:$file,frozen:$frozen}')" \
+  >"$artifact_dir/stack/up.json"
 jq -e '.status == "ok"' "$artifact_dir/stack/up.json" >/dev/null
 compose_trigger compose::status "file=$compose_file" >"$artifact_dir/stack/status.json"
 "$iii_bin" trigger engine::workers::list --engine "$engine_url" --json '{}' \

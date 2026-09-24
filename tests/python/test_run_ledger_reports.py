@@ -29,7 +29,7 @@ def load(name):
 
 
 report_execution = load("report_execution")
-resolve_stack_lock = load("resolve_stack_lock")
+prepare_execution = load("prepare_execution")
 
 
 PROFILE_SNAPSHOT = {
@@ -276,108 +276,178 @@ class LedgerDeliveryTests(unittest.TestCase):
         self.assertTrue(rerun.endswith(":2"))
 
 
-class StackResolutionTests(unittest.TestCase):
-    def test_visual_profile_freezes_canvas_latest_before_dispatch(self):
-        snapshot = json.loads(json.dumps(PROFILE_SNAPSHOT))
-        snapshot["campaigns"][0]["groups"].append({
-            "id": "case-form-flow-build", "execution_kind": "harness_turn",
-            "runs": 1, "technical_retries": 0, "scenarios": ["form_flow_build"],
-        })
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            (root / "snapshot.json").write_text(json.dumps(snapshot))
-            (root / "plan.json").write_text(json.dumps(PLAN))
-            args = SimpleNamespace(
-                execution_id="b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-                profile_snapshot=root / "snapshot.json", plan=root / "plan.json",
-                stack='{"policy":"latest"}', cli_version="0.23.1",
-                oidc_audience="release-control-harness-e2e", output_dir=root / "contracts",
-            )
-            with patch.object(resolve_stack_lock, "parse_args", return_value=args), \
-                 patch.object(resolve_stack_lock, "resolve_cli", return_value={"version": "0.23.1"}), \
-                 patch.object(resolve_stack_lock, "get_json", return_value={"root": {"version": "0.1.16"}}) as get:
-                self.assertEqual(resolve_stack_lock.main(), 0)
-            get.assert_called_once_with(
-                f"{resolve_stack_lock.REGISTRY_API_URL}/resolve",
-                {"worker": "canvas", "version": "latest"},
-            )
-            contract = json.loads((root / "contracts/regression-r01.json").read_text())
-            self.assertEqual(contract["runtime"]["stack"]["canvas"], "0.1.16")
+class DispatchTests(unittest.TestCase):
+    """One execution from a dispatch: the new inputs, or Release Control's older ones."""
 
-    def test_runner_release_version_pins_the_runner_unless_the_stack_does(self):
-        plan = {"runner": {"version": "0.11.2-experimental"}}
-        self.assertEqual(resolve_stack_lock.runner_selector(plan, {}), "0.11.2-experimental")
-        self.assertEqual(
-            resolve_stack_lock.runner_selector(plan, {"harness-e2e": "0.11.1-experimental"}),
-            "0.11.1-experimental",
+    def test_a_new_dispatch_names_the_suite_stack_model_and_profile(self):
+        dispatch = prepare_execution.read_dispatch(
+            {"suite": "pr", "model": "zai/glm-5.1", "profile": "tech-lead", "execution_id": ""}
         )
-        self.assertEqual(resolve_stack_lock.runner_selector({}, {}), "latest")
-        with self.assertRaises(resolve_stack_lock.ResolutionError):
-            resolve_stack_lock.runner_selector({"runner": {"version": "latest"}}, {})
-
-    def test_a_template_is_pinned_to_one_main_commit_and_nothing_else_is_read(self):
-        """Whether the template exists and what it declares, the executor learns
-        from `iii project init` on that commit. Resolution only pins the commit."""
-        urls = []
-        def get(url, **kwargs):
-            urls.append(url)
-            self.assertTrue(url.endswith("/commits/main"), url)
-            return {"sha": "a" * 40}
-        with patch.object(resolve_stack_lock, "get_json", side_effect=get):
-            identity = resolve_stack_lock.resolve_template("new-template", None)
-        self.assertEqual(identity, {
-            "id": "new-template", "repository": resolve_stack_lock.TEMPLATES_REPOSITORY,
-            "ref": "main", "revision": "a" * 40,
+        self.assertEqual(dispatch["execution"], {
+            "execution_id": None, "suite": "pr", "stack": "default",
+            "model": "zai/glm-5.1", "profile": "tech-lead",
         })
-        self.assertEqual(urls, [urls[0]])
-        for invalid in ("../harness", {}, ""):
-            with self.subTest(invalid=invalid), self.assertRaises(resolve_stack_lock.ResolutionError):
-                resolve_stack_lock.resolve_template(invalid, None)
-        self.assertIsNone(resolve_stack_lock.resolve_template(None, None))
+        self.assertEqual(dispatch["stack"]["iii"], "latest")
+        self.assertEqual(dispatch["stack"]["containers"]["harness"]["worker"], "package://harness")
+        # The plan shape the Console import and the ledger reports still read.
+        self.assertEqual(dispatch["plan"], {
+            "profile": {"id": "pr"}, "subject": {"provider": "zai", "model": "glm-5.1"},
+            "agent_profile": "tech-lead",
+        })
 
-    def graph(self, worker, version, nodes=(), edges=()):
-        return {"root": {"worker": worker, "version": version}, "nodes": list(nodes), "edges": list(edges)}
+    def test_a_suite_and_a_stack_may_be_stated_whole(self):
+        dispatch = prepare_execution.read_dispatch({
+            "suite": '{"id": "smoke", "scenarios": ["minimal_path"]}',
+            "stack": "iii: 0.24.2\ntemplate: harness\ncontainers:\n  harness:\n    worker: package://harness\n",
+            "model": "deepseek/deepseek-v4-flash",
+        })
+        self.assertEqual(dispatch["execution"]["suite"], {"id": "smoke", "scenarios": ["minimal_path"]})
+        self.assertEqual(dispatch["execution"]["stack"], "inline")
+        self.assertEqual(dispatch["plan"]["profile"], {"id": "smoke"})
+        self.assertEqual(prepare_execution.compose_of(dispatch["stack"]),
+                         {"containers": {"harness": {"worker": "package://harness"}}})
 
-    def test_the_contract_states_the_profile_the_runner_materialized(self):
-        contract = resolve_stack_lock.build_contract(
-            PROFILE_SNAPSHOT["campaigns"][0],
-            execution_id="b0607faa-096a-4efe-a4a2-a2a9bc06de83",
-            snapshot=PROFILE_SNAPSHOT,
-            plan=PLAN,
-            cli={"version": "0.23.1-rc.2", "target": "t", "asset": "iii-t.tar.gz", "sha256": "sha256:" + "c" * 64},
-            stack={"harness": "1.8.15"},
+    def test_a_dispatch_without_suite_or_model_says_what_is_missing(self):
+        for inputs, missing in (({"model": "zai/glm-5.1"}, "suite"), ({"suite": "pr", "model": "glm-5.1"}, "model")):
+            with self.subTest(missing=missing), self.assertRaisesRegex(prepare_execution.ResolutionError, missing):
+                prepare_execution.read_dispatch(inputs)
+
+    def test_an_older_dispatch_becomes_the_execution_it_stands_for(self):
+        plan = {**PLAN, "agent_profile": "console-ui", "template": "harness",
+                "runner": {"revision": "a" * 40, "version": "0.12.2"}}
+        dispatch = prepare_execution.read_dispatch({
+            "plan": json.dumps(plan), "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83",
+            "stack": json.dumps({"versions": {"harness": "1.9.3", "llm-router": "1.4.0"}}),
+            "runner_sha": "a" * 40, "cli_version": "0.24.2-rc.2",
+            # Ignored: an older dispatch states all of it in its plan.
+            "suite": "after-release",
+        })
+        self.assertEqual(dispatch["execution"], {
+            "execution_id": "b0607faa-096a-4efe-a4a2-a2a9bc06de83", "suite": "regression",
+            "stack": "default", "model": "deepseek/deepseek-v4-flash", "profile": "console-ui",
+        })
+        self.assertEqual(dispatch["plan"], plan)
+        stack = dispatch["stack"]
+        self.assertEqual(list(stack)[:2], ["iii", "template"])
+        self.assertEqual((stack["iii"], stack["template"]), ("0.24.2-rc.2", "harness"))
+        versions = {name: c["version"] for name, c in stack["containers"].items()}
+        # The policy pins what the stack declares; the plan's runner release is
+        # the runner's version; a worker the stack does not declare is not added.
+        self.assertEqual(versions["harness"], "1.9.3")
+        self.assertEqual(versions["harness-e2e"], "0.12.2")
+        self.assertEqual(versions["fp"], "latest")
+        self.assertNotIn("llm-router", stack["containers"])
+        pinned = prepare_execution.read_dispatch({
+            "plan": json.dumps(plan), "stack": json.dumps({"versions": {"harness-e2e": "0.12.0"}}),
+        })
+        self.assertEqual(pinned["stack"]["containers"]["harness-e2e"]["version"], "0.12.0")
+        self.assertEqual(pinned["stack"]["iii"], "latest")
+
+
+class StackResolutionTests(unittest.TestCase):
+    def test_latest_iii_is_the_newest_tag_pre_releases_included(self):
+        newest = prepare_execution.newest_release
+        self.assertEqual(newest(["0.24.1", "0.24.2-rc.2", "0.24.2-rc.10", "0.24.0"]), "0.24.2-rc.10")
+        self.assertEqual(newest(["0.24.2-rc.2", "0.24.2", "0.23.9"]), "0.24.2")
+        self.assertEqual(newest(["0.24.2", "0.25.0-rc.1"]), "0.25.0-rc.1")
+        self.assertEqual(newest(["0.24.2-alpha.1", "0.24.2-rc.1", "0.24.2-beta"]), "0.24.2-rc.1")
+        self.assertIsNone(newest(["main", "v1", ""]))
+
+    def test_iii_resolves_to_a_release_and_the_digest_the_groups_check(self):
+        urls = []
+
+        def get(url, token=None):
+            urls.append(url)
+            if url.endswith("/git/matching-refs/tags/iii/v"):
+                return [{"ref": "refs/tags/iii/v0.24.1"}, {"ref": "refs/tags/iii/v0.24.2-rc.2"}]
+            return {"assets": [{"name": prepare_execution.CLI_ASSET, "digest": "sha256:" + "c" * 64}]}
+
+        with patch.object(prepare_execution, "get_json", side_effect=get):
+            cli = prepare_execution.resolve_cli("latest", None)
+            self.assertEqual(cli["version"], "0.24.2-rc.2")
+            self.assertEqual(cli["sha256"], "sha256:" + "c" * 64)
+            self.assertTrue(urls[-1].endswith("/releases/tags/iii/v0.24.2-rc.2"))
+            self.assertEqual(prepare_execution.resolve_cli("0.23.1", None)["version"], "0.23.1")
+        with patch.object(prepare_execution, "get_json", return_value={"assets": [{"name": prepare_execution.CLI_ASSET}]}):
+            with self.assertRaisesRegex(prepare_execution.ResolutionError, "digest"):
+                prepare_execution.resolve_cli("0.24.2", None)
+
+    def test_a_template_is_pinned_to_one_commit_of_its_revision(self):
+        urls = []
+
+        def get(url, token=None):
+            urls.append(url)
+            return {"sha": "a" * 40}
+
+        with patch.object(prepare_execution, "get_json", side_effect=get):
+            self.assertEqual(prepare_execution.resolve_template("harness", None), {
+                "id": "harness", "repository": prepare_execution.TEMPLATES_REPOSITORY,
+                "ref": "main", "revision": "a" * 40,
+            })
+            self.assertEqual(prepare_execution.resolve_template("harness@v2", None)["ref"], "v2")
+        self.assertTrue(urls[0].endswith("/commits/main") and urls[1].endswith("/commits/v2"))
+        self.assertIsNone(prepare_execution.resolve_template(None, None))
+
+    def test_the_contract_states_the_suite_the_runner_materialized(self):
+        execution = {"model": "deepseek/deepseek-v4-flash", "profile": None}
+        cli = {"version": "0.24.2", "target": "t", "asset": "iii-t.tar.gz", "sha256": "sha256:" + "c" * 64}
+        compose = {"containers": {"harness": {"worker": "package://harness", "version": "latest"}}}
+        contract = prepare_execution.build_contract(
+            PROFILE_SNAPSHOT["campaigns"][0], execution_key="b0607faa-096a-4efe-a4a2-a2a9bc06de83",
+            snapshot=PROFILE_SNAPSHOT, execution=execution, cli=cli, compose=compose,
             oidc_audience="release-control-harness-e2e",
         )
-        self.assertEqual(contract["schema"], resolve_stack_lock.CONTRACT_SCHEMA)
+        self.assertEqual(contract["schema"], prepare_execution.CONTRACT_SCHEMA)
         self.assertEqual(contract["suite"]["id"], "regression-r01")
         self.assertEqual(contract["suite"]["subject"], PLAN["subject"])
-        agent = "console-ui"
-        with_agent = resolve_stack_lock.build_contract(
-            PROFILE_SNAPSHOT["campaigns"][0], execution_id=contract["execution_id"],
-            snapshot=PROFILE_SNAPSHOT, plan={**PLAN, "agent_profile": agent},
-            cli=contract["runtime"]["cli"],
-            stack=contract["runtime"]["stack"], oidc_audience="release-control-harness-e2e",
+        self.assertEqual(contract["runtime"], {"cli": cli, "compose": compose})
+        with_agent = prepare_execution.build_contract(
+            PROFILE_SNAPSHOT["campaigns"][0], execution_key=contract["execution_id"],
+            snapshot=PROFILE_SNAPSHOT, execution={**execution, "profile": "console-ui"}, cli=cli,
+            compose=compose, oidc_audience="release-control-harness-e2e",
         )
-        self.assertEqual(with_agent["suite"]["agent_profile"], agent)
+        self.assertEqual(with_agent["suite"]["agent_profile"], "console-ui")
         self.assertNotEqual(with_agent["idempotency_key"], contract["idempotency_key"])
         # Absent: each scenario keeps the canonical seed it was materialized
         # with, so the same slot stays the same slot across executions.
         self.assertIsNone(contract["suite"]["seed"])
         group = contract["suite"]["groups"][0]
         # No difficulty weight travels: every case counts the same.
-        self.assertEqual(
-            sorted(group),
-            ["execution_kind", "id", "runs", "scenarios", "technical_retries"],
-        )
-        self.assertEqual(group["scenarios"], ["minimal_path"])
+        self.assertEqual(sorted(group), ["execution_kind", "id", "runs", "scenarios", "technical_retries"])
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
 
-    def test_a_selector_that_stays_mutable_never_reaches_a_contract(self):
-        """`latest` is a question. A contract may only contain the answer."""
-        source = (ROOT / "scripts/resolve_stack_lock.py").read_text()
-        self.assertIn("EXACT_VERSION.fullmatch(version)", source)
-        with self.assertRaises(resolve_stack_lock.ResolutionError):
-            resolve_stack_lock.resolve_cli("latest", None)
+    def test_every_contract_carries_the_stack_assembled_once_and_its_lock(self):
+        import yaml
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "contract/contracts").mkdir(parents=True)
+            (root / "assembled").mkdir()
+            compose = {"namespace": "e2e-prepare", "containers": {
+                "harness": {"worker": "package://harness", "version": "latest"},
+                "state": {"worker": "package://state", "version": "0.22.8"},
+            }}
+            lock_text = yaml.safe_dump({"version": 1, "containers": {
+                name: {"worker": f"package://{name}", "requested": "latest", "resolved": {"name": name, "version": version}}
+                for name, version in (("harness", "1.9.3"), ("state", "0.22.8"))
+            }})
+            (root / "assembled/worker-compose.yaml").write_text(yaml.safe_dump(compose))
+            (root / "assembled/worker-compose.lock").write_text(lock_text)
+            (root / "contract/execution.json").write_text(json.dumps({"iii": "0.24.2", "template": None}))
+            (root / "contract/contracts/resolution.json").write_text(json.dumps({"cli_version": "0.24.2"}))
+            before = {"runtime": {"cli": {}, "compose": {"containers": {}}}, "suite": {"id": "regression-r01"}}
+            (root / "contract/contracts/regression-r01.json").write_text(json.dumps(before))
+            args = SimpleNamespace(contract_dir=root / "contract", assembled=root / "assembled")
+            prepare_execution.command_lock(args)
+            contract = json.loads((root / "contract/contracts/regression-r01.json").read_text())
+            resolution = json.loads((root / "contract/contracts/resolution.json").read_text())
+            stack = yaml.safe_load((root / "contract/stack.yaml").read_text())
+            self.assertEqual((root / "contract/worker-compose.lock").read_text(), lock_text)
+        self.assertEqual(contract["runtime"]["compose"], compose)
+        self.assertEqual(contract["runtime"]["lock"], yaml.safe_load(lock_text))
+        self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
+        self.assertEqual(resolution["stack_versions"], {"harness": "1.9.3", "state": "0.22.8"})
+        self.assertEqual(stack, {"iii": "0.24.2", **compose})
 
 
 if __name__ == "__main__":
