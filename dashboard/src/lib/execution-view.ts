@@ -363,11 +363,8 @@ export function executionProgress(
   return done === null || !planned ? null : `${done} of ${planned} done`
 }
 
-/** The version a stack worker ran: its checkout for a `path://` worker,
- *  else the version the engine reported (or the one asked for). Versions
- *  that differed between groups are all listed. */
 /** A suite as the Console names it: its name, or "unnamed suite", and the
- *  start of the digest of what it materialized. */
+ *  start of the digest of what it materialized, when known. */
 export function suiteText(
   suite: ExecutionSuite | null | undefined,
 ): string | null {
@@ -377,6 +374,9 @@ export function suiteText(
   return digest ? `${name} · ${digest}` : name
 }
 
+/** The version a stack worker ran: its checkout for a `path://` worker,
+ *  else the version the engine reported (or the one asked for). Versions
+ *  that differed between groups are all listed. */
 export function workerVersion(
   stack: StackWorker[] | undefined,
   name: string,

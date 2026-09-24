@@ -171,6 +171,19 @@ const githubRuns = [
 ]
 const started = []
 const deleted = []
+const cancelled = []
+/** A started execution, cancelled once its cancel arrived. */
+const startedExecution = (id) => {
+  const execution = running(id)
+  return cancelled.includes(id)
+    ? {
+        ...execution,
+        status: 'cancelled',
+        state: 'cancelled',
+        plan_execution: { ...execution.plan_execution, state: 'cancelled' },
+      }
+    : execution
+}
 let executions = []
 let busy = true
 let catalogDown = false
@@ -194,8 +207,12 @@ const trigger = async (name, request = {}) => {
           ? imported
           : request.execution_id === nightly
             ? { ...running(nightly), label: 'Nightly' }
-            : running(request.execution_id),
+            : startedExecution(request.execution_id),
     }
+  if (id === 'execution-cancel') {
+    cancelled.push(request.execution_id)
+    return {}
+  }
   if (id === 'catalog-get') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return {
@@ -413,6 +430,12 @@ try {
   })
   // No plan, no role: just an execution.
   await page.getByText('Execution · running', { exact: true }).waitFor()
+  // Cancel stops it: no next scenario is admitted.
+  const cancel = page.getByRole('button', { name: 'cancel execution' })
+  await cancel.click()
+  await cancel.waitFor({ state: 'detached' })
+  assert.deepEqual(cancelled, [`plan-${'1'.padStart(32, 'f')}`])
+  await page.getByText('Execution · running').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
   // that will run, under the execution's name, and sends its parameters
@@ -437,7 +460,7 @@ try {
   // Its suite, as recorded, even though this runner does not list it.
   assert.equal(
     await again.locator('#quick-execution-suite').inputValue(),
-    'software-engineering-2025',
+    'recorded:software-engineering-2025',
   )
   await again
     .getByRole('option', { name: 'Software engineering 2025 · as recorded' })
@@ -495,7 +518,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, delete.',
   )
 } finally {
   await browser.close()

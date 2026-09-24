@@ -271,5 +271,11 @@ describe('versions in the header', () => {
     } as unknown as DashboardExecutionDetail
     expect(executionSuite(unnamed)).toBe('unnamed suite · fedcba987654')
     expect(executionSuite(detail)).toBe('not recorded')
+    // An older import knew only the suite's id: named, digest unknown.
+    const byId = {
+      ...detail,
+      parameters: { suite: { id: 'pr', label: 'pr', sha256: '' } },
+    } as unknown as DashboardExecutionDetail
+    expect(executionSuite(byId)).toBe('pr')
   })
 })

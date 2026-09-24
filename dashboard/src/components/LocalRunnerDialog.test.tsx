@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
+  choiceValue,
   executionStartRequest,
   lastUsedModel,
   namedSuite,
+  pickedSuite,
   runnerForm,
   runningExecutionId,
   suiteChoices,
@@ -34,7 +36,7 @@ describe('run form', () => {
     expect(form).toMatchObject({
       label: '',
       subject: 'openai-codex\ngpt-5.6-terra',
-      suite: 'software-engineering',
+      suite: 'recorded:software-engineering',
       scenarios: imported.scenarios,
       runs: '3',
       technicalRetries: '0',
@@ -137,16 +139,45 @@ describe('suite field', () => {
         recorded: true,
       },
     ])
-    // A listed suite is offered as listed; an unnamed one adds nothing.
-    expect(
-      suiteChoices([regression], {
-        ...imported,
-        suite: { id: 'regression', label: 'Regression' },
-      }),
-    ).toEqual([regression])
+    // An unnamed one adds nothing.
     expect(suiteChoices([regression], { ...imported, suite: null })).toEqual([
       regression,
     ])
+  })
+
+  it('runs again under the suite it ran, holding the same or not', () => {
+    // Listed holding the same: the listed suite is the one picked.
+    const same: ExecutionParameters = {
+      ...imported,
+      suite: { id: 'regression', label: 'Regression', sha256: 'sha256:a' },
+      scenarios: ['context_pressure', 'minimal_path'],
+      runs: 1,
+      technical_retries: 1,
+    }
+    const choices = suiteChoices([regression], same)
+    expect(choices).toEqual([regression])
+    const form = runnerForm(same)
+    expect(pickedSuite(form.suite, choices)).toBe(regression)
+    expect(choiceValue(regression)).toBe('regression')
+    expect(namedSuite(form, choices)).toBe(regression)
+
+    // Edited since, or read otherwise by this runner (an import whose
+    // retries differ): the suite as it ran is picked, under its name.
+    const edited: ExecutionParameters = { ...same, technical_retries: 0 }
+    const offered = suiteChoices([regression], edited)
+    expect(offered).toHaveLength(2)
+    const again = runnerForm(edited)
+    const suite = namedSuite(again, offered)
+    expect(suite?.recorded).toBe(true)
+    expect(choiceValue(suite as NonNullable<typeof suite>)).toBe(
+      'recorded:regression',
+    )
+    expect(executionStartRequest(again, suite).parameters).toMatchObject({
+      suite: { id: 'regression', label: 'Regression' },
+      technical_retries: 0,
+    })
+    // Picking the listed suite fills what it holds now.
+    expect(pickedSuite('regression', offered)).toBe(regression)
   })
 })
 

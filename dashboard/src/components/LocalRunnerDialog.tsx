@@ -68,8 +68,11 @@ export function runnerForm(
     // The name it runs again under, to edit.
     label,
     subject: modelKey(parameters),
-    // A subset of its scenarios is ticked by hand.
-    suite: scenarios.length > 0 ? '' : (parameters.suite?.id ?? ''),
+    // Its suite as it ran; a subset of its scenarios is ticked by hand.
+    suite:
+      scenarios.length === 0 && parameters.suite?.id
+        ? `${RECORDED}${parameters.suite.id}`
+        : '',
     scenarios: scenarios.length > 0 ? scenarios : parameters.scenarios,
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
@@ -120,30 +123,76 @@ export type SuiteContent = Pick<
   Suite,
   'id' | 'label' | 'scenarios' | 'repetitions' | 'technical_retries'
 > & {
-  /** An execution's suite this runner does not list, as it ran. */
+  /** An execution's suite as it ran, when this runner lists it otherwise
+   *  or not at all. */
   recorded?: boolean
 }
 
+/** The select value of the suite an execution ran, apart from the suite of
+ *  that id this runner lists. */
+const RECORDED = 'recorded:'
+
+export function choiceValue(choice: SuiteContent) {
+  return choice.recorded ? `${RECORDED}${choice.id}` : choice.id
+}
+
+function holds(
+  suite: SuiteContent,
+  scenarios: string[],
+  runs: number,
+  technicalRetries: number,
+) {
+  return (
+    suite.scenarios.length === scenarios.length &&
+    suite.scenarios.every((id) => scenarios.includes(id)) &&
+    suite.repetitions === runs &&
+    suite.technical_retries === technicalRetries
+  )
+}
+
 /** The suites the form offers: this runner's, and the one an execution ran
- *  when this runner does not list it (with what it ran). */
+ *  as it ran, unless this runner lists that suite holding the same. */
 export function suiteChoices(
   suites: Suite[],
   parameters: ExecutionParameters | null,
 ): SuiteContent[] {
-  const recorded = parameters?.suite?.id
-  return recorded && !suites.some((suite) => suite.id === recorded)
-    ? [
+  const id = parameters?.suite?.id
+  if (!parameters || !id) return suites
+  const listed = suites.find((suite) => suite.id === id)
+  return listed &&
+    holds(
+      listed,
+      parameters.scenarios,
+      parameters.runs,
+      parameters.technical_retries,
+    )
+    ? suites
+    : [
         ...suites,
         {
-          id: recorded,
-          label: parameters.suite?.label || recorded,
+          id,
+          label: parameters.suite?.label || id,
           scenarios: parameters.scenarios,
           repetitions: parameters.runs,
           technical_retries: parameters.technical_retries,
           recorded: true,
         },
       ]
-    : suites
+}
+
+/** The suite a select value names. The suite an execution ran is the listed
+ *  one of its id when that holds the same. */
+export function pickedSuite(
+  value: string,
+  choices: SuiteContent[],
+): SuiteContent | null {
+  return (
+    choices.find((choice) => choiceValue(choice) === value) ??
+    (value.startsWith(RECORDED)
+      ? choices.find((choice) => choice.id === value.slice(RECORDED.length))
+      : undefined) ??
+    null
+  )
 }
 
 /** The picked suite while the form still holds exactly what it does; any
@@ -152,14 +201,16 @@ export function namedSuite(
   form: RunnerForm,
   choices: SuiteContent[],
 ): SuiteContent | null {
-  const suite = choices.find((choice) => choice.id === form.suite)
-  if (!suite) return null
-  const same =
-    suite.scenarios.length === form.scenarios.length &&
-    suite.scenarios.every((id) => form.scenarios.includes(id)) &&
-    suite.repetitions === Number(form.runs) &&
-    suite.technical_retries === Number(form.technicalRetries)
-  return same ? suite : null
+  const suite = pickedSuite(form.suite, choices)
+  return suite &&
+    holds(
+      suite,
+      form.scenarios,
+      Number(form.runs),
+      Number(form.technicalRetries),
+    )
+    ? suite
+    : null
 }
 
 /** What `execution-start` receives for the form. */
@@ -368,15 +419,15 @@ export function LocalRunnerDialog({
     () => suiteChoices(suites, parameters),
     [suites, parameters],
   )
-  const picked = choices.find((choice) => choice.id === form.suite) ?? null
+  const picked = pickedSuite(form.suite, choices)
   const suite = namedSuite(form, choices)
-  const pickSuite = (id: string) => {
-    const chosen = choices.find((choice) => choice.id === id)
+  const pickSuite = (value: string) => {
+    const chosen = pickedSuite(value, choices)
     setForm((current) =>
       chosen
         ? {
             ...current,
-            suite: id,
+            suite: value,
             scenarios: chosen.scenarios,
             runs: String(chosen.repetitions),
             technicalRetries: String(chosen.technical_retries),
@@ -531,7 +582,7 @@ export function LocalRunnerDialog({
           <Field label="Suite" htmlFor="quick-execution-suite" hint={suiteHint}>
             <Select
               id="quick-execution-suite"
-              value={form.suite}
+              value={picked ? choiceValue(picked) : ''}
               disabled={submitting}
               onChange={(event) => pickSuite(event.target.value)}
             >
@@ -540,7 +591,10 @@ export function LocalRunnerDialog({
                 entries.length > 0 ? (
                   <optgroup key={group} label={group}>
                     {entries.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
+                      <option
+                        key={choiceValue(entry)}
+                        value={choiceValue(entry)}
+                      >
                         {entry.recorded
                           ? `${entry.label} · as recorded`
                           : entry.label}

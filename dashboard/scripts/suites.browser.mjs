@@ -200,22 +200,6 @@ try {
     })
     .waitFor()
 
-  // A suite of this Console is deleted after a confirmation.
-  await page
-    .getByRole('button', { name: 'Delete Regression, fast', exact: true })
-    .click()
-  const confirm = page.getByRole('dialog', { name: 'Delete Regression, fast?' })
-  await confirm.getByRole('button', { name: 'cancel', exact: true }).click()
-  assert.deepEqual(calls.remove, [])
-  await page
-    .getByRole('button', { name: 'Delete Regression, fast', exact: true })
-    .click()
-  await confirm
-    .getByRole('button', { name: 'delete suite', exact: true })
-    .click()
-  await copy.waitFor({ state: 'detached' })
-  assert.deepEqual(calls.remove, [{ suite_id: 'suite-1' }])
-
   // Run tests: the suite is the first field. Picking one ticks what it
   // holds; changing that makes it unnamed until it is picked again.
   const pr = repository.find((suite) => suite.id === 'pr')
@@ -295,6 +279,68 @@ try {
   await page.waitForFunction(() => location.hash.endsWith('0002'))
   assert.deepEqual(calls.start[1].parameters, calls.start[0].parameters)
 
+  // Run tests from the suite of this Console (the model of the last
+  // execution comes along), then edit the suite: Run again keeps the suite
+  // as the execution ran it, under its name, not what it holds now.
+  const fast = regression.scenarios.length - 1
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  const fromLocal = page.getByRole('dialog', { name: 'Run tests' })
+  await fromLocal.getByText('catalog ready').waitFor()
+  await fromLocal.locator('#quick-execution-suite').selectOption('suite-1')
+  await fromLocal
+    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .click()
+  await page.waitForFunction(() => location.hash.endsWith('0003'))
+  const ranLocal = calls.start[2].parameters
+  assert.deepEqual(ranLocal.suite, { id: 'suite-1', label: 'Regression, fast' })
+  assert.equal(ranLocal.runs, 2)
+  await band.getByText('Regression, fast · local', { exact: true }).waitFor()
+  const localExecution = await page.evaluate(() => location.hash)
+  await page.goto(`${server.url}#/ext/harness-e2e/suites`)
+  await page
+    .getByRole('button', { name: 'Edit Regression, fast', exact: true })
+    .click()
+  const edit = page.getByRole('dialog', { name: 'Edit Regression, fast' })
+  await edit.locator('#suite-editor-runs').fill('3')
+  await edit.getByRole('button', { name: 'save suite', exact: true }).click()
+  await edit.waitFor({ state: 'hidden' })
+  await page.goto(`${server.url}${localExecution}`)
+  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await again.getByText('catalog ready').waitFor()
+  assert.equal(
+    await again.locator('#quick-execution-suite').inputValue(),
+    'recorded:suite-1',
+  )
+  await again
+    .getByRole('option', { name: 'Regression, fast · as recorded' })
+    .waitFor({ state: 'attached' })
+  await again
+    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .click()
+  await page.waitForFunction(() => location.hash.endsWith('0004'))
+  assert.deepEqual(calls.start[3].parameters, ranLocal)
+
+  // A suite of this Console is deleted after a confirmation.
+  await page.goto(`${server.url}#/ext/harness-e2e/suites`)
+  await page
+    .getByRole('button', { name: 'Delete Regression, fast', exact: true })
+    .click()
+  const confirm = page.getByRole('dialog', { name: 'Delete Regression, fast?' })
+  await confirm.getByRole('button', { name: 'cancel', exact: true }).click()
+  assert.deepEqual(calls.remove, [])
+  await page
+    .getByRole('button', { name: 'Delete Regression, fast', exact: true })
+    .click()
+  await confirm
+    .getByRole('button', { name: 'delete suite', exact: true })
+    .click()
+  await copy.waitFor({ state: 'detached' })
+  assert.deepEqual(calls.remove, [{ suite_id: 'suite-1' }])
+
   // Narrow: the suites table fits.
   await page.goto(`${server.url}#/ext/harness-e2e/suites`)
   await page.locator('[data-suites]').waitFor()
@@ -307,7 +353,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Suites browser flow passed: repository suites listed read-only, copy, edit and delete a suite of this Console, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, narrow viewport.',
+    'Suites browser flow passed: repository suites listed read-only, copy, edit and delete a suite of this Console, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, even after its suite was edited (as recorded), narrow viewport.',
   )
 } catch (error) {
   console.error(
