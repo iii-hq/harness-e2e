@@ -7,7 +7,8 @@ import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { type PlanExecution, rerunGroup } from '@/lib/plan-execution'
 
 /** Run one scenario of a finished execution again. A local execution runs it
- *  here; an imported one says how to run it again on GitHub instead. */
+ *  here, a Docker one in a new container as its next attempt; an imported
+ *  one says how to run it again on GitHub instead. */
 export function ScenarioRerunDialog({
   bridge,
   execution,
@@ -96,7 +97,12 @@ export function ScenarioRerunDialog({
       onClose={close}
       size="sm"
       title={`Run ${scenarioId} again`}
-      description="It runs on this stack with this execution's model, profile, runs and technical retries."
+      description={
+        source.kind === 'docker'
+          ? "Its group runs again in a new container with this execution's contract, stack lock and executor image, as attempt " +
+            `${source.attempt + 1}; then the execution is aggregated and imported again.`
+          : "It runs on this stack with this execution's model, profile, runs and technical retries."
+      }
       bodyPadding
       footer={
         <div className="flex flex-wrap items-center justify-end gap-2">

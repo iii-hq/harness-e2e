@@ -697,7 +697,9 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
     parts.push(`GitHub run ${String(source.run_id ?? '')}`)
     const rc = text(source.release_control_execution_id)
     if (rc) parts.push(`RC ${rc.slice(0, 8)}`)
-  } else parts.push('local')
+  } else if (source.kind === 'docker')
+    parts.push(`Docker attempt ${String(source.attempt ?? 1)}`)
+  else parts.push('local')
   const stack = stackOf(detail)
   // The application under test and the runner that measured it are different
   // workers; a path checkout of either is described with the others below.

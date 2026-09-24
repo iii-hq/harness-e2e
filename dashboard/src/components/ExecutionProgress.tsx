@@ -3,7 +3,16 @@ import { Callout, Panel } from '@/design-system'
 import { formatDate, formatDuration } from '@/lib/execution-view'
 import { type PlanExecution, running } from '@/lib/plan-execution'
 
-/** A running execution: how many of its slots finished, and which runs now. */
+const dockerPhases: Record<string, string> = {
+  prepare: 'Materializing the suite and assembling the stack…',
+  groups: 'Running the groups…',
+  finalize: 'Aggregating the groups…',
+  import: 'Importing the results…',
+  done: 'Done',
+}
+
+/** A running execution: how many of its slots finished, and which runs now.
+ *  One in Docker lists its groups; its results arrive with the import. */
 export function ExecutionProgress({
   execution,
   actions,
@@ -67,6 +76,33 @@ export function ExecutionProgress({
           </div>
         ))}
       </dl>
+      {execution.source?.kind === 'docker' ? (
+        <div className="grid gap-2 text-xs" data-docker-groups>
+          <p className="m-0 text-ink-soft">
+            {dockerPhases[execution.source.phase] ?? execution.source.phase}
+          </p>
+          <ul className="m-0 grid list-none gap-1 p-0">
+            {execution.source.groups.map((group) => (
+              <li
+                key={`${group.round}:${group.group_id}`}
+                className="flex min-w-0 flex-wrap items-baseline gap-x-3 font-mono"
+                data-docker-group={group.group_id}
+              >
+                <span className="text-ink">{group.group_id}</span>
+                <span className="text-ink-soft" data-group-state>
+                  {group.state}
+                  {group.attempt > 1 ? ` · attempt ${group.attempt}` : ''}
+                </span>
+                {group.error ? (
+                  <span className="min-w-0 break-words font-sans text-warning">
+                    {group.error}
+                  </span>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {execution.error ? (
         <Callout tone="warning" title="Execution evidence">
           {execution.error}

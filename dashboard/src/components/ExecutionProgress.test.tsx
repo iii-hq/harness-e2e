@@ -73,4 +73,44 @@ describe('execution progress', () => {
     expect(html).toMatch(/· 1m 3\ds elapsed/)
     expect(html).toContain('totals update when it finishes')
   })
+  it('lists the groups of a Docker execution and where they are', () => {
+    const group = (group_id: string, state: string, attempt = 1) => ({
+      round: 1,
+      campaign_id: 'pr-r01',
+      group_id,
+      scenarios: [group_id],
+      state,
+      attempt,
+      error: state === 'failed' ? 'provider refused the key' : null,
+    })
+    const html = renderToStaticMarkup(
+      <ExecutionProgress
+        execution={
+          {
+            state: 'running',
+            slots: [],
+            source: {
+              kind: 'docker',
+              attempt: 2,
+              phase: 'groups',
+              groups: [
+                group('case-minimal-path', 'done'),
+                group('case-persistent-state', 'running', 2),
+                group('case-shell-coder-sandbox', 'failed'),
+                group('case-tool-contract-recovery', 'queued'),
+              ],
+            },
+          } as unknown as PlanExecution
+        }
+      />,
+    )
+    expect(html).toContain('Running the groups…')
+    for (const text of [
+      'case-minimal-path',
+      'running · attempt 2',
+      'provider refused the key',
+      'queued',
+    ])
+      expect(html).toContain(text)
+  })
 })
