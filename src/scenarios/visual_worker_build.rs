@@ -1141,7 +1141,8 @@ return {{visible,same_id:sameId,rendered_graph:false}};
     let persisted_canvas_id = context
         .trigger_value(
             "browser::execute",
-            json!({"session_id":session,"code":format!("return document.querySelector('[data-testid=\"open-canvas\"]')?.dataset.canvasId === {}", expected_canvas_id)}),
+            // The reloaded page reads its Canvas id back from the Worker, so wait for it.
+            json!({"session_id":session,"timeout_ms":30000,"code":format!("return await (async()=>{{for(let i=0;i<100;i++){{if(document.querySelector('[data-testid=\"open-canvas\"]')?.dataset.canvasId === {expected_canvas_id})return true;await new Promise(r=>setTimeout(r,100))}}return false}})();")}),
         )
         .await?;
     context
