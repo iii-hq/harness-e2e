@@ -434,7 +434,7 @@ class ExecutorTests(unittest.TestCase):
         state = self.directory / "daemon-up"
         for name, body in {
             "dockerd": f"""\
-                echo "dockerd $* as $(id -u)" >>"$FAKE_LOG"
+                echo "dockerd $* as $(id -u) telemetry=${{III_TELEMETRY_ENABLED:-on}}" >>"$FAKE_LOG"
                 [[ -z "${{FAKE_DOCKERD_FAILS:-}}" ]] || {{ echo "failed to start daemon: no iptables"; exit 1; }}
                 touch {state}
                 trap 'echo "dockerd stopped" >>"$FAKE_LOG"; rm -f {state}; kill $sleeper; exit 0' TERM
@@ -457,16 +457,18 @@ class ExecutorTests(unittest.TestCase):
     @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
     def test_a_group_starts_its_own_docker_daemon_runs_as_the_user_and_stops_the_daemon_after(self):
         env = self.daemon_fakes("""\
-            echo "group ran as the user" >>"$FAKE_LOG"
+            echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on}" >>"$FAKE_LOG"
             exit 3
         """)
-        result = self.executor("group", env=env)
+        # The image's environment (its telemetry switch, say) reaches the
+        # daemon and the group alike.
+        result = self.executor("group", env={**env, "III_TELEMETRY_ENABLED": "false"})
         # The group's status is the phase's.
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            f"dockerd --group 1234 as {os.getuid()}",
+            f"dockerd --group 1234 as {os.getuid()} telemetry=false",
             "setpriv --reuid 4321 --regid 1234 --clear-groups bash scripts/run_exact_stack_group.sh",
-            "group ran as the user",
+            "group ran as the user telemetry=false",
             "dockerd stopped",
         ])
 
