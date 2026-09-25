@@ -19,8 +19,10 @@ describe('result states', () => {
       lost_points: 'Lost points · warn',
       incomplete: 'Incomplete · warn',
       inconclusive: 'Inconclusive · warn',
+      failed: 'Failed · alert',
       failed_gate: 'Failed a gate · alert',
       not_run: 'Not run · alert',
+      never_run: 'Never run · ghost',
       running: 'Running · accent',
       waiting: 'Waiting for a slot · ghost',
       queued: 'Queued · ghost',
@@ -63,14 +65,33 @@ describe('runResultState', () => {
     ).toBe('inconclusive')
   })
 
-  it('does not invent lost points for an unscored run', () => {
+  it('passes a full-score run recorded before completion was reported', () => {
+    expect(runResultState({ status: 'passed', score: 100 })).toBe('passed')
+    expect(
+      runResultState({ status: 'passed', completion: null, score: 100 }),
+    ).toBe('passed')
+  })
+
+  it('reads a lost point as incomplete when the task was not finished', () => {
+    expect(
+      runResultState({
+        status: 'passed',
+        completion: 'task_incomplete',
+        score: 80,
+      }),
+    ).toBe('incomplete')
+    expect(runResultState({ status: 'passed', score: 80 })).toBe('lost_points')
+  })
+
+  it('calls a passed run without a score inconclusive', () => {
     expect(
       runResultState({
         status: 'passed',
         completion: 'completed',
         score: null,
       }),
-    ).toBe('passed')
+    ).toBe('inconclusive')
+    expect(runResultState({ status: 'passed' })).toBe('inconclusive')
   })
 
   it('names why a run did not pass', () => {

@@ -9,8 +9,10 @@ export type ResultState =
   | 'lost_points'
   | 'incomplete'
   | 'inconclusive'
+  | 'failed'
   | 'failed_gate'
   | 'not_run'
+  | 'never_run'
   | 'running'
   | 'waiting'
   | 'queued'
@@ -38,8 +40,10 @@ export const RESULT_STATES: Record<ResultState, ResultPresentation> = {
   lost_points: state('Lost points', 'warn'),
   incomplete: state('Incomplete', 'warn'),
   inconclusive: state('Inconclusive', 'warn'),
+  failed: state('Failed', 'alert'),
   failed_gate: state('Failed a gate', 'alert'),
   not_run: state('Not run', 'alert'),
+  never_run: state('Never run', 'ghost'),
   running: state('Running', 'accent', true),
   waiting: state('Waiting for a slot', 'ghost'),
   queued: state('Queued', 'ghost'),
@@ -52,11 +56,13 @@ export const RESULT_STATES: Record<ResultState, ResultPresentation> = {
 export type RunOutcome = {
   /** The run's system status (`passed`, `hard_gate_failed`, …). */
   status: string
+  /** Absent in runs recorded before completion was reported. */
   completion?: CompletionState | null
   score?: number | null
 }
 
-/** The canvas's verdict() for a finished run. */
+/** The canvas's verdict() for a finished run. Passed means every point and a
+ *  completed task; a passed run without a score proves neither. */
 export function runResultState({
   status,
   completion,
@@ -65,8 +71,9 @@ export function runResultState({
   switch (status) {
     case 'passed':
       if (completion === 'task_incomplete') return 'incomplete'
-      if (completion === 'undetermined') return 'inconclusive'
-      return typeof score === 'number' && score < 100 ? 'lost_points' : 'passed'
+      if (typeof score !== 'number' || completion === 'undetermined')
+        return 'inconclusive'
+      return score < 100 ? 'lost_points' : 'passed'
     case 'hard_gate_failed':
       return 'failed_gate'
     case 'resource_limit':
