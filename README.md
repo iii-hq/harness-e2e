@@ -418,11 +418,9 @@ finish and imports what did. A worker older than this release cannot read a
 Docker execution and drops it from its database, as it drops any row it cannot
 read.
 
-Every group runs on a network of its own. The Registry fixture serves the
-application it screenshots on the host's loopback, which only a phase on the
-host's network reaches; there a group's stack takes host ports this machine's
-iii already holds (its Console binds 3113), so the Registry groups run isolated
-as well, and their executions say their screenshots are missing.
+Every group runs on a network of its own with a Docker daemon of its own
+(see [Executor image](#executor-image)): it opens no port on this host, so it
+never meets this machine's iii (its Console binds 3113) or another group.
 
 Worker configuration:
 

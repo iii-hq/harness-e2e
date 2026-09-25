@@ -623,7 +623,6 @@ impl PlanStore {
                 log.display()
             ));
         }
-        execution.warnings.extend(network_note(&groups));
         execution.slots = group_slots(&groups);
         if let ExecutionSource::Docker {
             phase,
@@ -1340,32 +1339,9 @@ fn placeholders(slots: &[Slot]) -> bool {
     slots.iter().all(|slot| slot.execution_id.is_empty())
 }
 
-fn registry(group_id: &str) -> bool {
-    group_id.starts_with("case-registry-")
-}
-
-/// Every group runs on a network of its own. The Registry fixture serves the
-/// application it screenshots on the host's loopback, which only a phase on
-/// the host's network reaches; there a group's stack would take this host's
-/// ports (its Console binds 3113 on every address, as this host's iii does),
-/// so the Registry groups run isolated too, and without those screenshots.
-fn network_note(groups: &[DockerGroup]) -> Option<String> {
-    let registry = groups
-        .iter()
-        .filter(|group| registry(&group.group_id))
-        .map(|group| group.group_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    (!registry.is_empty()).then(|| {
-        format!(
-            "{} ran on an isolated network: the application the Registry fixture serves on the host's loopback cannot be reached for its screenshots, so they are missing. On the host's network the group's stack would take this host's ports (its Console binds 3113).",
-            registry.into_iter().collect::<Vec<_>>().join(", ")
-        )
-    })
-}
-
 /// Groups whose fixtures are private repositories.
 fn private_fixtures(group_id: &str) -> bool {
-    registry(group_id) || group_id == "case-trending-topics-build"
+    group_id.starts_with("case-registry-") || group_id == "case-trending-topics-build"
 }
 
 /// Copy a directory tree, as `cp -a` does, to `destination`, which must not
@@ -2484,28 +2460,6 @@ mod tests {
             assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
         }
         assert_eq!(done.slots[1].state, "not_run");
-    }
-
-    #[test]
-    fn registry_groups_run_isolated_and_say_their_screenshots_are_missing() {
-        let group = |id: &str| DockerGroup {
-            round: 1,
-            campaign_id: "software-engineering-r01".into(),
-            group_id: id.into(),
-            scenarios: Vec::new(),
-            state: "queued".into(),
-            attempt: 1,
-            counted: 0,
-            error: None,
-        };
-        assert_eq!(network_note(&[group("case-minimal-path")]), None);
-        let note = network_note(&[
-            group("case-registry-implementation"),
-            group("case-minimal-path"),
-        ])
-        .unwrap();
-        assert!(note.starts_with("case-registry-implementation ran on an isolated network"));
-        assert!(note.contains("screenshots"));
     }
 
     #[tokio::test]
