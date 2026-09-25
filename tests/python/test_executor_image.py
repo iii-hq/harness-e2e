@@ -209,6 +209,9 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(result.stdout, TAG + "\n")
         self.assertEqual(invoked, [])
 
+    def test_the_image_turns_iii_telemetry_off(self):
+        self.assertIn("ENV III_TELEMETRY_ENABLED=false", (ROOT / "Dockerfile").read_text().splitlines())
+
 
 # Stand-ins for what the phases call, logging each call to $FAKE_LOG.
 FAKE_SCRIPTS = {
