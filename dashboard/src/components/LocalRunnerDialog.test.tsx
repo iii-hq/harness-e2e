@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   choiceValue,
+  chooseWhere,
   executionStartRequest,
   lastUsedModel,
   namedSuite,
@@ -18,6 +19,7 @@ import type {
   Stack,
   Suite,
 } from '@/lib/dashboard-data-source'
+import { runSummary } from '@/lib/run-tests'
 
 const imported: ExecutionParameters = {
   suite: {
@@ -178,6 +180,35 @@ describe('where and stack fields', () => {
       executionStartRequest({ ...form, where: 'harness' }, null, choices[1])
         .parameters,
     ).not.toHaveProperty('stack')
+  })
+
+  it('drops a busy refusal on Run in Docker, so the footer sums up Docker', () => {
+    const refused = {
+      form: {
+        ...runnerForm(null, ['minimal_path']),
+        subject: 'deepseek\ndeepseek-v4-flash',
+      },
+      error: '"Nightly" is still running. Wait for it to finish or cancel it.',
+    }
+    const choices = stackChoices(listed, null)
+    const next = chooseWhere(refused, 'docker', choices)
+    expect(next).toEqual({
+      form: { ...refused.form, where: 'docker', stack: 'default' },
+      error: null,
+    })
+    const stack = pickedStack(next.form.stack, choices, null)
+    expect(
+      runSummary({
+        tests: 1,
+        runs: 1,
+        retries: 1,
+        suite: null,
+        where: next.form.where,
+        stack: stack?.label ?? null,
+      }).detail,
+    ).toBe('1 run per test · 1 retry · custom selection · in Docker on default')
+    // Back on this harness the stack picked stays for next time.
+    expect(chooseWhere(next, 'harness', choices).form.stack).toBe('default')
   })
 
   it('reads the recorded stack as the listed one holding the same YAML', () => {

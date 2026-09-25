@@ -203,6 +203,28 @@ export function runnerForm(
   }
 }
 
+/** Where it runs, changed: Docker starts on the repository's default stack,
+ *  and a start the server refused is dropped, since it was about the other
+ *  place (a busy harness does not hold Docker). */
+export function chooseWhere(
+  state: { form: RunnerForm; error: string | null },
+  where: RunnerForm['where'],
+  stacks: StackChoice[],
+): { form: RunnerForm; error: string | null } {
+  return {
+    form: {
+      ...state.form,
+      where,
+      stack:
+        state.form.stack ||
+        (stacks.find((choice) => choice.value === 'default') ?? stacks[0])
+          ?.value ||
+        '',
+    },
+    error: null,
+  }
+}
+
 /** Run tests starts from the model of the newest execution (newest first)
  *  whose model this stack still lists; without one, no model is chosen. */
 export function lastUsedModel(
@@ -1007,19 +1029,11 @@ export function LocalRunnerDialog({
 
   const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) =>
     setForm((current) => ({ ...current, [key]: value }))
-  const pickWhere = (value: RunnerForm['where']) =>
-    setForm((current) => ({
-      ...current,
-      where: value,
-      // Docker starts on the repository's default stack.
-      stack:
-        current.stack ||
-        (
-          stackOptions.find((choice) => choice.value === 'default') ??
-          stackOptions[0]
-        )?.value ||
-        '',
-    }))
+  const pickWhere = (value: RunnerForm['where']) => {
+    const next = chooseWhere({ form, error }, value, stackOptions)
+    setForm(next.form)
+    setError(next.error)
+  }
   const pickSuite = (value: string) => {
     const chosen = pickedSuite(value, choices)
     if (chosen)

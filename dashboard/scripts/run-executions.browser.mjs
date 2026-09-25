@@ -630,6 +630,16 @@ try {
   await busyAlert.waitFor()
   assert.equal(await runTests.getByText(/handler error/).count(), 0)
   assert.equal(started.length, 0)
+  // Run in Docker drops the refusal: the footer sums up Docker.
+  await busyAlert.getByRole('button', { name: 'Run in Docker' }).click()
+  await runTests
+    .getByText(
+      '1 run per test · 1 retry · custom selection · in Docker on default',
+    )
+    .waitFor()
+  assert.equal(await runTests.getByText(/still running/).count(), 0)
+  await runTests.getByRole('radio', { name: 'This harness' }).click()
+  await busyAlert.waitFor()
   await submit.click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-f'))
   assert.deepEqual(started[0], {
