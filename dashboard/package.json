@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "screenshots": "node scripts/screenshots.mjs",
+    "preview:bundle": "node scripts/preview-bundle.mjs",
     "test:profiles": "node scripts/suites.browser.mjs && node scripts/stacks.browser.mjs && node scripts/run-executions.browser.mjs && node scripts/compare-executions.browser.mjs && node scripts/rerun-scenario.browser.mjs"
   },
   "dependencies": {

@@ -1,11 +1,11 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import { Boxes, FlaskConical, Layers, ListChecks } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
@@ -17,6 +17,7 @@ import {
   routeRenderIdentity,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
+import '@/design-system/styles.css'
 import './dashboard-shell.css'
 
 export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
@@ -73,13 +74,6 @@ function hashForSection(section: DashboardSection): string {
   return hashForWorkspace(section as WorkspaceView)
 }
 
-const sectionIcons: Record<DashboardSection, ReactNode> = {
-  tests: <FlaskConical size={15} aria-hidden="true" />,
-  executions: <ListChecks size={15} aria-hidden="true" />,
-  suites: <Layers size={15} aria-hidden="true" />,
-  stacks: <Boxes size={15} aria-hidden="true" />,
-}
-
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
@@ -108,6 +102,19 @@ function HarnessE2eIcon() {
   )
 }
 
+/** The header a page asks for. The key says which page and labels; the
+ *  actions are compared too, since a page re-renders them as its state
+ *  changes (a button that enables, a label that flips) under the same key,
+ *  and the shell should not rely on the page clearing its header first. */
+export function nextHeader(
+  current: DashboardHeaderState,
+  next: DashboardHeaderState,
+): DashboardHeaderState {
+  return current.key === next.key && current.actions === next.actions
+    ? current
+    : next
+}
+
 export type PageActionsBarProps = {
   actions?: ReactNode
   label?: string
@@ -120,7 +127,7 @@ export function PageActionsBar({ actions, label }: PageActionsBarProps) {
   if (!actions) return null
   return (
     <section
-      className="harness-e2e-page-actions flex min-w-0 flex-wrap items-center justify-end gap-2"
+      className="harness-e2e-page-actions"
       aria-label={label ?? 'Page actions'}
     >
       {actions}
@@ -148,18 +155,17 @@ export function DashboardShell({
   const [mainRef, narrow] = useContainerNarrow(720)
   const [header, setHeaderState] = useState<DashboardHeaderState>({ key: '' })
   const setHeader = useCallback((next: DashboardHeaderState) => {
-    setHeaderState((current) => (current.key === next.key ? current : next))
+    setHeaderState((current) => nextHeader(current, next))
   }, [])
   const clearHeader = useCallback(() => setHeaderState({ key: '' }), [])
   const section = sectionForRoute(route)
   const sectionLabel = sectionLabels[section]
-  const contextValue: DashboardChromeContextValue = {
-    tabId,
-    panelSide,
-    narrow,
-    setHeader,
-    clearHeader,
-  }
+  // Stable across header updates, so a page that reads the chrome does not
+  // re-render (and re-send its actions) because its own actions changed.
+  const contextValue = useMemo<DashboardChromeContextValue>(
+    () => ({ tabId, panelSide, narrow, setHeader, clearHeader }),
+    [tabId, panelSide, narrow, setHeader, clearHeader],
+  )
 
   const navigate = (next: DashboardSection) => {
     window.location.hash = hashForSection(next)
@@ -212,13 +218,15 @@ export function DashboardShell({
             >
               {/* Audit S-04 / A11Y-05: sections are links with aria-current,
                   so the browser, assistive technology and the hash router all
-                  agree on what navigation is. Page actions share the bar. */}
+                  agree on what navigation is. Page actions share the bar.
+                  The bar's look lives in dashboard-shell.css: the extension's
+                  layers outrank Tailwind utilities inside the Console. */}
               <nav
-                className="harness-e2e-navigation sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-2 bg-panel px-4 py-1.5"
+                className="harness-e2e-navigation"
                 data-section={section}
                 aria-label="Harness E2E sections"
               >
-                <ul className="harness-e2e-navigation-wide m-0 min-w-0 list-none items-center gap-1 overflow-x-auto p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <ul className="harness-e2e-navigation-wide">
                   {navigation.map((item) => (
                     <li key={item.value}>
                       <a
@@ -228,8 +236,7 @@ export function DashboardShell({
                           item.value === section ? 'page' : undefined
                         }
                       >
-                        {sectionIcons[item.value]}
-                        <span>{item.label}</span>
+                        {item.label}
                       </a>
                     </li>
                   ))}
@@ -237,9 +244,9 @@ export function DashboardShell({
                 {/* Visibility of the wide links and the narrow select lives in
                     dashboard-shell.css, keyed on data-narrow: a Tailwind
                     `hidden` here would win over that CSS (audit S-01). */}
-                <div className="harness-e2e-navigation-narrow min-w-32 flex-1">
+                <div className="harness-e2e-navigation-narrow">
                   <select
-                    className="harness-e2e-nav-select min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
+                    className="harness-e2e-nav-select"
                     value={section}
                     onChange={(event) =>
                       navigate(event.target.value as DashboardSection)

@@ -307,9 +307,8 @@ export function TestsCatalogActions() {
     <a
       className={dashboardHeaderActionClassName()}
       href={hashForVersionComparison()}
-      aria-label="Compare system versions"
     >
-      compare versions
+      Compare system versions
     </a>
   )
 }

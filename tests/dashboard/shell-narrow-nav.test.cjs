@@ -36,7 +36,24 @@ test("the narrow select is hidden by CSS, not by a Tailwind utility", () => {
 // inside the page and wrap in narrow containers.
 test("page actions live in the wrapping section bar, not the console header (S-02)", () => {
   assert.match(shellTsx, /<PageActionsBar/);
-  assert.match(shellTsx, /harness-e2e-page-actions flex min-w-0 flex-wrap/);
+  assert.match(shellTsx, /className="harness-e2e-page-actions"/);
+  assert.match(shellCss, /\.harness-e2e-page-actions\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.doesNotMatch(shellTsx, /harness-e2e-header-overflow/);
   assert.doesNotMatch(shellCss, /harness-e2e-header-overflow/);
+});
+
+// Redesign canvas: the section bar is a raised strip of sentence-case Inter
+// tabs with an ink underline on the current one; the actions are Inter too.
+test("tabs and page actions are sentence-case Inter, not mono lowercase", () => {
+  const rule = (selector) =>
+    shellCss.match(new RegExp(`\\n\\s*${selector.replace(/[.[\]"=]/g, "\\$&")}\\s*\\{([^}]*)\\}`))?.[1] ?? "";
+  for (const selector of [".harness-e2e-nav-link", ".harness-e2e-nav-select", ".harness-e2e-header-action"]) {
+    const body = rule(selector);
+    assert.match(body, /font-family:\s*var\(--font-sans\)/, selector);
+    assert.doesNotMatch(body, /text-transform:\s*lowercase/, selector);
+  }
+  assert.match(rule(".harness-e2e-navigation"), /background:\s*var\(--color-panel-raised\)/);
+  assert.match(rule('.harness-e2e-nav-link[aria-current="page"]::after'), /height:\s*2px[^}]*background:\s*var\(--color-ink\)/);
+  const actionsTsx = fs.readFileSync(path.join(componentsDir, "DashboardPageActions.tsx"), "utf8");
+  assert.doesNotMatch(actionsTsx, /font-mono|lowercase/);
 });

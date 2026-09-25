@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DashboardShell,
+  nextHeader,
   PageActionsBar,
   sectionForRoute,
 } from '@/components/DashboardShell'
@@ -85,6 +86,19 @@ describe('section navigation', () => {
     }
   })
 
+  // Redesign canvas: sentence-case tabs, no icons, the current one marked.
+  it('labels the sections in sentence case, without icons', () => {
+    const html = renderShell()
+    const tabs = html.match(
+      /<ul class="harness-e2e-navigation-wide">.*?<\/ul>/,
+    )?.[0]
+    expect(tabs).toBeTruthy()
+    expect(tabs).not.toContain('<svg')
+    expect(tabs).toContain('aria-current="page">Executions</a>')
+    for (const label of ['Tests', 'Suites', 'Stacks'])
+      expect(tabs).toContain(`>${label}</a>`)
+  })
+
   it('names the section without a slogan in the console header', () => {
     const html = renderShell()
     expect(html).not.toContain('evidence, plans and live evaluation control')
@@ -108,5 +122,28 @@ describe('page actions in the section bar', () => {
 
   it('renders nothing when a page has no actions', () => {
     expect(renderToStaticMarkup(<PageActionsBar />)).toBe('')
+  })
+})
+
+describe('header updates', () => {
+  const disabled = (
+    <button type="button" disabled>
+      Share link
+    </button>
+  )
+  const enabled = <button type="button">Share link</button>
+  const header = { key: 'tests:Comparison actions:true:compare' }
+
+  // TestsPage enables "Share link" once both versions are picked, under the
+  // same key. Until now only the effect cleanup (clearHeader) let it through.
+  it('takes new actions under the same key', () => {
+    const current = { ...header, actions: disabled }
+    const next = { ...header, actions: enabled }
+    expect(nextHeader(current, next)).toBe(next)
+  })
+
+  it('keeps the current header when nothing changed', () => {
+    const current = { ...header, actions: enabled }
+    expect(nextHeader(current, { ...header, actions: enabled })).toBe(current)
   })
 })

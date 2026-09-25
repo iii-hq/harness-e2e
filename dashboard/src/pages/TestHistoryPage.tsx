@@ -1046,7 +1046,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       href={hashForWorkspace()}
       onClick={() => requestQuickExecution([testId])}
     >
-      run this test
+      Run this test
     </a>
   )
 
@@ -1062,7 +1062,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               className={dashboardHeaderActionClassName()}
               href={hashForVersionComparison()}
             >
-              compare systems
+              Compare systems
             </a>
             {runThisTest}
           </>

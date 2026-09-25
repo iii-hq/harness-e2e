@@ -1,3 +1,4 @@
 @layer theme, base, legacy, ds, components, utilities;
 @import "./foundations.css" layer(ds);
 @import "./primitives.css" layer(ds);
+@import "./common.css" layer(ds);

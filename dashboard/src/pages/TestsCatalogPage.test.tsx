@@ -63,7 +63,7 @@ describe('test catalog dimensions', () => {
   it('offers only the comparison entry point, never test authoring', () => {
     const html = renderToStaticMarkup(<TestsCatalogActions />)
 
-    expect(html).toContain('compare versions')
+    expect(html).toContain('>Compare system versions</a>')
     expect(html).not.toContain('new test')
     expect(html).not.toContain('Create a new local test')
   })

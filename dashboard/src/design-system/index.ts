@@ -1,4 +1,11 @@
 export type {
+  FactChipProps,
+  RowMenuItem,
+  RowMenuProps,
+  StatusLabelProps,
+} from './common'
+export { FactChip, FactList, RowMenu, StatusLabel } from './common'
+export type {
   Breadcrumb,
   ButtonProps,
   ButtonSize,
