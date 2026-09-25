@@ -22,7 +22,7 @@
 //! Running a scenario again runs its groups as the next attempt, finalizes
 //! again and imports again: the last attempt counts, as a re-run job's does
 //! on GitHub.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -92,6 +92,9 @@ pub(crate) struct DockerSettings {
     /// A checkout's `scripts/` to run instead of the embedded scripts, copied
     /// into each new execution.
     pub scripts_dir: Option<PathBuf>,
+    /// A pull-through cache per registry for each group's Docker daemon,
+    /// handed to the group as `HARNESS_E2E_REGISTRY_MIRRORS`.
+    pub registry_mirrors: BTreeMap<String, String>,
 }
 
 impl Default for DockerSettings {
@@ -100,6 +103,7 @@ impl Default for DockerSettings {
             parallel_groups: 2,
             provider_env_file: None,
             scripts_dir: None,
+            registry_mirrors: BTreeMap::new(),
         }
     }
 }
@@ -760,6 +764,17 @@ impl PlanStore {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
         );
+        let mirrors = &self.docker.settings.registry_mirrors;
+        if !mirrors.is_empty() {
+            env.push((
+                "HARNESS_E2E_REGISTRY_MIRRORS".into(),
+                mirrors
+                    .iter()
+                    .map(|(registry, mirror)| format!("{registry}={mirror}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
         let folder = self.docker_folder(id);
         let log = folder.join(format!(
             "logs/group-{}-{}-{}.log",
@@ -1709,6 +1724,10 @@ mod tests {
             launcher.clone(),
             DockerSettings {
                 provider_env_file: Some(providers.clone()),
+                registry_mirrors: BTreeMap::from([
+                    ("mcr.microsoft.com".into(), "http://mirror:5001".into()),
+                    ("docker.io".into(), "http://mirror:5000".into()),
+                ]),
                 ..DockerSettings::default()
             },
         );
@@ -1840,6 +1859,16 @@ mod tests {
                 || call.args[..] == ["prepare", "assemble"];
             assert_eq!(call.env_file.is_some(), credentials, "{:?}", call.args);
             assert_eq!(call.env["EXECUTION_KEY"], id);
+            // Only a group runs a Docker daemon to pull through them.
+            assert_eq!(
+                call.env
+                    .get("HARNESS_E2E_REGISTRY_MIRRORS")
+                    .map(String::as_str),
+                (call.args[0] == "group")
+                    .then_some("docker.io=http://mirror:5000 mcr.microsoft.com=http://mirror:5001"),
+                "{:?}",
+                call.args
+            );
         }
         let group = &launcher.calls("group")[0];
         assert_eq!(

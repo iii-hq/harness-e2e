@@ -432,6 +432,26 @@ Worker configuration:
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.
+- `docker_registry_mirrors`: a pull-through cache per registry for the Docker
+  daemon each group runs, which starts with no image, as
+  `{mcr.microsoft.com: http://172.17.0.1:5001}`: the daemon pulls from the
+  mirror first and from the registry when the mirror fails. It reaches the
+  groups as `HARNESS_E2E_REGISTRY_MIRRORS` (`REGISTRY=URL ...`), which
+  `scripts/run_in_image.sh group` also takes from its caller.
+
+Kanban's and trending topics' images come from `mcr.microsoft.com`, which
+`dockerd --registry-mirror` does not cover (it mirrors Docker Hub alone); a
+group's daemon writes each mirror into `/etc/docker/certs.d/<registry>/hosts.toml`
+instead. One `registry:2` per upstream serves as the cache, listening on the
+Docker bridge's gateway (`docker network inspect bridge --format '{{(index
+.IPAM.Config 0).Gateway}}'`), where every group container reaches this host:
+
+```sh
+docker run -d --name mcr-cache --restart unless-stopped -p 172.17.0.1:5001:5000 \
+  -v mcr-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://mcr.microsoft.com registry:2
+docker run -d --name hub-cache --restart unless-stopped -p 172.17.0.1:5000:5000 \
+  -v hub-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io registry:2
+```
 
 The phases get none of the worker's environment but where Docker and
 `TMPDIR` are.

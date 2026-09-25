@@ -24,7 +24,9 @@
 #             the fixture repositories it clones read from those checkouts.
 #             Started as root with HARNESS_E2E_EXECUTOR_USER=UID:GID (as
 #             run_in_image.sh does, privileged), it first starts a Docker
-#             daemon of its own and runs the group as that user.
+#             daemon of its own, with the pull-through caches
+#             HARNESS_E2E_REGISTRY_MIRRORS names, and runs the group as that
+#             user.
 #   package WORKFLOW ROOT...
 #             check that each ROOT (below target/, its contract in
 #             stack-lock.json) holds nothing unsafe and hash it into its
@@ -213,6 +215,16 @@ group() {
     xargs -rn1 </sys/fs/cgroup/cgroup.procs >/sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
     sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
   fi
+  # Pull-through caches by registry, "REGISTRY=URL ...": the daemon pulls
+  # from the mirror first and from the registry when the mirror fails.
+  local mirror registry server
+  for mirror in ${HARNESS_E2E_REGISTRY_MIRRORS:-}; do
+    registry=${mirror%%=*} server=${mirror%%=*}
+    [[ "$registry" != docker.io ]] || server=registry-1.docker.io
+    mkdir -p "/etc/docker/certs.d/$registry"
+    printf 'server = "https://%s"\n[host."%s"]\n  capabilities = ["pull", "resolve"]\n' \
+      "$server" "${mirror#*=}" >"/etc/docker/certs.d/$registry/hosts.toml"
+  done
   local log=${TMPDIR:-/tmp}/dockerd.log try status=0
   dockerd --group "${user#*:}" >"$log" 2>&1 &
   daemon=$!

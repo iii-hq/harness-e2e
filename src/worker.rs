@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -40,6 +41,12 @@ pub struct WorkerConfig {
     /// edited script takes effect on the next one. Resolved as `data_dir` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scripts_dir: Option<String>,
+    /// Docker executions: a pull-through cache per registry (`docker.io`,
+    /// `mcr.microsoft.com`, ...) for the Docker daemon each group runs, which
+    /// starts with no image: it pulls from the mirror first, from the
+    /// registry itself when the mirror fails.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub docker_registry_mirrors: BTreeMap<String, String>,
 }
 
 fn default_control_database() -> String {
@@ -65,6 +72,7 @@ impl Default for WorkerConfig {
             docker_parallel_groups: default_docker_parallel_groups(),
             provider_env_file: None,
             scripts_dir: None,
+            docker_registry_mirrors: BTreeMap::new(),
         }
     }
 }
@@ -79,6 +87,22 @@ impl WorkerConfig {
         }
         if self.docker_parallel_groups == 0 {
             return Err("docker_parallel_groups must be at least 1".into());
+        }
+        // Each becomes a line of the daemon's hosts.toml.
+        let plain = |value: &str| {
+            !value.is_empty()
+                && !value.contains(|c: char| c.is_whitespace() || "\"'=\\".contains(c))
+        };
+        for (registry, mirror) in &self.docker_registry_mirrors {
+            if !plain(registry)
+                || registry.contains('/')
+                || !plain(mirror)
+                || !(mirror.starts_with("http://") || mirror.starts_with("https://"))
+            {
+                return Err(format!(
+                    "docker_registry_mirrors: {registry:?} needs a registry host and an http(s) URL"
+                ));
+            }
         }
         Ok(self)
     }
@@ -96,6 +120,7 @@ impl WorkerConfig {
             parallel_groups: self.docker_parallel_groups,
             provider_env_file: path(&self.provider_env_file)?,
             scripts_dir: path(&self.scripts_dir)?,
+            registry_mirrors: self.docker_registry_mirrors.clone(),
         })
     }
 }
@@ -374,6 +399,43 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("docker_parallel_groups must be at least 1"));
+    }
+
+    #[test]
+    fn docker_registry_mirrors_name_a_registry_and_an_http_url() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "data_dir: evidence\ndocker_registry_mirrors:\n  mcr.microsoft.com: http://172.17.0.1:5001\n",
+        )
+        .unwrap();
+        let docker = load_config(&path).unwrap().docker(&path).unwrap();
+        assert_eq!(
+            docker.registry_mirrors,
+            BTreeMap::from([(
+                "mcr.microsoft.com".to_owned(),
+                "http://172.17.0.1:5001".to_owned()
+            )])
+        );
+        for bad in [
+            "mcr.microsoft.com: 172.17.0.1:5001",
+            "mcr.microsoft.com: 'http://x\" y'",
+            "mcr.microsoft.com/playwright: http://x",
+        ] {
+            std::fs::write(
+                &path,
+                format!("data_dir: evidence\ndocker_registry_mirrors:\n  {bad}\n"),
+            )
+            .unwrap();
+            assert!(
+                load_config(&path)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("docker_registry_mirrors"),
+                "{bad}"
+            );
+        }
     }
 
     #[test]

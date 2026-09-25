@@ -97,7 +97,7 @@ class WrapperTests(unittest.TestCase):
             "DEEPSEEK_API_KEY": "secret-value", "EXECUTION_KEY": "42", "CI": "true", "GITHUB_TOKEN": "ghs_token",
             "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.x.insteadOf", "GIT_CONFIG_VALUE_0": "y",
             "GIT_CONFIG_GLOBAL": "/host/gitconfig", "UNRELATED": "1", "HARNESS_E2E_EXECUTOR_IMAGE": "stale",
-            "HARNESS_E2E_EXECUTOR_USER": "0:0",
+            "HARNESS_E2E_EXECUTOR_USER": "0:0", "HARNESS_E2E_REGISTRY_MIRRORS": "mcr.microsoft.com=http://172.17.0.1:5001",
         })
         self.assertEqual(invoked[0], ["pull", "--quiet", TAG])
         run = next(call for call in invoked if call[0] == "run")
@@ -132,7 +132,8 @@ class WrapperTests(unittest.TestCase):
         # By name only: the values never reach the command line. The subject
         # has a shell in a group, so no GitHub token enters it.
         self.assertEqual(passed, ["CI", "DEEPSEEK_API_KEY", "EXECUTION_KEY", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
-                                  "GIT_CONFIG_VALUE_0", "HARNESS_E2E_CAMPAIGN_GROUP_ID", "HARNESS_E2E_CONTRACT"])
+                                  "GIT_CONFIG_VALUE_0", "HARNESS_E2E_CAMPAIGN_GROUP_ID", "HARNESS_E2E_CONTRACT",
+                                  "HARNESS_E2E_REGISTRY_MIRRORS"])
         self.assertNotIn("secret-value", "\n".join(run))
         self.assertNotIn("not published", result.stderr)
 
@@ -468,6 +469,25 @@ class ExecutorTests(unittest.TestCase):
             "group ran as the user",
             "dockerd stopped",
         ])
+
+    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
+    def test_a_groups_daemon_pulls_through_the_mirrors_it_is_given(self):
+        # Where the daemon reads them, here under the test's directory.
+        certs = self.directory / "certs.d"
+        executor = self.root / "scripts/executor.sh"
+        self.assertIn('"/etc/docker/certs.d/$registry/hosts.toml"', executor.read_text())
+        executor.write_text(executor.read_text().replace("/etc/docker/certs.d", str(certs)))
+        env = self.daemon_fakes("exit 0\n")
+        result = self.executor("group", env={**env, "HARNESS_E2E_REGISTRY_MIRRORS":
+                                             "mcr.microsoft.com=http://172.17.0.1:5001 docker.io=http://172.17.0.1:5000"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(path.relative_to(certs).as_posix() for path in certs.rglob("*.toml")),
+                         ["docker.io/hosts.toml", "mcr.microsoft.com/hosts.toml"])
+        self.assertEqual((certs / "mcr.microsoft.com/hosts.toml").read_text(),
+                         'server = "https://mcr.microsoft.com"\n'
+                         '[host."http://172.17.0.1:5001"]\n  capabilities = ["pull", "resolve"]\n')
+        self.assertEqual((certs / "docker.io/hosts.toml").read_text().splitlines()[:2],
+                         ['server = "https://registry-1.docker.io"', '[host."http://172.17.0.1:5000"]'])
 
     @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
     def test_a_group_whose_daemon_does_not_start_never_runs(self):
