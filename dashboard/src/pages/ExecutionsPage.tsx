@@ -134,7 +134,8 @@ export function ledgerFiltersFromParams(
   const status = params.get('status')
   return {
     query: params.get('q') ?? '',
-    status: status && status in RESULT_STATES ? (status as ResultState) : 'all',
+    // Only a result the filter offers; `in` would also take `toString`.
+    status: SEGMENT_ORDER.find((state) => state === status) ?? 'all',
     sort: SORTS.find((entry) => entry.value === sort)?.value ?? 'newest',
   }
 }
@@ -374,22 +375,25 @@ const SEGMENT_ORDER: ResultState[] = [
   'cancelled',
 ]
 
-function resultCounts(rows: LedgerRow[]) {
+/** Each result present, in the filter's order; `keep` stays at zero. */
+function resultCounts(rows: LedgerRow[], keep?: LedgerFilters['status']) {
   const counts = new Map<ResultState, number>()
   for (const row of rows)
     counts.set(row.result.state, (counts.get(row.result.state) ?? 0) + 1)
-  return [...counts.entries()].sort(
-    ([a], [b]) =>
-      (SEGMENT_ORDER.indexOf(a) + 1 || 99) -
-      (SEGMENT_ORDER.indexOf(b) + 1 || 99),
-  )
+  return SEGMENT_ORDER.filter(
+    (state) => counts.has(state) || state === keep,
+  ).map((state) => [state, counts.get(state) ?? 0] as const)
 }
 
-/** The result filter: All, then each result present, with its count. */
-export function resultSegments(rows: LedgerRow[]) {
+/** The result filter: All, then each result present, with its count. The
+ *  active one stays when nothing loaded has that result any more. */
+export function resultSegments(
+  rows: LedgerRow[],
+  active: LedgerFilters['status'] = 'all',
+) {
   return [
     { value: 'all' as const, label: 'All', count: rows.length },
-    ...resultCounts(rows).map(([state, count]) => ({
+    ...resultCounts(rows, active).map(([state, count]) => ({
       value: state,
       label: RESULT_STATES[state].label,
       count,
@@ -705,8 +709,14 @@ export function LedgerTable({
             >
               <TableRow className="ex-group">
                 <TableHead colSpan={narrow ? 5 : 10} scope="colgroup">
-                  <span className="ds-label">{group.label}</span>
-                  <span className="ex-group-count">{group.rows.length}</span>
+                  {/* Spaced and named, so it is not read as "Sep 248". */}
+                  <span className="ds-label">{group.label}</span>{' '}
+                  <span className="ex-group-count">
+                    {group.rows.length}
+                    <span className="ds-visually-hidden">
+                      {group.rows.length === 1 ? ' execution' : ' executions'}
+                    </span>
+                  </span>
                 </TableHead>
               </TableRow>
               {group.rows.map((row) => {
@@ -1276,11 +1286,11 @@ export function ExecutionsPage() {
           className="ex-segments"
           value={filters.status}
           onChange={(value) => setFilter('status', value)}
-          options={resultSegments(rows).map((segment) => ({
+          options={resultSegments(rows, filters.status).map((segment) => ({
             value: segment.value,
             label: (
               <>
-                {segment.label}
+                {segment.label}{' '}
                 <span className="ex-count">{segment.count}</span>
               </>
             ),

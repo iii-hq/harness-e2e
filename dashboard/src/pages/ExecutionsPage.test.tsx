@@ -66,6 +66,14 @@ describe('executions list filters', () => {
     expect(
       ledgerFiltersFromParams(new URLSearchParams('status=cancelling&sort=x')),
     ).toEqual(LEDGER_DEFAULT_FILTERS)
+    // Only a result the filter offers: no inherited names, no other states.
+    for (const status of ['toString', 'constructor', 'never_run', 'queued'])
+      expect(
+        ledgerFiltersFromParams(new URLSearchParams({ status })).status,
+      ).toBe('all')
+    expect(
+      ledgerFiltersFromParams(new URLSearchParams('status=cancelled')).status,
+    ).toBe('cancelled')
   })
 
   it('searches the title, id, model, profile, origin and date', () => {
@@ -170,6 +178,16 @@ describe('executions list filters', () => {
     expect(ledgerSummary(rows, LEDGER_TOTAL)).toBe(
       '58 retained · 16 loaded · 8 passed · 4 failed · 1 incomplete · 3 running',
     )
+    // The active filter keeps its segment when nothing has that result.
+    expect(
+      resultSegments(rows, 'cancelled').map(({ value, count }) => [
+        value,
+        count,
+      ]),
+    ).toContainEqual(['cancelled', 0])
+    expect(
+      resultSegments(rows).some((segment) => segment.value === 'cancelled'),
+    ).toBe(false)
   })
 })
 
@@ -455,6 +473,10 @@ describe('the executions table', () => {
     expect(html).toContain('aria-label="Select no profile"')
     expect(html).toContain('aria-label="Actions for no profile"')
     expect(html).toContain('>Today · Sep 24<')
+    // A heading's count is spaced from it and named.
+    expect(html).toContain(
+      'Today · Sep 24</span> <span class="ex-group-count">8<span class="ds-visually-hidden"> executions</span>',
+    )
     expect(html).toContain('title="3,339,305 tokens"')
     expect(html).toContain('3 of 9 groups finished · 2 running · 4 waiting')
     expect(html).toContain('>Importing<')

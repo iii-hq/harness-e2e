@@ -80,8 +80,9 @@
   flex-wrap: wrap;
 }
 
+/* A space separates it from its label; this adds the rest of the gap. */
 .ex-count {
-  margin-inline-start: calc(var(--spacing) * 1.5);
+  margin-inline-start: calc(var(--spacing) * 0.5);
   color: var(--color-ink-faint);
   font-family: var(--font-mono);
   font-size: var(--ds-text-label, 0.6875rem);
@@ -286,7 +287,7 @@
 }
 
 .ex-group-count {
-  margin-inline-start: calc(var(--spacing) * 2);
+  margin-inline-start: calc(var(--spacing) * 0.5);
   color: var(--color-ink-faint);
   font-family: var(--font-mono);
   font-size: var(--ds-text-label, 0.6875rem);
