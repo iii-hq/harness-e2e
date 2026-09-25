@@ -191,10 +191,11 @@ describe('executions list rows', () => {
       meta: 'GitHub #36073359724 · 8:33 PM · plan-e5b0a2c4',
       result: { state: 'running', label: 'Importing' },
       live: true,
+      issue: '6 of 14 group jobs finished',
     })
     expect(row('plan-2b7e41c0')).toMatchObject({
       result: { state: 'running' },
-      issue: '1 of 2 tests reported',
+      issue: '1 of 2 runs reported',
     })
   })
 

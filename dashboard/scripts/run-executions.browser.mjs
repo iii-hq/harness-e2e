@@ -540,7 +540,7 @@ try {
   // One execution: ticked alone, there is nothing to compare it with.
   executions = [runningSummary]
   await page.reload()
-  await page.getByText('1 of 9 tests reported', { exact: true }).waitFor()
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
   await page
     .getByRole('checkbox', { name: /^Select gpt-5\.6-terra · / })
     .check()
@@ -557,11 +557,11 @@ try {
   // cancelled with how far it got, and its runtime rounds whole.
   executions = [runningSummary, cancelledSummary]
   await page.reload()
-  await page.getByText('1 of 9 tests reported', { exact: true }).waitFor()
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
   await stopped.getByText('Cancelled', { exact: true }).waitFor()
-  await stopped.getByText('3 of 9 tests reported', { exact: true }).waitFor()
+  await stopped.getByText('3 of 9 runs reported', { exact: true }).waitFor()
   await stopped.getByText('2m 00s', { exact: true }).waitFor()
   assert.equal(await page.getByText(/infrastructure event/).count(), 0)
   assert.equal(await page.getByText('1m 60s').count(), 0)

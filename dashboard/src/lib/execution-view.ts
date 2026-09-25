@@ -366,13 +366,15 @@ export function dockerGroupsProgress(groups: DockerGroup[]): string {
 }
 
 /** How far a running (or cancelled) execution got: in Docker, where its
- *  groups are; here, its tests reported of those planned (a native run's
- *  live progress). Null otherwise. */
+ *  groups are; an import from GitHub, its group jobs finished; here, its
+ *  runs (one per test and repetition) reported of those planned, or a
+ *  native run's live progress. Null otherwise. */
 export function executionProgress(
   execution: DashboardExecutionSummary,
 ): string | null {
   const status = stringValue(execution.status)
-  if (!['running', 'cancelling', 'cancelled'].includes(status)) return null
+  if (!['running', 'importing', 'cancelling', 'cancelled'].includes(status))
+    return null
   const source = objectValue(execution.source)
   if (
     source.kind === 'docker' &&
@@ -386,9 +388,10 @@ export function executionProgress(
     numberValue(plan.finished) ?? numberValue(live.runs_committed) ?? null
   const planned =
     numberValue(plan.planned) ?? numberValue(live.planned_slots) ?? null
-  return done === null || !planned
-    ? null
-    : `${done} of ${plural(planned, 'test')} reported`
+  if (done === null || !planned) return null
+  return status === 'importing'
+    ? `${done} of ${plural(planned, 'group job')} finished`
+    : `${done} of ${plural(planned, 'run')} reported`
 }
 
 /** A suite as the Console names it: its name, or "unnamed suite", and the

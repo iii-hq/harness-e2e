@@ -158,7 +158,7 @@ describe('an execution as it runs', () => {
     ).toBe('gpt-5.6-terra · Sep 23, 2026, 7:51 AM')
   })
 
-  it('reads its progress as tests reported of those planned', () => {
+  it('reads its progress as runs reported of those planned', () => {
     expect(
       executionProgress(
         execution({
@@ -166,7 +166,7 @@ describe('an execution as it runs', () => {
           plan_execution: { planned: 9, finished: 1 },
         } as Partial<DashboardExecutionSummary>),
       ),
-    ).toBe('1 of 9 tests reported')
+    ).toBe('1 of 9 runs reported')
     expect(
       executionProgress(
         execution({
@@ -174,7 +174,16 @@ describe('an execution as it runs', () => {
           live_progress: { runs_committed: 2, planned_slots: 4 },
         } as Partial<DashboardExecutionSummary>),
       ),
-    ).toBe('2 of 4 tests reported')
+    ).toBe('2 of 4 runs reported')
+    // An import from GitHub, by its group jobs.
+    expect(
+      executionProgress(
+        execution({
+          status: 'importing',
+          plan_execution: { planned: 14, finished: 6 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBe('6 of 14 group jobs finished')
     // In Docker, where its groups are.
     const group = (state: string) => ({ state })
     expect(
@@ -300,7 +309,7 @@ describe('list details', () => {
     expect(presentation.attention).toBe('cancelled')
     expect(presentation.primaryIssue).toBeNull()
     // How far it got before it was stopped.
-    expect(executionProgress(cancelled)).toBe('1 of 9 tests reported')
+    expect(executionProgress(cancelled)).toBe('1 of 9 runs reported')
   })
 })
 
