@@ -1332,7 +1332,7 @@ export function TestsPage({
     <>
       <DashboardPageActions
         active="tests"
-        context="compare"
+        context="Compare"
         actionsLabel="Comparison actions"
         actions={
           <>

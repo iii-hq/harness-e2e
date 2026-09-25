@@ -862,7 +862,7 @@ export function ExecutionComparePage({
 
   const shell = (children: ReactNode) => (
     <div className="ds-root min-h-dvh bg-canvas text-ink">
-      <DashboardPageActions active="executions" context="compare" />
+      <DashboardPageActions active="executions" context="Compare" />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         {children}
       </div>
