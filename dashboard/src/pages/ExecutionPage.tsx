@@ -63,6 +63,7 @@ import {
   suiteText,
   workerVersion,
 } from '@/lib/execution-view'
+import { formatStamp } from '@/lib/format'
 import { scenarioReruns } from '@/lib/plan-execution'
 import {
   buildPrimaryMetrics,
@@ -669,10 +670,8 @@ export function ExecutionPage({
       'subject',
       presentation.subjects.map(providerModel).join(', ') || 'not reported',
     ],
-    [
-      'started',
-      presentation.startedAt ? formatDate(presentation.startedAt) : '—',
-    ],
+    // The same stamp an untitled execution's title carries.
+    ['started', formatStamp(presentation.startedAt)],
     [
       'origin',
       detail.plan_execution ? (

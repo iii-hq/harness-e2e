@@ -175,7 +175,7 @@ describe('executions list rows', () => {
 
   it('titles an untitled execution by its model and when it was created', () => {
     expect(row('plan-3ef1b6a7').title).toBe(
-      'claude-code/claude-opus-5-5 · Sep 24, 6:43 AM',
+      'claude-code/claude-opus-5-5 · Sep 24, 2026, 6:43 AM',
     )
   })
 

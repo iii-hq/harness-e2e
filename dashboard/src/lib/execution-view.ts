@@ -8,7 +8,7 @@ import type {
   JsonObject,
   StackWorker,
 } from '@/lib/dashboard-data-source'
-import { formatDateTime, plural } from '@/lib/format'
+import { formatStamp, plural } from '@/lib/format'
 import type { ResultState } from '@/lib/result-status'
 
 export type ExecutionAttentionState =
@@ -469,10 +469,10 @@ export function executionTitle(presentation: ExecutionPresentation): {
   if (label) return { title: label, detail: workflow || null }
   const subject = presentation.subjects[0]
   if (subject) {
-    // Dated by its creation: the same title while it runs, when it ends and
-    // on every page.
+    // Dated by its creation, with the year: the same title while it runs,
+    // when it ends, on every page and in any year after.
     return {
-      title: `${subject.model} · ${formatDateTime(presentation.startedAt || presentation.completedAt)}`,
+      title: `${subject.model} · ${formatStamp(presentation.startedAt || presentation.completedAt)}`,
       detail: workflow || null,
     }
   }

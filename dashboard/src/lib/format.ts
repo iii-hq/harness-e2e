@@ -155,6 +155,14 @@ export function formatDateTime(value: DateInput, now = new Date()): string {
   return `${shortDay(date, now)}, ${clock(date)}`
 }
 
+/** `Sep 24, 2026, 3:33 AM`, the year always: for what names a thing and
+ *  must read the same next year, like an untitled execution's title. */
+export function formatStamp(value: DateInput): string {
+  const date = toDate(value)
+  if (!date) return unparsed(value)
+  return `${MONTHS[date.getMonth()]} ${date.getDate()}, ${date.getFullYear()}, ${clock(date)}`
+}
+
 /** `3:33 AM`, for a row under a heading that already names the day. */
 export function formatTime(value: DateInput): string {
   const date = toDate(value)

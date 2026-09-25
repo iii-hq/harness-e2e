@@ -6,6 +6,7 @@ import {
   formatDay,
   formatDayLabel,
   formatDuration,
+  formatStamp,
   formatTime,
   formatTokens,
   plural,
@@ -138,6 +139,18 @@ describe('formatDateTime', () => {
     expect(formatDateTime('last Tuesday', now)).toBe('last Tuesday')
     expect(formatDateTime('', now)).toBe('—')
     expect(formatDateTime(null, now)).toBe('—')
+  })
+})
+
+describe('formatStamp', () => {
+  it('always names the year, so it reads the same next year', () => {
+    expect(formatStamp(new Date(2026, 8, 24, 6, 43))).toBe(
+      'Sep 24, 2026, 6:43 AM',
+    )
+    expect(formatStamp(new Date(2025, 11, 31, 23, 59).toISOString())).toBe(
+      'Dec 31, 2025, 11:59 PM',
+    )
+    expect(formatStamp('soon')).toBe('soon')
   })
 })
 

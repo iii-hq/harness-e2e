@@ -147,7 +147,15 @@ describe('an execution as it runs', () => {
         ).title,
     )
     expect(new Set(titles).size).toBe(1)
-    expect(titles[0]).toMatch(/^gpt-5\.6-terra · Sep 23, /)
+    // Local time, so the day and hour hold in any time zone.
+    const created = new Date(2026, 8, 23, 7, 51)
+    expect(
+      executionTitle(
+        buildExecutionPresentation(
+          execution({ label: '', started_at: created.toISOString() }),
+        ),
+      ).title,
+    ).toBe('gpt-5.6-terra · Sep 23, 2026, 7:51 AM')
   })
 
   it('reads its progress as tests reported of those planned', () => {
