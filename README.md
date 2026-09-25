@@ -267,9 +267,11 @@ aggregating them. Only `prepare` gets a `GITHUB_TOKEN`: a group's subject has
 a shell. Interrupted, the wrapper stops its container; a group whose image or
 container never started still writes its `failure.json`.
 
-No phase reaches the host's Docker or its network. Each container has a
-network of its own, where a group's engine listens on 49134. A `group`
-container runs a Docker daemon of its own: privileged, it starts as root with
+No phase mounts the host's Docker socket or joins the host's network. Each
+container has a network of its own on Docker's default bridge, where a group's
+engine listens on 49134 without taking a host port. A `group` container runs
+a Docker daemon of its own: privileged, in a cgroup namespace of its own, it
+starts as root with
 an anonymous volume, labelled like the container, at `/var/lib/docker`;
 `executor.sh group` starts `dockerd` there, runs the group as the caller's uid
 (whose group owns the daemon's socket) and stops the daemon after it, which
@@ -277,11 +279,18 @@ stops its containers. Every container a scenario starts (Registry's runner,
 Kanban's, trending topics') is that daemon's, in the group's network, so the
 application the Registry fixture publishes on `127.0.0.1` is where its
 screenshots look, and it goes with the group's container and its volume
-(`docker rm -fv` for one left behind). The group's user reaches root in that
-container through the socket, and a privileged container is root on the
-host: what the host's socket gave a group before, and no more. It no longer
-sees the host's containers, such as a concurrent `prepare` holding a token.
-Each group starts with no image and pulls what its scenarios run.
+(`docker rm -fv` for one left behind). Each group starts with no image and
+pulls what its scenarios run.
+
+This keeps groups from colliding, not from the host. The group's user
+reaches root in its container through the daemon's socket, and the container
+is privileged, so that root is root-equivalent on the host, as the host's
+socket was: a subject can start a privileged container with the host's
+devices, mount the host's disk and read what is there (the host daemon's
+container configurations, with a concurrent `prepare`'s `GITHUB_TOKEN`, a
+worker's `provider_env_file`, `gh`'s credentials). From the default bridge it
+also reaches the host's ports on the bridge's gateway (a local Console on
+3113, iii on 49134) and other groups' containers.
 
 The workflow keeps on the runner what needs it: the GitHub App token for the
 private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
@@ -419,8 +428,10 @@ Docker execution and drops it from its database, as it drops any row it cannot
 read.
 
 Every group runs on a network of its own with a Docker daemon of its own
-(see [Executor image](#executor-image)): it opens no port on this host, so it
-never meets this machine's iii (its Console binds 3113) or another group.
+(see [Executor image](#executor-image)): it publishes no port on this host, so
+its stack never collides with this machine's iii (its Console binds 3113) or
+another group's. It can still reach them, and root on this host, as that
+section says.
 
 Worker configuration:
 
