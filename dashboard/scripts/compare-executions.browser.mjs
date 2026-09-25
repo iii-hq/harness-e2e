@@ -357,6 +357,17 @@ try {
   await rename.waitFor({ state: 'detached' })
   assert.deepEqual(renamed, [{ execution_id: a.id, label: 'smoke A' }])
 
+  // Run again from the menu opens the form on that execution's parameters.
+  await page
+    .getByRole('button', { name: 'Actions for smoke rerun', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Run again' }).click()
+  const rerun = page.getByRole('dialog', { name: 'Run again' })
+  await rerun.getByText('Advanced · sampling and retries').click()
+  assert.equal(await rerun.locator('#quick-execution-runs').inputValue(), '3')
+  await page.keyboard.press('Escape')
+  await rerun.waitFor({ state: 'detached' })
+
   await page
     .getByRole('checkbox', { name: 'Select every execution shown' })
     .check()
@@ -387,7 +398,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename from the row menu, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename and run again from the row menu, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()
