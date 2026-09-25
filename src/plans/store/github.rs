@@ -64,6 +64,8 @@ pub(crate) struct GithubCli {
     pub api_timeout: Duration,
     /// For the run's evidence bundle (hundreds of MB).
     pub download_timeout: Duration,
+    /// How often an execution started on GitHub looks at its run.
+    pub follow_interval: Duration,
 }
 
 impl Default for GithubCli {
@@ -72,6 +74,7 @@ impl Default for GithubCli {
             program: "gh".into(),
             api_timeout: Duration::from_secs(60),
             download_timeout: Duration::from_secs(30 * 60),
+            follow_interval: Duration::from_secs(30),
         }
     }
 }
@@ -388,6 +391,7 @@ impl PlanStore {
             url: run["html_url"].as_str().unwrap_or_default().to_owned(),
             release_control_execution_id: title.strip_prefix("E2E · ").map(str::to_owned),
             stack: None,
+            status: None,
         };
         execution.state = "importing".into();
         execution.error = None;

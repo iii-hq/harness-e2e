@@ -861,7 +861,29 @@ export function ExecutionPage({
             onCancel={ready && !importing ? () => void cancelRun() : undefined}
           />
         ) : null}
-        {detail.plan_execution && live && !importing ? (
+        {detail.plan_execution?.source.kind === 'github' && live ? (
+          <section
+            className="mt-6 flex flex-wrap items-center gap-3 rounded-[6px] bg-[var(--color-surface)] px-4 py-3 text-sm"
+            aria-label="GitHub run"
+            role="status"
+          >
+            <span>
+              Running on GitHub ·{' '}
+              {detail.plan_execution.source.status === 'in_progress'
+                ? 'in progress'
+                : (detail.plan_execution.source.status ?? 'queued')}
+              . The results are imported when the run ends.
+            </span>
+            <a
+              className="ml-auto underline underline-offset-2"
+              href={detail.plan_execution.source.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Open the run on GitHub
+            </a>
+          </section>
+        ) : detail.plan_execution && live && !importing ? (
           <ExecutionProgress
             execution={detail.plan_execution}
             actions={

@@ -32,6 +32,7 @@ const runtimeConfig: RuntimeConfig = {
     suite_update: 'e2e::dashboard::suite-update',
     suite_delete: 'e2e::dashboard::suite-delete',
     stacks_list: 'e2e::dashboard::stacks-list',
+    github_status_get: 'e2e::dashboard::github-status-get',
     stack_create: 'e2e::dashboard::stack-create',
     stack_update: 'e2e::dashboard::stack-update',
     stack_delete: 'e2e::dashboard::stack-delete',

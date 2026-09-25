@@ -63,6 +63,15 @@ export type Stack = {
   updated_at: string | null
 }
 
+/** Whether the worker's `gh` can dispatch executions to GitHub. */
+export type GithubStatus = {
+  ready: boolean
+  repository: string
+  account: string | null
+  /** How to fix it when not ready. */
+  message: string | null
+}
+
 /** The suite an execution ran; `id` is absent for an unnamed suite. The
  *  runner sets `sha256`, the digest of what it materialized; a request never
  *  does. */
@@ -125,6 +134,9 @@ export type ExecutionSource =
       release_control_execution_id: string | null
       /** The stack its contract names. */
       stack?: string | null
+      /** The run's status while this worker follows an execution it
+       *  started there: `queued`, `in_progress`, then `completed`. */
+      status?: string | null
     }
   | {
       kind: 'docker'
@@ -600,6 +612,7 @@ export type RuntimeConfig = {
     suite_update: string
     suite_delete: string
     stacks_list: string
+    github_status_get: string
     stack_create: string
     stack_update: string
     stack_delete: string
@@ -662,8 +675,10 @@ export type DashboardDataBridge = {
   ): Promise<Stack>
   deleteStack(stackId: string): Promise<void>
   getCatalog(url?: string): Promise<JsonObject>
-  /** Starts an execution on this harness or in Docker; Run tests and Run
-   *  again alike. */
+  /** Whether `gh` on the worker's machine can dispatch to GitHub. */
+  getGithubStatus(): Promise<GithubStatus>
+  /** Starts an execution on this harness, in Docker or on GitHub; Run tests
+   *  and Run again alike. */
   startExecution(request: {
     parameters: ExecutionParameters
     label: string
@@ -765,6 +780,7 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         () => undefined,
       ),
     listStacks: () => call(runtime.functions.stacks_list, {}),
+    getGithubStatus: () => call(runtime.functions.github_status_get, {}),
     createStack: (from, label = '') =>
       call(runtime.functions.stack_create, { from, label }),
     updateStack: (stackId, changes) =>

@@ -38,6 +38,7 @@ pub(super) const EVIDENCE_READ: &str = "e2e::dashboard::evidence-read";
 pub(super) const GITHUB_RUNS_LIST: &str = "e2e::dashboard::github-runs-list";
 pub(super) const GITHUB_RUN_CONTRACTS: &str = "e2e::dashboard::github-run-contracts";
 pub(super) const GITHUB_RUN_IMPORT: &str = "e2e::dashboard::github-run-import";
+pub(super) const GITHUB_STATUS_GET: &str = "e2e::dashboard::github-status-get";
 pub(super) const ATTEMPT_GET: &str = "e2e::dashboard::attempt-get";
 pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-versions-list";
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
@@ -201,6 +202,18 @@ pub(super) struct CatalogResponse {
     scenarios: Vec<String>,
     /// Scenarios that run only together, in this order: picking one runs all.
     scenario_groups: Vec<Vec<String>>,
+    /// Groups a Docker execution runs at once, across executions.
+    docker_parallel_groups: usize,
+}
+
+/// Whether `gh` can dispatch executions to GitHub from this worker.
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct GithubStatusResponse {
+    ready: bool,
+    repository: String,
+    account: Option<String>,
+    /// How to fix it when not ready.
+    message: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
@@ -380,7 +393,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_START,
-        "Start an execution on this stack from its parameters; answers with its id and runs in the background.",
+        "Start an execution from its parameters on this harness, in Docker on a stack, or on GitHub (dispatching the exact-stack workflow, followed and imported when the run ends); answers with its id and runs in the background.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionStartRequest| {
@@ -454,6 +467,21 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                 async move {
                     let runs = controller.github_runs(request).await.map_err(handler_error)?;
                     serde_json::from_value::<PlanControlResponse>(runs).map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
+        GITHUB_STATUS_GET,
+        "Tell whether the GitHub CLI on this worker's machine is installed and signed in, so executions can be dispatched to the repository's exact-stack workflow; never fails for a missing or signed-out gh.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
+                let controller = controller.clone();
+                async move {
+                    serde_json::from_value::<GithubStatusResponse>(controller.github_status().await)
+                        .map_err(handler_error)
                 }
             })
         },
@@ -941,6 +969,7 @@ pub(super) async fn catalog(
                 scenario_groups: crate::plans::store::sequential_groups(
                     &crate::test_plan::embedded()?,
                 ),
+            docker_parallel_groups: controller.docker_parallel_groups(),
             });
         }
     }
@@ -977,6 +1006,7 @@ pub(super) async fn catalog(
             scenario_groups: crate::plans::store::sequential_groups(
                 &crate::test_plan::embedded()?,
             ),
+            docker_parallel_groups: controller.docker_parallel_groups(),
         })
     }
     .await;

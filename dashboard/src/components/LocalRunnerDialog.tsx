@@ -1,16 +1,37 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
-  ExecutionSetup,
-  ExecutionSetupFooter,
-  focusFirstInvalid,
-  validateExecutionSetup,
-} from '@/components/ExecutionSetup'
-import { buttonClassName, Dialog, Field, Select } from '@/design-system'
-import { hashForExecution } from '@/hooks/use-hash-route'
+  AlertCircle,
+  ArrowRight,
+  Info,
+  Minus,
+  Plus,
+  TriangleAlert,
+} from 'lucide-react'
+import { useCallback, useEffect, useId, useMemo, useState } from 'react'
+import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import { GithubCard } from '@/components/run-dialog/GithubCard'
+import { Picker, type PickerGroup } from '@/components/run-dialog/Picker'
+import {
+  pendingReasons,
+  pendingText,
+  plural,
+  runLabel,
+  stackDeclares,
+  summaryCounts,
+  summaryDetail,
+  whereHint,
+} from '@/components/run-dialog/run-dialog-model'
+import {
+  type CatalogStatus,
+  TestsColumn,
+} from '@/components/run-dialog/TestsColumn'
+import '@/components/run-dialog/run-dialog.css'
+import { Dialog } from '@/design-system'
+import { hashForExecution, hashForStacks } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   DashboardExecutionSummary,
   ExecutionParameters,
+  GithubStatus,
   JsonObject,
   Stack,
   Suite,
@@ -18,7 +39,6 @@ import type {
 import {
   buildExecutionPresentation,
   executionTitle,
-  providerModel,
 } from '@/lib/execution-view'
 
 type RunnerModel = { provider: string; model: string }
@@ -38,9 +58,10 @@ export type RunnerForm = {
   runs: string
   technicalRetries: string
   agent: string
-  /** On this harness, or in Docker on a stack. */
-  where: 'harness' | 'docker'
-  /** The stack picked for Docker, by id, or the execution's as recorded. */
+  /** On this harness, or in Docker or on GitHub on a stack. */
+  where: 'harness' | 'docker' | 'github'
+  /** The stack picked for Docker or GitHub, by id, or the execution's as
+   *  recorded. */
   stack: string
 }
 
@@ -145,13 +166,14 @@ export function runnerForm(
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
     agent: parameters.agent ?? '',
-    // Where it ran, on the stack it recorded; a GitHub run runs in Docker
-    // here.
+    // Where it ran, on the stack it recorded: a GitHub run runs on GitHub
+    // again when its stack is known.
     where:
-      parameters.where === 'docker' ||
-      (parameters.where === 'github' && parameters.stack)
-        ? 'docker'
-        : 'harness',
+      parameters.where === 'github' && parameters.stack
+        ? 'github'
+        : parameters.where === 'docker'
+          ? 'docker'
+          : 'harness',
     stack: parameters.stack ? RECORDED_STACK : '',
   }
 }
@@ -289,8 +311,8 @@ export function namedSuite(
     : null
 }
 
-/** What `execution-start` receives for the form. Docker gets the stack's
- *  YAML: the executor knows nothing of this Console's stacks. */
+/** What `execution-start` receives for the form. Docker and GitHub get the
+ *  stack's YAML: the executor knows nothing of this Console's stacks. */
 export function executionStartRequest(
   form: RunnerForm,
   suite: SuiteContent | null = null,
@@ -311,7 +333,7 @@ export function executionStartRequest(
       provider,
       agent: form.agent.trim() || null,
       where: form.where,
-      ...(form.where === 'docker' && stack
+      ...(form.where !== 'harness' && stack
         ? { stack: { name: stack.name, yaml: stack.yaml } }
         : {}),
     },
@@ -381,8 +403,18 @@ export async function describeStartError(
   }
 }
 
-/** Run tests and Run again: one form that starts an execution on this
- *  harness or in Docker and then follows it on its page. */
+const SUITE_SOURCE: Record<string, string> = {
+  repository: 'Repository suite',
+  local: 'Saved in this Console',
+  recorded: 'As this execution ran',
+}
+
+function shortSha(sha?: string) {
+  return sha ? sha.replace('sha256:', '').slice(0, 12) : ''
+}
+
+/** Run tests and Run again: one dialog that starts an execution on this
+ *  harness, in Docker or on GitHub, then follows it on its page. */
 export function LocalRunnerDialog({
   bridge,
   open,
@@ -402,30 +434,32 @@ export function LocalRunnerDialog({
   onClose: () => void
 }) {
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
+  const [dockerGroups, setDockerGroups] = useState(2)
   const [suites, setSuites] = useState<Suite[]>([])
   const [stacks, setStacks] = useState<Stack[]>([])
   const [form, setForm] = useState<RunnerForm>(initialForm)
-  const [scenarioQuery, setScenarioQuery] = useState('')
+  const [query, setQuery] = useState('')
+  const [onlySelected, setOnlySelected] = useState(false)
   const [loadingCatalog, setLoadingCatalog] = useState(false)
   const [submitting, setSubmitting] = useState(false)
-  const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [github, setGithub] = useState<GithubStatus | 'loading' | null>(null)
   // The execution holding a busy runner, to open.
   const [running, setRunning] = useState<{ id: string; title: string } | null>(
     null,
   )
   // The model taken from the last execution, said so under the field.
   const [lastSubject, setLastSubject] = useState('')
-  // A new setup sheet per opening, so its filters start fresh.
-  const [opening, setOpening] = useState(0)
+  const ids = useId()
+  const id = (name: string) => `${ids}-${name}`
 
   const refreshCatalog = useCallback(async () => {
     if (!bridge) return
     setLoadingCatalog(true)
     setError(null)
     try {
-      const [next, recent, listed, stackList] = await Promise.all([
-        bridge.getCatalog().then(asCatalog),
+      const [raw, recent, listed, stackList] = await Promise.all([
+        bridge.getCatalog(),
         // Running again brings its own model.
         parameters
           ? []
@@ -442,48 +476,71 @@ export function LocalRunnerDialog({
           .then((response) => response.stacks)
           .catch(() => []),
       ])
+      const next = asCatalog(raw)
       const last = lastUsedModel(recent, next.models)
       setLastSubject(last ? modelKey(last) : '')
       setCatalog(next)
+      if (typeof raw.docker_parallel_groups === 'number')
+        setDockerGroups(raw.docker_parallel_groups)
       setSuites(listed)
       setStacks(stackList)
       setForm((current) => ({
         ...current,
-        // Never a model the user did not pick or run last: without one the
-        // field asks for it.
+        // Never a model the user did not pick or run last.
         subject: current.subject || (last ? modelKey(last) : ''),
-        // Keep the local loop deliberate: selecting every scenario is too
-        // expensive for the default path. The developer chooses the scope.
         scenarios: withSequentialGroups(current.scenarios, [], next.groups),
       }))
-    } catch (cause) {
+    } catch {
       setCatalog(null)
-      setError(errorMessage(cause))
     } finally {
       setLoadingCatalog(false)
     }
   }, [bridge, parameters])
 
+  const refreshGithub = useCallback(async () => {
+    if (!bridge) return
+    setGithub('loading')
+    try {
+      setGithub(await bridge.getGithubStatus())
+    } catch (cause) {
+      setGithub({
+        ready: false,
+        repository: '',
+        account: null,
+        message: errorMessage(cause),
+      })
+    }
+  }, [bridge])
+
   useEffect(() => {
     if (!open) return
-    setOpening((count) => count + 1)
     setRunning(null)
+    setError(null)
+    setQuery('')
+    setGithub(null)
+    // Running again shows what will run first.
+    setOnlySelected(parameters !== null)
     if (parameters) setForm(runnerForm(parameters, initialScenarios, label))
     else if (initialScenarios.length > 0)
       setForm((current) => ({
         ...current,
         scenarios: [
           ...current.scenarios,
-          ...initialScenarios.filter((id) => !current.scenarios.includes(id)),
+          ...initialScenarios.filter(
+            (item) => !current.scenarios.includes(item),
+          ),
         ],
       }))
   }, [open, parameters, initialScenarios, label])
 
   useEffect(() => {
     if (!open || !bridge) return
-    setError(null)
     void refreshCatalog()
   }, [bridge, open, refreshCatalog])
+
+  useEffect(() => {
+    if (open && form.where === 'github' && github === null) void refreshGithub()
+  }, [open, form.where, github, refreshGithub])
 
   // The execution run again may name a model or scenarios this stack's
   // catalog lacks: they stay listed and selected, and fail in their slots.
@@ -499,7 +556,8 @@ export function LocalRunnerDialog({
     return [
       ...listed,
       ...[...(parameters?.scenarios ?? []), ...form.scenarios].filter(
-        (id, index, all) => !listed.includes(id) && all.indexOf(id) === index,
+        (item, index, all) =>
+          !listed.includes(item) && all.indexOf(item) === index,
       ),
     ]
   }, [catalog, parameters, form.scenarios])
@@ -514,11 +572,60 @@ export function LocalRunnerDialog({
     [stacks, parameters],
   )
   const stack = pickedStack(form.stack, stackOptions, parameters)
+  const stackView = (choice: StackChoice) =>
+    choice.source === 'recorded'
+      ? null
+      : (stacks.find((entry) => entry.id === choice.value) ?? null)
+
+  const status: CatalogStatus = loadingCatalog
+    ? 'loading'
+    : catalog
+      ? 'ready'
+      : 'failed'
+  const ready = status === 'ready'
+  const where = form.where
+  const needsStack = where !== 'harness'
+  const githubStatus = github && github !== 'loading' ? github : null
+  const githubBlocked = where === 'github' && githubStatus?.ready === false
+  const runs = Math.max(1, Number(form.runs) || 1)
+  const retries = Math.max(0, Number(form.technicalRetries) || 0)
+  const tests = form.scenarios.length
+  const pending = pendingReasons({
+    ready,
+    where,
+    hasStack: stack !== null,
+    githubBlocked,
+    hasModel: form.subject !== '',
+    tests,
+  })
+  const canRun =
+    ready &&
+    pending.length === 0 &&
+    !(where === 'github' && github === 'loading') &&
+    !submitting
+  const modelName = form.subject.split('\n')[1] ?? ''
+  const stackName = stack
+    ? stack.source === 'recorded'
+      ? `${stack.label} · as recorded`
+      : stack.label
+    : null
+
+  const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) =>
+    setForm((current) => ({ ...current, [key]: value }))
+  const select = (next: string[]) =>
+    setForm((current) => ({
+      ...current,
+      scenarios: withSequentialGroups(
+        next,
+        current.scenarios,
+        catalog?.groups ?? [],
+      ),
+    }))
   const pickWhere = (value: RunnerForm['where']) =>
     setForm((current) => ({
       ...current,
       where: value,
-      // Docker starts on the repository's default stack.
+      // Docker and GitHub start on the repository's default stack.
       stack:
         current.stack ||
         (
@@ -527,15 +634,6 @@ export function LocalRunnerDialog({
         )?.value ||
         '',
     }))
-  const stackGroups: Array<[string, StackChoice[]]> = [
-    ['Repository', stackOptions.filter((c) => c.source === 'repository')],
-    ['This Console', stackOptions.filter((c) => c.source === 'local')],
-    ['This execution', stackOptions.filter((c) => c.source === 'recorded')],
-  ]
-  const stackError =
-    attempted && form.where === 'docker' && !stack
-      ? 'Pick the stack it runs on in Docker.'
-      : undefined
   const pickSuite = (value: string) => {
     const chosen = pickedSuite(value, choices)
     setForm((current) =>
@@ -550,59 +648,15 @@ export function LocalRunnerDialog({
         : { ...current, suite: '' },
     )
   }
-  const suiteHint = suite
-    ? `${suite.scenarios.length} ${suite.scenarios.length === 1 ? 'test' : 'tests'} · ${suite.repetitions} ${suite.repetitions === 1 ? 'run' : 'runs'} each · ${suite.technical_retries} ${suite.technical_retries === 1 ? 'retry' : 'retries'}`
-    : picked
-      ? `Changed from ${picked.label}: runs as an unnamed suite.`
-      : 'Pick a suite, or tick the tests below.'
-  const suiteGroups: Array<[string, SuiteContent[]]> = [
-    ['Repository', suites.filter((choice) => choice.source === 'repository')],
-    ['This Console', suites.filter((choice) => choice.source === 'local')],
-    ['This execution', choices.filter((choice) => choice.recorded)],
-  ]
-  const modelOptions = modelGroups(models).map((group) => ({
-    provider: group.provider,
-    models: group.models.map((model) => ({
-      label: model.model,
-      value: modelKey(model),
-    })),
-  }))
-  const runsPerScenario = Math.max(1, Number(form.runs) || 1)
-  const technicalRetries = Math.max(0, Number(form.technicalRetries) || 0)
-  const testCount = form.scenarios.length
-  const runLabel = submitting
-    ? 'starting…'
-    : testCount > 0
-      ? `run ${testCount} ${testCount === 1 ? 'test' : 'tests'}`
-      : 'run tests'
-  // Audit RS-10 / PN-05: the primary stays enabled; after a submit attempt
-  // the footer lists what is still pending and the fields show it inline.
-  // Without the catalog the form still sends what it holds.
-  const validation = () =>
-    validateExecutionSetup({
-      mode: 'quick',
-      label: form.label,
-      subject: form.subject,
-      selectedScenarios: form.scenarios,
-    })
-  const errors = attempted ? validation() : {}
-
-  const update = <K extends keyof RunnerForm>(key: K, value: RunnerForm[K]) => {
-    setForm((current) => ({ ...current, [key]: value }))
+  const step = (key: 'runs' | 'technicalRetries', by: number) => {
+    const [min, max] = key === 'runs' ? [1, 20] : [0, 3]
+    const next = (key === 'runs' ? runs : retries) + by
+    if (next >= min && next <= max) update(key, String(next))
   }
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    const nextErrors = validation()
-    const noStack = form.where === 'docker' && !stack
-    if (Object.keys(nextErrors).length > 0 || noStack || !bridge) {
-      setAttempted(true)
-      focusFirstInvalid('quick-execution', nextErrors)
-      if (noStack && Object.keys(nextErrors).length === 0)
-        document.getElementById('quick-execution-stack')?.focus()
-      if (!bridge) setError('The local runner is not connected.')
-      return
-    }
+    if (!canRun || !bridge) return
     setSubmitting(true)
     setError(null)
     setRunning(null)
@@ -621,227 +675,471 @@ export function LocalRunnerDialog({
     }
   }
 
-  const request = executionStartRequest(form)
-  const summary = {
-    mode: 'quick' as const,
-    selectedScenarios: form.scenarios.length,
-    runsPerScenario,
-    technicalRetries,
-    subject: form.subject ? providerModel(request.parameters) : '',
-  }
-  // Said before running: a sequential group always runs whole.
-  const groupNote = (catalog?.groups ?? [])
-    .filter((group) => group.some((id) => form.scenarios.includes(id)))
-    .map((group) => `${group.join(' then ')} run only together, in this order.`)
-    .join(' ')
+  const suiteSource = (choice: SuiteContent) =>
+    choice.recorded
+      ? 'recorded'
+      : (suites.find((entry) => entry.id === choice.id)?.source ?? 'repository')
+  const suiteGroups: PickerGroup[] = [
+    {
+      label: null,
+      options: [{ value: '', label: 'Custom', meta: 'tests you tick' }],
+    },
+    ...(
+      [
+        ['Repository', 'repository'],
+        ['This Console', 'local'],
+        ['This execution', 'recorded'],
+      ] as const
+    ).map(([groupLabel, source]) => ({
+      label: groupLabel,
+      options: choices
+        .filter((choice) => suiteSource(choice) === source)
+        .map((choice) => ({
+          value: choiceValue(choice),
+          label: choice.recorded
+            ? `${choice.label} · as recorded`
+            : choice.label,
+          meta: plural(choice.scenarios.length, 'test', 'tests'),
+        })),
+    })),
+  ]
+  const suiteHint = suite
+    ? `${SUITE_SOURCE[suiteSource(suite)]} · ${plural(suite.repetitions, 'run', 'runs')} per test · ${plural(suite.technical_retries, 'retry', 'retries')}`
+    : picked
+      ? `Changed from ${picked.label}. Runs as a custom selection.`
+      : 'Pick a suite, or tick tests in the list.'
+
+  const stackGroups: PickerGroup[] = (
+    [
+      ['Repository', 'repository'],
+      ['This Console', 'local'],
+      ['This execution', 'recorded'],
+    ] as const
+  ).map(([groupLabel, source]) => ({
+    label: groupLabel,
+    options: stackOptions
+      .filter((choice) => choice.source === source)
+      .map((choice) => {
+        const view = stackView(choice)
+        const warnings = view?.warnings.length ?? 0
+        return {
+          value: choice.value,
+          label:
+            choice.source === 'recorded'
+              ? `${choice.label} · as recorded`
+              : choice.label,
+          sub: view ? stackDeclares(view) : 'As this execution recorded it',
+          meta: warnings
+            ? plural(warnings, 'warning', 'warnings')
+            : shortSha(choice.sha256),
+          metaTone: warnings ? ('warn' as const) : ('faint' as const),
+        }
+      }),
+  }))
+  const currentStack = stack ? stackView(stack) : null
+  const stackWarnings = currentStack?.warnings ?? []
+  const stackHint = !stack
+    ? 'Its YAML is what the executor assembles.'
+    : stack.source === 'recorded'
+      ? `As this execution recorded it · ${shortSha(stack.sha256)}: the iii release and the runner pinned.${where === 'github' ? ' Sent as YAML.' : ''}`
+      : `${currentStack ? stackDeclares(currentStack) : stack.label}. ${
+          where === 'github'
+            ? stack.source === 'repository'
+              ? `Sent by name: the workflow reads stacks/${stack.value}.yaml from the default branch.`
+              : 'Sent as YAML.'
+            : 'Its YAML is what the executor assembles.'
+        }`
+
+  const modelOptions = modelGroups(models).map((group) => ({
+    provider: group.provider,
+    models: group.models.map((model) => ({
+      label: model.model,
+      value: modelKey(model),
+    })),
+  }))
+  const modelHint = parameters
+    ? 'The model this execution ran with.'
+    : form.subject && form.subject === lastSubject
+      ? 'The model of your last execution.'
+      : ''
+
+  const description = parameters
+    ? where === 'github'
+      ? 'Starts a new execution with the suite and parameters of this one, where it ran: on GitHub, on the stack it recorded. Change anything first.'
+      : `Starts a new execution with the suite and parameters of ${label ? `“${label}”` : 'this one'}. Change anything first.`
+    : 'Starts a new execution on this harness, in Docker or on GitHub.'
+  const busy = running !== null && where === 'harness'
 
   return (
     <Dialog
       open={open}
       onClose={onClose}
-      size="lg"
+      size="xl"
       tall
-      kicker="Execution setup"
       title={parameters ? 'Run again' : 'Run tests'}
-      description={
-        parameters
-          ? 'Starts a new execution with the suite and parameters of this one, where it ran. Change anything before running.'
-          : 'Runs a suite, or the tests ticked, as a new execution on this harness or in Docker on a stack. To compare, tick two executions in the list.'
-      }
-      closeLabel="Close execution form"
-      className="ds-root"
+      description={description}
+      closeLabel="Close"
+      className="ds-root rd-dialog"
+      bodyClassName="rd-body"
       footer={
-        <ExecutionSetupFooter
-          summary={summary}
-          pending={[
-            ...Object.values(errors),
-            ...(stackError ? [stackError] : []),
-          ]}
-          error={error}
-          status={groupNote || null}
-        >
-          {running ? (
-            <a
-              className={buttonClassName({
-                variant: 'secondary',
-                className: 'no-underline',
-              })}
-              href={hashForExecution(running.id)}
+        <div className="rd-footer">
+          {busy && running ? (
+            <div role="alert" className="rd-alert rd-grow" data-tone="warn">
+              <TriangleAlert
+                size={16}
+                aria-hidden="true"
+                className="rd-alert-icon"
+              />
+              <div className="rd-grow">
+                <p className="rd-strong">
+                  “{running.title}” is still running on this harness.
+                </p>
+                <p className="rd-faint">
+                  This harness runs one execution at a time. Docker and GitHub
+                  don’t wait for it.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="rd-ghost rd-small"
+                onClick={() => {
+                  pickWhere('docker')
+                  setRunning(null)
+                  setError(null)
+                }}
+              >
+                Run in Docker
+              </button>
+              <a
+                className="rd-ghost rd-small rd-link-button"
+                href={hashForExecution(running.id)}
+                onClick={onClose}
+              >
+                Open
+                <ArrowRight size={16} aria-hidden="true" />
+              </a>
+            </div>
+          ) : (
+            <div className="rd-summary rd-grow" aria-live="polite">
+              <p className="rd-summary-counts rd-ellipsis">
+                <span>{summaryCounts(tests, runs)}</span>
+                {form.subject ? (
+                  <>
+                    <span className="rd-faint rd-normal"> on </span>
+                    <span className="rd-mono">{modelName}</span>
+                  </>
+                ) : null}
+              </p>
+              {error ? (
+                <p role="alert" className="rd-summary-line" data-tone="alert">
+                  <AlertCircle size={16} aria-hidden="true" />
+                  {error}
+                </p>
+              ) : !ready || pending.length > 0 ? (
+                <p className="rd-summary-line rd-faint">
+                  <Info size={16} aria-hidden="true" />
+                  {pendingText(ready, pending)}
+                </p>
+              ) : (
+                <p className="rd-summary-line rd-faint rd-ellipsis">
+                  {summaryDetail({
+                    runs,
+                    retries,
+                    suite: suite?.label ?? null,
+                    where,
+                    stack: stackName,
+                  })}
+                </p>
+              )}
+            </div>
+          )}
+          <div className="rd-actions">
+            <button
+              type="button"
+              className="rd-ghost rd-button rd-cancel"
               onClick={onClose}
             >
-              open {running.title}
-            </a>
-          ) : null}
-          <button
-            className={buttonClassName({ variant: 'secondary' })}
-            type="button"
-            onClick={onClose}
-          >
-            cancel
-          </button>
-          <button
-            className={buttonClassName({ variant: 'primary' })}
-            type="submit"
-            form="local-runner-form"
-            disabled={submitting}
-            aria-busy={submitting}
-          >
-            {runLabel}
-          </button>
-        </ExecutionSetupFooter>
+              Cancel
+            </button>
+            <button
+              type="submit"
+              form={id('form')}
+              className="rd-primary"
+              disabled={!canRun}
+              aria-busy={submitting || undefined}
+            >
+              {submitting ? 'Starting…' : runLabel(tests, where)}
+            </button>
+          </div>
+        </div>
       }
     >
-      <form
-        id="local-runner-form"
-        className="grid min-w-0 gap-6"
-        onSubmit={submit}
-        noValidate
-      >
-        {/* The first field: what to test. Ticking tests by hand after
-            picking a suite makes it unnamed. */}
-        <div className="grid items-start gap-4 sm:grid-cols-2">
-          <Field label="Suite" htmlFor="quick-execution-suite" hint={suiteHint}>
-            <Select
-              id="quick-execution-suite"
-              value={picked ? choiceValue(picked) : ''}
-              disabled={submitting}
-              onChange={(event) => pickSuite(event.target.value)}
-            >
-              <option value="">Unnamed · the tests ticked below</option>
-              {suiteGroups.map(([group, entries]) =>
-                entries.length > 0 ? (
-                  <optgroup key={group} label={group}>
-                    {entries.map((entry) => (
-                      <option
-                        key={choiceValue(entry)}
-                        value={choiceValue(entry)}
-                      >
-                        {entry.recorded
-                          ? `${entry.label} · as recorded`
-                          : entry.label}
-                      </option>
-                    ))}
-                  </optgroup>
-                ) : null,
-              )}
-            </Select>
-          </Field>
-          <Field
-            label="Where"
-            htmlFor="quick-execution-where"
-            hint={
-              form.where === 'docker'
-                ? 'In the executor image, one container per group, from this worker; results arrive once every group finished.'
-                : 'On the stack this Console runs on.'
-            }
-          >
-            <Select
-              id="quick-execution-where"
-              value={form.where}
-              disabled={submitting}
-              onChange={(event) =>
-                pickWhere(event.target.value as RunnerForm['where'])
+      <form id={id('form')} className="rd-grid" onSubmit={submit} noValidate>
+        <div className="rd-setup rd-scroll">
+          <div className="rd-field">
+            <label className="rd-label" htmlFor={id('suite')}>
+              Suite
+            </label>
+            <Picker
+              id={id('suite')}
+              label="Suites"
+              groups={suiteGroups}
+              value={suite ? choiceValue(suite) : ''}
+              valueLabel={
+                suite
+                  ? suite.recorded
+                    ? `${suite.label} · as recorded`
+                    : suite.label
+                  : 'Custom'
               }
-            >
-              <option value="harness">This harness</option>
-              <option value="docker">Docker</option>
-            </Select>
-          </Field>
-          {form.where === 'docker' ? (
-            <Field
-              label="Stack"
-              htmlFor="quick-execution-stack"
-              meta="required"
-              error={stackError}
-              hint={
-                stack?.source === 'recorded'
-                  ? `As this execution recorded it${stack.sha256 ? ` · ${stack.sha256.replace('sha256:', '').slice(0, 12)}` : ''}: the iii release and the runner pinned.`
-                  : 'Its YAML is what the executor assembles.'
+              valueMeta={
+                tests
+                  ? suite
+                    ? plural(tests, 'test', 'tests')
+                    : `${tests} ticked`
+                  : ''
               }
+              disabled={!ready || submitting}
+              describedBy={id('suite-hint')}
+              onPick={pickSuite}
+            />
+            <div className="rd-hint-row">
+              <p id={id('suite-hint')} className="rd-hint rd-grow">
+                {suiteHint}
+              </p>
+              {picked && !suite ? (
+                <button
+                  type="button"
+                  className="rd-ghost rd-tiny"
+                  onClick={() => pickSuite(choiceValue(picked))}
+                >
+                  Reset
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rd-field">
+            <span className="rd-label" id={id('where')}>
+              Where
+            </span>
+            <div
+              role="radiogroup"
+              aria-labelledby={id('where')}
+              className="rd-where"
             >
-              <Select
-                id="quick-execution-stack"
+              {(
+                [
+                  ['harness', 'This harness'],
+                  ['docker', 'Docker'],
+                  ['github', 'GitHub'],
+                ] as const
+              ).map(([value, text]) => (
+                // biome-ignore lint/a11y/useSemanticElements: a segmented control styled as buttons
+                <button
+                  key={value}
+                  type="button"
+                  role="radio"
+                  aria-checked={where === value}
+                  className="rd-segment"
+                  disabled={!ready || submitting}
+                  onClick={() => pickWhere(value)}
+                >
+                  {text}
+                </button>
+              ))}
+            </div>
+            <p className="rd-hint">{whereHint(where, dockerGroups)}</p>
+          </div>
+
+          {needsStack ? (
+            <div className="rd-field">
+              <div className="rd-label-row">
+                <label className="rd-label" htmlFor={id('stack')}>
+                  Stack
+                </label>
+                <span className="rd-hint">required</span>
+              </div>
+              <Picker
+                id={id('stack')}
+                label="Stacks"
+                groups={stackGroups}
                 value={stack?.value ?? ''}
-                disabled={submitting}
-                aria-invalid={stackError ? true : undefined}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    stack: event.target.value,
-                  }))
+                valueLabel={stackName ?? 'Choose a stack'}
+                placeholder={!stack}
+                valueMeta={
+                  stackWarnings.length
+                    ? plural(stackWarnings.length, 'warning', 'warnings')
+                    : ''
                 }
-              >
-                <option value="">Choose a stack</option>
-                {stackGroups.map(([group, entries]) =>
-                  entries.length > 0 ? (
-                    <optgroup key={group} label={group}>
-                      {entries.map((entry) => (
-                        <option key={entry.value} value={entry.value}>
-                          {entry.source === 'recorded'
-                            ? `${entry.label} · as recorded`
-                            : entry.label}
-                        </option>
-                      ))}
-                    </optgroup>
-                  ) : null,
-                )}
-              </Select>
-            </Field>
+                valueMetaTone="warn"
+                disabled={!ready || submitting}
+                describedBy={id('stack-hint')}
+                onPick={(value) => update('stack', value)}
+              />
+              <div className="rd-hint-stack">
+                <p id={id('stack-hint')} className="rd-hint">
+                  {stackHint}
+                </p>
+                {stackWarnings.map((warning) => (
+                  <p key={warning} className="rd-hint rd-warning">
+                    <TriangleAlert size={12} aria-hidden="true" />
+                    <span>{warning}</span>
+                  </p>
+                ))}
+                <a className="rd-hint rd-underline" href={hashForStacks()}>
+                  Open in Stacks
+                </a>
+              </div>
+            </div>
           ) : null}
+
+          {where === 'github' ? (
+            <GithubCard
+              status={github}
+              onCheckAgain={() => void refreshGithub()}
+            />
+          ) : null}
+
+          <div className="rd-field">
+            <div className="rd-label-row">
+              <span className="rd-label" id={id('model')}>
+                Model
+              </span>
+              <span className="rd-hint">required</span>
+            </div>
+            <div className="rd-model">
+              <ProviderModelDropdown
+                id={id('model-picker')}
+                labelledBy={id('model')}
+                ariaLabel="Model"
+                groups={modelOptions}
+                value={form.subject}
+                onChange={(value) => update('subject', value)}
+                placeholder={
+                  loadingCatalog
+                    ? 'Loading models…'
+                    : !ready
+                      ? 'Catalog unavailable'
+                      : 'Choose a model'
+                }
+                disabled={!ready || submitting}
+                required
+              />
+            </div>
+            {modelHint ? <p className="rd-hint">{modelHint}</p> : null}
+          </div>
+
+          <div className="rd-field">
+            <div className="rd-steppers">
+              {(
+                [
+                  ['runs', 'Runs per test', runs, 1, 20, 'runs'],
+                  [
+                    'technicalRetries',
+                    'Retries on crash',
+                    retries,
+                    0,
+                    3,
+                    'retries',
+                  ],
+                ] as const
+              ).map(([key, text, value, min, max, noun]) => (
+                // biome-ignore lint/a11y/useSemanticElements: a labelled stepper group
+                <div
+                  key={key}
+                  role="group"
+                  aria-labelledby={id(key)}
+                  className="rd-field"
+                >
+                  <span className="rd-label" id={id(key)}>
+                    {text}
+                  </span>
+                  <div className="rd-control rd-stepper">
+                    <button
+                      type="button"
+                      className="rd-ghost rd-step-button"
+                      aria-label={`Fewer ${noun}`}
+                      disabled={value <= min || submitting}
+                      onClick={() => step(key, -1)}
+                    >
+                      <Minus size={16} aria-hidden="true" />
+                    </button>
+                    <output className="rd-stepper-value" aria-live="polite">
+                      {value}
+                    </output>
+                    <button
+                      type="button"
+                      className="rd-ghost rd-step-button"
+                      aria-label={`More ${noun}`}
+                      disabled={value >= max || submitting}
+                      onClick={() => step(key, 1)}
+                    >
+                      <Plus size={16} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="rd-hint">
+              More runs give steadier comparisons. A retry only reruns a crashed
+              attempt and adds no sample.
+            </p>
+          </div>
+
+          <div className="rd-field">
+            <div className="rd-label-row">
+              <label className="rd-label" htmlFor={id('agent')}>
+                Agent profile
+              </label>
+              <span className="rd-hint">optional</span>
+            </div>
+            <input
+              id={id('agent')}
+              type="text"
+              className="rd-control rd-input rd-mono"
+              placeholder="Harness default"
+              value={form.agent}
+              disabled={submitting}
+              onChange={(event) => update('agent', event.target.value)}
+            />
+          </div>
+
+          <div className="rd-field">
+            <div className="rd-label-row">
+              <label className="rd-label" htmlFor={id('label')}>
+                Label
+              </label>
+              <span className="rd-hint">optional</span>
+            </div>
+            <input
+              id={id('label')}
+              type="text"
+              maxLength={80}
+              className="rd-control rd-input"
+              placeholder="Before system prompt change"
+              value={form.label}
+              disabled={submitting}
+              onChange={(event) => update('label', event.target.value)}
+            />
+            <p className="rd-hint">
+              Makes this execution easier to find later.
+            </p>
+          </div>
         </div>
-        <ExecutionSetup
-          key={opening}
-          // Running again shows what will run first.
-          initialOnlySelected={parameters !== null}
-          idPrefix="quick-execution"
-          mode="quick"
-          stickyOffset="dialog"
-          label={form.label}
-          subject={form.subject}
-          subjectHint={
-            form.subject && form.subject === lastSubject && !parameters
-              ? 'The model of your last execution.'
-              : undefined
-          }
-          modelGroups={modelOptions}
-          availableScenarios={scenarios}
-          selectedScenarios={form.scenarios}
-          query={scenarioQuery}
-          runs={form.runs}
-          technicalRetries={form.technicalRetries}
-          agent={form.agent}
-          disabled={submitting}
-          catalogLoading={loadingCatalog}
-          catalogStatus={
-            loadingCatalog
-              ? { tone: 'loading', text: 'loading catalog…' }
-              : catalog
-                ? {
-                    tone: 'ready',
-                    text: `catalog ready · ${catalog.models.length} model${catalog.models.length === 1 ? '' : 's'} · ${catalog.scenarios.length} test${catalog.scenarios.length === 1 ? '' : 's'}`,
-                  }
-                : { tone: 'unavailable', text: 'catalog unavailable' }
-          }
-          errors={errors}
-          onRefreshCatalog={() => void refreshCatalog()}
-          onLabelChange={(value) => update('label', value)}
-          onSubjectChange={(value) => update('subject', value)}
-          onSelectedScenariosChange={(value) =>
-            update(
-              'scenarios',
-              withSequentialGroups(
-                value,
-                form.scenarios,
-                catalog?.groups ?? [],
-              ),
-            )
-          }
-          onQueryChange={setScenarioQuery}
-          onRunsChange={(value) => update('runs', value)}
-          onTechnicalRetriesChange={(value) =>
-            update('technicalRetries', value)
-          }
-          onAgentChange={(value) => update('agent', value)}
+
+        <TestsColumn
+          status={status}
+          tests={scenarios}
+          sequences={catalog?.groups ?? []}
+          selected={form.scenarios}
+          onSelect={select}
+          query={query}
+          onQuery={setQuery}
+          onlySelected={onlySelected}
+          onOnlySelected={setOnlySelected}
+          modelCount={catalog?.models.length ?? 0}
+          onRefresh={() => void refreshCatalog()}
         />
       </form>
     </Dialog>

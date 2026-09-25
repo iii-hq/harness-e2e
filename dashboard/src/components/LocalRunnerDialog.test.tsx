@@ -141,9 +141,16 @@ describe('where and stack fields', () => {
       where: 'docker',
       stack: { name: 'default', yaml: recorded },
     })
-    // A GitHub run runs in Docker here, on the stack it recorded; one that
-    // recorded none, on this harness.
-    expect(runnerForm({ ...docker, where: 'github' }).where).toBe('docker')
+    // A GitHub run runs on GitHub again, on the stack it recorded, and
+    // sends that stack; one that recorded none, on this harness.
+    const onGithub = runnerForm({ ...docker, where: 'github' })
+    expect(onGithub.where).toBe('github')
+    expect(
+      executionStartRequest(onGithub, null, picked).parameters,
+    ).toMatchObject({
+      where: 'github',
+      stack: { name: 'default', yaml: recorded },
+    })
     expect(runnerForm({ ...docker, where: 'github', stack: null }).where).toBe(
       'harness',
     )

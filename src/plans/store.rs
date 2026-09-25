@@ -26,6 +26,8 @@ use crate::test_plan::{self, ProfileSnapshot};
 
 mod docker;
 mod github;
+mod github_start;
+use github_start::github_started;
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
@@ -143,7 +145,7 @@ pub(crate) struct ExecutionParameters {
 }
 
 /// Where an execution runs: on this harness, in Docker from this worker, or
-/// on GitHub (imported runs; starting one there is not offered yet).
+/// on GitHub (dispatched from here, or imported).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Where {
@@ -231,6 +233,10 @@ pub(crate) enum ExecutionSource {
         /// before contracts stated their execution.
         #[serde(default)]
         stack: Option<String>,
+        /// The run's status while this worker follows an execution it
+        /// started there: `queued`, `in_progress`, then `completed`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
     },
     /// Run in Docker by this worker, from `docker-executions/<id>/`.
     Docker {
@@ -531,7 +537,7 @@ impl PlanStore {
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
-        if matches!(execution.source, ExecutionSource::Docker { .. }) {
+        if matches!(execution.source, ExecutionSource::Docker { .. }) || github_started(execution) {
             // No one listening is fine.
             let _ = self.changes.send(execution.id.clone());
         }
@@ -770,10 +776,22 @@ impl PlanStore {
     /// unnamed. A scenario this runner does not know gets a slot that says
     /// so; every other slot runs. A scenario of a sequential group brings the
     /// whole group, and the execution says what was added.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) async fn start_execution(
+        self: &Arc<Self>,
+        parameters: ExecutionParameters,
+        label: &str,
+    ) -> Result<PlanExecution> {
+        self.start_execution_in(parameters, label, None).await
+    }
+
+    /// `start_execution`, with the GitHub repository a GitHub execution is
+    /// dispatched to (the worker's `github_repository`).
+    pub(crate) async fn start_execution_in(
         self: &Arc<Self>,
         mut parameters: ExecutionParameters,
         label: &str,
+        repository: Option<&str>,
     ) -> Result<PlanExecution> {
         let label = clean_label(label)?;
         parameters.model = parameters.model.trim().into();
@@ -793,8 +811,9 @@ impl PlanStore {
                 parameters.stack.is_some(),
                 "Pick the stack the execution runs on in Docker."
             ),
-            Where::Github => anyhow::bail!(
-                "Executions on GitHub are imported here, not started; run it on this harness or in Docker."
+            Where::Github => ensure!(
+                parameters.stack.is_some(),
+                "Pick the stack the execution runs on on GitHub."
             ),
         }
         let suite = parameters.suite.as_ref();
@@ -868,6 +887,11 @@ impl PlanStore {
         };
         if parameters_where(&execution) == Where::Docker {
             return self.start_docker(execution, &master).await;
+        }
+        if parameters_where(&execution) == Where::Github {
+            let repository = repository
+                .context("This worker has no GitHub repository to dispatch the execution to.")?;
+            return self.start_github(execution, &master, repository).await;
         }
         let _guard = self.lock.lock().await;
         let runner = self.runner()?;
@@ -1184,6 +1208,11 @@ impl PlanStore {
     pub(crate) async fn cancel(&self, id: &str) -> Result<Value> {
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
+        if github_started(&execution) && execution.active() {
+            if let ExecutionSource::Github { url, .. } = &execution.source {
+                anyhow::bail!("Cancel it on GitHub: {url}");
+            }
+        }
         if execution.active() {
             execution.cancel_requested = true;
             execution.state = "cancelling".into();
@@ -1259,6 +1288,13 @@ impl PlanStore {
             }
         }
         for mut execution in self.executions().await? {
+            // A GitHub run goes on without this worker: follow it again.
+            if github_started(&execution)
+                && (execution.active() || execution.state == "importing")
+            {
+                self.spawn_follow_github(&execution.id);
+                continue;
+            }
             if execution.state == "importing" {
                 execution.state = "failed".into();
                 execution.error =
@@ -2346,6 +2382,7 @@ pub(super) mod tests {
             program,
             api_timeout: Duration::from_millis(500),
             download_timeout: Duration::from_millis(500),
+            follow_interval: Duration::from_millis(10),
         }
     }
     pub(super) async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
@@ -3038,6 +3075,7 @@ pub(super) mod tests {
                 url: "https://github.com/iii-hq/harness-e2e/actions/runs/42".into(),
                 release_control_execution_id: Some("rc-execution".into()),
                 stack: None,
+                status: None,
             },
             stack: Vec::new(),
             warnings: Vec::new(),
@@ -3230,6 +3268,7 @@ pub(super) mod tests {
             url: String::new(),
             release_control_execution_id: None,
             stack: None,
+            status: None,
         };
         let slow = manager_with_gh(&data, runner, fake_gh(root.path(), "sleep 5"));
         slow.write_execution(&execution).await.unwrap();
@@ -4224,6 +4263,7 @@ pub(super) mod tests {
             url: "https://github.com/o/r/actions/runs/42".into(),
             release_control_execution_id: None,
             stack: None,
+            status: None,
         };
         imported.slots = vec![github::slot(1, "case-minimal", "minimal_path")];
         imported.slots[0].execution_id = "0123456789abcdef0123456789abcdef".into();
@@ -4674,5 +4714,166 @@ esac"#,
                 .count(),
             1
         );
+    }
+
+    /// A stand-in `gh` for a GitHub start: signed in as octo, dispatches run
+    /// 77 on o/r and answers the run with `run_status`; every call is logged.
+    fn dispatching_gh(directory: &Path, run_status: &str) -> github::GithubCli {
+        let log = directory.join("gh.log");
+        fake_gh(
+            directory,
+            &format!(
+                r#"echo "$*" >> '{log}'
+case "$*" in
+  "auth status"*) echo "github.com"; echo "  Logged in to github.com account octo (keyring)";;
+  "api repos/o/r --jq .default_branch") echo main;;
+  "api -X POST"*) echo '{{"workflow_run_id":77,"html_url":"https://github.com/o/r/actions/runs/77"}}';;
+  "api repos/o/r/actions/runs/77") echo '{run_status}';;
+  *) echo "not found" >&2; exit 1;;
+esac"#,
+                log = log.display()
+            ),
+        )
+    }
+
+    fn github_parameters() -> ExecutionParameters {
+        let (name, yaml) = crate::plans::stacks::REPOSITORY[0];
+        ExecutionParameters {
+            r#where: Where::Github,
+            stack: Some(ExecutionStack {
+                name: name.into(),
+                yaml: yaml.into(),
+                sha256: String::new(),
+            }),
+            ..suite_parameters("pr")
+        }
+    }
+
+    #[tokio::test]
+    async fn github_status_says_signed_in_signed_out_or_missing() {
+        let root = tempfile::tempdir().unwrap();
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let signed_in = manager_with_gh(
+            root.path(),
+            runner.clone(),
+            fake_gh(root.path(), "echo '  Logged in to github.com account octo (keyring)'"),
+        );
+        let status = signed_in.github_status("o/r").await;
+        assert_eq!(status["ready"], json!(true));
+        assert_eq!(status["account"], json!("octo"));
+        assert_eq!(status["repository"], json!("o/r"));
+
+        let out = tempfile::tempdir().unwrap();
+        let signed_out = manager_with_gh(root.path(), runner.clone(), fake_gh(out.path(), "exit 1"));
+        let status = signed_out.github_status("o/r").await;
+        assert_eq!(status["ready"], json!(false));
+        assert!(status["message"].as_str().unwrap().contains("gh auth login"));
+
+        let mut missing_cli = fake_gh(out.path(), "exit 0");
+        missing_cli.program = root.path().join("no-such-gh");
+        let missing = manager_with_gh(root.path(), runner, missing_cli);
+        let status = missing.github_status("o/r").await;
+        assert_eq!(status["ready"], json!(false));
+        assert!(status["message"].as_str().unwrap().contains("not installed"));
+    }
+
+    #[tokio::test]
+    async fn a_github_start_dispatches_the_workflow_follows_the_run_and_imports_it() {
+        let root = tempfile::tempdir().unwrap();
+        let gh = dispatching_gh(
+            root.path(),
+            r#"{"status":"completed","conclusion":"success","run_attempt":1}"#,
+        );
+        let manager = manager_with_gh(root.path(), Arc::new(FakeRunner::new(root.path().into())), gh);
+        let started = manager
+            .start_execution_in(github_parameters(), "On GitHub", Some("o/r"))
+            .await
+            .unwrap();
+        assert_eq!(started.id, github::import_id("o/r", 77));
+        assert!(github_started(&started));
+        assert!(matches!(
+            &started.source,
+            ExecutionSource::Github { run_id: 77, url, .. } if url == "https://github.com/o/r/actions/runs/77"
+        ));
+        assert_eq!(started.label.as_deref(), Some("On GitHub"));
+
+        // The run ended: the import runs, and fails here (no artifacts), so
+        // the execution ends failed with the reason.
+        let ended = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let execution = manager.read_execution(&started.id).await.unwrap();
+                if !execution.active() && execution.state != "importing" {
+                    return execution;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(ended.state, "failed");
+        assert!(ended.error.is_some());
+
+        let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
+        let dispatch = log.lines().find(|line| line.starts_with("api -X POST")).unwrap();
+        assert!(dispatch.contains("repos/o/r/actions/workflows/exact-stack-e2e.yml/dispatches"));
+        assert!(dispatch.contains("return_run_details=true"));
+        assert!(dispatch.contains("ref=main"));
+        assert!(dispatch.contains("inputs[suite]=pr"));
+        assert!(dispatch.contains(&format!(
+            "inputs[stack]={}",
+            crate::plans::stacks::REPOSITORY[0].0
+        )));
+        assert!(dispatch.contains("inputs[model]=provider/model"));
+        assert!(!dispatch.contains("execution_id"));
+        assert!(log.contains("api repos/o/r/actions/runs/77"));
+    }
+
+    #[tokio::test]
+    async fn a_running_github_execution_is_cancelled_on_github_and_resumes_after_restart() {
+        let root = tempfile::tempdir().unwrap();
+        let gh = dispatching_gh(root.path(), r#"{"status":"in_progress","run_attempt":1}"#);
+        let runner = Arc::new(FakeRunner::new(root.path().into()));
+        let manager = manager_with_gh(root.path(), runner.clone(), gh.clone());
+        let started = manager
+            .start_execution_in(github_parameters(), "", Some("o/r"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let execution = manager.read_execution(&started.id).await.unwrap();
+                if matches!(&execution.source, ExecutionSource::Github { status: Some(s), .. } if s == "in_progress") {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let error = manager.cancel(&started.id).await.unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("Cancel it on GitHub: https://github.com/o/r/actions/runs/77"));
+
+        // A restarted worker follows it again instead of interrupting it.
+        let restarted = manager_with_gh(root.path(), runner, gh);
+        restarted.reconcile().await.unwrap();
+        let execution = restarted.read_execution(&started.id).await.unwrap();
+        assert_eq!(execution.state, "running");
+    }
+
+    #[tokio::test]
+    async fn a_github_start_without_gh_signed_in_says_how_to_fix_it() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            fake_gh(root.path(), "exit 1"),
+        );
+        let error = manager
+            .start_execution_in(github_parameters(), "", Some("o/r"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("gh auth login"));
+        assert!(manager.executions().await.unwrap().is_empty());
     }
 }
