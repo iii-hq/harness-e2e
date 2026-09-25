@@ -24,9 +24,11 @@ use crate::persistence::Persistence;
 use crate::report::{E2eReport, ReportState};
 use crate::test_plan::{self, ProfileSnapshot};
 
+mod docker;
 mod github;
 mod stack;
 
+pub(crate) use docker::{DockerGroup, DockerSettings};
 pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -130,6 +132,38 @@ pub(crate) struct ExecutionParameters {
     pub provider: String,
     /// Agent profile the subject ran under.
     pub agent: Option<String>,
+    /// Where it ran; absent for an execution from before Docker, which ran
+    /// on this harness.
+    #[serde(default)]
+    pub r#where: Where,
+    /// The stack it ran on in Docker or on GitHub; this harness runs on its
+    /// own. Running it again offers it as recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stack: Option<ExecutionStack>,
+}
+
+/// Where an execution runs: on this harness, in Docker from this worker, or
+/// on GitHub (imported runs; starting one there is not offered yet).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Where {
+    #[default]
+    Harness,
+    Docker,
+    Github,
+}
+
+/// The stack an execution ran on, to run it again as recorded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct ExecutionStack {
+    /// A repository stack's id, a local one's name, or what a contract names.
+    pub name: String,
+    /// The YAML as sent; once imported, the final `stack.yaml` its contract
+    /// recorded (the iii release and the runner pinned).
+    pub yaml: String,
+    /// `sha256:` of `yaml`; the worker sets it, a request never does.
+    #[serde(default)]
+    pub sha256: String,
 }
 
 /// The suite an execution ran: named when it was picked as it is (a suite of
@@ -197,6 +231,18 @@ pub(crate) enum ExecutionSource {
         /// before contracts stated their execution.
         #[serde(default)]
         stack: Option<String>,
+    },
+    /// Run in Docker by this worker, from `docker-executions/<id>/`.
+    Docker {
+        /// The attempt of the last root bundle: 1, then one more each time a
+        /// scenario runs again.
+        attempt: u32,
+        /// `prepare`, `groups`, `finalize`, `import`, then `done`.
+        phase: String,
+        /// The executor image it was prepared in, as its contract records it.
+        #[serde(default)]
+        image: Option<String>,
+        groups: Vec<DockerGroup>,
     },
 }
 
@@ -314,6 +360,10 @@ pub(crate) struct PlanStore {
     persistence: Option<Persistence>,
     runner: Option<Arc<dyn Runner>>,
     github: github::GithubCli,
+    docker: docker::Docker,
+    /// The ids of Docker executions as they change in the background, for
+    /// the dashboard to refresh and tell the Console.
+    changes: tokio::sync::broadcast::Sender<String>,
     // Serializes receipt transitions against cancellation and admission.
     lock: Mutex<()>,
     /// Moves whenever a slot's previous attempts change, so views that leave
@@ -321,7 +371,11 @@ pub(crate) struct PlanStore {
     attempts: AtomicU64,
 }
 impl PlanStore {
-    pub(crate) async fn new(root: PathBuf, control: Option<ControlPlane>) -> Result<Arc<Self>> {
+    pub(crate) async fn new(
+        root: PathBuf,
+        control: Option<ControlPlane>,
+        docker: DockerSettings,
+    ) -> Result<Arc<Self>> {
         #[cfg(test)]
         if control.is_none() {
             fs::create_dir_all(root.join("plan-store/suites"))?;
@@ -333,6 +387,8 @@ impl PlanStore {
             persistence: control.as_ref().map(ControlPlane::persistence),
             runner: control.map(|c| Arc::new(c) as Arc<dyn Runner>),
             github: github::GithubCli::default(),
+            docker: docker::Docker::new(docker),
+            changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
         });
@@ -453,6 +509,9 @@ impl PlanStore {
         Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
+        self.load_execution(id).await.map(ran_where_it_came_from)
+    }
+    async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
         if let Some(persistence) = &self.persistence {
             return persistence
@@ -471,6 +530,14 @@ impl PlanStore {
         Ok(execution)
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
+        self.save_execution(execution).await?;
+        if matches!(execution.source, ExecutionSource::Docker { .. }) {
+            // No one listening is fine.
+            let _ = self.changes.send(execution.id.clone());
+        }
+        Ok(())
+    }
+    async fn save_execution(&self, execution: &PlanExecution) -> Result<()> {
         if let Some(persistence) = &self.persistence {
             return persistence.save_execution_receipt(execution).await;
         }
@@ -478,6 +545,10 @@ impl PlanStore {
         anyhow::bail!("the E2E control-plane persistence is not available");
         #[cfg(test)]
         write_json(&self.execution_path(&execution.id)?, execution)
+    }
+    /// The ids of Docker executions as they change in the background.
+    pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
+        self.changes.subscribe()
     }
     /// Changes whenever a slot's previous attempts do.
     pub(crate) fn attempts_revision(&self) -> u64 {
@@ -495,13 +566,15 @@ impl PlanStore {
             .collect())
     }
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
-        if let Some(persistence) = &self.persistence {
-            return persistence.saved_executions().await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        read_json_directory(&self.root.join("plan-store/executions"))
+        let executions = if let Some(persistence) = &self.persistence {
+            persistence.saved_executions().await?
+        } else {
+            #[cfg(not(test))]
+            anyhow::bail!("the E2E control-plane persistence is not available");
+            #[cfg(test)]
+            read_json_directory(&self.root.join("plan-store/executions"))?
+        };
+        Ok(executions.into_iter().map(ran_where_it_came_from).collect())
     }
 
     /// Every suite an execution can run: the master plan's, read-only, then
@@ -713,6 +786,17 @@ impl PlanStore {
             !parameters.model.is_empty() && !parameters.provider.is_empty(),
             "Select an execution model."
         );
+        match parameters.r#where {
+            // This harness runs on its own stack.
+            Where::Harness => parameters.stack = None,
+            Where::Docker => ensure!(
+                parameters.stack.is_some(),
+                "Pick the stack the execution runs on in Docker."
+            ),
+            Where::Github => anyhow::bail!(
+                "Executions on GitHub are imported here, not started; run it on this harness or in Docker."
+            ),
+        }
         let suite = parameters.suite.as_ref();
         for (name, value) in [
             ("model", Some(&parameters.model)),
@@ -720,6 +804,7 @@ impl PlanStore {
             ("agent", parameters.agent.as_ref()),
             ("suite", suite.and_then(|suite| suite.id.as_ref())),
             ("suite label", suite.map(|suite| &suite.label)),
+            ("stack", parameters.stack.as_ref().map(|stack| &stack.name)),
         ] {
             let Some(value) = value else { continue };
             ensure!(
@@ -781,6 +866,9 @@ impl PlanStore {
             system_under_test: None,
             rerun: None,
         };
+        if parameters_where(&execution) == Where::Docker {
+            return self.start_docker(execution, &master).await;
+        }
         let _guard = self.lock.lock().await;
         let runner = self.runner()?;
         if let Err(error) = runner.reserve(&execution.id).await {
@@ -805,6 +893,12 @@ impl PlanStore {
         id: &str,
         scenario_id: &str,
     ) -> Result<PlanExecution> {
+        if matches!(
+            self.read_execution(id).await?.source,
+            ExecutionSource::Docker { .. }
+        ) {
+            return self.rerun_docker(id, scenario_id).await;
+        }
         let runner = self.runner()?;
         // The stack is read before the lock; the checks run again under it.
         let execution = self.read_execution(id).await?;
@@ -886,6 +980,9 @@ impl PlanStore {
             if runner.record(child).await.is_some() {
                 runner.remove(child).await?;
             }
+        }
+        if matches!(execution.source, ExecutionSource::Docker { .. }) {
+            self.remove_docker_folder(id).await;
         }
         if let Some(persistence) = &self.persistence {
             return persistence.delete_execution_receipt(id).await;
@@ -1092,6 +1189,11 @@ impl PlanStore {
             execution.state = "cancelling".into();
             execution.updated_at = now();
             self.write_execution(&execution).await?;
+            if matches!(execution.source, ExecutionSource::Docker { .. }) {
+                // Its drive stops the containers and keeps what finished.
+                self.docker.cancel(id);
+                return Ok(serde_json::to_value(execution)?);
+            }
             for slot in &execution.slots {
                 if matches!(slot.state.as_str(), "admitting" | "running") {
                     if let Some(record) = self.runner()?.record(&slot.execution_id).await {
@@ -1148,7 +1250,7 @@ impl PlanStore {
         }
         runner.release(id).await;
     }
-    async fn reconcile(&self) -> Result<()> {
+    async fn reconcile(self: &Arc<Self>) -> Result<()> {
         // No import runs at start: drop whatever an interrupted one left.
         let imports = self.root.join(".imports");
         if let Err(error) = fs::remove_dir_all(&imports) {
@@ -1167,6 +1269,10 @@ impl PlanStore {
                 continue;
             }
             let was_active = execution.active();
+            if was_active && matches!(execution.source, ExecutionSource::Docker { .. }) {
+                self.restart_docker(execution).await?;
+                continue;
+            }
             if !was_active
                 && (execution.measurements.is_some()
                     || !execution.slots.iter().any(|s| s.result_path.is_some()))
@@ -1247,6 +1353,25 @@ fn safe_id(id: &str) -> Result<()> {
 }
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+/// An import recorded before executions stated where they ran (0.14.0)
+/// reads as run where it came from.
+fn ran_where_it_came_from(mut execution: PlanExecution) -> PlanExecution {
+    let from = match execution.source {
+        ExecutionSource::Github { .. } => Where::Github,
+        ExecutionSource::Docker { .. } => Where::Docker,
+        ExecutionSource::Local => return execution,
+    };
+    if let Some(parameters) = execution.parameters.as_mut() {
+        parameters.r#where = from;
+    }
+    execution
+}
+fn parameters_where(execution: &PlanExecution) -> Where {
+    execution
+        .parameters
+        .as_ref()
+        .map_or(Where::Harness, |parameters| parameters.r#where)
 }
 #[cfg(test)]
 fn write_json(path: &Path, value: &impl Serialize) -> Result<()> {
@@ -1878,7 +2003,7 @@ pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::control::{ExecutionPhase, LaneBudget};
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
@@ -1887,7 +2012,7 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    struct FakeRunner {
+    pub(super) struct FakeRunner {
         root: PathBuf,
         owner: Mutex<Option<String>>,
         records: Mutex<HashMap<String, ExecutionRecord>>,
@@ -1908,7 +2033,7 @@ mod tests {
         dirty: AtomicBool,
     }
     impl FakeRunner {
-        fn new(root: PathBuf) -> Self {
+        pub(super) fn new(root: PathBuf) -> Self {
             Self {
                 root,
                 owner: Mutex::new(None),
@@ -1943,7 +2068,7 @@ mod tests {
                 )]),
             }
         }
-        fn native_record(&self, request: RunRequest) -> Result<ExecutionRecord> {
+        pub(super) fn native_record(&self, request: RunRequest) -> Result<ExecutionRecord> {
             let id = execution_id_for_key(&request.idempotency_key);
             let max_cases = request.scenarios.len() as u16;
             let scenarios = request
@@ -2171,7 +2296,7 @@ mod tests {
         }
     }
     /// What running a suite of the master plan as it is sends.
-    fn suite_parameters(suite: &str) -> ExecutionParameters {
+    pub(super) fn suite_parameters(suite: &str) -> ExecutionParameters {
         let snapshot = test_plan::embedded().unwrap().materialize(suite).unwrap();
         ExecutionParameters {
             suite: Some(ExecutionSuite {
@@ -2185,6 +2310,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         }
     }
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
@@ -2203,6 +2330,8 @@ mod tests {
             persistence: None,
             runner: Some(runner),
             github,
+            docker: docker::Docker::new(DockerSettings::default()),
+            changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
         })
@@ -2219,7 +2348,7 @@ mod tests {
             download_timeout: Duration::from_millis(500),
         }
     }
-    async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
+    pub(super) async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
         tokio::time::timeout(Duration::from_secs(120), async {
             loop {
                 let execution = manager.read_execution(id).await.unwrap();
@@ -2267,6 +2396,8 @@ mod tests {
             persistence: Some(db.clone()),
             runner: Some(runner),
             github: github::GithubCli::default(),
+            docker: docker::Docker::new(DockerSettings::default()),
+            changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
             attempts: AtomicU64::new(0),
         });
@@ -2405,6 +2536,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         };
         let id = manager.start_execution(parameters, "").await.unwrap().id;
         let execution = terminal(&manager, &id).await;
@@ -2767,6 +2900,26 @@ mod tests {
         assert_ne!(one.sha256, reviewed.profile_sha256);
     }
 
+    #[tokio::test]
+    async fn an_import_recorded_before_where_reads_as_run_on_github() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        // As 0.14.0 stored one: parameters without `where` or `stack`.
+        let mut stored = serde_json::to_value(import_stub()).unwrap();
+        stored["source"] = json!({"kind": "github", "repository": "o/r", "run_id": 7,
+            "run_attempt": 1, "url": "", "release_control_execution_id": null});
+        stored["parameters"] = json!({"scenarios": ["minimal_path"], "runs": 1,
+            "technical_retries": 0, "model": "m", "provider": "p", "agent": null});
+        write_json(&manager.execution_path("plan-stub").unwrap(), &stored).unwrap();
+        let read = manager.read_execution("plan-stub").await.unwrap();
+        assert_eq!(read.parameters.unwrap().r#where, Where::Github);
+        let listed = manager.executions().await.unwrap();
+        assert_eq!(
+            listed[0].parameters.as_ref().unwrap().r#where,
+            Where::Github
+        );
+    }
+
     #[test]
     fn a_suite_an_older_import_stored_by_id_reads_as_that_suite() {
         let mut stored = serde_json::to_value(suite_parameters("pr")).unwrap();
@@ -2789,9 +2942,16 @@ mod tests {
         assert!(serde_json::from_value::<ExecutionParameters>(stored).is_err());
     }
 
+    /// The final stack.yaml a contract records.
+    const STACK_AS_RUN: &str = "iii: 0.24.2\ncontainers:\n  harness:\n    worker: package://harness\n    version: 1.8.31\n";
+
     /// A campaign bundle as the exact-stack workflow uploads it: one group
     /// with its native run, one that left only `failure.json`.
-    fn exact_stack_bundle(root: &Path, key: &str, observed: &str) -> (PathBuf, PathBuf, String) {
+    pub(super) fn exact_stack_bundle(
+        root: &Path,
+        key: &str,
+        observed: &str,
+    ) -> (PathBuf, PathBuf, String) {
         let campaign = root.join("bundle/smoke-r01");
         let group = campaign.join("groups/case-context");
         fs::create_dir_all(group.join("stack")).unwrap();
@@ -2853,6 +3013,7 @@ mod tests {
             json!({"profile": {"label": "Smoke"}, "profile_sha256": "sha256:smoke"}).to_string(),
         )
         .unwrap();
+        fs::write(contract.join("stack.yaml"), STACK_AS_RUN).unwrap();
         (root.join("bundle"), contract, native.execution_id)
     }
 
@@ -2896,7 +3057,7 @@ mod tests {
         let (bundle, contract, first) =
             exact_stack_bundle(&root.path().join("attempt-1"), "rc:e2e:first", "1.8.8");
         manager
-            .install_bundle(&mut execution, &bundle, &contract)
+            .install_bundle(&mut execution, &bundle, &contract, None)
             .await
             .unwrap();
         let installed = manager.read_execution(&id).await.unwrap();
@@ -2920,6 +3081,14 @@ mod tests {
                 model: "model".into(),
                 provider: "provider".into(),
                 agent: Some("tech-lead".into()),
+                r#where: Where::Github,
+                // As the contract recorded it; one from before contracts
+                // named their stack reads as inline.
+                stack: Some(ExecutionStack {
+                    name: "inline".into(),
+                    yaml: STACK_AS_RUN.into(),
+                    sha256: artifact::sha256_bytes(STACK_AS_RUN.as_bytes()),
+                }),
             })
         );
         assert_eq!(
@@ -2965,7 +3134,7 @@ mod tests {
         let (bundle, contract, second) =
             exact_stack_bundle(&root.path().join("attempt-2"), "rc:e2e:second", "1.8.9");
         manager
-            .install_bundle(&mut execution, &bundle, &contract)
+            .install_bundle(&mut execution, &bundle, &contract, None)
             .await
             .unwrap();
         let replaced = manager.read_execution(&id).await.unwrap();
@@ -2992,7 +3161,7 @@ mod tests {
         .unwrap();
         let mut execution = import_stub();
         let error = manager
-            .install_bundle(&mut execution, &bundle, &root.path().join("contract"))
+            .install_bundle(&mut execution, &bundle, &root.path().join("contract"), None)
             .await
             .unwrap_err();
         assert!(error
@@ -3101,7 +3270,7 @@ mod tests {
         let (bundle, contract, _) =
             exact_stack_bundle(&root.path().join("bundle"), "rc:e2e:renamed", "1.8.8");
         manager
-            .install_bundle(&mut snapshot, &bundle, &contract)
+            .install_bundle(&mut snapshot, &bundle, &contract, None)
             .await
             .unwrap();
         let installed = manager.read_execution(&snapshot.id).await.unwrap();
@@ -3117,6 +3286,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_cancel_asked_while_the_import_ran_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let manager = manager(&data, Arc::new(FakeRunner::new(data.clone())));
+        let mut snapshot = import_stub();
+        snapshot.state = "running".into();
+        manager.write_execution(&snapshot).await.unwrap();
+        // Asked after the import read the execution.
+        manager.cancel(&snapshot.id).await.unwrap();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.path().join("bundle"), "rc:e2e:cancelled", "1.8.8");
+        manager
+            .install_bundle(&mut snapshot, &bundle, &contract, None)
+            .await
+            .unwrap();
+        let installed = manager.read_execution(&snapshot.id).await.unwrap();
+        assert!(installed.cancel_requested);
+        assert_eq!(installed.state, "cancelled");
+    }
+
+    #[tokio::test]
     async fn a_new_attempt_without_a_readable_group_keeps_the_previous_import() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
@@ -3127,7 +3317,7 @@ mod tests {
         let (bundle, contract, first) =
             exact_stack_bundle(&root.path().join("attempt-1"), "rc:e2e:first", "1.8.8");
         manager
-            .install_bundle(&mut execution, &bundle, &contract)
+            .install_bundle(&mut execution, &bundle, &contract, None)
             .await
             .unwrap();
         let before = manager.read_execution(&execution.id).await.unwrap();
@@ -3146,6 +3336,7 @@ mod tests {
                 &mut execution.clone(),
                 &root.path().join("attempt-2/bundle"),
                 &contract,
+                None,
             )
             .await
             .unwrap_err()
@@ -3174,7 +3365,7 @@ mod tests {
         let natives = bundle.join("smoke-r01/groups/case-context/native");
         fs::rename(natives.join(&id), natives.join("not-an-id")).unwrap();
         let error = manager
-            .install_bundle(&mut execution, &bundle, &contract)
+            .install_bundle(&mut execution, &bundle, &contract, None)
             .await
             .unwrap_err()
             .to_string();
@@ -3185,7 +3376,7 @@ mod tests {
         fs::create_dir_all(data.join(&id)).unwrap();
         fs::write(data.join(&id).join("marker"), b"another execution").unwrap();
         let error = manager
-            .install_bundle(&mut execution, &bundle, &contract)
+            .install_bundle(&mut execution, &bundle, &contract, None)
             .await
             .unwrap_err()
             .to_string();
@@ -3534,6 +3725,8 @@ mod tests {
             model: " model ".into(),
             provider: "provider".into(),
             agent: Some("tech-lead".into()),
+            r#where: Where::Harness,
+            stack: None,
         };
         let started = manager
             .start_execution(parameters, "  Again  ")
@@ -3641,6 +3834,8 @@ mod tests {
                 model: model.into(),
                 provider: provider.into(),
                 agent: agent.map(str::to_owned),
+                r#where: Where::Harness,
+                stack: None,
             };
             let error = manager
                 .start_execution(parameters, "")
@@ -3665,6 +3860,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         };
         let slots = parameter_slots(
             &test_plan::embedded().unwrap(),
@@ -3701,6 +3898,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         };
         let running = manager
             .start_execution(parameters.clone(), "Nightly")
@@ -3729,6 +3928,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         };
         let started = manager.start_execution(parameters, "").await.unwrap();
         assert_eq!(
@@ -3801,6 +4002,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
         };
         let started = manager.start_execution(parameters, "").await.unwrap();
         let execution = terminal(&manager, &started.id).await;
@@ -3821,6 +4024,8 @@ mod tests {
             model: "model".into(),
             provider: "provider".into(),
             agent: None,
+            r#where: Where::Harness,
+            stack: None,
             suite: None,
         }
     }

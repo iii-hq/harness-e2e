@@ -77,6 +77,18 @@ differ. An imported execution is not run here, which would mix stacks:
 re-run its job on GitHub and import the run again (the import takes the
 highest attempt).
 
+**Where** picks this harness (the above) or **Docker**, which asks for a
+**Stack** (the repository's, this Console's, or, running an execution again,
+the one it recorded, *as recorded*); the worker sends the stack's YAML to the
+executor. The execution appears at once with its groups, each `queued`,
+`running`, `done`, `failed`, `cancelled` or `interrupted`, and the phase it is
+in; its results arrive when every group ended and the worker imported them.
+Cancel stops its containers and keeps what finished. Running a scenario of it
+again runs its groups in new containers as the execution's next attempt,
+finalizes and imports again: the last attempt counts. See [Run in
+Docker](../README.md#run-in-docker). Run again of a GitHub run that recorded
+its stack starts in Docker on it; one that recorded none runs on this harness.
+
 Before its first slot every local execution records its stack: the containers
 of the compose project that runs this worker (`package://` or `path://`, the
 requested version, and the commit and dirty state of each path checkout) and
@@ -231,8 +243,8 @@ on this machine), a `commit:` pin (it takes effect once the executor runs commit
 pins), a top-level key neither the executor nor Compose reads, a tag the
 executor's loader refuses (`!env`, `!!python/…`), and an `iii`, `template`,
 `version` or `commit` that is not text to the executor (`1.10`, `0123456`:
-quote it). Runs do not take a stack from here yet: an execution still runs on
-this worker's stack.
+quote it). Run tests in Docker runs on one of them; on this harness an
+execution runs on this worker's own stack.
 
 The shared Rust coordinator persists every child identity before dispatch and
 reserves admission across the whole execution. It cancels active work before

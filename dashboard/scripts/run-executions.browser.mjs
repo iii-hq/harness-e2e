@@ -141,6 +141,87 @@ const cancelledSummary = {
     wall_time_seconds: 119.6,
   },
 }
+// Ran in Docker on the default stack; its stack as its contract recorded it.
+const recordedStack =
+  'iii: 0.24.2\ncontainers:\n  harness:\n    worker: package://harness\n    version: 1.8.31\n'
+const dockered = {
+  ...imported,
+  id: 'plan-44444444444444444444444444444444',
+  label: 'In Docker',
+  plan_execution: {
+    ...imported.plan_execution,
+    id: 'plan-44444444444444444444444444444444',
+    label: 'In Docker',
+    parameters: {
+      ...imported.plan_execution.parameters,
+      where: 'docker',
+      stack: {
+        name: 'default',
+        yaml: recordedStack,
+        sha256:
+          'sha256:feedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedfacefeedface',
+      },
+    },
+    source: {
+      kind: 'docker',
+      attempt: 2,
+      phase: 'done',
+      image: 'ghcr.io/iii-hq/harness-e2e@sha256:dd',
+      groups: [],
+    },
+  },
+}
+const dockerGroup = (group_id, state) => ({
+  round: 1,
+  campaign_id: 'pr-r01',
+  group_id,
+  scenarios: [group_id],
+  state,
+  attempt: 1,
+  error: null,
+})
+/** Running in Docker: its groups, and where each is. */
+const dockerRunning = {
+  ...running('plan-55555555555555555555555555555555'),
+  plan_execution: {
+    ...running('plan-55555555555555555555555555555555').plan_execution,
+    source: {
+      kind: 'docker',
+      attempt: 1,
+      phase: 'groups',
+      image: null,
+      groups: [
+        dockerGroup('case-minimal-path', 'done'),
+        dockerGroup('case-persistent-state', 'running'),
+        dockerGroup('case-shell-coder-sandbox', 'queued'),
+      ],
+    },
+  },
+}
+const stacks = [
+  {
+    id: 'default',
+    label: 'default',
+    source: 'repository',
+    yaml: 'iii: latest\ncontainers:\n  harness:\n    worker: package://harness\n',
+    iii: 'latest',
+    template: null,
+    containers: [{ name: 'harness', version: null, commit: null }],
+    warnings: [],
+    updated_at: null,
+  },
+  {
+    id: 'stack-0123456789ab',
+    label: 'Pinned harness',
+    source: 'local',
+    yaml: 'iii: 0.24.1\ncontainers: {}\n',
+    iii: '0.24.1',
+    template: null,
+    containers: [],
+    warnings: [],
+    updated_at: '2026-09-24T10:00:00Z',
+  },
+]
 const githubRuns = [
   {
     run_id: 101,
@@ -205,9 +286,13 @@ const trigger = async (name, request = {}) => {
       detail:
         request.execution_id === imported.id
           ? imported
-          : request.execution_id === nightly
-            ? { ...running(nightly), label: 'Nightly' }
-            : startedExecution(request.execution_id),
+          : request.execution_id === dockered.id
+            ? dockered
+            : request.execution_id === dockerRunning.id
+              ? dockerRunning
+              : request.execution_id === nightly
+                ? { ...running(nightly), label: 'Nightly' }
+                : startedExecution(request.execution_id),
     }
   if (id === 'execution-cancel') {
     cancelled.push(request.execution_id)
@@ -245,6 +330,7 @@ const trigger = async (name, request = {}) => {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return { suites: [] }
   }
+  if (id === 'stacks-list') return { stacks }
   if (id === 'execution-delete') {
     deleted.push(request.execution_id)
     return {}
@@ -426,6 +512,7 @@ try {
       model: 'deepseek-v4-flash',
       provider: 'deepseek',
       agent: null,
+      where: 'harness',
     },
   })
   // No plan, no role: just an execution.
@@ -492,6 +579,8 @@ try {
         id: 'software-engineering-2025',
         label: 'Software engineering 2025',
       },
+      // It recorded no stack: it runs on this harness.
+      where: 'harness',
     },
   })
 
@@ -507,7 +596,76 @@ try {
   )
   await page.keyboard.press('Escape')
 
+  // In Docker: Where asks for a stack, the repository's default first, and
+  // the executor receives its YAML.
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await runTests.getByText('catalog ready').waitFor()
+  assert.equal(await runTests.locator('#quick-execution-stack').count(), 0)
+  await runTests.locator('#quick-execution-where').selectOption('docker')
+  assert.equal(
+    await runTests.locator('#quick-execution-stack').inputValue(),
+    'default',
+  )
+  await runTests
+    .getByRole('option', { name: 'Pinned harness' })
+    .waitFor({ state: 'attached' })
+  await box('minimal_path').click()
+  await runTests
+    .getByRole('button', { name: 'run 1 test', exact: true })
+    .click()
+  await page.waitForFunction(() => /\/execution\/plan-f+3$/.test(location.hash))
+  assert.equal(started[2].parameters.where, 'docker')
+  assert.deepEqual(started[2].parameters.stack, {
+    name: 'default',
+    yaml: stacks[0].yaml,
+  })
+
+  // A Docker execution that runs: its groups and where each is.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/execution/${dockerRunning.id}`,
+  )
+  const groups = page.locator('[data-docker-groups]')
+  await groups.getByText('Running the groups…').waitFor()
+  await groups
+    .locator('[data-docker-group="case-persistent-state"] [data-group-state]')
+    .getByText('running', { exact: true })
+    .waitFor()
+
+  // A finished one says where it ran and runs again there, on its stack as
+  // recorded.
+  await page.goto(`${server.url}#/ext/harness-e2e/execution/${dockered.id}`)
+  await band.getByText('Docker · attempt 2', { exact: true }).waitFor()
+  await band.getByText('default', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await again.getByText('catalog ready').waitFor()
+  assert.equal(
+    await again.locator('#quick-execution-where').inputValue(),
+    'docker',
+  )
+  assert.equal(
+    await again.locator('#quick-execution-stack').inputValue(),
+    'recorded',
+  )
+  await again
+    .getByRole('option', { name: 'default · as recorded' })
+    .waitFor({ state: 'attached' })
+  await again
+    .getByText('As this execution recorded it · feedfacefeed')
+    .waitFor()
+  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await page.waitForFunction(() => !location.hash.includes('44444444'))
+  assert.deepEqual(started[3].parameters.stack, {
+    name: 'default',
+    yaml: recordedStack,
+  })
+  assert.equal(started[3].parameters.where, 'docker')
+
   // A finished execution can be deleted.
+  await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page
     .getByRole('button', { name: 'Delete execution', exact: true })
     .click()
@@ -518,7 +676,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

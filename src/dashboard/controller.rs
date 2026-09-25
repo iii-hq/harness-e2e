@@ -48,6 +48,7 @@ impl Controller {
         events: Option<Arc<DashboardEvents>>,
         control: Option<ControlPlane>,
         github_repository: String,
+        docker: crate::plans::store::DockerSettings,
     ) -> Result<Arc<Self>> {
         validate_stack_url(&url)?;
         fs::create_dir_all(&runs_dir).with_context(|| format!("create {}", runs_dir.display()))?;
@@ -68,7 +69,7 @@ impl Controller {
             }
         }
         let plan_store =
-            crate::plans::store::PlanStore::new(runs_dir.clone(), control.clone()).await?;
+            crate::plans::store::PlanStore::new(runs_dir.clone(), control.clone(), docker).await?;
         let controller = Arc::new(Self {
             plan_store,
             github_repository,
@@ -94,7 +95,30 @@ impl Controller {
             }
             controller.observe_control_plane();
         }
+        controller.observe_docker_executions();
         Ok(controller)
+    }
+
+    /// A Docker execution changes in the background: its groups move, then
+    /// its import installs native runs. Each change refreshes the summaries
+    /// and tells the Console.
+    fn observe_docker_executions(self: &Arc<Self>) {
+        let mut changes = self.plan_store.changes();
+        let controller = Arc::downgrade(self);
+        tokio::spawn(async move {
+            loop {
+                let id = match changes.recv().await {
+                    Ok(id) => id,
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
+                };
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                controller.invalidate_summaries().await;
+                controller.emit_change("progress", &id).await;
+            }
+        });
     }
 
     pub(super) fn default_url(&self) -> &str {

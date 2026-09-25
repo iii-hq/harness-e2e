@@ -26,6 +26,20 @@ pub struct WorkerConfig {
     /// GitHub repository whose exact-stack workflow runs can be imported.
     #[serde(default = "default_github_repository")]
     pub github_repository: String,
+    /// Docker executions: groups running at once, across executions.
+    #[serde(default = "default_docker_parallel_groups")]
+    pub docker_parallel_groups: usize,
+    /// Docker executions: an env file with the provider credentials the
+    /// GitHub groups receive (DEEPSEEK_API_KEY, ZAI_API_KEY,
+    /// TYPESAFE_API_KEY), passed to the executor with `--env-file`. Resolved
+    /// as `data_dir` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_env_file: Option<String>,
+    /// Docker executions: a checkout's `scripts/` to run instead of the
+    /// scripts this worker embeds, copied into each new execution, so an
+    /// edited script takes effect on the next one. Resolved as `data_dir` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scripts_dir: Option<String>,
 }
 
 fn default_control_database() -> String {
@@ -37,6 +51,9 @@ fn default_control_namespace() -> String {
 fn default_github_repository() -> String {
     "iii-hq/harness-e2e".into()
 }
+fn default_docker_parallel_groups() -> usize {
+    2
+}
 
 impl Default for WorkerConfig {
     fn default() -> Self {
@@ -45,6 +62,9 @@ impl Default for WorkerConfig {
             control_database: default_control_database(),
             control_namespace: default_control_namespace(),
             github_repository: default_github_repository(),
+            docker_parallel_groups: default_docker_parallel_groups(),
+            provider_env_file: None,
+            scripts_dir: None,
         }
     }
 }
@@ -57,7 +77,26 @@ impl WorkerConfig {
         if self.control_database.trim().is_empty() || self.control_namespace.trim().is_empty() {
             return Err("control database and namespace cannot be empty".into());
         }
+        if self.docker_parallel_groups == 0 {
+            return Err("docker_parallel_groups must be at least 1".into());
+        }
         Ok(self)
+    }
+
+    /// How Docker executions run, with paths resolved as `data_dir` is.
+    pub(crate) fn docker(&self, config_path: &Path) -> Result<crate::plans::store::DockerSettings> {
+        let path = |value: &Option<String>| {
+            value
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| resolve_data_dir(value, config_path))
+                .transpose()
+        };
+        Ok(crate::plans::store::DockerSettings {
+            parallel_groups: self.docker_parallel_groups,
+            provider_env_file: path(&self.provider_env_file)?,
+            scripts_dir: path(&self.scripts_dir)?,
+        })
     }
 }
 
@@ -147,6 +186,7 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
         &iii,
         control.clone(),
         config.github_repository.clone(),
+        config.docker(&environment.config)?,
     )
     .await
     .context("register dashboard functions")?;
@@ -297,6 +337,43 @@ mod tests {
             resolve_data_dir(&config.data_dir, &path).unwrap(),
             directory.path().join("evidence")
         );
+    }
+
+    #[test]
+    fn docker_executions_run_two_groups_at_once_unless_configured() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(&path, "data_dir: evidence\n").unwrap();
+        let docker = load_config(&path).unwrap().docker(&path).unwrap();
+        assert_eq!(
+            (
+                docker.parallel_groups,
+                docker.provider_env_file,
+                docker.scripts_dir
+            ),
+            (2, None, None)
+        );
+        // Paths resolve as data_dir does.
+        std::fs::write(
+            &path,
+            "data_dir: evidence\ndocker_parallel_groups: 4\nprovider_env_file: providers.env\nscripts_dir: /src/harness-e2e/scripts\n",
+        )
+        .unwrap();
+        let docker = load_config(&path).unwrap().docker(&path).unwrap();
+        assert_eq!(docker.parallel_groups, 4);
+        assert_eq!(
+            docker.provider_env_file,
+            Some(directory.path().join("providers.env"))
+        );
+        assert_eq!(
+            docker.scripts_dir,
+            Some(PathBuf::from("/src/harness-e2e/scripts"))
+        );
+        std::fs::write(&path, "data_dir: evidence\ndocker_parallel_groups: 0\n").unwrap();
+        assert!(load_config(&path)
+            .unwrap_err()
+            .to_string()
+            .contains("docker_parallel_groups must be at least 1"));
     }
 
     #[test]

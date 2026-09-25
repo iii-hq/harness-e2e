@@ -344,6 +344,7 @@ export function executionOrigin(execution: DashboardExecutionSummary): {
       label: `GitHub #${String(source.run_id ?? '')}`,
       href: stringValue(source.url) || null,
     }
+  if (source.kind === 'docker') return { label: 'Docker', href: null }
   return { label: 'local', href: null }
 }
 

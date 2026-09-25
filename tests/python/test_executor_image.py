@@ -1,8 +1,8 @@
 """The executor: one image of tools, the checkout's scripts mounted into it.
 
-`scripts/run_in_image.sh` is the host side every runner shares (GitHub now,
-the Console's Docker runner later); `scripts/executor.sh` is what each phase
-does inside the image.
+`scripts/run_in_image.sh` is the host side every runner shares (GitHub's jobs
+and the Console's Docker executions); `scripts/executor.sh` is what each
+phase does inside the image.
 """
 
 import hashlib
@@ -265,9 +265,10 @@ class ExecutorTests(unittest.TestCase):
         self.log = self.directory / "log"
         self.log.touch()
 
-    def executor(self, *args):
+    def executor(self, *args, env=None):
         environment = {**os.environ, "FAKE_LOG": str(self.log), "FAKE_RUNNER": str(self.runner),
-                       "EXECUTION_KEY": "42", "DISPATCH_SUITE": "pr", "TMPDIR": str(self.directory)}
+                       "EXECUTION_KEY": "42", "DISPATCH_SUITE": "pr", "TMPDIR": str(self.directory), **(env or {})}
+        environment.pop("GIT_CONFIG_COUNT", None)
         # Run from elsewhere: the phases work from the checkout's root.
         return subprocess.run(["bash", str(self.root / "scripts/executor.sh"), *args], cwd=self.directory,
                               env=environment, capture_output=True, text=True)
@@ -294,10 +295,10 @@ class ExecutorTests(unittest.TestCase):
 
     def test_finalize_aggregates_every_campaign_into_one_summary(self):
         # Nothing to aggregate is a failed finalizer, not an empty summary.
-        self.assertNotEqual(self.executor("finalize").returncode, 0)
+        self.assertNotEqual(self.executor("finalize", "aggregate").returncode, 0)
         for campaign in ("pr-r01", "smoke-r01"):
             (self.root / "target/harness-e2e-campaign" / campaign / "groups").mkdir(parents=True)
-        result = self.executor("finalize")
+        result = self.executor("finalize", "aggregate")
         self.assertEqual(result.returncode, 0, result.stderr)
         aggregated = [line for line in self.log.read_text().splitlines() if line.startswith("aggregate")]
         self.assertEqual(len(aggregated), 2)
@@ -305,6 +306,133 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("--execution-id 42", aggregated[0])
         summary = json.loads((self.root / "target/harness-e2e-campaign/execution-summary.json").read_text())
         self.assertEqual(summary, {"campaigns": [{"campaign": "pr-r01"}, {"campaign": "smoke-r01"}]})
+
+    def test_fixtures_check_out_what_the_groups_start_from_with_a_token_only_for_private_sources(self):
+        contracts = self.root / "target/harness-e2e-contract/contracts"
+        contracts.mkdir(parents=True)
+        # Each group once, in order, whatever the matrix repeats.
+        groups = ["case-minimal-path", "case-registry-implementation", "case-trending-topics-build",
+                  "case-linkly-tutorial", "case-kanban-board", "case-registry-implementation"]
+        (contracts / "resolution.json").write_text(json.dumps({
+            "matrix": {"include": [{"group_id": group} for group in groups]},
+            "template": {"id": "harness", "revision": "a" * 40}}))
+        # Logs each call and whether it carried credentials; a fetch leaves
+        # the commit it fetched as the checkout's HEAD.
+        git = self.directory / "bin/git"
+        git.parent.mkdir()
+        git.write_text(textwrap.dedent("""\
+            #!/usr/bin/env bash
+            printf 'git %s|%s\\n' "$*" "${GIT_CONFIG_VALUE_0:+$GIT_CONFIG_KEY_0}" >>"$FAKE_LOG"
+            case "$1" in
+              init) mkdir -p "$3/.git" ;;
+              clone) mkdir -p "${@: -1}/.git" ;;
+              -C)
+                case "$3" in
+                  fetch) printf '%s' "${@: -1}" >"$2/.git/fetched" ;;
+                  rev-parse) cat "$2/.git/fetched" ;;
+                esac
+                ;;
+            esac
+        """))
+        git.chmod(0o755)
+        environment = {"PATH": f"{git.parent}:{os.environ['PATH']}", "GITHUB_TOKEN": "ghs_fixture"}
+        result = self.executor("prepare", "fixtures", env=environment)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        header = "http.https://github.com/.extraheader"
+        registry = "662eb87c1bdbb395f36264d5d26bf823e2ace783"
+        trending = "3ee24f7ace3c014db35423f14939ad3f6ce0c3d2"
+        linkly = "ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d"
+        self.assertEqual(self.log.read_text().splitlines(), [
+            "git clone -q --branch main https://github.com/iii-hq/kanban-e2e-fixture.git target/kanban-fixture|",
+            "git init -q target/linkly-templates|",
+            f"git -C target/linkly-templates fetch -q --depth 1 https://github.com/iii-hq/templates.git {linkly}|",
+            "git -C target/linkly-templates checkout -q --detach FETCH_HEAD|",
+            "git init -q target/registry-sources/registry|" + header,
+            f"git -C target/registry-sources/registry fetch -q --depth 1 https://github.com/iii-hq/registry.git {registry}|{header}",
+            "git -C target/registry-sources/registry checkout -q --detach FETCH_HEAD|" + header,
+            "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
+            "git init -q target/trending-topics-fixture|" + header,
+            f"git -C target/trending-topics-fixture fetch -q --depth 1 https://github.com/iii-hq/e2e-fixture.git {trending}|{header}",
+            "git -C target/trending-topics-fixture checkout -q --detach FETCH_HEAD|" + header,
+            "git init -q target/execution-template|",
+            f"git -C target/execution-template fetch -q --depth 1 https://github.com/iii-hq/templates.git {'a' * 40}|",
+            "git -C target/execution-template checkout -q --detach FETCH_HEAD|",
+        ])
+        self.assertNotIn("ghs_fixture", self.log.read_text())
+        # Again, for one group: a commit already checked out stays, a branch
+        # is checked out anew.
+        self.log.write_text("")
+        result = self.executor("prepare", "fixtures", env={
+            **environment, "HARNESS_E2E_CAMPAIGN_GROUP_ID": "case-registry-implementation"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([line for line in self.log.read_text().splitlines() if "rev-parse" not in line], [
+            "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
+        ])
+
+    def test_a_checkout_that_fails_is_tried_again(self):
+        contracts = self.root / "target/harness-e2e-contract/contracts"
+        contracts.mkdir(parents=True)
+        (contracts / "resolution.json").write_text(json.dumps({
+            "matrix": {"include": [{"group_id": "case-linkly-tutorial"}]}}))
+        # The first fetch answers a 5xx; the next one works.
+        git = self.directory / "bin/git"
+        git.parent.mkdir()
+        git.write_text(textwrap.dedent("""\
+            #!/usr/bin/env bash
+            printf 'git %s\\n' "$*" >>"$FAKE_LOG"
+            case "$1" in
+              init) mkdir -p "$3/.git" ;;
+              -C)
+                if [[ "$3" == fetch && ! -f "$FAKE_STATE_FAILED" ]]; then
+                  touch "$FAKE_STATE_FAILED"
+                  echo "error: RPC failed; HTTP 502" >&2
+                  exit 128
+                fi
+                ;;
+            esac
+        """))
+        git.chmod(0o755)
+        result = self.executor("prepare", "fixtures", env={
+            "PATH": f"{git.parent}:{os.environ['PATH']}",
+            "FAKE_STATE_FAILED": str(self.directory / "failed-once")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checking out iii-hq/templates failed (try 1 of 3)", result.stderr)
+        fetches = [line for line in self.log.read_text().splitlines() if " fetch " in line]
+        self.assertEqual(len(fetches), 2)
+
+    def test_a_group_clones_its_fixture_repositories_from_the_checkouts(self):
+        (self.root / "scripts/run_exact_stack_group.sh").write_text(
+            'env | grep ^GIT_CONFIG_ | sort >>"$FAKE_LOG"\n')
+        for group, expected in (
+            ("case-registry-implementation", [
+                "GIT_CONFIG_COUNT=2",
+                f"GIT_CONFIG_KEY_0=url.file://{self.root}/target/registry-sources/registry.insteadOf",
+                f"GIT_CONFIG_KEY_1=url.file://{self.root}/target/registry-sources/e2e-fixture.insteadOf",
+                "GIT_CONFIG_VALUE_0=https://github.com/iii-hq/registry.git",
+                "GIT_CONFIG_VALUE_1=https://github.com/iii-hq/e2e-fixture.git",
+            ]),
+            ("case-trending-topics-build", [
+                "GIT_CONFIG_COUNT=1",
+                f"GIT_CONFIG_KEY_0=url.file://{self.root}/target/trending-topics-fixture.insteadOf",
+                "GIT_CONFIG_VALUE_0=git@github.com:iii-hq/e2e-fixture.git",
+            ]),
+            ("case-minimal-path", []),
+        ):
+            with self.subTest(group=group):
+                self.log.write_text("")
+                result = self.executor("group", env={"HARNESS_E2E_CAMPAIGN_GROUP_ID": group})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def test_package_hashes_each_root_beside_its_contract(self):
+        result = self.executor("package", '{"job":"group"}', "target/a", "target/b")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            f"campaign package --root target/{root} --contract target/{root}/stack-lock.json "
+            f'--workflow {{"job":"group"}} --output target/{root}/bundle-manifest.json'
+            for root in ("a", "b")
+        ])
+        self.assertEqual(self.executor("package", '{"job":"group"}').returncode, 2)
 
     def test_an_unknown_phase_says_how_to_call_it(self):
         result = self.executor("assemble")

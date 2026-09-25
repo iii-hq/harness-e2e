@@ -72,6 +72,18 @@ export type ExecutionSuite = {
   sha256?: string
 }
 
+/** Where an execution runs: on this harness, in Docker from this worker,
+ *  or on GitHub (imported runs). */
+export type ExecutionWhere = 'harness' | 'docker' | 'github'
+
+/** The stack an execution ran on in Docker or on GitHub: once imported, the
+ *  final `stack.yaml` its contract recorded. The worker sets `sha256`. */
+export type ExecutionStack = {
+  name: string
+  yaml: string
+  sha256?: string
+}
+
 /** What running an execution again would need. */
 export type ExecutionParameters = {
   /** Absent for an execution from before suites. */
@@ -83,6 +95,22 @@ export type ExecutionParameters = {
   provider: string
   /** Agent profile the subject ran under. */
   agent: string | null
+  /** Absent for an execution from before Docker: this harness. */
+  where?: ExecutionWhere
+  /** Docker and GitHub only; this harness runs on its own stack. */
+  stack?: ExecutionStack | null
+}
+
+/** One group of a Docker execution and where it is. */
+export type DockerGroup = {
+  round: number
+  /** Empty until the stack's runner materialized the suite. */
+  campaign_id: string
+  group_id: string
+  scenarios: string[]
+  state: 'queued' | 'running' | 'done' | 'failed' | 'cancelled' | 'interrupted'
+  attempt: number
+  error?: string | null
 }
 
 /** Where an execution came from; data only, every execution reads alike. */
@@ -97,6 +125,14 @@ export type ExecutionSource =
       release_control_execution_id: string | null
       /** The stack its contract names. */
       stack?: string | null
+    }
+  | {
+      kind: 'docker'
+      /** The last root bundle's attempt: 1, then one more per re-run. */
+      attempt: number
+      phase: 'prepare' | 'groups' | 'finalize' | 'import' | 'done'
+      image?: string | null
+      groups: DockerGroup[]
     }
 
 export type StackWorker = {
@@ -626,12 +662,14 @@ export type DashboardDataBridge = {
   ): Promise<Stack>
   deleteStack(stackId: string): Promise<void>
   getCatalog(url?: string): Promise<JsonObject>
-  /** Starts an execution on this stack; Run tests and Run again alike. */
+  /** Starts an execution on this harness or in Docker; Run tests and Run
+   *  again alike. */
   startExecution(request: {
     parameters: ExecutionParameters
     label: string
   }): Promise<{ execution_id: string }>
-  /** Runs one scenario of a finished local execution again, its group whole. */
+  /** Runs one scenario of a finished execution again, its group whole: here,
+   *  or in Docker as the execution's next attempt. */
   rerunScenario(
     executionId: string,
     scenarioId: string,

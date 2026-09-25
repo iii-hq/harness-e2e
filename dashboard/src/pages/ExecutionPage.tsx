@@ -135,17 +135,21 @@ export function executionSuite(detail: DashboardExecutionDetail) {
   )
 }
 
-/** Where an execution ran: for an imported one the stack its contract names,
- *  then the Harness and the E2E runner as its stack recorded them. What was
- *  not recorded is not shown. */
+/** Where an execution ran: for one in Docker or imported the stack it
+ *  records, then the Harness and the E2E runner as its stack recorded them.
+ *  What was not recorded is not shown. */
 export function stackVersions(
   detail: DashboardExecutionDetail,
 ): Array<[string, string]> {
   const stack = detail.plan_execution?.stack
   const source = detail.plan_execution?.source
+  const recorded = detail.plan_execution?.parameters?.stack?.name
   return (
     [
-      ['stack', source?.kind === 'github' ? (source.stack ?? null) : null],
+      [
+        'stack',
+        recorded ?? (source?.kind === 'github' ? (source.stack ?? null) : null),
+      ],
       ['harness', workerVersion(stack, 'harness')],
       ['runner', workerVersion(stack, 'harness-e2e')],
     ] as const

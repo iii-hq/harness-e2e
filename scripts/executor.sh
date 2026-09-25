@@ -1,24 +1,44 @@
 #!/usr/bin/env bash
 # One phase of an execution, run from the checkout's root inside the executor
 # image (scripts/run_in_image.sh starts it there). Every phase reads and writes
-# below target/, as the workflow always has:
+# below target/, as the workflow always has; GitHub's jobs and the Console's
+# Docker executions run the same phases:
 #
-#   prepare [materialize|assemble]
+#   prepare [materialize|assemble|fixtures]
 #       materialize  read the dispatch (DISPATCH_*), resolve iii and the
 #                    template, fetch the stack's runner and materialize the
 #                    suite with it.
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
-#       Without an argument, both. GitHub reports the materialized suite to
-#       Release Control between the two, before anything is assembled.
+#       fixtures     check out below target/ what the groups start from and
+#                    no package brings: the Kanban fixture, the Linkly
+#                    templates, the stack's template, the Registry sources and
+#                    the trending topics fixture. For the group
+#                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
+#                    of the execution. The private ones read GITHUB_TOKEN.
+#       Without an argument, materialize and assemble. GitHub reports the
+#       materialized suite to Release Control between the two, before
+#       anything is assembled.
 #   group     start one group's frozen stack and run its scenarios
-#             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...).
-#   finalize  aggregate every campaign under target/harness-e2e-campaign/ with
-#             the stack's runner into its execution-summary.json.
+#             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...), with
+#             the fixture repositories it clones read from those checkouts.
+#   package WORKFLOW ROOT...
+#             check that each ROOT (below target/, its contract in
+#             stack-lock.json) holds nothing unsafe and hash it into its
+#             bundle-manifest.json; WORKFLOW is the JSON naming who ran it.
+#   finalize [restore|aggregate]
+#       restore    lay every campaign's groups out under
+#                  target/harness-e2e-campaign/ from the group bundles
+#                  target/selected-group-artifacts.json names in
+#                  ${HARNESS_E2E_GROUP_ARTIFACTS:-target/downloaded-groups};
+#                  a group without one reads as never observed.
+#       aggregate  aggregate every campaign there with the stack's runner
+#                  into its execution-summary.json.
+#       Without an argument, both.
 set -Eeuo pipefail
 
 usage() {
-  echo "usage: executor.sh prepare [materialize|assemble] | group | finalize" >&2
+  echo "usage: executor.sh prepare [materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2
 }
 
@@ -80,7 +100,137 @@ assemble() {
   done
 }
 
-finalize() {
+# The revisions the scenarios expect of their fixture sources.
+REGISTRY_REVISION=662eb87c1bdbb395f36264d5d26bf823e2ace783
+TRENDING_TOPICS_REVISION=3ee24f7ace3c014db35423f14939ad3f6ce0c3d2
+LINKLY_TEMPLATES_REVISION=ba1dfd95d4f4120705c8b0cc95d9a2ef86a0290d
+PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "
+
+# checkout REPOSITORY REF DIRECTORY [full]: REF is a commit, a branch, or
+# empty for the default branch, one commit deep unless `full`. A directory
+# that already holds that commit is kept. The token of a private repository
+# goes in the environment of the git calls, never on disk or a command line.
+checkout() {
+  local repository=$1 ref=$2 directory=$3 depth=(--depth 1) try
+  [[ "${4:-}" != full ]] || depth=()
+  if [[ -d "$directory/.git" && "$ref" =~ ^[0-9a-f]{40}$ ]] \
+    && [[ "$(git -C "$directory" rev-parse HEAD 2>/dev/null)" == "$ref" ]]; then
+    return 0
+  fi
+  # Three tries, as actions/checkout makes: a passing 5xx must not cost a
+  # group its fixture.
+  for try in 1 2 3; do
+    rm -rf "$directory"
+    if (
+      if [[ "$PRIVATE_REPOSITORIES" == *" $repository "* && -n "${GITHUB_TOKEN:-}" ]]; then
+        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+        GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+        export GIT_CONFIG_VALUE_0
+      fi
+      url=https://github.com/$repository.git
+      if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        git init -q "$directory" \
+          && git -C "$directory" fetch -q "${depth[@]}" "$url" "$ref" \
+          && git -C "$directory" checkout -q --detach FETCH_HEAD
+      else
+        git clone -q "${depth[@]}" ${ref:+--branch "$ref"} "$url" "$directory"
+      fi
+    ); then
+      return 0
+    fi
+    echo "::warning::checking out $repository failed (try $try of 3)" >&2
+    ((try == 3)) || sleep "$((try * 5))"
+  done
+  return 1
+}
+
+fixtures() {
+  local groups group template
+  if [[ -n "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" ]]; then
+    groups=$HARNESS_E2E_CAMPAIGN_GROUP_ID
+  else
+    groups=$(jq -r '[.matrix.include[].group_id] | unique | .[]' "$contracts/resolution.json")
+  fi
+  for group in $groups; do
+    case "$group" in
+      case-kanban-*) checkout iii-hq/kanban-e2e-fixture main target/kanban-fixture full ;;
+      case-registry-*)
+        checkout iii-hq/registry "$REGISTRY_REVISION" target/registry-sources/registry
+        checkout iii-hq/e2e-fixture "" target/registry-sources/e2e-fixture
+        ;;
+      case-trending-topics-build)
+        checkout iii-hq/e2e-fixture "$TRENDING_TOPICS_REVISION" target/trending-topics-fixture
+        ;;
+      case-linkly-tutorial) checkout iii-hq/templates "$LINKLY_TEMPLATES_REVISION" target/linkly-templates ;;
+    esac
+  done
+  template=$(jq -r '.template.revision // empty' "$contracts/resolution.json")
+  [[ -z "$template" ]] || checkout iii-hq/templates "$template" target/execution-template
+}
+
+# The fixture repositories a group's scenarios clone, read from the
+# checkouts `prepare fixtures` left; git reads this from the environment. A
+# checkout that is missing fails the clone, and the scenario says so.
+route_fixtures() {
+  local routes=()
+  case "${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}" in
+    case-registry-*)
+      routes=(target/registry-sources/registry https://github.com/iii-hq/registry.git
+        target/registry-sources/e2e-fixture https://github.com/iii-hq/e2e-fixture.git)
+      ;;
+    case-trending-topics-build) routes=(target/trending-topics-fixture git@github.com:iii-hq/e2e-fixture.git) ;;
+  esac
+  local index
+  for ((index = 0; index < ${#routes[@]} / 2; index++)); do
+    export "GIT_CONFIG_KEY_$index=url.file://$PWD/${routes[index * 2]}.insteadOf"
+    export "GIT_CONFIG_VALUE_$index=${routes[index * 2 + 1]}"
+  done
+  ((${#routes[@]} == 0)) || export GIT_CONFIG_COUNT=$((${#routes[@]} / 2))
+}
+
+package() {
+  local workflow=${1:?package needs the workflow identity} root
+  shift
+  (($# > 0)) || usage
+  for root in "$@"; do
+    python3 scripts/exact_stack_campaign.py package \
+      --root "$root" \
+      --contract "$root/stack-lock.json" \
+      --workflow "$workflow" \
+      --output "$root/bundle-manifest.json"
+  done
+}
+
+restore() {
+  local bundles=${HARNESS_E2E_GROUP_ARTIFACTS:-target/downloaded-groups}
+  local selected=target/selected-group-artifacts.json contract campaign root group name destination
+  rm -rf target/harness-e2e-campaign
+  while IFS= read -r contract; do
+    campaign=$(basename "$contract" .json)
+    root=target/harness-e2e-campaign/$campaign
+    mkdir -p "$root/groups"
+    cp "$contract" "$root/stack-lock.json"
+    while IFS= read -r group; do
+      name=""
+      [[ ! -f "$selected" ]] || name=$(jq -r --arg job "$campaign · $group" '.[$job].name // empty' "$selected")
+      destination=$root/groups/$group
+      if [[ -n "$name" && -d "$bundles/$name" ]]; then
+        # Linked, not moved: a group bundle stays where the next attempt looks
+        # for it, without taking its size again. The aggregator writes new
+        # files and removes others, never changing one in place.
+        cp -al "$bundles/$name" "$destination" 2>/dev/null \
+          || { rm -rf "$destination" && cp -a "$bundles/$name" "$destination"; }
+      else
+        mkdir -p "$destination"
+        jq -n --arg group_id "$group" --arg campaign_id "$campaign" \
+          '{phase:"workflow_artifact_download",outcome:"infra_failed",campaign_id:$campaign_id,group_id:$group_id,error:"group observation artifact was not available"}' \
+          >"$destination/failure.json"
+      fi
+    done < <(python3 scripts/exact_stack_campaign.py groups --contract "$contract")
+  done < <(find "$contracts" -name '*.json' ! -name resolution.json | sort)
+}
+
+aggregate() {
   # Aggregated by the runner the stack ran, as the suite was materialized by
   # it: one release scores what it executed.
   local runner root
@@ -107,6 +257,7 @@ case "${1:-}" in
     case "${2:-}" in
       materialize) materialize ;;
       assemble) assemble ;;
+      fixtures) fixtures ;;
       "")
         materialize
         assemble
@@ -114,7 +265,24 @@ case "${1:-}" in
       *) usage ;;
     esac
     ;;
-  group) exec bash scripts/run_exact_stack_group.sh ;;
-  finalize) finalize ;;
+  group)
+    route_fixtures
+    exec bash scripts/run_exact_stack_group.sh
+    ;;
+  package)
+    shift
+    package "$@"
+    ;;
+  finalize)
+    case "${2:-}" in
+      restore) restore ;;
+      aggregate) aggregate ;;
+      "")
+        restore
+        aggregate
+        ;;
+      *) usage ;;
+    esac
+    ;;
   *) usage ;;
 esac

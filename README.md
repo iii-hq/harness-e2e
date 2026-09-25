@@ -255,19 +255,27 @@ Dockerfile is one set of tools. It holds no scripts:
 checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
 with `no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
-[materialize|assemble]`, `group` or `finalize` there. Only `group` gets the
-host's Docker socket, and only `prepare` a `GITHUB_TOKEN`: a group's subject
-has a shell. Interrupted, the wrapper stops its container; a group whose
-image or container never started still writes its `failure.json`.
+[materialize|assemble|fixtures]`, `group`, `package` or `finalize
+[restore|aggregate]` there. `prepare fixtures` checks out what the groups
+start from and no package brings (the Kanban fixture, the Linkly templates,
+the stack's template, the Registry sources and the trending topics fixture)
+below `target/`, three tries each, and `group` routes the fixture repositories
+a scenario clones to those checkouts; `finalize` lays each campaign's groups
+out from the group bundles the execution selected (linked, not copied) before
+aggregating them. Only `group` gets the host's Docker socket, and only
+`prepare` a `GITHUB_TOKEN`: a group's subject has a shell. Interrupted, the
+wrapper stops its container; a group whose image or container never started
+still writes its `failure.json`.
 
 Each group's engine listens on 49134 in its own container, off the host's
 network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
 host networking for their screenshots: the fixture publishes the application
 on the host's loopback, where only a phase on the host's network reaches it.
 The workflow runs every group on its runner's network, since each job owns
-its runner, and keeps on the runner what needs it: checkouts, artifacts, the
-OIDC reports, `gh`, and removing a cancelled phase's container before
-anything is reported or packaged.
+its runner, and keeps on the runner what needs it: the GitHub App token for
+the private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
+removing a cancelled phase's container before anything is reported or
+packaged.
 
 [`executor-image.yml`](.github/workflows/executor-image.yml) publishes a tag
 from `main` when the Dockerfile changes (or by hand) and never rebuilds an
@@ -355,13 +363,71 @@ release, date and conclusion. The worker calls the `gh` CLI, so sign it in once 
 **Import** answers at once with an execution in the `importing` state; the
 worker downloads the run's highest-attempt bundle into its data directory and
 installs every group's native run as an ordinary retained run. The execution
-records its parameters with its suite (name and snapshot digest), the stack its
-contract names, the workers each group resolved and observed, and its GitHub
-origin. Contracts from before the workflow stated its execution (plan and
+records its parameters with its suite (name and snapshot digest), the stack as
+its contract recorded it (the final `stack.yaml` and its digest, which Run
+again offers as recorded), the workers each group resolved and observed, and
+its GitHub origin. Contracts from before the workflow stated its execution (plan and
 profile only) import too. A group that left only `failure.json` is kept as a slot with
 that error. Importing a run again replaces the runs of the earlier import; the
 execution keeps its name. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
+
+### Run in Docker
+
+**Run tests** with **Where: Docker** runs the execution as the exact-stack
+workflow does, from this worker, with no checkout of this repository: the
+worker embeds the [Dockerfile](Dockerfile) (whose digest names the executor
+image) and [`scripts/`](scripts), and runs every phase through
+`scripts/run_in_image.sh` from `docker-executions/<execution id>/` under its
+data directory:
+
+- `inputs.json`: the dispatch (`DISPATCH_*`): a master-plan suite run as it is
+  by its id, any other suite whole as JSON, the stack's YAML, the model and the
+  agent profile.
+- `checkout/`: what the wrapper mounts, with the Dockerfile and the scripts,
+  frozen for the execution, and `target/`, every phase's work;
+  `target/artifacts/` keeps the bundles under the workflow's artifact names
+  (`e2e-contract-<id>-gh-1`, `e2e-observation-<id>-<campaign>-<group>-gh-<n>`,
+  `e2e-observation-<id>-gh-<n>`).
+- `logs/`: each phase's output.
+
+`prepare materialize`, `assemble` and `fixtures` run once, then one `group`
+container per group, `docker_parallel_groups` (2) at a time across executions,
+each packaged, then `finalize`, whose root bundle is imported by the code that
+imports a GitHub run, from the folder. The root links its groups' bundles
+rather than copying them, and once an attempt is finalized the roots before it
+go, before it is imported. Cancel stops the running groups' containers (never
+a `package` or `finalize`), then finalizes and imports what finished. Running
+a scenario again runs its groups in new containers as the execution's next
+attempt, with the same contract, lock, scripts and image, finalizes and
+imports again: a group's last attempt that ended counts, and one cancelled or
+cut by a restart leaves the attempt before it counted. A worker that restarts
+removes an active Docker execution's containers, interrupts what did not
+finish and imports what did. A worker older than this release cannot read a
+Docker execution and drops it from its database, as it drops any row it cannot
+read.
+
+Every group runs on a network of its own. The Registry fixture serves the
+application it screenshots on the host's loopback, which only a phase on the
+host's network reaches; there a group's stack takes host ports this machine's
+iii already holds (its Console binds 3113), so the Registry groups run isolated
+as well, and their executions say their screenshots are missing.
+
+Worker configuration:
+
+- `provider_env_file`: an env file with the provider credentials the GitHub
+  groups receive (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `TYPESAFE_API_KEY`),
+  passed to `prepare assemble` and every group with `--env-file`; never logged
+  or copied into the execution's folder. Without one, the execution says its
+  providers start without credentials.
+- `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
+  copied into each new execution, so an edited script takes effect on the next.
+- `docker_parallel_groups`: groups at once, 2 by default.
+
+The phases get none of the worker's environment but where Docker and
+`TMPDIR` are (keep `TMPDIR` short: Chromium's socket path holds 107 bytes).
+`prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
+for the private Registry and trending topics sources.
 
 ## Worker
 

@@ -12,6 +12,7 @@ import type {
   DashboardExecutionSummary,
   ExecutionParameters,
   JsonObject,
+  Stack,
   Suite,
 } from '@/lib/dashboard-data-source'
 import {
@@ -37,6 +38,10 @@ export type RunnerForm = {
   runs: string
   technicalRetries: string
   agent: string
+  /** On this harness, or in Docker on a stack. */
+  where: 'harness' | 'docker'
+  /** The stack picked for Docker, by id, or the execution's as recorded. */
+  stack: string
 }
 
 const initialForm: RunnerForm = {
@@ -47,6 +52,69 @@ const initialForm: RunnerForm = {
   runs: '1',
   technicalRetries: '1',
   agent: '',
+  where: 'harness',
+  stack: '',
+}
+
+/** The stack select's value for the stack an execution ran on, as recorded. */
+const RECORDED_STACK = 'recorded'
+
+/** A stack Docker can run on: one of this Console's list, or the one an
+ *  execution recorded. Its YAML is what the executor receives. */
+export type StackChoice = {
+  value: string
+  label: string
+  source: 'repository' | 'local' | 'recorded'
+  /** What the execution records it as. */
+  name: string
+  yaml: string
+  sha256?: string
+}
+
+/** The stacks the form offers for Docker: the listed ones, and the one the
+ *  execution ran on as it recorded it, unless a listed stack holds that very
+ *  YAML. */
+export function stackChoices(
+  stacks: Stack[],
+  parameters: ExecutionParameters | null,
+): StackChoice[] {
+  const listed: StackChoice[] = stacks.map((stack) => ({
+    value: stack.id,
+    label: stack.label,
+    source: stack.source,
+    name: stack.source === 'repository' ? stack.id : stack.label,
+    yaml: stack.yaml,
+  }))
+  const recorded = parameters?.stack
+  if (!recorded || listed.some((choice) => choice.yaml === recorded.yaml))
+    return listed
+  return [
+    ...listed,
+    {
+      value: RECORDED_STACK,
+      label: recorded.name,
+      source: 'recorded',
+      name: recorded.name,
+      yaml: recorded.yaml,
+      sha256: recorded.sha256,
+    },
+  ]
+}
+
+/** The stack a select value names; the recorded one is the listed stack of
+ *  the same YAML when there is one. */
+export function pickedStack(
+  value: string,
+  choices: StackChoice[],
+  parameters: ExecutionParameters | null,
+): StackChoice | null {
+  return (
+    choices.find((choice) => choice.value === value) ??
+    (value === RECORDED_STACK && parameters?.stack
+      ? choices.find((choice) => choice.yaml === parameters.stack?.yaml)
+      : undefined) ??
+    null
+  )
 }
 
 const NO_SCENARIOS: string[] = []
@@ -77,6 +145,14 @@ export function runnerForm(
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
     agent: parameters.agent ?? '',
+    // Where it ran, on the stack it recorded; a GitHub run runs in Docker
+    // here.
+    where:
+      parameters.where === 'docker' ||
+      (parameters.where === 'github' && parameters.stack)
+        ? 'docker'
+        : 'harness',
+    stack: parameters.stack ? RECORDED_STACK : '',
   }
 }
 
@@ -213,10 +289,12 @@ export function namedSuite(
     : null
 }
 
-/** What `execution-start` receives for the form. */
+/** What `execution-start` receives for the form. Docker gets the stack's
+ *  YAML: the executor knows nothing of this Console's stacks. */
 export function executionStartRequest(
   form: RunnerForm,
   suite: SuiteContent | null = null,
+  stack: StackChoice | null = null,
 ): {
   parameters: ExecutionParameters
   label: string
@@ -232,6 +310,10 @@ export function executionStartRequest(
       model,
       provider,
       agent: form.agent.trim() || null,
+      where: form.where,
+      ...(form.where === 'docker' && stack
+        ? { stack: { name: stack.name, yaml: stack.yaml } }
+        : {}),
     },
   }
 }
@@ -299,8 +381,8 @@ export async function describeStartError(
   }
 }
 
-/** Run tests and Run again: one form that starts an execution on this stack
- *  and then follows it on its page. */
+/** Run tests and Run again: one form that starts an execution on this
+ *  harness or in Docker and then follows it on its page. */
 export function LocalRunnerDialog({
   bridge,
   open,
@@ -321,6 +403,7 @@ export function LocalRunnerDialog({
 }) {
   const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
   const [suites, setSuites] = useState<Suite[]>([])
+  const [stacks, setStacks] = useState<Stack[]>([])
   const [form, setForm] = useState<RunnerForm>(initialForm)
   const [scenarioQuery, setScenarioQuery] = useState('')
   const [loadingCatalog, setLoadingCatalog] = useState(false)
@@ -341,7 +424,7 @@ export function LocalRunnerDialog({
     setLoadingCatalog(true)
     setError(null)
     try {
-      const [next, recent, listed] = await Promise.all([
+      const [next, recent, listed, stackList] = await Promise.all([
         bridge.getCatalog().then(asCatalog),
         // Running again brings its own model.
         parameters
@@ -354,11 +437,16 @@ export function LocalRunnerDialog({
           .listSuites()
           .then((response) => response.suites)
           .catch(() => []),
+        bridge
+          .listStacks()
+          .then((response) => response.stacks)
+          .catch(() => []),
       ])
       const last = lastUsedModel(recent, next.models)
       setLastSubject(last ? modelKey(last) : '')
       setCatalog(next)
       setSuites(listed)
+      setStacks(stackList)
       setForm((current) => ({
         ...current,
         // Never a model the user did not pick or run last: without one the
@@ -421,6 +509,33 @@ export function LocalRunnerDialog({
   )
   const picked = pickedSuite(form.suite, choices)
   const suite = namedSuite(form, choices)
+  const stackOptions = useMemo(
+    () => stackChoices(stacks, parameters),
+    [stacks, parameters],
+  )
+  const stack = pickedStack(form.stack, stackOptions, parameters)
+  const pickWhere = (value: RunnerForm['where']) =>
+    setForm((current) => ({
+      ...current,
+      where: value,
+      // Docker starts on the repository's default stack.
+      stack:
+        current.stack ||
+        (
+          stackOptions.find((choice) => choice.value === 'default') ??
+          stackOptions[0]
+        )?.value ||
+        '',
+    }))
+  const stackGroups: Array<[string, StackChoice[]]> = [
+    ['Repository', stackOptions.filter((c) => c.source === 'repository')],
+    ['This Console', stackOptions.filter((c) => c.source === 'local')],
+    ['This execution', stackOptions.filter((c) => c.source === 'recorded')],
+  ]
+  const stackError =
+    attempted && form.where === 'docker' && !stack
+      ? 'Pick the stack it runs on in Docker.'
+      : undefined
   const pickSuite = (value: string) => {
     const chosen = pickedSuite(value, choices)
     setForm((current) =>
@@ -479,9 +594,12 @@ export function LocalRunnerDialog({
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const nextErrors = validation()
-    if (Object.keys(nextErrors).length > 0 || !bridge) {
+    const noStack = form.where === 'docker' && !stack
+    if (Object.keys(nextErrors).length > 0 || noStack || !bridge) {
       setAttempted(true)
       focusFirstInvalid('quick-execution', nextErrors)
+      if (noStack && Object.keys(nextErrors).length === 0)
+        document.getElementById('quick-execution-stack')?.focus()
       if (!bridge) setError('The local runner is not connected.')
       return
     }
@@ -490,7 +608,7 @@ export function LocalRunnerDialog({
     setRunning(null)
     try {
       const started = await bridge.startExecution(
-        executionStartRequest(form, suite),
+        executionStartRequest(form, suite, stack),
       )
       onClose()
       window.location.hash = hashForExecution(started.execution_id)
@@ -527,15 +645,18 @@ export function LocalRunnerDialog({
       title={parameters ? 'Run again' : 'Run tests'}
       description={
         parameters
-          ? 'Starts a new execution on this stack with the suite and parameters of this one. Change anything before running.'
-          : 'Runs a suite, or the tests ticked, on this stack as a new execution. To compare, tick two executions in the list.'
+          ? 'Starts a new execution with the suite and parameters of this one, where it ran. Change anything before running.'
+          : 'Runs a suite, or the tests ticked, as a new execution on this harness or in Docker on a stack. To compare, tick two executions in the list.'
       }
       closeLabel="Close execution form"
       className="ds-root"
       footer={
         <ExecutionSetupFooter
           summary={summary}
-          pending={Object.values(errors)}
+          pending={[
+            ...Object.values(errors),
+            ...(stackError ? [stackError] : []),
+          ]}
           error={error}
           status={groupNote || null}
         >
@@ -605,6 +726,68 @@ export function LocalRunnerDialog({
               )}
             </Select>
           </Field>
+          <Field
+            label="Where"
+            htmlFor="quick-execution-where"
+            hint={
+              form.where === 'docker'
+                ? 'In the executor image, one container per group, from this worker; results arrive once every group finished.'
+                : 'On the stack this Console runs on.'
+            }
+          >
+            <Select
+              id="quick-execution-where"
+              value={form.where}
+              disabled={submitting}
+              onChange={(event) =>
+                pickWhere(event.target.value as RunnerForm['where'])
+              }
+            >
+              <option value="harness">This harness</option>
+              <option value="docker">Docker</option>
+            </Select>
+          </Field>
+          {form.where === 'docker' ? (
+            <Field
+              label="Stack"
+              htmlFor="quick-execution-stack"
+              meta="required"
+              error={stackError}
+              hint={
+                stack?.source === 'recorded'
+                  ? `As this execution recorded it${stack.sha256 ? ` · ${stack.sha256.replace('sha256:', '').slice(0, 12)}` : ''}: the iii release and the runner pinned.`
+                  : 'Its YAML is what the executor assembles.'
+              }
+            >
+              <Select
+                id="quick-execution-stack"
+                value={stack?.value ?? ''}
+                disabled={submitting}
+                aria-invalid={stackError ? true : undefined}
+                onChange={(event) =>
+                  setForm((current) => ({
+                    ...current,
+                    stack: event.target.value,
+                  }))
+                }
+              >
+                <option value="">Choose a stack</option>
+                {stackGroups.map(([group, entries]) =>
+                  entries.length > 0 ? (
+                    <optgroup key={group} label={group}>
+                      {entries.map((entry) => (
+                        <option key={entry.value} value={entry.value}>
+                          {entry.source === 'recorded'
+                            ? `${entry.label} · as recorded`
+                            : entry.label}
+                        </option>
+                      ))}
+                    </optgroup>
+                  ) : null,
+                )}
+              </Select>
+            </Field>
+          ) : null}
         </div>
         <ExecutionSetup
           key={opening}

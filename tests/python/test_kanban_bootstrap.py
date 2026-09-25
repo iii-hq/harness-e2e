@@ -30,19 +30,14 @@ class KanbanBootstrapTest(unittest.TestCase):
 
     def test_ci_only_checks_out_and_bootstraps_kanban_groups(self):
         workflow = (ROOT / '.github/workflows/exact-stack-e2e.yml').read_text()
+        executor = (ROOT / 'scripts/executor.sh').read_text()
         group = (ROOT / 'scripts/run_exact_stack_group.sh').read_text()
-        self.assertIn("startsWith(matrix.group_id, 'case-kanban-')", workflow)
-        self.assertIn('repository: iii-hq/kanban-e2e-fixture', workflow)
-        self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow)
-        self.assertIn('fetch-depth: 0', workflow)
+        # Checked out in full, anonymously, only for a Kanban group.
+        self.assertIn('case-kanban-*) checkout iii-hq/kanban-e2e-fixture main target/kanban-fixture full ;;', executor)
+        self.assertNotIn('KANBAN_FIXTURE_REPOSITORY', workflow + executor)
+        self.assertIn('scripts/run_in_image.sh prepare fixtures', workflow)
         # The group runs with the executor image's Node.
         self.assertIn('node-v24.18.0-linux-x64', (ROOT / 'Dockerfile').read_text())
-        kanban_checkout = next(
-            step for step in workflow.split('\n      - ')
-            if 'name: Checkout Kanban fixture' in step
-        )
-        self.assertIn('ref: main', kanban_checkout)
-        self.assertNotIn('token:', kanban_checkout)
         for step in workflow.split('\n      - '):
             if 'uses: actions/checkout@' in step:
                 self.assertIn('persist-credentials: false', step)

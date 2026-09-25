@@ -11,6 +11,7 @@ export function ExecutionOriginLink({
 }: {
   source: PlanExecution['source']
 }) {
+  if (source.kind === 'docker') return <>Docker · attempt {source.attempt}</>
   if (source.kind !== 'github') return <>local</>
   return (
     <a
@@ -39,8 +40,15 @@ export function ExecutionConfiguration({
   ]
   if (source.kind === 'github' && source.release_control_execution_id)
     rows.push(['release control', source.release_control_execution_id])
-  if (source.kind === 'github' && source.stack)
+  if (parameters?.stack)
+    rows.push([
+      'stack',
+      `${parameters.stack.name}${parameters.stack.sha256 ? ` · ${parameters.stack.sha256.replace('sha256:', '').slice(0, 12)}` : ''}`,
+    ])
+  else if (source.kind === 'github' && source.stack)
     rows.push(['stack', source.stack])
+  if (source.kind === 'docker' && source.image)
+    rows.push(['executor image', source.image])
   if (parameters)
     rows.push(
       ['suite', suiteText(parameters.suite) ?? 'not recorded'],

@@ -316,6 +316,7 @@ try {
           'timer_wake',
           'registry_implementation',
         ],
+        where: 'harness',
       },
     },
   ])

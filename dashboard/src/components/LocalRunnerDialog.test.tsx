@@ -4,15 +4,18 @@ import {
   executionStartRequest,
   lastUsedModel,
   namedSuite,
+  pickedStack,
   pickedSuite,
   runnerForm,
   runningExecutionId,
+  stackChoices,
   suiteChoices,
   withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
 import type {
   DashboardExecutionSummary,
   ExecutionParameters,
+  Stack,
   Suite,
 } from '@/lib/dashboard-data-source'
 
@@ -50,6 +53,8 @@ describe('run form', () => {
       parameters: {
         ...imported,
         suite: { id: 'software-engineering', label: 'Software engineering' },
+        // Recorded before Docker: it ran on this harness.
+        where: 'harness',
       },
     })
   })
@@ -71,6 +76,7 @@ describe('run form', () => {
       ...imported,
       suite: null,
       scenarios: ['context_pressure'],
+      where: 'harness',
     })
   })
 
@@ -91,8 +97,88 @@ describe('run form', () => {
         model: 'deepseek-v4-flash',
         provider: 'deepseek',
         agent: null,
+        where: 'harness',
       },
     })
+  })
+})
+
+describe('where and stack fields', () => {
+  const stack = (id: string, source: 'repository' | 'local', yaml: string) =>
+    ({
+      id,
+      label: source === 'local' ? `${id} copy` : id,
+      source,
+      yaml,
+      iii: 'latest',
+      template: null,
+      containers: [],
+      warnings: [],
+      updated_at: null,
+    }) as Stack
+  const listed = [
+    stack('default', 'repository', 'iii: latest\ncontainers: {}\n'),
+    stack('stack-0123456789ab', 'local', 'iii: 0.24.1\ncontainers: {}\n'),
+  ]
+  const recorded = 'iii: 0.24.2\ncontainers:\n  harness: {version: 1.8.31}\n'
+  const docker: ExecutionParameters = {
+    ...imported,
+    where: 'docker',
+    stack: { name: 'default', yaml: recorded, sha256: 'sha256:abc' },
+  }
+
+  it('runs a Docker execution again on its stack as recorded', () => {
+    const form = runnerForm(docker)
+    expect(form).toMatchObject({ where: 'docker', stack: 'recorded' })
+    const choices = stackChoices(listed, docker)
+    expect(choices.map((choice) => [choice.value, choice.source])).toEqual([
+      ['default', 'repository'],
+      ['stack-0123456789ab', 'local'],
+      ['recorded', 'recorded'],
+    ])
+    const picked = pickedStack(form.stack, choices, docker)
+    expect(executionStartRequest(form, null, picked).parameters).toMatchObject({
+      where: 'docker',
+      stack: { name: 'default', yaml: recorded },
+    })
+    // A GitHub run runs in Docker here, on the stack it recorded; one that
+    // recorded none, on this harness.
+    expect(runnerForm({ ...docker, where: 'github' }).where).toBe('docker')
+    expect(runnerForm({ ...docker, where: 'github', stack: null }).where).toBe(
+      'harness',
+    )
+  })
+
+  it('names a listed stack by its id or name and sends its YAML', () => {
+    const choices = stackChoices(listed, null)
+    expect(choices.map((choice) => choice.name)).toEqual([
+      'default',
+      'stack-0123456789ab copy',
+    ])
+    const form = {
+      ...runnerForm(null, ['minimal_path']),
+      where: 'docker' as const,
+      stack: 'stack-0123456789ab',
+    }
+    expect(
+      executionStartRequest(form, null, pickedStack(form.stack, choices, null))
+        .parameters.stack,
+    ).toEqual({
+      name: 'stack-0123456789ab copy',
+      yaml: 'iii: 0.24.1\ncontainers: {}\n',
+    })
+    // This harness runs on its own stack: none is sent.
+    expect(
+      executionStartRequest({ ...form, where: 'harness' }, null, choices[1])
+        .parameters,
+    ).not.toHaveProperty('stack')
+  })
+
+  it('reads the recorded stack as the listed one holding the same YAML', () => {
+    const same = { ...docker, stack: { name: 'default', yaml: listed[0].yaml } }
+    const choices = stackChoices(listed, same)
+    expect(choices).toHaveLength(2)
+    expect(pickedStack('recorded', choices, same)?.value).toBe('default')
   })
 })
 

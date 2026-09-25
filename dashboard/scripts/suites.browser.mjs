@@ -254,6 +254,7 @@ try {
       model: 'deepseek-v4-flash',
       provider: 'deepseek',
       agent: null,
+      where: 'harness',
     },
   })
 
