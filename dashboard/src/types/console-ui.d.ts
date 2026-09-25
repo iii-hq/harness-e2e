@@ -121,8 +121,68 @@ declare module '@iii-dev/console-ui' {
   export const Skeleton: React.ComponentType<
     React.HTMLAttributes<HTMLSpanElement>
   >
+  export type TableDensity = 'comfortable' | 'compact'
+  export interface TableProps
+    extends React.TableHTMLAttributes<HTMLTableElement> {
+    density?: TableDensity
+  }
+  export const TableViewport: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const TableFrame: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const Table: React.ComponentType<TableProps>
+  export const TableHeader: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export const TableBody: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export const TableFooter: React.ComponentType<
+    React.HTMLAttributes<HTMLTableSectionElement>
+  >
+  export interface TableRowProps
+    extends React.HTMLAttributes<HTMLTableRowElement> {
+    interactive?: boolean
+    selected?: boolean
+  }
+  export const TableRow: React.ComponentType<TableRowProps>
+  export const TableHead: React.ComponentType<
+    React.ThHTMLAttributes<HTMLTableCellElement>
+  >
+  export const TableCell: React.ComponentType<
+    React.TdHTMLAttributes<HTMLTableCellElement>
+  >
+  export const TableCaption: React.ComponentType<
+    React.HTMLAttributes<HTMLTableCaptionElement>
+  >
+
+  export type ChipTone = 'neutral' | 'accent' | 'success' | 'warning' | 'danger'
+  export interface ChipProps extends React.HTMLAttributes<HTMLSpanElement> {
+    tone?: ChipTone
+    selected?: boolean
+  }
+  export const Chip: React.ComponentType<ChipProps>
+
+  export type BadgeVariant = 'default' | 'ok' | 'warn' | 'alert' | 'accent'
+  export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement> {
+    variant?: BadgeVariant
+  }
+  export const Badge: React.ComponentType<BadgeProps>
+
+  export type StatusDotTone = 'accent' | 'alert' | 'warn' | 'ink' | 'ok'
+  export interface StatusDotProps
+    extends React.HTMLAttributes<HTMLSpanElement> {
+    tone?: StatusDotTone
+    /** The host's live ring; off under prefers-reduced-motion. */
+    pulse?: boolean
+  }
+  export const StatusDot: React.ComponentType<StatusDotProps>
+
+  export type StatusVariant = 'info' | 'success' | 'warn' | 'alert'
   export interface StatusPanelProps {
-    variant?: 'info' | 'success' | 'warn' | 'alert'
+    variant?: StatusVariant
     icon?: React.ReactNode
     headline: React.ReactNode
     detail?: React.ReactNode
@@ -130,17 +190,108 @@ declare module '@iii-dev/console-ui' {
   }
   export const StatusPanel: React.ComponentType<StatusPanelProps>
   export interface EmptyStateProps {
+    icon?: React.ComponentType<{ className?: string }>
     title: string
     description: string
     action?: { label: string; onClick: () => void }
   }
   export const EmptyState: React.ComponentType<EmptyStateProps>
-  export const Dialog: React.ComponentType<{
+
+  export interface DialogProps {
     open?: boolean
+    defaultOpen?: boolean
     onOpenChange?(open: boolean): void
+    modal?: boolean
     children?: React.ReactNode
-  }>
-  export const DropdownMenu: React.ComponentType<{ children?: React.ReactNode }>
+  }
+  export const Dialog: React.ComponentType<DialogProps>
+  export const DialogTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export const DialogClose: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export interface DialogContentProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    onOpenAutoFocus?(event: Event): void
+    onCloseAutoFocus?(event: Event): void
+    onEscapeKeyDown?(event: KeyboardEvent): void
+  }
+  export const DialogContent: React.ComponentType<DialogContentProps>
+  export const DialogTitle: React.ComponentType<
+    React.HTMLAttributes<HTMLHeadingElement>
+  >
+  export const DialogDescription: React.ComponentType<
+    React.HTMLAttributes<HTMLParagraphElement>
+  >
+  export interface ConfirmDialogProps {
+    open: boolean
+    onOpenChange: (open: boolean) => void
+    title: string
+    description?: React.ReactNode
+    details?: readonly string[]
+    confirmLabel?: string
+    cancelLabel?: string
+    onConfirm: () => void
+    onCancel?: () => void
+  }
+  export const ConfirmDialog: React.ComponentType<ConfirmDialogProps>
+
+  export interface CollapsibleCardProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    open?: boolean
+    defaultOpen?: boolean
+    onOpenChange?(open: boolean): void
+    disabled?: boolean
+  }
+  export const CollapsibleCard: React.ComponentType<CollapsibleCardProps>
+  export const CollapsibleCardTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement>
+  >
+  export const CollapsibleCardContent: React.ComponentType<
+    React.HTMLAttributes<HTMLElement>
+  >
+
+  /** Radix dropdown-menu anatomy, restyled by the host. */
+  export interface DropdownMenuProps {
+    open?: boolean
+    defaultOpen?: boolean
+    onOpenChange?(open: boolean): void
+    modal?: boolean
+    children?: React.ReactNode
+  }
+  export const DropdownMenu: React.ComponentType<DropdownMenuProps>
+  export const DropdownMenuTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export interface DropdownMenuContentProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    align?: 'start' | 'center' | 'end'
+    side?: 'top' | 'right' | 'bottom' | 'left'
+    sideOffset?: number
+    alignOffset?: number
+    collisionPadding?: number
+    loop?: boolean
+  }
+  export const DropdownMenuContent: React.ComponentType<DropdownMenuContentProps>
+  export interface DropdownMenuItemProps
+    extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onSelect'> {
+    disabled?: boolean
+    onSelect?(event: Event): void
+    textValue?: string
+    asChild?: boolean
+  }
+  export const DropdownMenuItem: React.ComponentType<DropdownMenuItemProps>
+  export const DropdownMenuSeparator: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const DropdownMenuLabel: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const DropdownMenuGroup: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+
   export const Tooltip: React.ComponentType<{
     children?: React.ReactNode
     delayDuration?: number
