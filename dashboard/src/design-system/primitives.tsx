@@ -157,6 +157,14 @@ export type PageHeaderProps = HTMLAttributes<HTMLElement> & {
   /** Trail above the title; the last entry is the current page. */
   breadcrumb?: Breadcrumb[]
   actions?: ReactNode
+  /** `list`: the section tab is the title, so the heading is for assistive
+   *  technology only and the summary is the visible line. `detail`: a back
+   *  button and one 20 px title with the record's actions beside it. */
+  variant?: 'list' | 'detail'
+  /** First-level detail pages go back to their section, never a crumb. */
+  back?: { label: string; href: string }
+  /** The title is a machine id (a test id): Geist Mono. */
+  mono?: boolean
 }
 
 export function PageHeader({
@@ -167,14 +175,30 @@ export function PageHeader({
   context,
   breadcrumb,
   actions,
+  variant,
+  back,
+  mono = false,
   className,
   ...props
 }: PageHeaderProps) {
   const Heading = headingLevel === 1 ? 'h1' : 'h2'
   return (
-    <header className={classes('ds-page-header', className)} {...props}>
+    <header
+      className={classes(
+        'ds-page-header',
+        variant === 'list' && 'ds-page-header-list',
+        variant === 'detail' && 'ds-page-header-detail',
+        className,
+      )}
+      {...props}
+    >
       <div className="ds-page-header-copy">
-        {breadcrumb && breadcrumb.length > 0 ? (
+        {back ? (
+          <a className="ds-page-back" href={back.href}>
+            <span aria-hidden="true">←</span> {back.label}
+          </a>
+        ) : null}
+        {!back && breadcrumb && breadcrumb.length > 0 ? (
           <nav className="ds-breadcrumb" aria-label="Breadcrumb">
             <ol>
               {breadcrumb.map((crumb, index) => {
@@ -194,8 +218,20 @@ export function PageHeader({
             </ol>
           </nav>
         ) : null}
-        {context ? <p className="ds-page-context">{context}</p> : null}
-        <Heading id={headingId}>{title}</Heading>
+        {context && variant !== 'list' ? (
+          <p className="ds-page-context">{context}</p>
+        ) : null}
+        <Heading
+          id={headingId}
+          className={
+            classes(
+              variant === 'list' && 'ds-visually-hidden',
+              mono && 'ds-page-title-mono',
+            ) || undefined
+          }
+        >
+          {title}
+        </Heading>
         <p className="ds-page-summary">{summary}</p>
       </div>
       {actions ? <div className="ds-page-actions">{actions}</div> : null}
@@ -521,7 +557,7 @@ export type CalloutProps = HTMLAttributes<HTMLDivElement> & {
 }
 
 const calloutRoles: Record<CalloutTone, 'note' | 'status' | 'alert'> = {
-  info: 'note',
+  info: 'status',
   success: 'status',
   warning: 'status',
   danger: 'alert',
@@ -680,6 +716,13 @@ export type DialogProps = Omit<
   bodyClassName?: string
   /** Element to focus on open instead of the title (e.g. the safe action of a confirm). */
   initialFocus?: RefObject<HTMLElement | null>
+  /**
+   * Open outside the browser's top layer, under our own backdrop, so the
+   * host's portaled overlays (ModelPicker, DropdownMenu, Tooltip) render above
+   * the dialog instead of behind it. Focus stays trapped; Escape and clicks
+   * that come from those overlays are left to them.
+   */
+  hostOverlays?: boolean
   children?: ReactNode
 }
 
@@ -727,6 +770,7 @@ export function Dialog({
   bodyPadding = false,
   bodyClassName,
   initialFocus,
+  hostOverlays = false,
   className,
   children,
   ...props
@@ -741,87 +785,101 @@ export function Dialog({
     const dialog = ref.current
     if (!dialog) return
     if (open && !dialog.open) {
-      dialog.showModal()
+      if (hostOverlays) dialog.show()
+      else dialog.showModal()
       ;(initialFocus?.current ?? titleRef.current)?.focus()
     }
     if (!open && dialog.open) dialog.close()
-  }, [open, initialFocus])
+  }, [open, initialFocus, hostOverlays])
+
+  // Keys and clicks from the host's portaled overlays bubble here through the
+  // React tree; they belong to those overlays.
+  const fromInside = (event: { target: EventTarget; currentTarget: Node }) =>
+    event.currentTarget.contains(event.target as Node)
 
   return (
-    <dialog
-      ref={ref}
-      className={classes(
-        'ds-dialog',
-        `ds-dialog-${size}`,
-        tall && 'ds-dialog-tall',
-        className,
-      )}
-      aria-labelledby={titleId}
-      aria-describedby={description ? descriptionId : undefined}
-      onCancel={(event) => {
-        event.preventDefault()
-        event.stopPropagation()
-        onClose()
-      }}
-      onClose={(event) => {
-        event.stopPropagation()
-        if (open) onClose()
-      }}
-      onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+    <>
+      {hostOverlays && open ? (
+        <div className="ds-dialog-scrim" aria-hidden="true" onClick={onClose} />
+      ) : null}
+      <dialog
+        ref={ref}
+        className={classes(
+          'ds-dialog',
+          `ds-dialog-${size}`,
+          tall && 'ds-dialog-tall',
+          hostOverlays && 'ds-dialog-host-overlays',
+          className,
+        )}
+        aria-modal={hostOverlays ? true : undefined}
+        aria-labelledby={titleId}
+        aria-describedby={description ? descriptionId : undefined}
+        onCancel={(event) => {
           event.preventDefault()
           event.stopPropagation()
           onClose()
-          return
-        }
-        trapDialogFocus(event)
-      }}
-      onClick={(event) => {
-        if (event.target === event.currentTarget) onClose()
-      }}
-      {...props}
-    >
-      <header className="ds-dialog-header">
-        <div className="ds-dialog-heading">
-          {kicker ? <span className="ds-label">{kicker}</span> : null}
-          <h2
-            id={titleId}
-            ref={titleRef}
-            tabIndex={-1}
-            className="ds-dialog-title"
+        }}
+        onClose={(event) => {
+          event.stopPropagation()
+          if (open) onClose()
+        }}
+        onKeyDown={(event) => {
+          if (!fromInside(event)) return
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            event.stopPropagation()
+            onClose()
+            return
+          }
+          trapDialogFocus(event)
+        }}
+        onClick={(event) => {
+          if (event.target === event.currentTarget) onClose()
+        }}
+        {...props}
+      >
+        <header className="ds-dialog-header">
+          <div className="ds-dialog-heading">
+            {kicker ? <span className="ds-label">{kicker}</span> : null}
+            <h2
+              id={titleId}
+              ref={titleRef}
+              tabIndex={-1}
+              className="ds-dialog-title"
+            >
+              {title}
+            </h2>
+            {description ? (
+              <p id={descriptionId} className="ds-dialog-description">
+                {description}
+              </p>
+            ) : null}
+          </div>
+          <div className="ds-dialog-actions">
+            {actions}
+            <button
+              className="ds-dialog-close"
+              type="button"
+              onClick={onClose}
+              aria-label={closeLabel}
+            >
+              <X size={18} aria-hidden="true" />
+            </button>
+          </div>
+        </header>
+        {children ? (
+          <div
+            className={classes(
+              'ds-dialog-body',
+              bodyPadding && 'ds-dialog-body-padded',
+              bodyClassName,
+            )}
           >
-            {title}
-          </h2>
-          {description ? (
-            <p id={descriptionId} className="ds-dialog-description">
-              {description}
-            </p>
-          ) : null}
-        </div>
-        <div className="ds-dialog-actions">
-          {actions}
-          <button
-            className="ds-dialog-close"
-            type="button"
-            onClick={onClose}
-            aria-label={closeLabel}
-          >
-            <X size={18} aria-hidden="true" />
-          </button>
-        </div>
-      </header>
-      {children ? (
-        <div
-          className={classes(
-            'ds-dialog-body',
-            bodyPadding && 'ds-dialog-body-padded',
-            bodyClassName,
-          )}
-        >
-          {children}
-        </div>
-      ) : null}
-      {footer ? <footer className="ds-dialog-footer">{footer}</footer> : null}
-    </dialog>
+            {children}
+          </div>
+        ) : null}
+        {footer ? <footer className="ds-dialog-footer">{footer}</footer> : null}
+      </dialog>
+    </>
   )
 }

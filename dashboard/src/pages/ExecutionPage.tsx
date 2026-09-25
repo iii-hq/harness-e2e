@@ -16,6 +16,14 @@ import {
 import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
 import { ExecutionProgress } from '@/components/ExecutionProgress'
+import {
+  CancelExecutionDialog,
+  WhereItRan,
+} from '@/components/execution/WhereItRan'
+import {
+  reportedLine,
+  whereLine,
+} from '@/components/execution/where-it-ran-model'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
@@ -480,6 +488,7 @@ export function ExecutionPage({
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [cancelling, setCancelling] = useState(false)
+  const [cancelOpen, setCancelOpen] = useState(false)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   // The parameters the Run again form opened with; null while it is closed.
@@ -727,6 +736,11 @@ export function ExecutionPage({
       <div className="page-shell max-w-[1420px]">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
+          variant="detail"
+          back={{
+            label: 'Back to Executions',
+            href: hashForWorkspace('executions'),
+          }}
           className="pm-page-header execution-header"
           title={title}
           summary={
@@ -861,46 +875,48 @@ export function ExecutionPage({
             onCancel={ready && !importing ? () => void cancelRun() : undefined}
           />
         ) : null}
-        {detail.plan_execution?.source.kind === 'github' && live ? (
-          <section
-            className="mt-6 flex flex-wrap items-center gap-3 rounded-[6px] bg-[var(--color-surface)] px-4 py-3 text-sm"
-            aria-label="GitHub run"
-            role="status"
-          >
-            <span>
-              Running on GitHub ·{' '}
-              {detail.plan_execution.source.status === 'in_progress'
-                ? 'in progress'
-                : (detail.plan_execution.source.status ?? 'queued')}
-              . The results are imported when the run ends.
+        {detail.plan_execution && (live || importing) ? (
+          <div className="wr-live" role="status" data-where-line>
+            <span className="wr-live-line">
+              {whereLine(detail.plan_execution)}
             </span>
-            <a
-              className="ml-auto underline underline-offset-2"
-              href={detail.plan_execution.source.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open the run on GitHub
-            </a>
-          </section>
-        ) : detail.plan_execution && live && !importing ? (
-          <ExecutionProgress
+            {reportedLine(detail.plan_execution) ? (
+              <span className="wr-faint">
+                {reportedLine(detail.plan_execution)}
+              </span>
+            ) : null}
+            {ready && live && detail.plan_execution.state !== 'cancelling' ? (
+              <button
+                type="button"
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                  className: 'ms-auto',
+                })}
+                onClick={() => setCancelOpen(true)}
+              >
+                Cancel
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        {detail.plan_execution &&
+        (live || importing || detail.plan_execution.source.kind !== 'local') ? (
+          <WhereItRan execution={detail.plan_execution} />
+        ) : null}
+        {detail.plan_execution &&
+        detail.plan_execution.source.kind === 'local' &&
+        live &&
+        !importing ? (
+          <ExecutionProgress execution={detail.plan_execution} />
+        ) : null}
+        {detail.plan_execution ? (
+          <CancelExecutionDialog
+            bridge={bridge}
             execution={detail.plan_execution}
-            actions={
-              ready ? (
-                <button
-                  type="button"
-                  className={buttonClassName({
-                    variant: 'secondary',
-                    size: 'compact',
-                  })}
-                  onClick={() => void cancelRun()}
-                  disabled={cancelling}
-                >
-                  {cancelling ? 'cancelling…' : 'cancel execution'}
-                </button>
-              ) : undefined
-            }
+            open={cancelOpen}
+            onClose={() => setCancelOpen(false)}
+            onCancelled={() => void load()}
           />
         ) : null}
         {detail.live_progress ? (

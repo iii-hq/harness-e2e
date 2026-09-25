@@ -293,6 +293,74 @@ declare module '@iii-dev/console-ui' {
   export const DropdownMenuGroup: React.ComponentType<
     React.HTMLAttributes<HTMLDivElement>
   >
+  export interface DropdownMenuRadioGroupProps
+    extends React.HTMLAttributes<HTMLDivElement> {
+    value?: string
+    onValueChange?(value: string): void
+  }
+  export const DropdownMenuRadioGroup: React.ComponentType<DropdownMenuRadioGroupProps>
+  export interface DropdownMenuRadioItemProps
+    extends Omit<React.HTMLAttributes<HTMLDivElement>, 'onSelect'> {
+    value: string
+    disabled?: boolean
+    onSelect?(event: Event): void
+    textValue?: string
+  }
+  export const DropdownMenuRadioItem: React.ComponentType<DropdownMenuRadioItemProps>
+
+  /** The Console's model picker: searchable, grouped by provider, a popover
+   *  on desktop and a sheet on phones. Ids are `provider::model`. */
+  export interface ModelPickerOption {
+    id: string
+    label: string
+    contextWindow?: number
+    supportsThinking?: boolean
+    supportsVision?: boolean
+    reasoningEfforts?: { effort: string; description?: string }[]
+  }
+  export interface ModelPickerProps {
+    value: string | null
+    options: ModelPickerOption[]
+    openRequest?: number
+    thinkingLevel: string
+    onChange: (next: string) => void
+    onThinkingLevelChange: (next: string) => void
+    disabled?: boolean
+    loading?: boolean
+    showRefresh?: boolean
+    placeholder?: string
+    showProviderConfiguration?: boolean
+    showReasoningEffort?: boolean
+    className?: string
+    triggerClassName?: string
+    triggerAppearance?: 'default' | 'subtle'
+  }
+  export const ModelPicker: React.ComponentType<ModelPickerProps>
+
+  /** Radix dialog anatomy the host draws as a sheet from the bottom edge. */
+  export interface BottomSheetProps {
+    open?: boolean
+    defaultOpen?: boolean
+    onOpenChange?(open: boolean): void
+    modal?: boolean
+    children?: React.ReactNode
+  }
+  export const BottomSheet: React.ComponentType<BottomSheetProps>
+  export const BottomSheetTrigger: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export const BottomSheetClose: React.ComponentType<
+    React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+  >
+  export const BottomSheetContent: React.ComponentType<
+    React.HTMLAttributes<HTMLDivElement>
+  >
+  export const BottomSheetTitle: React.ComponentType<
+    React.HTMLAttributes<HTMLHeadingElement>
+  >
+  export const BottomSheetDescription: React.ComponentType<
+    React.HTMLAttributes<HTMLParagraphElement>
+  >
 
   export const Tooltip: React.ComponentType<{
     children?: React.ReactNode

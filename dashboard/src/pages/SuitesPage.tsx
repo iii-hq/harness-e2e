@@ -97,7 +97,6 @@ function SuiteEditor({
   ]
   const validation = () =>
     validateExecutionSetup({
-      mode: 'suite',
       label: draft.label,
       selectedScenarios: draft.scenarios,
     })
@@ -144,7 +143,6 @@ function SuiteEditor({
       footer={
         <ExecutionSetupFooter
           summary={{
-            mode: 'suite',
             selectedScenarios: draft.scenarios.length,
             runsPerScenario,
             technicalRetries,
@@ -180,7 +178,6 @@ function SuiteEditor({
       >
         <ExecutionSetup
           idPrefix="suite-editor"
-          mode="suite"
           stickyOffset="dialog"
           initialOnlySelected
           label={draft.label}
@@ -286,7 +283,8 @@ export function SuitesPage() {
       <DashboardPageActions active="suites" />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="suites"
+          variant="list"
+          title="Suites"
           summary="What to test: scenarios, runs of each and technical retries. The repository's suites are read-only; copy one to edit it here."
         />
         {error ? (

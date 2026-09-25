@@ -114,6 +114,7 @@ export function Picker({
         aria-controls={open ? listId : undefined}
         aria-describedby={describedBy}
         data-open={open || undefined}
+        data-value={value}
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
         onKeyDown={(event) => {

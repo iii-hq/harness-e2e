@@ -392,6 +392,7 @@ impl PlanStore {
             release_control_execution_id: title.strip_prefix("E2E · ").map(str::to_owned),
             stack: None,
             status: None,
+            follow: Default::default(),
         };
         execution.state = "importing".into();
         execution.error = None;

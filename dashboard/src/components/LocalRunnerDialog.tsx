@@ -1,3 +1,4 @@
+import { ModelPicker } from '@iii-dev/console-ui'
 import {
   AlertCircle,
   ArrowRight,
@@ -6,8 +7,7 @@ import {
   Plus,
   TriangleAlert,
 } from 'lucide-react'
-import { useCallback, useEffect, useId, useMemo, useState } from 'react'
-import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GithubCard } from '@/components/run-dialog/GithubCard'
 import { Picker, type PickerGroup } from '@/components/run-dialog/Picker'
 import {
@@ -450,8 +450,9 @@ export function LocalRunnerDialog({
   )
   // The model taken from the last execution, said so under the field.
   const [lastSubject, setLastSubject] = useState('')
-  const ids = useId()
-  const id = (name: string) => `${ids}-${name}`
+  // One Run dialog is open at a time: stable ids let the browser journeys
+  // (scripts/*.browser.mjs) address its controls.
+  const id = (name: string) => `run-dialog-${name}`
 
   const refreshCatalog = useCallback(async () => {
     if (!bridge) return
@@ -750,13 +751,15 @@ export function LocalRunnerDialog({
             : 'Its YAML is what the executor assembles.'
         }`
 
-  const modelOptions = modelGroups(models).map((group) => ({
-    provider: group.provider,
-    models: group.models.map((model) => ({
+  // The Console's own picker: searchable, grouped by provider, a popover that
+  // is not clipped by the dialog and a sheet on phones. Ids are
+  // `provider::model`; the form keeps `provider\nmodel`.
+  const modelOptions = modelGroups(models).flatMap((group) =>
+    group.models.map((model) => ({
+      id: `${model.provider}::${model.model}`,
       label: model.model,
-      value: modelKey(model),
     })),
-  }))
+  )
   const modelHint = parameters
     ? 'The model this execution ran with.'
     : form.subject && form.subject === lastSubject
@@ -780,6 +783,7 @@ export function LocalRunnerDialog({
       description={description}
       closeLabel="Close"
       className="ds-root rd-dialog"
+      hostOverlays
       bodyClassName="rd-body"
       footer={
         <div className="rd-footer">
@@ -1009,22 +1013,18 @@ export function LocalRunnerDialog({
               <span className="rd-hint">required</span>
             </div>
             <div className="rd-model">
-              <ProviderModelDropdown
-                id={id('model-picker')}
-                labelledBy={id('model')}
-                ariaLabel="Model"
-                groups={modelOptions}
-                value={form.subject}
-                onChange={(value) => update('subject', value)}
-                placeholder={
-                  loadingCatalog
-                    ? 'Loading models…'
-                    : !ready
-                      ? 'Catalog unavailable'
-                      : 'Choose a model'
-                }
+              <ModelPicker
+                value={form.subject ? form.subject.replace('\n', '::') : null}
+                options={modelOptions}
+                thinkingLevel="default"
+                onChange={(next) => update('subject', next.replace('::', '\n'))}
+                onThinkingLevelChange={() => {}}
+                showRefresh={false}
+                showProviderConfiguration={false}
+                showReasoningEffort={false}
+                loading={loadingCatalog}
+                placeholder={!ready ? 'Catalog unavailable' : 'Choose a model'}
                 disabled={!ready || submitting}
-                required
               />
             </div>
             {modelHint ? <p className="rd-hint">{modelHint}</p> : null}
@@ -1065,7 +1065,11 @@ export function LocalRunnerDialog({
                     >
                       <Minus size={16} aria-hidden="true" />
                     </button>
-                    <output className="rd-stepper-value" aria-live="polite">
+                    <output
+                      id={id(`${key}-value`)}
+                      className="rd-stepper-value"
+                      aria-live="polite"
+                    >
                       {value}
                     </output>
                     <button

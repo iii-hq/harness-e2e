@@ -137,6 +137,8 @@ export type ExecutionSource =
       /** The run's status while this worker follows an execution it
        *  started there: `queued`, `in_progress`, then `completed`. */
       status?: string | null
+      /** What following the run adds; absent until this worker follows it. */
+      follow?: GithubFollow
     }
   | {
       kind: 'docker'
@@ -146,6 +148,25 @@ export type ExecutionSource =
       image?: string | null
       groups: DockerGroup[]
     }
+
+/** One job of a followed GitHub run's latest attempt. */
+export type GithubJob = {
+  id: number
+  name: string
+  status: 'queued' | 'in_progress' | 'completed' | string
+  conclusion?: string | null
+  started_at?: string | null
+  completed_at?: string | null
+  url: string
+}
+
+export type GithubFollow = {
+  /** This worker follows the run (started here, or a job re-run). */
+  followed?: boolean
+  head_branch?: string | null
+  head_sha?: string | null
+  jobs?: GithubJob[]
+}
 
 export type StackWorker = {
   name: string

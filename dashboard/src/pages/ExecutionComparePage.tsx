@@ -878,7 +878,12 @@ export function ExecutionComparePage({
   return shell(
     <>
       <PageHeader
-        title="compare executions"
+        variant="detail"
+        back={{
+          label: 'Back to Executions',
+          href: hashForWorkspace('executions'),
+        }}
+        title="Compare executions"
         summary={`${counted.length} of ${comparison.scenarios.length} scenarios counted in the totals · differences are observations, not a verdict`}
         headingId="comparison-title"
         breadcrumb={[

@@ -616,6 +616,97 @@ export function DropdownMenuGroup(props: Div) {
   return <div {...props} />
 }
 
+const RadioContext = createContext<{
+  value?: string
+  onValueChange?(value: string): void
+}>({})
+
+export function DropdownMenuRadioGroup({
+  value,
+  onValueChange,
+  ...props
+}: Div & { value?: string; onValueChange?(value: string): void }) {
+  return (
+    <RadioContext.Provider value={{ value, onValueChange }}>
+      {/* biome-ignore lint/a11y/useSemanticElements: Radix's radio group markup */}
+      <div role="group" {...props} />
+    </RadioContext.Provider>
+  )
+}
+
+/** A menu item that checks itself when it is the group's value. */
+export function DropdownMenuRadioItem({
+  value,
+  onSelect,
+  ...props
+}: Omit<Div, 'onSelect'> & {
+  value: string
+  disabled?: boolean
+  onSelect?(event: Event): void
+  textValue?: string
+}) {
+  const radio = useContext(RadioContext)
+  return (
+    <DropdownMenuItem
+      role="menuitemradio"
+      aria-checked={radio.value === value}
+      {...props}
+      onSelect={(event) => {
+        onSelect?.(event)
+        radio.onValueChange?.(value)
+      }}
+    />
+  )
+}
+
+/** The host's model picker, reduced to a labelled select of its options. */
+export function ModelPicker({
+  value,
+  options,
+  onChange,
+  disabled,
+  loading,
+  placeholder = 'Choose a model',
+  className,
+}: {
+  value: string | null
+  options: { id: string; label: string }[]
+  thinkingLevel: string
+  onChange(next: string): void
+  onThinkingLevelChange(next: string): void
+  disabled?: boolean
+  loading?: boolean
+  placeholder?: string
+  className?: string
+  [key: string]: unknown
+}) {
+  return (
+    <select
+      className={className}
+      aria-label="Model"
+      data-model-picker=""
+      value={value ?? ''}
+      disabled={disabled || loading}
+      onChange={(event) => onChange(event.target.value)}
+    >
+      <option value="">{placeholder}</option>
+      {options.map((option) => (
+        <option key={option.id} value={option.id}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  )
+}
+
+// The host's BottomSheet is Radix Dialog drawn from the bottom edge.
+export const BottomSheet = Dialog
+export const BottomSheetTrigger = DialogTrigger
+export const BottomSheetClose = DialogClose
+export const BottomSheetContent = DialogContent
+export const BottomSheetTitle = DialogTitle
+export const BottomSheetDescription = DialogDescription
+
 export function TableViewport(props: Div) {
   return <div className="iii-ui-table-viewport" {...props} />
 }

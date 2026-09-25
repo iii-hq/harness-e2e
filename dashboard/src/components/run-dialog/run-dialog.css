@@ -237,31 +237,8 @@
 }
 
 /* The host rings its inputs; here the fill is the control. */
-.rd-dialog .rd-input:not(:focus),
-.rd-dialog .rd-model .ds-input:not(:focus-visible) {
+.rd-dialog .rd-input:not(:focus) {
   outline: 0;
-}
-
-.rd-dialog .rd-model .ds-input {
-  height: auto;
-  min-height: var(--rd-ctrl);
-  border: 0;
-  border-radius: var(--ds-radius-sm, 6px);
-  background: var(--rd-fill);
-  font-size: var(--rd-input-font);
-}
-
-/* The model sits low in the setup column: its menu opens upward, where the
-   column has room, instead of past the dialog's edge. */
-.rd-dialog .rd-model > div > div.absolute {
-  top: auto;
-  bottom: 100%;
-  margin-top: 0;
-  margin-bottom: 0.5rem;
-}
-
-.rd-dialog .rd-model .ds-input:hover:not(:disabled) {
-  background: var(--rd-hover);
 }
 
 .rd-input::placeholder {

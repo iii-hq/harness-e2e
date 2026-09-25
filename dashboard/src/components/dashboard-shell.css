@@ -64,28 +64,24 @@
     letter-spacing: -0.01em;
   }
 
-  /* Section bar, as the redesign canvas draws it: a 44px raised strip,
-   sentence-case Inter tabs with a 2px ink underline on the current one,
-   and the page's actions on the right. Every rule is here, not in utilities:
-   inside the Console the extension's layers outrank Tailwind's. */
-  .harness-e2e-navigation {
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0 var(--ds-space-1);
-    min-width: 0;
-    min-height: calc(var(--spacing) * 11);
-    padding: 0 var(--ds-space-3);
-    background: var(--color-panel-raised);
+  /* Layout A: the sections and the section's actions live in the Console's
+   PageHeader (children and actions slots). Tabs fill the 44 px header with
+   a 2 px ink line under the current one. Every rule is here, not in
+   utilities: inside the Console the extension's layers outrank Tailwind's. */
+  /* The host centres its children slot; the tabs need its full 44 px so the
+   current-section line sits on the header's bottom edge. */
+  .harness-e2e-shell header > div:has(> .harness-e2e-sections) {
+    align-self: stretch;
   }
 
-  /* Section navigation: tabs by default, a select below 720px of container
-   width. Both states live here so no utility class can override them. */
-  .harness-e2e-navigation-wide {
+  .harness-e2e-sections {
+    display: flex;
+    align-self: stretch;
+    align-items: stretch;
+    min-width: 0;
+  }
+
+  .harness-e2e-section-tabs {
     display: flex;
     align-items: stretch;
     gap: var(--ds-space-1);
@@ -95,32 +91,15 @@
     list-style: none;
   }
 
-  .harness-e2e-navigation-narrow {
-    display: none;
-    flex: 1 1 auto;
-    min-width: var(--ds-space-32);
-  }
-
-  .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-wide {
-    display: none;
-  }
-
-  .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation-narrow {
-    display: block;
-  }
-
-  /* Wrapped onto two lines, the select and the actions need air. */
-  .harness-e2e-shell[data-narrow="true"] .harness-e2e-navigation {
-    gap: var(--ds-space-1) var(--ds-space-2);
-    padding-block: var(--ds-space-1);
+  .harness-e2e-section-tabs > li {
+    display: flex;
   }
 
   /* aria-current is the selected state (audit S-04 / A11Y-05). */
-  .harness-e2e-nav-link {
+  .harness-e2e-section-tab {
     position: relative;
     display: inline-flex;
     align-items: center;
-    min-height: calc(var(--spacing) * 11);
     padding: 0 calc(var(--spacing) * 2.5);
     color: var(--color-ink-faint);
     font-family: var(--font-sans);
@@ -132,16 +111,16 @@
     transition: color var(--motion-duration-control) var(--motion-ease-standard);
   }
 
-  .harness-e2e-nav-link:hover,
-  .harness-e2e-nav-link[aria-current="page"] {
+  .harness-e2e-section-tab:hover,
+  .harness-e2e-section-tab[aria-current="page"] {
     color: var(--color-ink);
   }
 
-  .harness-e2e-nav-link[aria-current="page"] {
+  .harness-e2e-section-tab[aria-current="page"] {
     font-weight: 600;
   }
 
-  .harness-e2e-nav-link[aria-current="page"]::after {
+  .harness-e2e-section-tab[aria-current="page"]::after {
     position: absolute;
     right: 0;
     bottom: 0;
@@ -151,24 +130,67 @@
     content: "";
   }
 
-  .harness-e2e-nav-select {
-    width: 100%;
-    min-width: 0;
+  /* Below 720 px of pane the tabs are one ghost 32 px menu button naming the
+   current section; on a phone it is 48 px and opens the Sections sheet. */
+  .harness-e2e-section-menu {
+    display: inline-flex;
+    align-self: center;
+    align-items: center;
+    gap: calc(var(--spacing) * 1.5);
+    min-height: var(--ds-space-8);
+    padding: 0 calc(var(--spacing) * 2);
+    border: 0;
+    border-radius: var(--ds-radius-sm);
+    background: transparent;
+    color: var(--color-ink);
     font-family: var(--font-sans);
     font-size: var(--ds-text-sm);
-    font-weight: 500;
-    text-transform: none;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
   }
 
-  /* The actions wrap onto the next line in a narrow container rather than
-   push the bar wider (audit S-05). */
-  .harness-e2e-page-actions {
+  .harness-e2e-section-menu:hover {
+    background: var(--color-surface-hover);
+  }
+
+  .harness-e2e-header-actions {
     display: flex;
-    flex-wrap: wrap;
     align-items: center;
-    justify-content: flex-end;
-    gap: var(--ds-space-1);
-    min-width: 0;
+    gap: calc(var(--spacing) * 1.5);
+  }
+
+  .harness-e2e-header-action-icon {
+    width: var(--ds-space-8);
+    padding: 0;
+  }
+
+  /* Phone: the section's primary action pins to the bottom of the pane. */
+  .harness-e2e-pinned-primary {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    display: flex;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    background: var(--color-panel);
+  }
+
+  .harness-e2e-pinned-primary > .harness-e2e-header-action {
+    flex: 1 1 auto;
+    min-height: 48px;
+    font-size: 1rem;
+  }
+
+  @media (max-width: 639px) {
+    .harness-e2e-section-menu,
+    .harness-e2e-header-action {
+      min-height: 48px;
+      font-size: 1rem;
+    }
+
+    .harness-e2e-header-action-icon {
+      width: 48px;
+    }
   }
 
   /* Page actions: a quiet secondary and an ink primary, 32px, Inter. */
@@ -228,10 +250,9 @@
     outline-offset: 3px;
   }
 
-  /* A tab fills the 44px bar and the scroller clips above it, so its ring
-   sits inside, clear of the 2px current-section underline. Actions keep
-   the canvas's 1px offset. */
-  .harness-e2e-shell .harness-e2e-nav-link:focus-visible {
+  /* A tab fills the 44px header, so its ring sits inside, clear of the 2px
+   current-section underline. Actions keep the canvas's 1px offset. */
+  .harness-e2e-shell .harness-e2e-section-tab:focus-visible {
     outline-offset: -4px;
   }
 
@@ -283,4 +304,30 @@
       transition-duration: 1ms !important;
     }
   }
+}
+
+/* Content gutters: 24 on a wide pane, 16 below 720; top 20, 16 narrow.
+   Lists use the full width; detail pages cap at the host's content width
+   (1216) and stay left-aligned. Unlayered on purpose: the pages still carry
+   width utilities from before the redesign (Tailwind is imported with
+   `important`), and these must win. */
+.harness-e2e-content .page-shell {
+  width: auto !important;
+  max-width: none !important;
+  margin: 0 !important;
+  padding: 20px 24px 64px !important;
+}
+
+.harness-e2e-content[data-detail="true"] .page-shell {
+  max-width: calc(1216px + 48px) !important;
+}
+
+.harness-e2e-shell[data-narrow="true"] .harness-e2e-content .page-shell {
+  padding: 16px 16px 64px !important;
+}
+
+.harness-e2e-shell[data-narrow="true"]
+  .harness-e2e-content[data-detail="true"]
+  .page-shell {
+  max-width: calc(1216px + 32px) !important;
 }

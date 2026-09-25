@@ -1,10 +1,6 @@
 import { ArrowRight, Search, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  DashboardPageActions,
-  dashboardHeaderActionClassName,
-} from '@/components/DashboardPageActions'
-import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
@@ -48,6 +44,7 @@ import {
   percentPoints,
   statusCopy,
 } from '@/lib/execution-view'
+import { consumeQuickExecutionRequest } from '@/lib/quick-execution'
 import '@/design-system/styles.css'
 
 const PAGE_SIZE = 50
@@ -643,32 +640,30 @@ export function ExecutionsPage() {
         active="executions"
         actionsLabel="Execution actions"
         actions={
-          bridge ? (
-            <>
-              <button
-                className={dashboardHeaderActionClassName()}
-                type="button"
-                onClick={() => setImportOpen(true)}
-              >
-                Import from GitHub
-              </button>
-              <button
-                className={dashboardHeaderActionClassName({ primary: true })}
-                type="button"
-                onClick={() => {
-                  setRunnerScope([])
-                  setRunnerOpen(true)
-                }}
-              >
-                Run tests
-              </button>
-            </>
-          ) : null
+          bridge
+            ? [
+                {
+                  id: 'import',
+                  label: 'Import from GitHub',
+                  onSelect: () => setImportOpen(true),
+                },
+                {
+                  id: 'run',
+                  label: 'Run tests',
+                  primary: true,
+                  onSelect: () => {
+                    setRunnerScope([])
+                    setRunnerOpen(true)
+                  },
+                },
+              ]
+            : undefined
         }
       />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="executions"
+          variant="list"
+          title="Executions"
           summary={
             loading && rows.length === 0 ? 'loading the ledger…' : summary
           }

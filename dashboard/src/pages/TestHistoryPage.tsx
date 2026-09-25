@@ -30,7 +30,6 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
-import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
@@ -64,6 +63,7 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
+import { requestQuickExecution } from '@/lib/quick-execution'
 import type {
   HistoryModelGroup,
   TestCatalogRow,
@@ -1052,24 +1052,15 @@ export function TestHistoryPage({ testId }: { testId: string }) {
 
   return (
     <>
-      <DashboardPageActions
-        active="tests"
-        context={testId}
-        actionsLabel="Test actions"
-        actions={
-          <>
-            <a
-              className={dashboardHeaderActionClassName()}
-              href={hashForVersionComparison()}
-            >
-              Compare systems
-            </a>
-            {runThisTest}
-          </>
-        }
-      />
+      <DashboardPageActions active="tests" context={testId} />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-24 md:w-[calc(100%_-_3rem)]">
         <PageHeader
+          variant="detail"
+          mono
+          back={{
+            label: 'Back to Tests',
+            href: hashForTests(new URLSearchParams({ highlight: testId })),
+          }}
           title={testId}
           summary={
             loading && !history
@@ -1077,15 +1068,15 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               : identity || 'no identity recorded'
           }
           headingId="test-history-title"
-          breadcrumb={[
-            {
-              label: 'tests',
-              href: hashForTests(new URLSearchParams({ highlight: testId })),
-            },
-            { label: testId },
-          ]}
           actions={
             <>
+              <a
+                className={dashboardHeaderActionClassName()}
+                href={hashForVersionComparison()}
+              >
+                Compare systems
+              </a>
+              {runThisTest}
               {catalogRow ? (
                 <StatusBadge
                   status={

@@ -210,8 +210,15 @@ try {
     .click()
   const run = page.getByRole('dialog', { name: 'Run tests' })
   await run.getByText('catalog ready').waitFor()
-  const suiteField = run.locator('#quick-execution-suite')
-  await suiteField.selectOption('pr')
+  const suiteField = run.locator('#run-dialog-suite')
+  const pickSuite = async (dialog, name) => {
+    await dialog.locator('#run-dialog-suite').click()
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    await dialog
+      .getByRole('option', { name: new RegExp(`^${escaped}(\\s|$)`) })
+      .click()
+  }
+  await pickSuite(run, 'PR')
   for (const scenario of pr.scenarios)
     assert.ok(
       await run
@@ -219,27 +226,23 @@ try {
         .isChecked(),
     )
   await run
-    .getByText(`${pr.scenarios.length} tests · 1 run each`, { exact: false })
+    .getByText(`${pr.scenarios.length} tests ·`, { exact: false })
+    .first()
     .waitFor()
   await run
     .getByRole('checkbox', { name: pr.scenarios[0], exact: true })
     .click()
-  await run.getByText('Changed from PR: runs as an unnamed suite.').waitFor()
-  await suiteField.selectOption('')
-  await suiteField.selectOption('pr')
+  await run.getByText('Changed from PR. Runs as a custom selection.').waitFor()
+  await run.getByRole('button', { name: 'Reset', exact: true }).click()
+  assert.equal(await suiteField.getAttribute('data-value'), 'pr')
   await run
-    .getByText(`${pr.scenarios.length} tests · 1 run each`, { exact: false })
+    .getByText(`${pr.scenarios.length} tests ·`, { exact: false })
+    .first()
     .waitFor()
-  await run
-    .getByRole('button', { name: 'Execution model', exact: true })
-    .click()
-  const search = run.getByRole('searchbox', { name: 'Search Execution model' })
-  await search.fill('deepseek-v4-flash')
-  await search.press('ArrowDown')
-  await page.keyboard.press('Enter')
+  await run.getByLabel('Model').selectOption('deepseek::deepseek-v4-flash')
   await run
     .getByRole('button', {
-      name: `run ${pr.scenarios.length} tests`,
+      name: `Run ${pr.scenarios.length} tests`,
       exact: true,
     })
     .click()
@@ -270,10 +273,13 @@ try {
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.getByText('catalog ready').waitFor()
-  assert.equal(await again.locator('#quick-execution-suite').inputValue(), 'pr')
+  assert.equal(
+    await again.locator('#run-dialog-suite').getAttribute('data-value'),
+    'pr',
+  )
   await again
     .getByRole('button', {
-      name: `run ${pr.scenarios.length} tests`,
+      name: `Run ${pr.scenarios.length} tests`,
       exact: true,
     })
     .click()
@@ -291,9 +297,9 @@ try {
     .click()
   const fromLocal = page.getByRole('dialog', { name: 'Run tests' })
   await fromLocal.getByText('catalog ready').waitFor()
-  await fromLocal.locator('#quick-execution-suite').selectOption('suite-1')
+  await pickSuite(fromLocal, 'Regression, fast')
   await fromLocal
-    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .getByRole('button', { name: `Run ${fast} tests`, exact: true })
     .click()
   await page.waitForFunction(() => location.hash.endsWith('0003'))
   const ranLocal = calls.start[2].parameters
@@ -313,14 +319,15 @@ try {
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
   assert.equal(
-    await again.locator('#quick-execution-suite').inputValue(),
+    await again.locator('#run-dialog-suite').getAttribute('data-value'),
     'recorded:suite-1',
   )
   await again
-    .getByRole('option', { name: 'Regression, fast · as recorded' })
-    .waitFor({ state: 'attached' })
+    .locator('#run-dialog-suite')
+    .getByText('Regression, fast · as recorded')
+    .waitFor()
   await again
-    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .getByRole('button', { name: `Run ${fast} tests`, exact: true })
     .click()
   await page.waitForFunction(() => location.hash.endsWith('0004'))
   assert.deepEqual(calls.start[3].parameters, ranLocal)

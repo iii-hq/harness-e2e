@@ -7,13 +7,15 @@
 //! `gh api` on the run every `follow_interval`.
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::{ensure, Context, Result};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
 use super::docker::dispatch_suite;
 use super::github::import_id;
-use super::{now, ExecutionSource, PlanExecution, PlanStore};
+use super::{now, sequential_groups, ExecutionSource, PlanExecution, PlanStore, Rerun};
 use crate::plans::stacks;
 use crate::test_plan::MasterPlan;
 
@@ -25,10 +27,72 @@ const NOT_INSTALLED: &str = "The GitHub CLI (`gh`) is not installed for the Harn
 const NOT_SIGNED_IN: &str =
     "`gh` is not signed in on the worker's machine. Run `gh auth login` there, then reopen this dialog.";
 
-/// Started here on GitHub (not imported): followed until its run ends.
+/// One job of the run's latest attempt, as the follow loop last saw it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct GithubJob {
+    pub id: u64,
+    pub name: String,
+    /// `queued`, `in_progress`, `completed` (GitHub's words).
+    pub status: String,
+    #[serde(default)]
+    pub conclusion: Option<String>,
+    #[serde(default)]
+    pub started_at: Option<String>,
+    #[serde(default)]
+    pub completed_at: Option<String>,
+    #[serde(default)]
+    pub url: String,
+}
+
+/// What following a GitHub run adds to its execution.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct GithubFollow {
+    /// This worker follows the run: started here, or a job re-run of an
+    /// imported run.
+    #[serde(default)]
+    pub followed: bool,
+    #[serde(default)]
+    pub head_branch: Option<String>,
+    #[serde(default)]
+    pub head_sha: Option<String>,
+    #[serde(default)]
+    pub jobs: Vec<GithubJob>,
+}
+
+impl GithubFollow {
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Followed on GitHub by this worker (started here, or a job re-run): its
+/// page follows the run until it ends and the worker imports it.
 pub(super) fn github_started(execution: &PlanExecution) -> bool {
-    matches!(execution.source, ExecutionSource::Github { .. })
-        && execution.idempotency_key.starts_with(KEY_PREFIX)
+    match &execution.source {
+        ExecutionSource::Github { follow, .. } => {
+            follow.followed || execution.idempotency_key.starts_with(KEY_PREFIX)
+        }
+        _ => false,
+    }
+}
+
+fn jobs_of(value: &Value) -> Vec<GithubJob> {
+    value["jobs"]
+        .as_array()
+        .map(|jobs| {
+            jobs.iter()
+                .map(|job| GithubJob {
+                    id: job["id"].as_u64().unwrap_or(0),
+                    name: job["name"].as_str().unwrap_or_default().to_owned(),
+                    status: job["status"].as_str().unwrap_or("queued").to_owned(),
+                    conclusion: job["conclusion"].as_str().map(str::to_owned),
+                    started_at: job["started_at"].as_str().map(str::to_owned),
+                    completed_at: job["completed_at"].as_str().map(str::to_owned),
+                    url: job["html_url"].as_str().unwrap_or_default().to_owned(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// What the workflow's `stack` input gets: a repository stack by name when it
@@ -155,6 +219,10 @@ impl PlanStore {
             release_control_execution_id: None,
             stack: None,
             status: Some("queued".into()),
+            follow: GithubFollow {
+                followed: true,
+                ..GithubFollow::default()
+            },
         };
         execution.state = "running".into();
         execution.updated_at = now();
@@ -206,33 +274,66 @@ impl PlanStore {
                     tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "read the GitHub run");
                 }
                 Ok(run) => {
-                    let status = run["status"].as_str().unwrap_or("queued").to_owned();
                     let attempt = run["run_attempt"].as_u64().unwrap_or(1) as u32;
-                    let done = status == "completed";
-                    let _guard = self.lock.lock().await;
-                    let mut execution = self.read_execution(id).await?;
-                    let mut changed = done;
-                    if let ExecutionSource::Github {
-                        status: current,
-                        run_attempt,
-                        ..
-                    } = &mut execution.source
-                    {
-                        if current.as_deref() != Some(status.as_str()) || *run_attempt != attempt {
-                            *current = Some(status.clone());
-                            *run_attempt = attempt;
-                            changed = true;
+                    // After a job re-run GitHub may still answer with the
+                    // attempt that ended: wait for the new one.
+                    let expected = match &execution.source {
+                        ExecutionSource::Github { run_attempt, .. } => *run_attempt,
+                        _ => 1,
+                    };
+                    if attempt >= expected {
+                        let status = run["status"].as_str().unwrap_or("queued").to_owned();
+                        let jobs = self
+                            .gh(
+                                self.github.api_timeout,
+                                &[
+                                    "api",
+                                    &format!(
+                                        "repos/{repository}/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+                                    ),
+                                ],
+                            )
+                            .await
+                            .ok()
+                            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+                            .map(|value| jobs_of(&value));
+                        let done = status == "completed";
+                        let _guard = self.lock.lock().await;
+                        let mut execution = self.read_execution(id).await?;
+                        let mut changed = done;
+                        if let ExecutionSource::Github {
+                            status: current,
+                            run_attempt,
+                            follow,
+                            ..
+                        } = &mut execution.source
+                        {
+                            let mut next = follow.clone();
+                            next.head_branch = run["head_branch"].as_str().map(str::to_owned);
+                            next.head_sha = run["head_sha"].as_str().map(str::to_owned);
+                            if let Some(jobs) = jobs {
+                                next.jobs = jobs;
+                            }
+                            if current.as_deref() != Some(status.as_str())
+                                || *run_attempt != attempt
+                                || *follow != next
+                            {
+                                *current = Some(status.clone());
+                                *run_attempt = attempt;
+                                *follow = next;
+                                changed = true;
+                            }
                         }
-                    }
-                    if done {
-                        execution.state = "importing".into();
-                    }
-                    if changed {
-                        execution.updated_at = now();
-                        self.write_execution(&execution).await?;
-                    }
-                    if done {
-                        break run["conclusion"].as_str().map(str::to_owned);
+                        if done {
+                            execution.state = "importing".into();
+                        }
+                        if changed {
+                            execution.updated_at = now();
+                            self.write_execution(&execution).await?;
+                        }
+                        if done {
+                            break run["conclusion"].as_str().map(str::to_owned);
+                        }
                     }
                 }
             }
@@ -249,9 +350,103 @@ impl PlanStore {
             execution.error = Some(format!("{error:#}"));
             execution.updated_at = now();
             execution.finished_at = Some(now());
+            execution.rerun = None;
+            self.write_execution(&execution).await?;
+        } else {
+            // The import replaced the runs the re-run was for.
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            if execution.rerun.take().is_some() {
+                self.write_execution(&execution).await?;
+            }
+        }
+        // Cancelled from the Console: it ends cancelled, with what finished.
+        let _guard = self.lock.lock().await;
+        let mut execution = self.read_execution(id).await?;
+        if execution.cancel_requested && execution.state == "failed" {
+            execution.state = "cancelled".into();
+            execution.updated_at = now();
             self.write_execution(&execution).await?;
         }
         Ok(())
+    }
+
+    /// Run one test of a finished GitHub execution again: re-run its group's
+    /// job on GitHub (which redoes the aggregate job), follow the run and
+    /// import it again when it ends; the highest attempt counts.
+    pub(super) async fn rerun_github(
+        self: &Arc<Self>,
+        id: &str,
+        scenario_id: &str,
+    ) -> Result<PlanExecution> {
+        let execution = self.read_execution(id).await?;
+        let ExecutionSource::Github {
+            repository, run_id, ..
+        } = execution.source.clone()
+        else {
+            anyhow::bail!("{id} did not run on GitHub");
+        };
+        ensure!(
+            !execution.active() && execution.state != "importing",
+            "This execution is still running on GitHub; run a test again once it ends."
+        );
+        let group = sequential_groups(&crate::test_plan::embedded()?)
+            .into_iter()
+            .find(|group| group.iter().any(|scenario| scenario == scenario_id))
+            .unwrap_or_else(|| vec![scenario_id.to_owned()]);
+        let needle = format!("case-{}", group[0].replace('_', "-"));
+        let jobs = self
+            .gh(
+                self.github.api_timeout,
+                &["api", &format!("repos/{repository}/actions/runs/{run_id}/jobs?per_page=100")],
+            )
+            .await?;
+        let jobs: Value = serde_json::from_slice(&jobs).context("decode the run's jobs")?;
+        let job_id = jobs_of(&jobs)
+            .into_iter()
+            .find(|job| job.name.contains(&needle))
+            .map(|job| job.id)
+            .with_context(|| format!("No job of run #{run_id} runs {scenario_id}."))?;
+        self.gh(
+            self.github.api_timeout,
+            &[
+                "api",
+                "-X",
+                "POST",
+                &format!("repos/{repository}/actions/jobs/{job_id}/rerun"),
+            ],
+        )
+        .await
+        .context("re-run the job on GitHub")?;
+
+        let _guard = self.lock.lock().await;
+        let mut execution = self.read_execution(id).await?;
+        if let ExecutionSource::Github {
+            run_attempt,
+            status,
+            follow,
+            ..
+        } = &mut execution.source
+        {
+            *run_attempt += 1;
+            *status = Some("queued".into());
+            follow.followed = true;
+            follow.jobs.clear();
+        }
+        execution.rerun = Some(Rerun {
+            scenarios: group,
+            runs: Vec::new(),
+            started_at: now(),
+            state: std::mem::replace(&mut execution.state, "running".into()),
+            error: execution.error.take(),
+            finished_at: execution.finished_at.take(),
+        });
+        execution.cancel_requested = false;
+        execution.updated_at = now();
+        self.write_execution(&execution).await?;
+        drop(_guard);
+        self.spawn_follow_github(id);
+        Ok(execution)
     }
 }
 

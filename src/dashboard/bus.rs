@@ -411,7 +411,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_SLOT_RERUN,
-        "Run one scenario of a finished local execution again on this stack; the last attempt counts and the one it replaces stays visible outside every total. Answers with its id and runs in the background.",
+        "Run one scenario of a finished execution again where it ran: on this harness, in Docker as the next attempt, or on GitHub by re-running its group's job (followed and imported again when the run ends); the last attempt counts. Answers with its id and runs in the background.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionSlotRerunRequest| {
@@ -429,7 +429,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         EXECUTION_CANCEL,
-        "Stop an execution: no next scenario is admitted and the running one is cancelled.",
+        "Stop an execution where it runs: no next scenario is admitted and the running one is cancelled; in Docker the running groups stop; on GitHub `gh run cancel`, and what finished is imported when the run ends.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: ExecutionGetRequest| {

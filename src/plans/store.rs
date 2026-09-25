@@ -28,6 +28,7 @@ mod docker;
 mod github;
 mod github_start;
 use github_start::github_started;
+pub(crate) use github_start::GithubFollow;
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
@@ -237,6 +238,10 @@ pub(crate) enum ExecutionSource {
         /// started there: `queued`, `in_progress`, then `completed`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
+        /// What following the run adds: its jobs, its ref, and whether this
+        /// worker follows it (started here, or a job re-run of an import).
+        #[serde(default, skip_serializing_if = "GithubFollow::is_empty")]
+        follow: GithubFollow,
     },
     /// Run in Docker by this worker, from `docker-executions/<id>/`.
     Docker {
@@ -917,11 +922,10 @@ impl PlanStore {
         id: &str,
         scenario_id: &str,
     ) -> Result<PlanExecution> {
-        if matches!(
-            self.read_execution(id).await?.source,
-            ExecutionSource::Docker { .. }
-        ) {
-            return self.rerun_docker(id, scenario_id).await;
+        match self.read_execution(id).await?.source {
+            ExecutionSource::Docker { .. } => return self.rerun_docker(id, scenario_id).await,
+            ExecutionSource::Github { .. } => return self.rerun_github(id, scenario_id).await,
+            ExecutionSource::Local => {}
         }
         let runner = self.runner()?;
         // The stack is read before the lock; the checks run again under it.
@@ -1209,9 +1213,31 @@ impl PlanStore {
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
         if github_started(&execution) && execution.active() {
-            if let ExecutionSource::Github { url, .. } = &execution.source {
-                anyhow::bail!("Cancel it on GitHub: {url}");
+            // `gh run cancel`: GitHub stops the running jobs; the follow loop
+            // imports what finished once the run ends.
+            if execution.state != "cancelling" {
+                if let ExecutionSource::Github {
+                    repository, run_id, ..
+                } = &execution.source
+                {
+                    self.gh(
+                        self.github.api_timeout,
+                        &[
+                            "api",
+                            "-X",
+                            "POST",
+                            &format!("repos/{repository}/actions/runs/{run_id}/cancel"),
+                        ],
+                    )
+                    .await
+                    .context("gh run cancel")?;
+                }
+                execution.cancel_requested = true;
+                execution.state = "cancelling".into();
+                execution.updated_at = now();
+                self.write_execution(&execution).await?;
             }
+            return Ok(serde_json::to_value(execution)?);
         }
         if execution.active() {
             execution.cancel_requested = true;
@@ -3076,6 +3102,7 @@ pub(super) mod tests {
                 release_control_execution_id: Some("rc-execution".into()),
                 stack: None,
                 status: None,
+                follow: Default::default(),
             },
             stack: Vec::new(),
             warnings: Vec::new(),
@@ -3269,6 +3296,7 @@ pub(super) mod tests {
             release_control_execution_id: None,
             stack: None,
             status: None,
+            follow: Default::default(),
         };
         let slow = manager_with_gh(&data, runner, fake_gh(root.path(), "sleep 5"));
         slow.write_execution(&execution).await.unwrap();
@@ -4264,21 +4292,27 @@ pub(super) mod tests {
             release_control_execution_id: None,
             stack: None,
             status: None,
+            follow: Default::default(),
         };
         imported.slots = vec![github::slot(1, "case-minimal", "minimal_path")];
         imported.slots[0].execution_id = "0123456789abcdef0123456789abcdef".into();
         manager.write_execution(&imported).await.unwrap();
-        let error = manager
+        // An imported execution runs a test again on GitHub, by re-running
+        // its job; when gh cannot, the call fails and nothing changes.
+        let offline = manager_with_gh(
+            root.path(),
+            runner.clone(),
+            fake_gh(root.path(), "echo 'gh: unreachable' >&2; exit 1"),
+        );
+        let error = offline
             .rerun_scenario(&imported.id, "minimal_path")
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("imported from GitHub"), "{error}");
-        assert!(
-            error.contains("https://github.com/o/r/actions/runs/42"),
-            "{error}"
-        );
-        assert!(error.contains("import the run again"), "{error}");
+        assert!(!error.contains("imported from GitHub"), "{error}");
+        let unchanged = offline.read_execution(&imported.id).await.unwrap();
+        assert_eq!(unchanged.state, "completed");
+        assert!(unchanged.rerun.is_none());
 
         let started = manager
             .start_execution(parameters(&["minimal_path", "retired_scenario"]), "Nightly")
@@ -4717,9 +4751,25 @@ esac"#,
     }
 
     /// A stand-in `gh` for a GitHub start: signed in as octo, dispatches run
-    /// 77 on o/r and answers the run with `run_status`; every call is logged.
+    /// 77 on o/r, answers the run with `run_status` and its jobs with one
+    /// group job; every call is logged.
     fn dispatching_gh(directory: &Path, run_status: &str) -> github::GithubCli {
+        dispatching_gh_with_jobs(
+            directory,
+            run_status,
+            r#"{"jobs":[{"id":9001,"name":"E2E / case-first","status":"in_progress","html_url":"https://github.com/o/r/actions/runs/77/job/9001"}]}"#,
+        )
+    }
+
+    fn dispatching_gh_with_jobs(
+        directory: &Path,
+        run_status: &str,
+        jobs: &str,
+    ) -> github::GithubCli {
         let log = directory.join("gh.log");
+        let jobs_file = directory.join("jobs.json");
+        fs::write(&jobs_file, jobs).unwrap();
+        let run = run_status.replacen('{', r#"{"head_branch":"main","head_sha":"88aee14","#, 1);
         fake_gh(
             directory,
             &format!(
@@ -4728,10 +4778,12 @@ case "$*" in
   "auth status"*) echo "github.com"; echo "  Logged in to github.com account octo (keyring)";;
   "api repos/o/r --jq .default_branch") echo main;;
   "api -X POST"*) echo '{{"workflow_run_id":77,"html_url":"https://github.com/o/r/actions/runs/77"}}';;
-  "api repos/o/r/actions/runs/77") echo '{run_status}';;
+  "api repos/o/r/actions/runs/77") echo '{run}';;
+  *jobs*) cat '{jobs}';;
   *) echo "not found" >&2; exit 1;;
 esac"#,
-                log = log.display()
+                log = log.display(),
+                jobs = jobs_file.display(),
             ),
         )
     }
@@ -4849,16 +4901,93 @@ esac"#,
         })
         .await
         .unwrap();
-        let error = manager.cancel(&started.id).await.unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("Cancel it on GitHub: https://github.com/o/r/actions/runs/77"));
+        let execution = manager.cancel(&started.id).await.unwrap();
+        assert_eq!(execution["state"], json!("cancelling"));
+        let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
+        assert!(log.contains("api -X POST repos/o/r/actions/runs/77/cancel"));
+        // The jobs of the latest attempt were read while it ran.
+        let current = manager.read_execution(&started.id).await.unwrap();
+        let ExecutionSource::Github { follow, .. } = &current.source else {
+            panic!("a GitHub execution");
+        };
+        assert_eq!(follow.jobs.len(), 1);
+        assert_eq!(follow.jobs[0].name, "E2E / case-first");
+        assert_eq!(follow.head_branch.as_deref(), Some("main"));
 
         // A restarted worker follows it again instead of interrupting it.
         let restarted = manager_with_gh(root.path(), runner, gh);
         restarted.reconcile().await.unwrap();
         let execution = restarted.read_execution(&started.id).await.unwrap();
-        assert_eq!(execution.state, "running");
+        assert_eq!(execution.state, "cancelling");
+    }
+
+    #[tokio::test]
+    async fn a_finished_github_execution_runs_a_test_again_by_re_running_its_job() {
+        let root = tempfile::tempdir().unwrap();
+        let parameters = github_parameters();
+        let scenario = parameters.scenarios[0].clone();
+        let first = sequential_groups(&test_plan::embedded().unwrap())
+            .into_iter()
+            .find(|group| group.contains(&scenario))
+            .map(|group| group[0].clone())
+            .unwrap_or_else(|| scenario.clone());
+        let jobs = json!({"jobs": [
+            {"id": 9000, "name": "E2E / case-other", "status": "completed"},
+            {"id": 9001, "name": format!("E2E / case-{}", first.replace('_', "-")), "status": "completed"},
+        ]});
+        let gh = dispatching_gh_with_jobs(
+            root.path(),
+            r#"{"status":"completed","conclusion":"failure","run_attempt":1}"#,
+            &jobs.to_string(),
+        );
+        let manager =
+            manager_with_gh(root.path(), Arc::new(FakeRunner::new(root.path().into())), gh);
+        let started = manager
+            .start_execution_in(parameters, "", Some("o/r"))
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let execution = manager.read_execution(&started.id).await.unwrap();
+                if !execution.active() && execution.state != "importing" {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+
+        let again = manager.rerun_scenario(&started.id, &scenario).await.unwrap();
+        assert_eq!(again.state, "running");
+        assert!(again.rerun.is_some());
+        assert!(matches!(
+            &again.source,
+            ExecutionSource::Github { run_attempt: 2, follow, .. } if follow.followed
+        ));
+        let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
+        assert!(log.contains("api -X POST repos/o/r/actions/jobs/9001/rerun"));
+        // GitHub still answers with attempt 1: the page keeps following.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let following = manager.read_execution(&started.id).await.unwrap();
+        assert_eq!(following.state, "running");
+
+        // A test no job runs is refused with the reason.
+        let missing = dispatching_gh_with_jobs(
+            root.path(),
+            r#"{"status":"completed","run_attempt":2}"#,
+            r#"{"jobs":[]}"#,
+        );
+        let other = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            missing,
+        );
+        let mut finished = other.read_execution(&started.id).await.unwrap();
+        finished.state = "failed".into();
+        other.write_execution(&finished).await.unwrap();
+        let error = other.rerun_scenario(&started.id, &scenario).await.unwrap_err();
+        assert!(error.to_string().contains("No job of run #77 runs"));
     }
 
     #[tokio::test]

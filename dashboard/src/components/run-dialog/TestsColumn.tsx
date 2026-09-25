@@ -218,6 +218,7 @@ export function TestsColumn({
                       <label key={id} className="rd-test">
                         <Box
                           state={on ? 'on' : 'off'}
+                          label={id}
                           onToggle={() =>
                             onSelect(
                               on

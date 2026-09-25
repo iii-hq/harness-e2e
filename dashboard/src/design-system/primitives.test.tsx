@@ -225,7 +225,7 @@ describe('design system foundation primitives', () => {
       renderToStaticMarkup(
         <Callout title="Run needs review">Two runs disagreed.</Callout>,
       ),
-    ).toContain('class="ds-callout ds-callout-info" role="note"')
+    ).toContain('class="ds-callout ds-callout-info" role="status"')
     expect(renderToStaticMarkup(<Callout tone="warning">x</Callout>)).toContain(
       'role="status"',
     )
