@@ -7,7 +7,12 @@ import {
   StatusDot,
 } from '@iii-dev/console-ui'
 import { MoreHorizontal } from 'lucide-react'
-import { Fragment, type HTMLAttributes, type ReactNode } from 'react'
+import {
+  Fragment,
+  type HTMLAttributes,
+  type ReactNode,
+  type SyntheticEvent,
+} from 'react'
 import { RESULT_STATES, type ResultState } from '@/lib/result-status'
 import './styles.css'
 
@@ -95,7 +100,8 @@ export type RowMenuItem = {
   onSelect?: () => void
   /** Destructive: drawn in the alert color. */
   danger?: boolean
-  /** Why the item cannot run now. Disables it and shows as its hint. */
+  /** Why the item cannot run now. Disables it and shows as its hint; the
+   *  item stays focusable so a screen reader reads the reason. */
   disabledReason?: string
   /** Draws a separator above the item. */
   separator?: boolean
@@ -108,6 +114,12 @@ export type RowMenuProps = {
   className?: string
 }
 
+// The menu sits in a row that may open on click or Enter; neither the
+// button nor the (portalled, but still React-nested) menu lets them through.
+function stop(event: SyntheticEvent) {
+  event.stopPropagation()
+}
+
 /** The row's ⋯ button and its menu, on the host's DropdownMenu. */
 export function RowMenu({ label, items, className }: RowMenuProps) {
   return (
@@ -117,6 +129,8 @@ export function RowMenu({ label, items, className }: RowMenuProps) {
           type="button"
           className={classes('ds-row-menu-trigger', className)}
           aria-label={label}
+          onClick={stop}
+          onKeyDown={stop}
         >
           <MoreHorizontal size={16} aria-hidden="true" />
         </button>
@@ -125,23 +139,30 @@ export function RowMenu({ label, items, className }: RowMenuProps) {
         align="end"
         aria-label={label}
         className="ds-row-menu"
+        onClick={stop}
+        onKeyDown={stop}
       >
         {items.map((item) => {
           const hint = item.disabledReason ?? item.hint
+          // Not Radix's `disabled`, which drops the item from focus and dims
+          // the reason with it: aria-disabled, and selecting does nothing.
+          const disabled = Boolean(item.disabledReason)
           return (
             <Fragment key={item.label}>
               {item.separator ? <DropdownMenuSeparator /> : null}
               <DropdownMenuItem
                 className="ds-row-menu-item"
                 data-danger={item.danger || undefined}
-                disabled={Boolean(item.disabledReason)}
-                onSelect={item.onSelect}
+                aria-disabled={disabled || undefined}
+                onSelect={
+                  disabled ? (event) => event.preventDefault() : item.onSelect
+                }
               >
                 <span className="ds-row-menu-icon" aria-hidden="true">
                   {item.icon}
                 </span>
                 <span className="ds-row-menu-text">
-                  <span>{item.label}</span>
+                  <span className="ds-row-menu-label">{item.label}</span>
                   {hint ? (
                     <span className="ds-row-menu-hint">{hint}</span>
                   ) : null}

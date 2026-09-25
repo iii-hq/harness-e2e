@@ -95,6 +95,17 @@
   color: color-mix(in srgb, var(--color-alert) 80%, var(--color-ink));
 }
 
+/* A disabled item dims its label and icon only: the reason under it keeps
+   full contrast. */
+.ds-row-menu-item[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.ds-row-menu-item[aria-disabled="true"]
+  :is(.ds-row-menu-icon, .ds-row-menu-label) {
+  opacity: 0.4;
+}
+
 .ds-row-menu-icon {
   display: inline-flex;
   width: calc(var(--spacing) * 4);

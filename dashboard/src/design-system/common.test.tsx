@@ -1,5 +1,6 @@
+import { isValidElement, type ReactElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { RESULT_STATES, type ResultState } from '@/lib/result-status'
 import { FactChip, FactList, RowMenu, StatusLabel } from './index'
 
@@ -123,6 +124,15 @@ describe('RowMenu', () => {
     expect(danger).toBeGreaterThan(separator)
   })
 
+  it('keeps a disabled item focusable, with its reason at full contrast', () => {
+    const deleteItem = html.split('role="menuitem"').at(-1) ?? ''
+    expect(deleteItem).not.toContain('data-disabled')
+    expect(deleteItem).toContain('tabindex="-1"')
+    expect(deleteItem).toContain(
+      '<span class="ds-row-menu-label">Delete…</span>',
+    )
+  })
+
   it('disables an item with its reason in sight', () => {
     const deleteItem = html.split('role="menuitem"').at(-1) ?? ''
 
@@ -131,5 +141,48 @@ describe('RowMenu', () => {
       '<span class="ds-row-menu-hint">Finish or cancel it first</span>',
     )
     expect(html.match(/aria-disabled/g)).toHaveLength(1)
+  })
+})
+
+// The element tree RowMenu returns, walked without rendering, to reach the
+// handlers static markup cannot fire.
+function elements(node: ReactNode): ReactElement<Record<string, unknown>>[] {
+  if (Array.isArray(node)) return node.flatMap(elements)
+  if (!isValidElement<Record<string, unknown>>(node)) return []
+  return [node, ...elements(node.props.children as ReactNode)]
+}
+
+describe('RowMenu events', () => {
+  const opened = vi.fn()
+  const tree = elements(
+    RowMenu({
+      label: 'Actions for Regression',
+      items: [
+        { label: 'Open', onSelect: opened },
+        { label: 'Delete…', disabledReason: 'Finish or cancel it first' },
+      ],
+    }),
+  )
+  const byClass = (name: string) =>
+    tree.filter((element) => element.props.className === name)
+
+  it('keeps clicks and keys from reaching the row', () => {
+    const [trigger] = byClass('ds-row-menu-trigger')
+    const [menu] = byClass('ds-row-menu')
+    for (const element of [trigger, menu])
+      for (const handler of ['onClick', 'onKeyDown']) {
+        const event = { stopPropagation: vi.fn() }
+        ;(element.props[handler] as (event: unknown) => void)(event)
+        expect(event.stopPropagation).toHaveBeenCalled()
+      }
+  })
+
+  it('selects an enabled item and holds a disabled one open', () => {
+    const [open, remove] = byClass('ds-row-menu-item')
+    ;(open.props.onSelect as () => void)()
+    expect(opened).toHaveBeenCalled()
+    const event = new Event('menu.itemSelect', { cancelable: true })
+    ;(remove.props.onSelect as (event: Event) => void)(event)
+    expect(event.defaultPrevented).toBe(true)
   })
 })
