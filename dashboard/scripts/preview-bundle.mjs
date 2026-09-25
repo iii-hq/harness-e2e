@@ -10,9 +10,10 @@
 //
 // Routes are what follows #/ext/harness-e2e/ (default: executions). Without
 // --dist the bundle is built first. Options: --base (the Console, default
-// http://127.0.0.1:3113/), --out (default .screenshots/preview), --width
-// (default 1440), --narrow (default 640). Where /tmp is small, point TMPDIR
-// at a directory on disk or Chromium runs out of room.
+// http://127.0.0.1:3113/), --out (default dashboard/.screenshots/preview),
+// --width (default 1440), --narrow (default 640). --dist and --out are read
+// from the current directory. Where /tmp is small, point TMPDIR at a
+// directory on disk or Chromium runs out of room.
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
@@ -22,7 +23,9 @@ import { chromium } from 'playwright'
 const root = fileURLToPath(new URL('..', import.meta.url))
 const { options, routes } = parseArgs(process.argv.slice(2))
 const base = options.base ?? 'http://127.0.0.1:3113/'
-const outDir = path.resolve(root, options.out ?? '.screenshots/preview')
+const outDir = options.out
+  ? path.resolve(options.out)
+  : path.join(root, '.screenshots/preview')
 const width = Number(options.width ?? 1440)
 const narrow = Number(options.narrow ?? 640)
 
@@ -51,7 +54,7 @@ mkdirSync(outDir, { recursive: true })
 const browser = await chromium.launch({ args: ['--disable-dev-shm-usage'] })
 let failed = 0
 try {
-  for (const route of routes.length ? routes : ['executions']) {
+  captures: for (const route of routes.length ? routes : ['executions']) {
     for (const variant of variants) {
       const file = path.join(
         outDir,
@@ -60,6 +63,7 @@ try {
       const result = await capture(route, variant, file)
       if (!result.ok) failed += 1
       console.log(`${route} ${variant.name}: ${result.message}`)
+      if (result.fatal) break captures
     }
   }
 } finally {
@@ -68,9 +72,11 @@ try {
 process.exit(failed ? 1 : 0)
 
 async function capture(route, { theme, width: viewportWidth }, file) {
+  // A service worker would answer page.js from its cache, past the routes.
   const context = await browser.newContext({
     viewport: { width: viewportWidth, height: 1000 },
     colorScheme: theme,
+    serviceWorkers: 'block',
   })
   // The Console keeps its theme in localStorage and html[data-theme].
   await context.addInitScript((value) => {
@@ -95,11 +101,18 @@ async function capture(route, { theme, width: viewportWidth }, file) {
       document.documentElement.dataset.theme = value
     }, theme)
     // Open the extension's tab first; a bare hash change does not switch tabs.
-    await page
-      .getByRole('tab')
-      .filter({ hasText: /^e2e/ })
-      .first()
-      .click({ timeout: 15_000 })
+    const tab = page.getByRole('tab').filter({ hasText: /^e2e/ }).first()
+    const found = await tab
+      .waitFor({ timeout: 15_000 })
+      .then(() => true)
+      .catch(() => false)
+    if (!found)
+      return {
+        ok: false,
+        fatal: true,
+        message: `the Console at ${base} has no "e2e" tab. Check that its harness-e2e worker is running, open the Harness E2E page there once (the Console keeps its tabs), then run this again.`,
+      }
+    await tab.click()
     await page.evaluate((next) => {
       window.location.hash = next
     }, `#/ext/harness-e2e/${route}`)
