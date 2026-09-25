@@ -62,14 +62,15 @@ export function StatusLabel({
   )
 }
 
-export type FactChipProps = HTMLAttributes<HTMLSpanElement> & {
+export type FactChipProps = HTMLAttributes<HTMLLIElement> & {
   label: string
   value: string
   /** The whole value when `value` is a short form (an image tag, an id). */
   full?: string
 }
 
-/** A label and a mono value; the title carries the whole value. */
+/** A label and a mono value, an item of a FactList. The whole value is its
+ *  title and its accessible name, so it reads without hovering. */
 export function FactChip({
   label,
   value,
@@ -77,24 +78,29 @@ export function FactChip({
   className,
   ...props
 }: FactChipProps) {
+  const whole = `${label}: ${full ?? value}`
   return (
-    <span
+    <li
       className={classes('ds-fact', className)}
-      title={`${label}: ${full ?? value}`}
+      title={whole}
+      aria-label={whole}
       {...props}
     >
       <span className="ds-fact-label">{label}</span>
       <span className="ds-fact-value">{value}</span>
-    </span>
+    </li>
   )
 }
 
-/** Fact chips in a row that wraps. */
+/** Fact chips in a row that wraps, as a list. */
 export function FactList({
   className,
   ...props
-}: HTMLAttributes<HTMLDivElement>) {
-  return <div className={classes('ds-fact-list', className)} {...props} />
+}: HTMLAttributes<HTMLUListElement>) {
+  return (
+    // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+    <ul role="list" className={classes('ds-fact-list', className)} {...props} />
+  )
 }
 
 export type RowMenuItem = {

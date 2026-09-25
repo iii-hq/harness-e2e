@@ -55,7 +55,9 @@ describe('StatusLabel', () => {
 describe('FactChip', () => {
   it('labels a mono value and titles it whole', () => {
     const html = renderToStaticMarkup(<FactChip label="Where" value="GitHub" />)
+    expect(html).toMatch(/^<li class="ds-fact"/)
     expect(html).toContain('title="Where: GitHub"')
+    expect(html).toContain('aria-label="Where: GitHub"')
     expect(html).toContain('<span class="ds-fact-label">Where</span>')
     expect(html).toContain('<span class="ds-fact-value">GitHub</span>')
   })
@@ -68,9 +70,10 @@ describe('FactChip', () => {
         full="ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85"
       />,
     )
-    expect(html).toContain(
-      'title="Executor image: ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85"',
-    )
+    for (const attribute of ['title', 'aria-label'])
+      expect(html).toContain(
+        `${attribute}="Executor image: ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85"`,
+      )
     expect(html).toContain('>tools-d9a8b54a2c85<')
   })
 
@@ -82,7 +85,7 @@ describe('FactChip', () => {
       </FactList>,
     )
     expect(html).toMatch(
-      /^<div class="ds-fact-list" aria-label="Execution facts">/,
+      /^<ul role="list" class="ds-fact-list" aria-label="Execution facts">/,
     )
     expect(html.match(/class="ds-fact"/g)).toHaveLength(2)
   })
