@@ -1171,7 +1171,9 @@ export function LocalRunnerDialog({
               <Select
                 id="run-tests-suite"
                 aria-label="Suite"
-                className="w-full"
+                // "Custom" is a value, not a hint: ink like any suite (the
+                // host paints its placeholder ghost).
+                className="w-full font-medium data-[placeholder]:text-ink"
                 value={suite ? choiceValue(suite) : undefined}
                 groups={suiteGroups}
                 allowEmpty
@@ -1225,7 +1227,7 @@ export function LocalRunnerDialog({
                 <Select
                   id="run-tests-stack"
                   aria-label="Stack"
-                  className="w-full"
+                  className="w-full data-[placeholder]:text-(--color-ink-faint)"
                   value={stack?.value}
                   groups={stackGroups}
                   placeholder="Choose a stack"
@@ -1262,7 +1264,8 @@ export function LocalRunnerDialog({
               <Selector
                 id="run-tests-model"
                 aria-label="Model"
-                className="[&_button]:font-mono"
+                // The host's ghost placeholder reads at 2.1:1; faint passes.
+                className={`[&_button]:font-mono ${form.subject ? '' : '[&_button>span]:text-(--color-ink-faint)'}`}
                 value={form.subject || undefined}
                 options={modelOptions}
                 placeholder={
