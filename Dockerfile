@@ -77,6 +77,9 @@ ENV PATH=/home/executor/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:$PATH
 # every uid, and scripts/executor.sh names a uid /etc/passwd does not know
 # (run_in_image.sh adds no-new-privileges, so that entry cannot reach root).
 ENV HOME=/home/executor
+# iii's anonymous product-usage telemetry stays off in every phase and in
+# every engine and worker a group starts.
+ENV III_TELEMETRY_ENABLED=false
 RUN install -d -m 1777 /home/executor && chmod a+w /etc/passwd
 USER ubuntu
 WORKDIR /home/executor
