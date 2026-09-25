@@ -97,7 +97,6 @@ function SuiteEditor({
   ]
   const validation = () =>
     validateExecutionSetup({
-      mode: 'suite',
       label: draft.label,
       selectedScenarios: draft.scenarios,
     })
@@ -144,7 +143,6 @@ function SuiteEditor({
       footer={
         <ExecutionSetupFooter
           summary={{
-            mode: 'suite',
             selectedScenarios: draft.scenarios.length,
             runsPerScenario,
             technicalRetries,
@@ -180,7 +178,6 @@ function SuiteEditor({
       >
         <ExecutionSetup
           idPrefix="suite-editor"
-          mode="suite"
           stickyOffset="dialog"
           initialOnlySelected
           label={draft.label}
