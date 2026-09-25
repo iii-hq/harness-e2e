@@ -112,6 +112,7 @@ class WrapperTests(unittest.TestCase):
         self.assertIn("--privileged", run)
         for pair in [
             ("--user", "0:0"),
+            ("--cgroupns", "private"),
             ("--env", f"HARNESS_E2E_EXECUTOR_USER={os.getuid()}:{os.getgid()}"),
             ("--mount", "type=volume,dst=/var/lib/docker,volume-label=harness-e2e.execution=42,"
                         "volume-label=harness-e2e.phase=group,volume-label=harness-e2e.group=case-minimal-path"),
@@ -147,7 +148,7 @@ class WrapperTests(unittest.TestCase):
                 self.assertEqual(("--env", "GITHUB_TOKEN") in pairs(run), phase[0] == "prepare")
                 self.assertIn(("--user", f"{os.getuid()}:{os.getgid()}"), pairs(run))
                 self.assertIn(("--security-opt", "no-new-privileges"), pairs(run))
-                for flag in ("--privileged", "--mount", "--group-add", "--network"):
+                for flag in ("--privileged", "--cgroupns", "--mount", "--group-add", "--network"):
                     self.assertNotIn(flag, run)
                 self.assertFalse(any("docker.sock" in value or "EXECUTOR_USER" in value for value in run))
 
@@ -187,6 +188,21 @@ class WrapperTests(unittest.TestCase):
         self.assertEqual(json.loads((self.artifacts / "failure.json").read_text()), {"phase": "execution"})
         # A phase with no artifact directory writes none.
         self.run_wrapper("finalize", status=3, env={"FAKE_RUN_EXIT": "3"})
+
+    def test_a_group_that_fails_before_its_launcher_recorded_anything_says_so(self):
+        # Its Docker daemon did not start, say: the container ran and exited
+        # 1 with no failure.json.
+        self.run_wrapper("group", status=1, env={
+            "FAKE_RUN_EXIT": "1", "HARNESS_E2E_ARTIFACTS_DIR": str(self.artifacts)})
+        self.assertEqual(json.loads((self.artifacts / "failure.json").read_text()), {
+            "phase": "executor", "outcome": "infra_failed", "exit_code": 1,
+            "error": "the group's executor container exited 1 before the group recorded a failure"})
+        # Only a group's: the fixtures a group job checks out first are not
+        # the group's failure.
+        (self.artifacts / "failure.json").unlink()
+        self.run_wrapper("prepare", "fixtures", status=1, env={
+            "FAKE_RUN_EXIT": "1", "HARNESS_E2E_ARTIFACTS_DIR": str(self.artifacts)})
+        self.assertFalse((self.artifacts / "failure.json").exists())
 
     def test_an_interrupted_wrapper_stops_its_container(self):
         wrapper = subprocess.Popen(["bash", str(self.root / "scripts/run_in_image.sh"), "group"],
@@ -428,17 +444,25 @@ class ExecutorTests(unittest.TestCase):
 
     def daemon_fakes(self, launcher):
         """A dockerd that runs until TERM, a docker that answers once it is
-        up, a setpriv that logs how it was called and runs the rest."""
+        up, a setpriv that logs how it was called and runs the rest; the
+        cgroup tree and certs.d the group writes are under the test's
+        directory."""
         bin_dir = self.directory / "bin"
         bin_dir.mkdir()
         state = self.directory / "daemon-up"
         for name, body in {
             "dockerd": f"""\
                 echo "dockerd $* as $(id -u) telemetry=${{III_TELEMETRY_ENABLED:-on}}" >>"$FAKE_LOG"
+                grep SigIgn /proc/self/status | sed 's/^/dockerd /' >>"$FAKE_LOG"
                 [[ -z "${{FAKE_DOCKERD_FAILS:-}}" ]] || {{ echo "failed to start daemon: no iptables"; exit 1; }}
                 touch {state}
+                if [[ -n "${{FAKE_DOCKERD_HANGS:-}}" ]]; then
+                  echo $$ >"$FAKE_DOCKERD_HANGS"
+                  trap '' TERM
+                  exec sleep 300
+                fi
                 trap 'echo "dockerd stopped" >>"$FAKE_LOG"; rm -f {state}; kill $sleeper; exit 0' TERM
-                sleep 30 & sleeper=$!
+                sleep 60 & sleeper=$!
                 wait
             """,
             "docker": f'[[ "$1" == version && -f {state} ]]\n',
@@ -451,13 +475,20 @@ class ExecutorTests(unittest.TestCase):
             (bin_dir / name).write_text("#!/usr/bin/env bash\n" + textwrap.dedent(body))
             (bin_dir / name).chmod(0o755)
         (self.root / "scripts/run_exact_stack_group.sh").write_text(textwrap.dedent(launcher))
+        self.cgroup = self.directory / "cgroup"
+        self.certs = self.directory / "certs.d"
+        executor = self.root / "scripts/executor.sh"
+        for path, stand_in in (("/sys/fs/cgroup", self.cgroup), ("/etc/docker/certs.d", self.certs)):
+            self.assertIn(path, executor.read_text())
+            executor.write_text(executor.read_text().replace(path, str(stand_in)))
         return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HARNESS_E2E_EXECUTOR_USER": "4321:1234",
                 "HARNESS_E2E_CAMPAIGN_GROUP_ID": "case-minimal-path"}
 
-    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
     def test_a_group_starts_its_own_docker_daemon_runs_as_the_user_and_stops_the_daemon_after(self):
         env = self.daemon_fakes("""\
             echo "group ran as the user telemetry=${III_TELEMETRY_ENABLED:-on}" >>"$FAKE_LOG"
+            grep SigIgn /proc/self/status | sed 's/^/group /' >>"$FAKE_LOG"
+            sh -c 'grep SigIgn /proc/self/status' | sed 's/^/group child /' >>"$FAKE_LOG"
             exit 3
         """)
         # The image's environment (its telemetry switch, say) reaches the
@@ -465,33 +496,58 @@ class ExecutorTests(unittest.TestCase):
         result = self.executor("group", env={**env, "III_TELEMETRY_ENABLED": "false"})
         # The group's status is the phase's.
         self.assertEqual(result.returncode, 3, result.stderr)
-        self.assertEqual(self.log.read_text().splitlines(), [
+        lines = self.log.read_text().splitlines()
+        # Started in the background, yet with SIGINT and SIGQUIT (0x6) at
+        # their default action: the group's own traps and every process it
+        # starts see them as on a runner.
+        for owner in ("dockerd", "group", "group child"):
+            ignored = next(line for line in lines if line.startswith(f"{owner} SigIgn:"))
+            self.assertEqual(int(ignored.split()[-1], 16) & 0x6, 0, ignored)
+        self.assertEqual([line for line in lines if "SigIgn" not in line], [
             f"dockerd --group 1234 as {os.getuid()} telemetry=false",
-            "setpriv --reuid 4321 --regid 1234 --clear-groups bash scripts/run_exact_stack_group.sh",
+            "setpriv --reuid 4321 --regid 1234 --clear-groups env --default-signal=INT,QUIT "
+            "bash scripts/run_exact_stack_group.sh",
             "group ran as the user telemetry=false",
             "dockerd stopped",
         ])
 
-    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
-    def test_a_groups_daemon_pulls_through_the_mirrors_it_is_given(self):
-        # Where the daemon reads them, here under the test's directory.
-        certs = self.directory / "certs.d"
-        executor = self.root / "scripts/executor.sh"
-        self.assertIn('"/etc/docker/certs.d/$registry/hosts.toml"', executor.read_text())
-        executor.write_text(executor.read_text().replace("/etc/docker/certs.d", str(certs)))
-        env = self.daemon_fakes("exit 0\n")
-        result = self.executor("group", env={**env, "HARNESS_E2E_REGISTRY_MIRRORS":
-                                             "mcr.microsoft.com=http://172.17.0.1:5001 docker.io=http://172.17.0.1:5000"})
+    def test_a_group_moves_its_processes_into_a_leaf_cgroup_before_its_daemon_starts(self):
+        env = self.daemon_fakes('echo "group ran" >>"$FAKE_LOG"\n')
+        self.cgroup.mkdir()
+        (self.cgroup / "cgroup.controllers").write_text("cpuset cpu memory pids\n")
+        (self.cgroup / "cgroup.procs").write_text("1\n7\n")
+        (self.cgroup / "cgroup.subtree_control").write_text("")
+        result = self.executor("group", env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(sorted(path.relative_to(certs).as_posix() for path in certs.rglob("*.toml")),
-                         ["docker.io/hosts.toml", "mcr.microsoft.com/hosts.toml"])
-        self.assertEqual((certs / "mcr.microsoft.com/hosts.toml").read_text(),
+        self.assertEqual((self.cgroup / "init/cgroup.procs").read_text(), "1\n7\n")
+        self.assertEqual((self.cgroup / "cgroup.subtree_control").read_text(), "+cpuset +cpu +memory +pids\n")
+        # Controllers it cannot hand down fail the group before anything ran.
+        self.log.write_text("")
+        (self.cgroup / "cgroup.subtree_control").unlink()
+        (self.cgroup / "cgroup.subtree_control").mkdir()
+        result = self.executor("group", env=env)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.log.read_text(), "")
+
+    def test_a_groups_daemon_pulls_through_the_mirrors_it_is_given(self):
+        env = self.daemon_fakes("exit 0\n")
+        (self.directory / "glob-me").touch()
+        result = self.executor("group", env={**env, "HARNESS_E2E_REGISTRY_MIRRORS":
+                                             "mcr.microsoft.com=http://172.17.0.1:5001 * ../etc=http://x "
+                                             'quay.io=http://x"y docker.io=http://172.17.0.1:5000'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(path.relative_to(self.certs).as_posix() for path in self.certs.rglob("*")),
+                         ["docker.io", "docker.io/hosts.toml", "mcr.microsoft.com", "mcr.microsoft.com/hosts.toml"])
+        self.assertEqual((self.certs / "mcr.microsoft.com/hosts.toml").read_text(),
                          'server = "https://mcr.microsoft.com"\n'
                          '[host."http://172.17.0.1:5001"]\n  capabilities = ["pull", "resolve"]\n')
-        self.assertEqual((certs / "docker.io/hosts.toml").read_text().splitlines()[:2],
+        self.assertEqual((self.certs / "docker.io/hosts.toml").read_text().splitlines()[:2],
                          ['server = "https://registry-1.docker.io"', '[host."http://172.17.0.1:5000"]'])
+        # Anything else is said and skipped, never globbed.
+        for entry in ("*", "../etc=http://x", 'quay.io=http://x"y'):
+            self.assertIn(f"::warning::ignoring registry mirror '{entry}'", result.stderr)
+        self.assertNotIn("glob-me", result.stderr)
 
-    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
     def test_a_group_whose_daemon_does_not_start_never_runs(self):
         result = self.executor("group", env={**self.daemon_fakes('echo "group ran" >>"$FAKE_LOG"\n'),
                                              "FAKE_DOCKERD_FAILS": "1"})
@@ -500,7 +556,17 @@ class ExecutorTests(unittest.TestCase):
         self.assertIn("the group's Docker daemon did not start", result.stderr)
         self.assertNotIn("group ran", self.log.read_text())
 
-    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
+    def test_a_daemon_that_hangs_on_its_way_out_is_killed(self):
+        env = self.daemon_fakes("exit 0\n")
+        pid = self.directory / "dockerd.pid"
+        started = time.monotonic()
+        result = self.executor("group", env={**env, "FAKE_DOCKERD_HANGS": str(pid)})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # It ignores TERM: 30 s, then KILL.
+        self.assertGreater(time.monotonic() - started, 29)
+        self.assertLess(time.monotonic() - started, 45)
+        self.assertFalse(Path(f"/proc/{pid.read_text().strip()}").exists())
+
     def test_a_stopped_group_stops_its_stack_before_its_daemon(self):
         env = self.daemon_fakes("""\
             trap 'echo "stack down" >>"$FAKE_LOG"; kill $sleeper; exit 143' TERM
@@ -519,7 +585,8 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(executor.wait(timeout=10), 143)
         executor.stdout.close()
         executor.stderr.close()
-        self.assertEqual(self.log.read_text().splitlines()[-3:], ["group started", "stack down", "dockerd stopped"])
+        self.assertEqual([line for line in self.log.read_text().splitlines() if "SigIgn" not in line][-3:],
+                         ["group started", "stack down", "dockerd stopped"])
 
     def test_package_hashes_each_root_beside_its_contract(self):
         result = self.executor("package", '{"job":"group"}', "target/a", "target/b")

@@ -199,9 +199,9 @@ route_fixtures() {
 # container's (its network, so a port published on 127.0.0.1 is where the
 # group looks for it; its data root, the /var/lib/docker volume) and dies
 # with it. The group runs as the user, who reaches the daemon's socket
-# through its group; that socket makes it root in this container, as the
-# host's socket made it root on the host before. Stopped, the daemon stops
-# its containers.
+# through its group. That socket makes it root in this container, and this
+# container is privileged: root-equivalent on the host, as the host's socket
+# was before. Stopped, the daemon stops its containers.
 group() {
   route_fixtures
   if [[ -z "${HARNESS_E2E_EXECUTOR_USER:-}" ]]; then
@@ -209,7 +209,7 @@ group() {
   fi
   # cgroup v2: dockerd hands the controllers down only from a cgroup that
   # holds no process, so this container's move into a leaf first, as
-  # Docker's own dind does.
+  # Docker's own dind does (run_in_image.sh gives it a cgroup namespace).
   if [[ -w /sys/fs/cgroup/cgroup.subtree_control ]]; then
     mkdir -p /sys/fs/cgroup/init
     xargs -rn1 </sys/fs/cgroup/cgroup.procs >/sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
@@ -217,16 +217,23 @@ group() {
   fi
   # Pull-through caches by registry, "REGISTRY=URL ...": the daemon pulls
   # from the mirror first and from the registry when the mirror fails.
-  local mirror registry server
-  for mirror in ${HARNESS_E2E_REGISTRY_MIRRORS:-}; do
+  local mirrors mirror registry server
+  read -ra mirrors <<<"${HARNESS_E2E_REGISTRY_MIRRORS:-}"
+  for mirror in "${mirrors[@]}"; do
+    if [[ ! "$mirror" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*=https?://[^\"\\]+$ ]]; then
+      echo "::warning::ignoring registry mirror '$mirror': not REGISTRY=http(s)://HOST[:PORT]" >&2
+      continue
+    fi
     registry=${mirror%%=*} server=${mirror%%=*}
     [[ "$registry" != docker.io ]] || server=registry-1.docker.io
     mkdir -p "/etc/docker/certs.d/$registry"
     printf 'server = "https://%s"\n[host."%s"]\n  capabilities = ["pull", "resolve"]\n' \
       "$server" "${mirror#*=}" >"/etc/docker/certs.d/$registry/hosts.toml"
   done
+  # A command bash starts in the background ignores SIGINT and SIGQUIT; the
+  # daemon and the group get them back, as they have them on a runner.
   local log=${TMPDIR:-/tmp}/dockerd.log try status=0
-  dockerd --group "${user#*:}" >"$log" 2>&1 &
+  env --default-signal=INT,QUIT dockerd --group "${user#*:}" >"$log" 2>&1 &
   daemon=$!
   for ((try = 0; try < 60; try++)); do
     docker version >/dev/null 2>&1 && break
@@ -236,19 +243,32 @@ group() {
   if ((try >= 60)); then
     tail -n 50 "$log" >&2
     echo "the group's Docker daemon did not start" >&2
-    kill "$daemon" 2>/dev/null || true
+    stop_daemon
     return 1
   fi
-  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups bash scripts/run_exact_stack_group.sh &
+  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups \
+    env --default-signal=INT,QUIT bash scripts/run_exact_stack_group.sh &
   launcher=$!
   # A stopped container stops the group first: the launcher takes its stack
   # down, then the daemon its containers.
   trap 'kill -TERM "$launcher" 2>/dev/null || true' INT TERM
   wait "$launcher" || status=$?
   while kill -0 "$launcher" 2>/dev/null; do wait "$launcher" || status=$?; done
-  kill -TERM "$daemon" 2>/dev/null || true
-  wait "$daemon" || true
+  stop_daemon
   return "$status"
+}
+
+# TERM, 30 s to stop its containers and exit, then KILL: a daemon that hangs
+# on its way out never holds the group's job.
+stop_daemon() {
+  local try
+  kill -TERM "$daemon" 2>/dev/null || return 0
+  for ((try = 0; try < 30; try++)); do
+    case "$(ps -o stat= -p "$daemon")" in "" | Z*) break ;; esac
+    sleep 1
+  done
+  kill -KILL "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
 }
 
 package() {

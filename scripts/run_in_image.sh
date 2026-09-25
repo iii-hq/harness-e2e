@@ -90,7 +90,10 @@ if [[ "$phase" == group ]]; then
   for label in "${labels[@]}"; do
     [[ "$label" == --label ]] || volume+=",volume-label=$label"
   done
-  args+=(--privileged --user 0:0 --mount "$volume" --env "HARNESS_E2E_EXECUTOR_USER=$(id -u):$(id -g)")
+  # A cgroup namespace of its own whatever the host's default: the daemon
+  # rearranges the cgroups it sees.
+  args+=(--privileged --cgroupns private --user 0:0 --mount "$volume"
+    --env "HARNESS_E2E_EXECUTOR_USER=$(id -u):$(id -g)")
 else
   args+=(--user "$(id -u):$(id -g)")
 fi
@@ -123,5 +126,9 @@ status=0
 wait "$container" || status=$?
 if ((status != 0)) && [[ ! -s "$cidfile" ]]; then
   record_failure executor_start "$status" "the executor container did not start"
+elif ((status != 0)) && [[ "$phase" == group ]]; then
+  # Before the launcher ran (its Docker daemon did not start, say) or
+  # without it writing one.
+  record_failure executor "$status" "the group's executor container exited $status before the group recorded a failure"
 fi
 exit "$status"
