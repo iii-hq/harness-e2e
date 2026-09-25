@@ -26,6 +26,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # The engine, Compose and CLI calls the release runs keep iii telemetry off.
+  III_TELEMETRY_ENABLED: "false"
 
 jobs:
   validate:

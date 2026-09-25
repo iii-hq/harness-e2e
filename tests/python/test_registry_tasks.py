@@ -142,6 +142,9 @@ class RegistryDeliveryTests(unittest.TestCase):
             self.assertEqual("--privileged" in launch, test != 1)
             self.assertEqual(any("dst=/fixture," in c for c in launch), test in (2, 4))
             self.assertFalse(any("controller-assets" in c for c in launch))
+            # iii telemetry off in the runner and, through it, the fixture's services.
+            self.assertIn(["-e", "III_TELEMETRY_ENABLED=false"],
+                          [launch[i:i + 2] for i in range(len(launch) - 1)])
 
 
 if __name__ == "__main__":

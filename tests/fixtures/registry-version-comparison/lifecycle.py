@@ -145,7 +145,10 @@ def prepare(args):
             "-e", "DOCKER_TLS_CERTDIR=", "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
             "-e", f"WEB_PORT={args.web_port}", "-e", f"API_PORT={args.api_port}",
             "-e", "REGISTRY_SOURCE=/workspace/registry", "-e", "FIXTURE_DIR=/fixture",
-            "-e", f"COMPOSE_PROJECT_NAME={state['container']}"]
+            "-e", f"COMPOSE_PROJECT_NAME={state['container']}",
+            # A container starts with none of this environment: iii telemetry
+            # stays off here and in what Compose interpolates it into.
+            "-e", "III_TELEMETRY_ENABLED=false"]
     if args.test != 1:
         argv += ["--privileged", "-p", f"127.0.0.1:{args.web_port}:8080",
                  "-p", f"127.0.0.1:{args.api_port}:8081"]

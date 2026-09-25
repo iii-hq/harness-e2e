@@ -1329,9 +1329,10 @@ async fn prepare_workspace(kind: Kind, run_id: &str) -> Result<()> {
 // Compose derives `<namespace>-<container>` as the configuration id and refuses
 // one over 64 characters, which a long campaign group namespace reaches; the
 // run-scoped worker name is already unique and short, so name it explicitly.
+// The Worker keeps iii telemetry off even under a daemon that has it on.
 fn candidate_compose(contract: &WorkerContract, namespace: &str) -> String {
     format!(
-        "namespace: {namespace}\ncontainers:\n  {worker}:\n    worker: path://.\n    config_name: {worker}\n    scripts:\n      run: npm start\n",
+        "namespace: {namespace}\ncontainers:\n  {worker}:\n    worker: path://.\n    config_name: {worker}\n    environment:\n      III_TELEMETRY_ENABLED: \"false\"\n    scripts:\n      run: npm start\n",
         worker = contract.worker
     )
 }
@@ -1539,6 +1540,10 @@ mod tests {
         assert_eq!(
             yaml["containers"][&contract.worker]["config_name"],
             contract.worker.as_str()
+        );
+        assert_eq!(
+            yaml["containers"][&contract.worker]["environment"]["III_TELEMETRY_ENABLED"],
+            "false"
         );
         assert_eq!(
             yaml["containers"][&contract.worker]["scripts"]["run"],

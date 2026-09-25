@@ -162,7 +162,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
         self.assertNotIn("harness", project["containers"])
         self.assertEqual(project["containers"]["subject"]["version"], "latest")
-        self.assertEqual(project["containers"]["link"], template["containers"]["link"])
+        self.assertEqual(project["containers"]["link"], {**template["containers"]["link"], "environment": {"III_TELEMETRY_ENABLED": "false"}})
         template["containers"]["link"]["worker"] = "path://../elsewhere"
         with self.assertRaisesRegex(ValueError, "inside its project"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
@@ -242,6 +242,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                     "worker": f"package://provider-{provider}",
                     "version": "1.2.3",
                     "env_file": ["/private/.env"],
+                    "environment": {"III_TELEMETRY_ENABLED": "false"},
                 })
                 self.assertNotIn("fp", project["containers"])
                 self.assertNotIn("harness", project["containers"])
@@ -272,12 +273,27 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provider-deepseek"):
             MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template)
 
+    def test_every_container_keeps_iii_telemetry_off_whatever_the_daemon_inherited(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "link": {"worker": "path://./link", "environment": {"III_TELEMETRY_ENABLED": "true"}},
+        }}
+        for scaffold in (
+            MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None,
+                                    {"harness.III_TELEMETRY_ENABLED": "true"}),
+            MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template,
+                                    profile_root=Path("/isolated/project")),
+        ):
+            for name, container in scaffold["containers"].items():
+                self.assertEqual(container["environment"]["III_TELEMETRY_ENABLED"], "false", name)
+
     def test_base_projects_also_add_the_campaign_provider_when_it_is_not_declared(self):
         contract = campaign_contract()
         contract["suite"]["subject"]["provider"] = "anthropic"
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), "/private/.env", {})
         self.assertEqual(project["containers"].get("provider-anthropic"), {
             "worker": "package://provider-anthropic", "version": "latest", "env_file": ["/private/.env"],
+            "environment": {"III_TELEMETRY_ENABLED": "false"},
         })
 
     def test_visual_worker_groups_include_canvas_only_for_their_shards(self):
@@ -289,7 +305,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         ])
         # The stack the execution assembles once carries Canvas for the suite.
         shared = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
-        self.assertEqual(shared["containers"]["canvas"], {"worker": "package://canvas", "version": "latest"})
+        self.assertEqual(shared["containers"]["canvas"], {"worker": "package://canvas", "version": "latest",
+                                                          "environment": {"III_TELEMETRY_ENABLED": "false"}})
         ordinary = MODULE.project_scaffold(
             contract, "project-one", Path("/data"), None, {}, group_id="daily-core",
         )
@@ -409,7 +426,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         runner = project["containers"]["e2e"]
         self.assertEqual(runner["config_name"], "e2e-group-harness-e2e")
         self.assertEqual(runner["config_override"]["data_dir"], str(root / "native"))
-        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr"})
+        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr", "III_TELEMETRY_ENABLED": "false"})
         self.assertEqual(project["containers"]["directory"]["config_override"]["agents_folder"],
                          str(root / "project/agents"))
         self.assertEqual({tuple(c["env_file"]) for c in project["containers"].values()}, {(str(root / ".env"),)})
