@@ -537,32 +537,31 @@ try {
   assert.equal(await importDialog.getByText('0.11.28').count(), 2)
   await page.keyboard.press('Escape')
 
-  // One execution: nothing to compare it with, so no hint, button or column.
+  // One execution: ticked alone, there is nothing to compare it with.
   executions = [runningSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  const compareHint = page.getByText('tick two executions to compare')
-  assert.equal(await compareHint.count(), 0)
-  assert.equal(
-    await page.getByRole('button', { name: 'compare', exact: true }).count(),
-    0,
+  await page.getByText('1 of 9 tests reported', { exact: true }).waitFor()
+  await page
+    .getByRole('checkbox', { name: /^Select gpt-5\.6-terra · / })
+    .check()
+  const selection = page.getByRole('toolbar', { name: 'Selected executions' })
+  await selection.getByText('Tick one more to compare.').waitFor()
+  assert.ok(
+    await selection
+      .getByRole('button', { name: 'Compare A and B', exact: true })
+      .isDisabled(),
   )
-  assert.equal(
-    await page.locator('[data-ledger] input[type=checkbox]').count(),
-    0,
-  )
+  await selection.getByRole('button', { name: 'Clear selection' }).click()
 
-  // The ledger: a running row reads its progress; a cancelled one reads as
-  // cancelled with how far it got, and its runtime rounds whole. Two rows:
-  // now they can be compared.
+  // The list: a running row reads its progress; a cancelled one reads as
+  // cancelled with how far it got, and its runtime rounds whole.
   executions = [runningSummary, cancelledSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  await compareHint.waitFor()
+  await page.getByText('1 of 9 tests reported', { exact: true }).waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
-  await stopped.getByText('cancelled', { exact: true }).waitFor()
-  await stopped.getByText('3 of 9 done', { exact: true }).waitFor()
+  await stopped.getByText('Cancelled', { exact: true }).waitFor()
+  await stopped.getByText('3 of 9 tests reported', { exact: true }).waitFor()
   await stopped.getByText('2m 00s', { exact: true }).waitFor()
   assert.equal(await page.getByText(/infrastructure event/).count(), 0)
   assert.equal(await page.getByText('1m 60s').count(), 0)

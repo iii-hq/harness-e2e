@@ -109,7 +109,7 @@ function summaryFromDetail(
  *  native run's are its own request), or when nothing was recorded, the
  *  scenarios and model it reports with the form's defaults. */
 export function rerunParameters(
-  detail: DashboardExecutionDetail,
+  detail: Pick<DashboardExecutionDetail, 'plan_execution' | 'parameters'>,
   scenarios: string[],
   subject: ExecutionModel | undefined,
 ): ExecutionParameters {

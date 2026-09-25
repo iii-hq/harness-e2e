@@ -2,11 +2,14 @@ import type {
   DashboardExecutionDetail,
   DashboardExecutionSummary,
   DashboardSubjectSummary,
+  DockerGroup,
   ExecutionSuite,
   ExecutionTotals,
   JsonObject,
   StackWorker,
 } from '@/lib/dashboard-data-source'
+import { formatDateTime, plural } from '@/lib/format'
+import type { ResultState } from '@/lib/result-status'
 
 export type ExecutionAttentionState =
   | 'passed'
@@ -253,12 +256,6 @@ export function titleCase(value: string): string {
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
 }
 
-export function formatPercent(value: number | null, fraction = true): string {
-  if (value === null || !Number.isFinite(value)) return 'Not reported'
-  const percent = fraction && Math.abs(value) <= 1 ? value * 100 : value
-  return `${percent.toFixed(percent % 1 === 0 ? 0 : 1)}%`
-}
-
 export function formatDuration(seconds: number | null): string {
   if (seconds === null || !Number.isFinite(seconds)) return 'Not reported'
   if (seconds < 59.5) return `${seconds.toFixed(seconds < 10 ? 1 : 0)}s`
@@ -309,31 +306,37 @@ export function detailHasAttention(detail: DashboardExecutionDetail): boolean {
   return isExecutionAttention(buildExecutionPresentation(detail))
 }
 
-export function statusCopy(presentation: ExecutionPresentation) {
+/** An execution's result as a dot and a label; `live` while it moves. A
+ *  cancelling or importing execution is running under another name. */
+export function executionResult(presentation: ExecutionPresentation): {
+  state: ResultState
+  label?: string
+} {
   if (presentation.execution.status === 'importing')
-    return { label: 'importing', status: 'running' as const }
-  if (presentation.attention === 'passed')
-    return { label: 'passed', status: 'passed' as const }
-  if (presentation.attention === 'running')
-    return { label: 'running', status: 'running' as const }
-  if (presentation.attention === 'cancelling')
-    return { label: 'cancelling', status: 'cancelling' as const }
-  if (presentation.attention === 'cancelled')
-    return { label: 'cancelled', status: 'cancelled' as const }
-  if (presentation.attention === 'incomplete')
-    return { label: 'incomplete', status: 'incomplete' as const }
-  if (presentation.attention === 'unavailable')
-    return { label: 'no report', status: 'unavailable' as const }
-  if (
-    presentation.breakdown.inconclusive > 0 &&
-    presentation.breakdown.issues === presentation.breakdown.inconclusive
-  )
-    return { label: 'inconclusive', status: 'inconclusive' as const }
-  return { label: 'failed', status: 'failed' as const }
+    return { state: 'running', label: 'Importing' }
+  switch (presentation.attention) {
+    case 'passed':
+      return { state: 'passed' }
+    case 'running':
+      return { state: 'running' }
+    case 'cancelling':
+      return { state: 'running', label: 'Cancelling' }
+    case 'cancelled':
+      return { state: 'cancelled' }
+    case 'incomplete':
+      return { state: 'incomplete' }
+    case 'unavailable':
+      return { state: 'inconclusive', label: 'No report' }
+  }
+  const { inconclusive, issues } = presentation.breakdown
+  return {
+    state:
+      inconclusive > 0 && issues === inconclusive ? 'inconclusive' : 'failed',
+  }
 }
 
 /** Where an execution came from, as text with a link when it has one. Native
- *  runs and executions planned here read as local. */
+ *  runs and executions started here ran on this harness. */
 export function executionOrigin(execution: DashboardExecutionSummary): {
   label: string
   href: string | null
@@ -345,23 +348,47 @@ export function executionOrigin(execution: DashboardExecutionSummary): {
       href: stringValue(source.url) || null,
     }
   if (source.kind === 'docker') return { label: 'Docker', href: null }
-  return { label: 'local', href: null }
+  return { label: 'This harness', href: null }
 }
 
-/** How far a running (or cancelled) execution got, as its slots (or a
- *  native run's slots) finished of those planned; null otherwise. */
+/** Where a Docker execution's groups are: `3 of 9 groups finished · 2
+ *  running · 4 waiting`. */
+export function dockerGroupsProgress(groups: DockerGroup[]): string {
+  const running = groups.filter((group) => group.state === 'running').length
+  const waiting = groups.filter((group) => group.state === 'queued').length
+  return [
+    `${groups.length - running - waiting} of ${plural(groups.length, 'group')} finished`,
+    running ? `${running} running` : null,
+    waiting ? `${waiting} waiting` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** How far a running (or cancelled) execution got: in Docker, where its
+ *  groups are; here, its tests reported of those planned (a native run's
+ *  live progress). Null otherwise. */
 export function executionProgress(
   execution: DashboardExecutionSummary,
 ): string | null {
   const status = stringValue(execution.status)
   if (!['running', 'cancelling', 'cancelled'].includes(status)) return null
+  const source = objectValue(execution.source)
+  if (
+    source.kind === 'docker' &&
+    Array.isArray(source.groups) &&
+    source.groups.length > 0
+  )
+    return dockerGroupsProgress(source.groups as DockerGroup[])
   const plan = objectValue(execution.plan_execution)
   const live = objectValue(execution.live_progress)
   const done =
     numberValue(plan.finished) ?? numberValue(live.runs_committed) ?? null
   const planned =
     numberValue(plan.planned) ?? numberValue(live.planned_slots) ?? null
-  return done === null || !planned ? null : `${done} of ${planned} done`
+  return done === null || !planned
+    ? null
+    : `${done} of ${plural(planned, 'test')} reported`
 }
 
 /** A suite as the Console names it: its name, or "unnamed suite", and the
@@ -445,7 +472,7 @@ export function executionTitle(presentation: ExecutionPresentation): {
     // Dated by its creation: the same title while it runs, when it ends and
     // on every page.
     return {
-      title: `${subject.model} · ${formatDate(presentation.startedAt || presentation.completedAt)}`,
+      title: `${subject.model} · ${formatDateTime(presentation.startedAt || presentation.completedAt)}`,
       detail: workflow || null,
     }
   }

@@ -1,25 +1,62 @@
-import { ArrowRight, Search, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Button,
+  Checkbox,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+  SegmentedControl,
+  Table,
+  TableBody,
+  TableCell,
+  TableFrame,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableViewport,
+} from '@iii-dev/console-ui'
+import {
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  Copy,
+  Download,
+  ExternalLink,
+  GitCompare,
+  Minus,
+  Pencil,
+  RotateCcw,
+  Search,
+  Square,
+  Trash2,
+  X,
+} from 'lucide-react'
+import {
+  type FormEvent,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
+import { useDashboardChrome } from '@/components/DashboardShell'
 import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
   Callout,
-  DataTable,
-  DataTableRow,
   EmptyState,
-  FilterChip,
-  FilterChipGroup,
   Input,
-  numericCellClassName,
-  PageHeader,
+  isInteractiveTarget,
+  RowMenu,
+  type RowMenuItem,
   Select,
-  StatusBadge,
+  StatusLabel,
 } from '@/design-system'
 import {
   hashForComparison,
@@ -31,68 +68,74 @@ import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type DashboardDataBridge,
   type DashboardExecutionSummary,
+  type ExecutionParameters,
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import {
   buildExecutionPresentation,
   categoryMessage,
-  type ExecutionPresentation,
   executionOrigin,
   executionProgress,
+  executionResult,
   executionScore,
   executionTitle,
-  formatDate,
-  formatDuration,
-  formatPercent,
   modelNames,
   percentPoints,
-  statusCopy,
+  providerModel,
 } from '@/lib/execution-view'
+import {
+  formatCount,
+  formatDateTime,
+  formatDay,
+  formatDayLabel,
+  formatDuration,
+  formatTime,
+  formatTokens,
+  NOT_REPORTED,
+  plural,
+} from '@/lib/format'
+import { RESULT_STATES, type ResultState } from '@/lib/result-status'
+import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
+import './executions-page.css'
 
 const PAGE_SIZE = 50
 
-const triggerLabels: Record<string, string> = {
-  schedule: 'scheduled',
-  workflow_dispatch: 'manual',
-  local: 'local',
-}
-
-export function triggerLabel(event: string) {
-  return triggerLabels[event] ?? event.replace(/[_-]+/g, ' ')
-}
+/* ------------------------------------------------------------ filters */
 
 export type LedgerSort = 'newest' | 'oldest' | 'runtime' | 'tokens' | 'result'
 
 export type LedgerFilters = {
   query: string
-  status: string
-  event: string
+  /** `all` or a result state. */
+  status: 'all' | ResultState
   sort: LedgerSort
 }
 
 export const LEDGER_DEFAULT_FILTERS: LedgerFilters = {
   query: '',
   status: 'all',
-  event: 'all',
   sort: 'newest',
 }
 
-const SORTS: LedgerSort[] = ['newest', 'oldest', 'runtime', 'tokens', 'result']
+const SORTS: Array<{ value: LedgerSort; label: string }> = [
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'result', label: 'Result' },
+  { value: 'runtime', label: 'Longest runtime' },
+  { value: 'tokens', label: 'Most tokens' },
+]
 
-/** Audit E-04: the ledger's filters live in the hash, not only in state. */
+/** Audit E-04: the list's filters live in the hash, not only in state. */
 export function ledgerFiltersFromParams(
   params: URLSearchParams,
 ): LedgerFilters {
   const sort = params.get('sort')
+  const status = params.get('status')
   return {
     query: params.get('q') ?? '',
-    status: params.get('status') ?? 'all',
-    event: params.get('event') ?? 'all',
-    sort:
-      sort && (SORTS as string[]).includes(sort)
-        ? (sort as LedgerSort)
-        : 'newest',
+    status: status && status in RESULT_STATES ? (status as ResultState) : 'all',
+    sort: SORTS.find((entry) => entry.value === sort)?.value ?? 'newest',
   }
 }
 
@@ -100,44 +143,138 @@ export function ledgerFiltersToParams(filters: LedgerFilters): URLSearchParams {
   const params = new URLSearchParams()
   if (filters.query.trim()) params.set('q', filters.query.trim())
   if (filters.status !== 'all') params.set('status', filters.status)
-  if (filters.event !== 'all') params.set('event', filters.event)
   if (filters.sort !== 'newest') params.set('sort', filters.sort)
   return params
 }
 
+/* --------------------------------------------------------------- rows */
+
+/** One execution as the list shows it: every cell already written. */
 export type LedgerRow = {
   execution: DashboardExecutionSummary
-  presentation: ExecutionPresentation
-  status: ReturnType<typeof statusCopy>
+  id: string
+  title: string
+  origin: string
+  /** When it ended, or when it started while it runs. */
+  date: string
+  /** `This harness · 10:10 AM · plan-cf6ab5f9`. */
+  meta: string
+  result: { state: ResultState; label?: string }
+  /** Running, importing or cancelling: it cannot be deleted yet. */
+  live: boolean
+  /** The line under the result: progress, the first problem, or evidence. */
+  issue: string | null
+  model: string
+  models: string
+  profile: string
+  tests: string
+  /** Test runs recorded, which deleting it removes. */
+  runs: number
+  score: string
+  passRate: string
+  runtime: string
+  runtimeSeconds: number | null
+  tokens: string
+  tokenCount: number | null
+  github: { runId: number; url: string } | null
   searchText: string
+}
+
+function numeric(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function evidenceNote(execution: DashboardExecutionSummary) {
+  if (execution.availability === 'aggregate') return 'Aggregate report'
+  if (execution.availability === 'unavailable') return 'No report retained'
+  return null
 }
 
 export function buildLedgerRows(
   executions: DashboardExecutionSummary[],
+  now = new Date(),
 ): LedgerRow[] {
   return executions.map((execution) => {
     const presentation = buildExecutionPresentation(execution)
-    const { title, detail } = executionTitle(presentation)
+    const { title } = executionTitle(presentation)
+    const result = executionResult(presentation)
+    const live = result.state === 'running'
+    const origin = executionOrigin(execution)
+    const date = live
+      ? presentation.startedAt || presentation.completedAt
+      : presentation.completedAt || presentation.startedAt
+    const subject = presentation.subjects[0]
+    const model = subject ? providerModel(subject) : NOT_REPORTED
+    const profile = execution.parameters?.agent
+      ? `profile ${execution.parameters.agent}`
+      : 'no profile'
+    const { receivedReports: received, expectedReports: expected } =
+      presentation
+    const score = executionScore(execution)
+    const passRate = percentPoints(presentation.passRate)
+    const tokenCount = numeric(execution.totals?.total_tokens)
+    const source = execution.source ?? {}
+    const github =
+      source.kind === 'github' && typeof source.run_id === 'number'
+        ? { runId: source.run_id, url: origin.href ?? '' }
+        : null
     return {
       execution,
-      presentation,
-      status: statusCopy(presentation),
+      id: execution.id,
+      title,
+      origin: origin.label,
+      date,
+      meta: [
+        origin.label,
+        date ? formatTime(date) : null,
+        execution.id.slice(0, 13),
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      result,
+      live,
+      issue:
+        executionProgress(execution) ??
+        (presentation.primaryIssue
+          ? categoryMessage(
+              presentation.primaryIssue.category,
+              presentation.primaryIssue.count,
+            )
+          : live
+            ? null
+            : evidenceNote(execution)),
+      model,
+      models: modelNames(presentation.subjects),
+      profile,
+      tests:
+        received === null && expected === null
+          ? NOT_REPORTED
+          : `${received ?? NOT_REPORTED}/${expected ?? NOT_REPORTED}`,
+      runs: (received ?? expected ?? 0) * (execution.parameters?.runs ?? 1),
+      score:
+        score === null
+          ? NOT_REPORTED
+          : score.toLocaleString('en-US', { maximumFractionDigits: 1 }),
+      passRate:
+        passRate === null
+          ? NOT_REPORTED
+          : `${passRate.toLocaleString('en-US', { maximumFractionDigits: 1 })}%`,
+      runtime: formatDuration(
+        presentation.modelRuntimeSeconds === null
+          ? null
+          : presentation.modelRuntimeSeconds * 1000,
+      ),
+      runtimeSeconds: presentation.modelRuntimeSeconds,
+      tokens: formatTokens(tokenCount),
+      tokenCount,
+      github,
       searchText: [
         title,
-        detail,
-        execution.label,
-        execution.workflow_name,
         execution.id,
-        execution.run_id,
-        formatDate(presentation.completedAt),
-        execution.source?.sha,
-        executionOrigin(execution).label,
+        model,
         execution.parameters?.agent,
-        ...(execution.parameters?.scenarios ?? []),
-        ...presentation.subjects.flatMap((model) => [
-          model.model,
-          `${model.provider}/${model.model}`,
-        ]),
+        origin.label,
+        date ? formatDateTime(date, now) : null,
       ]
         .filter(Boolean)
         .join(' ')
@@ -146,362 +283,695 @@ export function buildLedgerRows(
   })
 }
 
-function tokensOf(row: LedgerRow) {
-  const value = row.execution.totals?.total_tokens
-  return typeof value === 'number' && Number.isFinite(value) ? value : null
-}
-
-const RESULT_ORDER = [
+// Worst first, for the Result sort.
+const RESULT_ORDER: ResultState[] = [
   'failed',
   'inconclusive',
   'incomplete',
   'running',
-  'cancelling',
   'cancelled',
-  'unavailable',
   'passed',
 ]
 
+function resultRank(row: LedgerRow) {
+  const rank = RESULT_ORDER.indexOf(row.result.state)
+  return rank === -1 ? RESULT_ORDER.length : rank
+}
+
 export function filterLedgerRows(rows: LedgerRow[], filters: LedgerFilters) {
   const query = filters.query.trim().toLowerCase()
-  const matched = rows.filter((row) => {
-    if (filters.status !== 'all' && row.status.status !== filters.status)
-      return false
-    if (filters.event !== 'all' && row.execution.event !== filters.event)
-      return false
-    return !query || row.searchText.includes(query)
-  })
-  const byDateDesc = (left: LedgerRow, right: LedgerRow) =>
-    Date.parse(right.presentation.completedAt || '') -
-    Date.parse(left.presentation.completedAt || '')
-  const sorted = [...matched]
-  if (filters.sort === 'oldest') sorted.sort((a, b) => byDateDesc(b, a))
-  else if (filters.sort === 'runtime')
-    sorted.sort(
-      (a, b) =>
-        (b.presentation.modelRuntimeSeconds ?? -1) -
-          (a.presentation.modelRuntimeSeconds ?? -1) || byDateDesc(a, b),
-    )
-  else if (filters.sort === 'tokens')
-    sorted.sort(
-      (a, b) => (tokensOf(b) ?? -1) - (tokensOf(a) ?? -1) || byDateDesc(a, b),
-    )
-  else if (filters.sort === 'result')
-    sorted.sort(
-      (a, b) =>
-        RESULT_ORDER.indexOf(a.status.status) -
-          RESULT_ORDER.indexOf(b.status.status) || byDateDesc(a, b),
-    )
-  else sorted.sort(byDateDesc)
-  return sorted
+  const matched = rows.filter(
+    (row) =>
+      (filters.status === 'all' || row.result.state === filters.status) &&
+      (!query || row.searchText.includes(query)),
+  )
+  const time = (row: LedgerRow) => Date.parse(row.date) || 0
+  const newest = (a: LedgerRow, b: LedgerRow) => time(b) - time(a)
+  const by: Record<LedgerSort, (a: LedgerRow, b: LedgerRow) => number> = {
+    newest,
+    oldest: (a, b) => time(a) - time(b),
+    runtime: (a, b) =>
+      (b.runtimeSeconds ?? -1) - (a.runtimeSeconds ?? -1) || newest(a, b),
+    tokens: (a, b) =>
+      (b.tokenCount ?? -1) - (a.tokenCount ?? -1) || newest(a, b),
+    result: (a, b) => resultRank(a) - resultRank(b) || newest(a, b),
+  }
+  return [...matched].sort(by[filters.sort])
 }
+
+export type LedgerGroup = { key: string; label: string; rows: LedgerRow[] }
 
 function dayKey(value: string) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'unknown'
-  const date = new Date(timestamp)
-  return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? 'undated'
+    : `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`
 }
 
-export function dayLabel(value: string, now = Date.now()) {
-  const timestamp = Date.parse(value)
-  if (!Number.isFinite(timestamp)) return 'date not reported'
-  const day = new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-  }).format(new Date(timestamp))
-  if (dayKey(value) === dayKey(new Date(now).toISOString()))
-    return `today · ${day}`
-  if (dayKey(value) === dayKey(new Date(now - 86_400_000).toISOString()))
-    return `yesterday · ${day}`
-  return day
+function dayHeading(value: string, now: Date) {
+  if (dayKey(value) === 'undated') return 'Date not reported'
+  const label = formatDayLabel(value, now)
+  const day = formatDay(value, now)
+  return label === day ? day : `${label} · ${day}`
 }
 
-export type LedgerGroup = {
-  key: string
-  label: string
-  rows: LedgerRow[]
-}
-
-export function groupHeading(group: LedgerGroup): string {
-  return `${group.label} · ${group.rows.length}`
-}
-
-/** Audit E-12: a running execution is pinned above its day groups. */
-export function groupLedgerRows(rows: LedgerRow[], now = Date.now()) {
-  const running = rows.filter(
-    (row) =>
-      row.status.status === 'running' || row.status.status === 'cancelling',
-  )
-  const settled = rows.filter((row) => !running.includes(row))
+/** Audit E-12: what runs comes first, then one group per day. */
+export function groupLedgerRows(rows: LedgerRow[], now = new Date()) {
   const groups: LedgerGroup[] = []
   const byKey = new Map<string, LedgerGroup>()
-  const push = (group: LedgerGroup, row: LedgerRow) => {
-    const existing = byKey.get(group.key)
-    if (existing) existing.rows.push(row)
-    else {
-      group.rows.push(row)
-      byKey.set(group.key, group)
+  const running = rows.filter((row) => row.live)
+  if (running.length > 0)
+    groups.push({ key: 'running', label: 'Running', rows: running })
+  for (const row of rows) {
+    if (row.live) continue
+    const key = dayKey(row.date)
+    let group = byKey.get(key)
+    if (!group) {
+      group = { key, label: dayHeading(row.date, now), rows: [] }
+      byKey.set(key, group)
       groups.push(group)
     }
+    group.rows.push(row)
   }
-  for (const row of settled) {
-    push(
-      {
-        key: dayKey(row.presentation.completedAt),
-        label: dayLabel(row.presentation.completedAt, now),
-        rows: [],
-      },
-      row,
-    )
-  }
-  return { running, groups }
+  return groups
 }
 
-/** Two executions ticked for comparison, in the order they were ticked: the
- *  first is A, the base. */
-export type LedgerSelection = {
-  ids: string[]
-  onToggle: (id: string) => void
-}
+// The segments the canvas names, then any other result that is present.
+const SEGMENT_ORDER: ResultState[] = [
+  'passed',
+  'failed',
+  'incomplete',
+  'running',
+  'inconclusive',
+  'cancelled',
+]
 
-/** Tick or untick one execution; a third tick waits for one to be cleared. */
-export function toggleComparisonSelection(ids: string[], id: string) {
-  if (ids.includes(id)) return ids.filter((entry) => entry !== id)
-  return ids.length < 2 ? [...ids, id] : ids
-}
-
-function LedgerRowCells({
-  row,
-  selection,
-}: {
-  row: LedgerRow
-  selection?: LedgerSelection
-}) {
-  const { presentation, execution, status } = row
-  const { title } = executionTitle(presentation)
-  const tokens = tokensOf(row)
-  const origin = executionOrigin(execution)
-  const score = executionScore(execution)
-  const progress = executionProgress(execution)
-  const scenarios = execution.parameters?.scenarios.length
-  const evidenceNote =
-    execution.availability === 'aggregate'
-      ? 'aggregate report'
-      : execution.availability === 'unavailable'
-        ? 'no report retained'
-        : null
-  return (
-    <>
-      <td data-label="Execution" className="ds-table-sticky-col">
-        <a
-          className="block truncate font-mono text-xs font-medium text-ink no-underline hover:underline"
-          href={hashForExecution(execution.id)}
-          title={title}
-        >
-          {title}
-        </a>
-        {/* Every row names its origin the same way: local or GitHub #run. */}
-        <span className="font-mono text-label text-ink-muted">
-          {origin.href ? (
-            <a
-              className="text-ink-muted"
-              href={origin.href}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {origin.label}
-            </a>
-          ) : (
-            origin.label
-          )}
-        </span>
-        <span className="block truncate font-mono text-label text-ink-muted">
-          {formatDate(presentation.completedAt)}
-        </span>
-      </td>
-      <td data-label="Result">
-        <StatusBadge status={status.status} label={status.label} />
-        {/* A running execution's missing reports are still to come. */}
-        {progress ? (
-          <span className="block font-mono text-label text-ink-soft">
-            {progress}
-          </span>
-        ) : presentation.primaryIssue ? (
-          <span className="block font-mono text-label text-ink-soft">
-            {categoryMessage(
-              presentation.primaryIssue.category,
-              presentation.primaryIssue.count,
-            )}
-          </span>
-        ) : evidenceNote ? (
-          <span className="block font-mono text-label text-ink-muted">
-            {evidenceNote}
-          </span>
-        ) : null}
-      </td>
-      <td data-label="Subject" title={modelNames(presentation.subjects)}>
-        <span className="block font-mono text-xs text-ink">
-          {presentation.subjects[0]?.model ?? '—'}
-        </span>
-        <span className="block font-mono text-label text-ink-muted">
-          {[
-            presentation.subjects[0]?.provider,
-            execution.parameters?.agent
-              ? `profile ${execution.parameters.agent}`
-              : null,
-          ]
-            .filter(Boolean)
-            .join(' · ')}
-        </span>
-      </td>
-      <td data-label="Scope" className={numericCellClassName}>
-        {presentation.receivedReports === null &&
-        presentation.expectedReports === null
-          ? '—'
-          : `${presentation.receivedReports ?? '—'}/${presentation.expectedReports ?? '—'}`}
-        {scenarios ? (
-          <span
-            className="block font-mono text-label text-ink-muted"
-            title={execution.parameters?.scenarios.join(', ')}
-          >
-            {scenarios} scenario{scenarios === 1 ? '' : 's'}
-          </span>
-        ) : null}
-      </td>
-      <td data-label="Score" className={numericCellClassName}>
-        {score === null
-          ? '—'
-          : score.toLocaleString('en-US', { maximumFractionDigits: 1 })}
-      </td>
-      <td data-label="Pass rate" className={numericCellClassName}>
-        {presentation.passRate === null
-          ? '—'
-          : formatPercent(percentPoints(presentation.passRate), false)}
-      </td>
-      <td data-label="Runtime" className={numericCellClassName}>
-        {presentation.modelRuntimeSeconds === null
-          ? '—'
-          : formatDuration(presentation.modelRuntimeSeconds)}
-      </td>
-      <td data-label="Tokens" className={numericCellClassName}>
-        {tokens === null ? '—' : tokens.toLocaleString()}
-      </td>
-      {selection ? (
-        <td data-label="Compare">
-          <input
-            type="checkbox"
-            aria-label={`Compare ${title}`}
-            checked={selection.ids.includes(execution.id)}
-            disabled={
-              selection.ids.length >= 2 && !selection.ids.includes(execution.id)
-            }
-            onChange={() => selection.onToggle(execution.id)}
-          />
-          {selection.ids.includes(execution.id) ? (
-            <span className="ms-1 font-mono text-label text-ink-muted">
-              {selection.ids[0] === execution.id ? 'A' : 'B'}
-            </span>
-          ) : null}
-        </td>
-      ) : null}
-      <td data-label="Open" className="text-right">
-        <a
-          className={buttonClassName({
-            variant: 'quiet',
-            size: 'compact',
-            className: 'no-underline',
-          })}
-          href={hashForExecution(execution.id)}
-          aria-label={`Open ${title}`}
-        >
-          open
-          <ArrowRight size={13} aria-hidden="true" />
-        </a>
-      </td>
-    </>
+function resultCounts(rows: LedgerRow[]) {
+  const counts = new Map<ResultState, number>()
+  for (const row of rows)
+    counts.set(row.result.state, (counts.get(row.result.state) ?? 0) + 1)
+  return [...counts.entries()].sort(
+    ([a], [b]) =>
+      (SEGMENT_ORDER.indexOf(a) + 1 || 99) -
+      (SEGMENT_ORDER.indexOf(b) + 1 || 99),
   )
 }
 
-/**
- * One table for the whole page: the day groups are separator rows so the
- * header is read once and the rhythm stays (audit E-07 / E-12).
- */
-export function LedgerTable({
-  caption,
-  groups,
-  selection,
-}: {
-  caption: string
+/** The result filter: All, then each result present, with its count. */
+export function resultSegments(rows: LedgerRow[]) {
+  return [
+    { value: 'all' as const, label: 'All', count: rows.length },
+    ...resultCounts(rows).map(([state, count]) => ({
+      value: state,
+      label: RESULT_STATES[state].label,
+      count,
+    })),
+  ]
+}
+
+/** `58 retained · 16 loaded · 8 passed · 5 failed · 3 running`. */
+export function ledgerSummary(rows: LedgerRow[], total: number) {
+  return [
+    `${total} retained`,
+    `${rows.length} loaded`,
+    ...resultCounts(rows).map(
+      ([state, count]) =>
+        `${count} ${RESULT_STATES[state].label.toLowerCase()}`,
+    ),
+  ].join(' · ')
+}
+
+/* ---------------------------------------------------------- selection */
+
+export function toggleSelection(ids: string[], id: string) {
+  return ids.includes(id) ? ids.filter((entry) => entry !== id) : [...ids, id]
+}
+
+/** How many of the shown rows are ticked: none, some or all. */
+export function shownSelection(ids: string[], shown: string[]) {
+  const ticked = shown.filter((id) => ids.includes(id)).length
+  return ticked === 0 ? 'none' : ticked === shown.length ? 'all' : 'some'
+}
+
+/** The box over the list: clears the shown rows when all are ticked, else
+ *  ticks every one of them. Rows filtered out keep their tick. */
+export function toggleShown(ids: string[], shown: string[]) {
+  return shownSelection(ids, shown) === 'all'
+    ? ids.filter((id) => !shown.includes(id))
+    : [...ids, ...shown.filter((id) => !ids.includes(id))]
+}
+
+/** What the selection bar says and allows. The first ticked is A. */
+export function selectionSummary(selected: LedgerRow[]) {
+  const deletable = selected.filter((row) => !row.live)
+  const kept = selected.length - deletable.length
+  const keptNote = kept ? `${kept} running will be kept.` : ''
+  const hint =
+    selected.length === 1
+      ? 'Tick one more to compare.'
+      : selected.length === 2
+        ? 'A is the first you ticked.'
+        : kept
+          ? ''
+          : 'Compare takes exactly two.'
+  return {
+    text: `${selected.length} selected`,
+    hint: [hint, keptNote].filter(Boolean).join(' '),
+    compare: selected.length === 2 ? [selected[0].id, selected[1].id] : null,
+    deletable: deletable.map((row) => row.id),
+    deleteLabel: deletable.length > 1 ? `Delete ${deletable.length}` : 'Delete',
+  }
+}
+
+/* --------------------------------------------------------------- menu */
+
+export type LedgerActions = {
+  open: (row: LedgerRow) => void
+  rename: (row: LedgerRow) => void
+  openOnGithub: (row: LedgerRow) => void
+  importAgain: (row: LedgerRow) => void
+  runAgain: (row: LedgerRow) => void
+  copyId: (row: LedgerRow) => void
+  cancel: (row: LedgerRow) => void
+  delete: (row: LedgerRow) => void
+}
+
+/** Only executions started or imported here have a name of their own. */
+function renamable(row: LedgerRow) {
+  return row.id.startsWith('plan-')
+}
+
+/** The row's ⋯ menu. An import in progress cannot be stopped from here. */
+export function rowMenuItems(
+  row: LedgerRow,
+  actions: LedgerActions,
+): RowMenuItem[] {
+  const icon = (Glyph: typeof ArrowRight) => (
+    <Glyph size={16} aria-hidden="true" />
+  )
+  const importing = row.execution.status === 'importing'
+  const cancellable =
+    row.live && !importing && row.result.label !== 'Cancelling'
+  const items: RowMenuItem[] = [
+    {
+      label: 'Open',
+      icon: icon(ArrowRight),
+      onSelect: () => actions.open(row),
+    },
+  ]
+  if (renamable(row))
+    items.push({
+      label: 'Rename',
+      icon: icon(Pencil),
+      onSelect: () => actions.rename(row),
+    })
+  if (row.github) {
+    items.push({
+      label: 'Open on GitHub',
+      icon: icon(ExternalLink),
+      onSelect: () => actions.openOnGithub(row),
+    })
+    if (!row.live)
+      items.push({
+        label: 'Import again',
+        hint: 'Replaces its evidence with the run’s',
+        icon: icon(RotateCcw),
+        onSelect: () => actions.importAgain(row),
+      })
+  } else if (!row.live)
+    items.push({
+      label: 'Run again',
+      icon: icon(RotateCcw),
+      onSelect: () => actions.runAgain(row),
+    })
+  items.push({
+    label: 'Copy execution id',
+    icon: icon(Copy),
+    onSelect: () => actions.copyId(row),
+  })
+  if (cancellable)
+    items.push({
+      label: 'Cancel execution',
+      icon: icon(Square),
+      separator: true,
+      onSelect: () => actions.cancel(row),
+    })
+  items.push({
+    label: 'Delete…',
+    icon: icon(Trash2),
+    danger: true,
+    separator: !cancellable,
+    disabledReason: row.live
+      ? importing
+        ? 'Wait for the import to finish'
+        : 'Finish or cancel it first'
+      : undefined,
+    onSelect: () => actions.delete(row),
+  })
+  return items
+}
+
+/* ------------------------------------------------------------- delete */
+
+export type DeleteFact = { tone: 'gone' | 'kept' | 'warn'; text: string }
+
+/** What the delete confirmation says: what leaves, what stays. `kept` are
+ *  the running executions of the selection, which are not deleted. */
+export function deleteConfirmation(
+  targets: LedgerRow[],
+  kept: LedgerRow[] = [],
+  now = new Date(),
+) {
+  const one = targets.length === 1 ? targets[0] : null
+  const runs = targets.reduce((total, row) => total + row.runs, 0)
+  const imported = targets.filter((row) => row.github)
+  const facts: DeleteFact[] = [
+    {
+      tone: 'gone',
+      // Without a count reported, the runs are named, not numbered.
+      text: `${runs ? plural(runs, 'test run') : one ? 'Its test runs' : 'Their test runs'} with their transcripts, reports and screenshots leave this Console.`,
+    },
+    {
+      tone: 'gone',
+      text: `Links to ${one ? 'it' : 'them'}, comparisons included, stop working.`,
+    },
+  ]
+  if (imported.length === 1)
+    facts.push({
+      tone: 'kept',
+      text: `The run on GitHub is not touched. You can import #${imported[0].github?.runId} again.`,
+    })
+  else if (imported.length > 1)
+    facts.push({
+      tone: 'kept',
+      text: 'The runs on GitHub are not touched. You can import them again.',
+    })
+  if (kept.length === 1)
+    facts.push({
+      tone: 'warn',
+      text: `“${kept[0].title}” is still running and stays. Cancel it first to delete it.`,
+    })
+  else if (kept.length > 1)
+    facts.push({
+      tone: 'warn',
+      text: `${kept.length} executions are still running and stay. Cancel them first to delete them.`,
+    })
+  return {
+    title: one
+      ? `Delete “${one.title}”?`
+      : `Delete ${targets.length} executions?`,
+    body: 'This can’t be undone.',
+    items: targets.slice(0, 5).map((row) => ({
+      id: row.id,
+      title: row.title,
+      meta: [
+        row.origin,
+        row.date ? formatDateTime(row.date, now) : null,
+        row.tests === NOT_REPORTED ? null : `${row.tests} tests`,
+        row.tokenCount === null ? null : `${row.tokens} tokens`,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+    })),
+    more: targets.length > 5 ? `and ${targets.length - 5} more` : null,
+    facts,
+    action: one ? 'Delete execution' : `Delete ${targets.length} executions`,
+  }
+}
+
+export function deletedMessage(titles: string[]) {
+  return titles.length === 1
+    ? `Deleted “${titles[0]}” with its runs and evidence.`
+    : `Deleted ${titles.length} executions with their runs and evidence.`
+}
+
+/* -------------------------------------------------------------- table */
+
+export type LedgerTableProps = {
   groups: LedgerGroup[]
-  selection?: LedgerSelection
-}) {
+  selected: string[]
+  onSelect: (ids: string[]) => void
+  actions: LedgerActions
+}
+
+const WIDE = 'ex-wide'
+
+/** One table: the header is read once, each group is a body of its own
+ *  with its heading row (audit E-07 / E-12). */
+export function LedgerTable({
+  groups,
+  selected,
+  onSelect,
+  actions,
+}: LedgerTableProps) {
+  const shown = groups.flatMap((group) => group.rows.map((row) => row.id))
+  const all = shownSelection(selected, shown)
+  const side = (id: string) =>
+    selected.length === 2 && selected.includes(id)
+      ? selected[0] === id
+        ? 'A'
+        : 'B'
+      : null
+  const open = (row: LedgerRow) => (event: MouseEvent<HTMLTableRowElement>) => {
+    if (!isInteractiveTarget(event.target)) actions.open(row)
+  }
   return (
-    <DataTable
-      caption={caption}
-      collapse
-      collapseInline
-      minWidth="62rem"
-      sticky
-      data-ledger-table
-    >
-      <thead>
-        <tr>
-          <th scope="col">execution</th>
-          <th scope="col">result</th>
-          <th scope="col">subject</th>
-          <th scope="col" className={numericCellClassName}>
-            scope
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            score
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            pass rate
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            runtime
-          </th>
-          <th scope="col" className={numericCellClassName}>
-            tokens
-          </th>
-          {selection ? <th scope="col">compare</th> : null}
-          <th scope="col">
-            <span className="ds-visually-hidden">Open</span>
-          </th>
-        </tr>
-      </thead>
-      {groups.map((group) => (
-        <tbody key={group.key} data-ledger-group={group.key}>
-          <tr data-ledger-day>
-            <th
-              className="ds-label"
-              colSpan={selection ? 10 : 9}
-              scope="colgroup"
+    <TableViewport className="ex-table-viewport">
+      <TableFrame>
+        <Table density="compact" inset className="ex-table" data-ledger-table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="ex-col-select" scope="col">
+                <Checkbox
+                  aria-label="Select every execution shown"
+                  checked={all === 'all'}
+                  indeterminate={all === 'some'}
+                  onChange={() => onSelect(toggleShown(selected, shown))}
+                />
+              </TableHead>
+              <TableHead scope="col">Execution</TableHead>
+              <TableHead className="ex-col-result" scope="col">
+                Result
+              </TableHead>
+              <TableHead className={`ex-col-model ${WIDE}`} scope="col">
+                Model
+              </TableHead>
+              <TableHead className="ex-col-tests ex-num" scope="col">
+                Tests
+              </TableHead>
+              <TableHead className={`ex-col-score ex-num ${WIDE}`} scope="col">
+                Score
+              </TableHead>
+              <TableHead className={`ex-col-pass ex-num ${WIDE}`} scope="col">
+                Pass rate
+              </TableHead>
+              <TableHead
+                className={`ex-col-runtime ex-num ${WIDE}`}
+                scope="col"
+              >
+                Runtime
+              </TableHead>
+              <TableHead className={`ex-col-tokens ex-num ${WIDE}`} scope="col">
+                Tokens
+              </TableHead>
+              <TableHead className="ex-col-menu" scope="col">
+                <span className="ds-visually-hidden">Actions</span>
+              </TableHead>
+            </TableRow>
+          </TableHeader>
+          {groups.map((group) => (
+            <TableBody
+              key={group.key}
+              data-ledger-group={group.key}
+              aria-label={group.label}
             >
-              {groupHeading(group)}
-            </th>
-          </tr>
-          {group.rows.map((row) => (
-            <DataTableRow
-              key={row.execution.id}
-              href={hashForExecution(row.execution.id)}
-              data-execution-id={row.execution.id}
-              data-result={row.status.status}
-            >
-              <LedgerRowCells row={row} selection={selection} />
-            </DataTableRow>
+              <TableRow className="ex-group">
+                <TableHead colSpan={10} scope="colgroup">
+                  <span className="ds-label">{group.label}</span>
+                  <span className="ex-group-count">{group.rows.length}</span>
+                </TableHead>
+              </TableRow>
+              {group.rows.map((row) => {
+                const ticked = selected.includes(row.id)
+                const letter = side(row.id)
+                return (
+                  <TableRow
+                    key={row.id}
+                    interactive
+                    tabIndex={-1}
+                    selected={ticked}
+                    className="ex-row"
+                    data-execution-id={row.id}
+                    data-result={row.result.state}
+                    onClick={open(row)}
+                  >
+                    <TableCell className="ex-col-select">
+                      <Checkbox
+                        aria-label={`Select ${row.title}`}
+                        checked={ticked}
+                        onChange={() =>
+                          onSelect(toggleSelection(selected, row.id))
+                        }
+                      />
+                    </TableCell>
+                    <TableCell className="ex-cell-stack">
+                      <span className="ex-title">
+                        {letter ? (
+                          <span
+                            className="ex-side"
+                            title={`Compared as ${letter}`}
+                          >
+                            {letter}
+                          </span>
+                        ) : null}
+                        <a href={hashForExecution(row.id)} title={row.title}>
+                          {row.title}
+                        </a>
+                      </span>
+                      <span className="ex-sub ex-mono">{row.meta}</span>
+                    </TableCell>
+                    <TableCell className="ex-cell-stack">
+                      <StatusLabel
+                        className="ex-result"
+                        state={row.result.state}
+                        label={row.result.label}
+                      />
+                      {row.issue ? (
+                        <span className="ex-sub" title={row.issue}>
+                          {row.issue}
+                        </span>
+                      ) : null}
+                    </TableCell>
+                    <TableCell
+                      className={`ex-cell-stack ${WIDE}`}
+                      title={row.models}
+                    >
+                      <span className="ex-mono ex-model">{row.model}</span>
+                      <span className="ex-sub ex-mono">{row.profile}</span>
+                    </TableCell>
+                    <TableCell className="ex-num">{row.tests}</TableCell>
+                    <TableCell className={`ex-num ${WIDE}`}>
+                      {row.score}
+                    </TableCell>
+                    <TableCell className={`ex-num ${WIDE}`}>
+                      {row.passRate}
+                    </TableCell>
+                    <TableCell className={`ex-num ${WIDE}`}>
+                      {row.runtime}
+                    </TableCell>
+                    <TableCell
+                      className={`ex-num ${WIDE}`}
+                      title={
+                        row.tokenCount === null
+                          ? undefined
+                          : `${formatCount(row.tokenCount)} tokens`
+                      }
+                    >
+                      {row.tokens}
+                    </TableCell>
+                    <TableCell className="ex-col-menu">
+                      <RowMenu
+                        label={`Actions for ${row.title}`}
+                        items={rowMenuItems(row, actions)}
+                      />
+                    </TableCell>
+                  </TableRow>
+                )
+              })}
+            </TableBody>
           ))}
-        </tbody>
-      ))}
-    </DataTable>
+        </Table>
+      </TableFrame>
+    </TableViewport>
   )
+}
+
+/* ------------------------------------------------------------ dialogs */
+
+const FACT_ICONS = { gone: Minus, kept: Check, warn: AlertTriangle }
+
+function DeleteDialog({
+  targets,
+  kept,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  targets: LedgerRow[]
+  kept: LedgerRow[]
+  deleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  const confirmation = deleteConfirmation(targets, kept)
+  return (
+    <Dialog
+      open={targets.length > 0}
+      onOpenChange={(open) => {
+        if (!open && !deleting) onCancel()
+      }}
+    >
+      <DialogContent
+        role="alertdialog"
+        className="ex-dialog"
+        aria-describedby="ex-delete-body"
+      >
+        <div className="ex-dialog-head">
+          <span className="ex-dialog-icon" aria-hidden="true">
+            <Trash2 size={16} />
+          </span>
+          <div>
+            <DialogTitle className="ex-dialog-title">
+              {confirmation.title}
+            </DialogTitle>
+            <DialogDescription id="ex-delete-body" className="ex-dialog-body">
+              {confirmation.body}
+            </DialogDescription>
+          </div>
+        </div>
+        <ul className="ex-dialog-items" aria-label="Executions to delete">
+          {confirmation.items.map((item) => (
+            <li key={item.id}>
+              <span className="ex-dialog-item-title">{item.title}</span>
+              <span className="ex-sub ex-mono">{item.meta}</span>
+            </li>
+          ))}
+          {confirmation.more ? (
+            <li className="ex-sub">{confirmation.more}</li>
+          ) : null}
+        </ul>
+        <ul className="ex-dialog-facts">
+          {confirmation.facts.map((fact) => {
+            const Icon = FACT_ICONS[fact.tone]
+            return (
+              <li key={fact.text} data-tone={fact.tone}>
+                <Icon size={16} aria-hidden="true" />
+                <span>{fact.text}</span>
+              </li>
+            )
+          })}
+        </ul>
+        <div className="ex-dialog-actions">
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            disabled={deleting}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className="ex-danger"
+            disabled={deleting}
+            aria-busy={deleting}
+            onClick={onConfirm}
+          >
+            {deleting ? 'Deleting…' : confirmation.action}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+function RenameDialog({
+  row,
+  onClose,
+  onRename,
+}: {
+  row: LedgerRow | null
+  onClose: () => void
+  onRename: (row: LedgerRow, label: string) => Promise<void>
+}) {
+  const [draft, setDraft] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  useEffect(() => {
+    setDraft(
+      typeof row?.execution.label === 'string' ? row.execution.label : '',
+    )
+    setError(null)
+  }, [row])
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (!row) return
+    setSaving(true)
+    setError(null)
+    try {
+      await onRename(row, draft)
+      onClose()
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <Dialog
+      open={row !== null}
+      onOpenChange={(open) => {
+        if (!open && !saving) onClose()
+      }}
+    >
+      <DialogContent className="ex-dialog">
+        <DialogTitle className="ex-dialog-title">Rename execution</DialogTitle>
+        <DialogDescription className="ex-dialog-body">
+          An empty name gives it back its default one.
+        </DialogDescription>
+        <form className="ex-rename" onSubmit={(event) => void submit(event)}>
+          <Input
+            aria-label="Execution name"
+            maxLength={80}
+            placeholder={row?.title}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+          />
+          {error ? (
+            <p className="ex-error" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="ex-dialog-actions">
+            <Button
+              type="button"
+              variant="pill"
+              size="sm"
+              disabled={saving}
+              onClick={onClose}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" size="sm" disabled={saving}>
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/* --------------------------------------------------------------- page */
+
+const NO_CONFIRM = { ids: [], kept: [] }
+
+function errorText(cause: unknown) {
+  return cause instanceof Error ? cause.message : String(cause)
 }
 
 export function ExecutionsPage() {
+  const narrow = useDashboardChrome()?.narrow ?? false
   const [runnerOpen, setRunnerOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [runnerScope, setRunnerScope] = useState<string[]>([])
+  const [rerun, setRerun] = useState<{
+    parameters: ExecutionParameters
+    label: string
+  } | null>(null)
   useEffect(() => {
     const requested = consumeQuickExecutionRequest()
     if (requested) {
@@ -521,9 +991,17 @@ export function ExecutionsPage() {
   const [loading, setLoading] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [compared, setCompared] = useState<string[]>([])
+  // Ticked executions, in the order they were ticked: the first is A.
+  const [selected, setSelected] = useState<string[]>([])
+  // What the delete confirmation deletes, and the running ones it keeps.
+  const [confirm, setConfirm] = useState<{ ids: string[]; kept: string[] }>(
+    NO_CONFIRM,
+  )
+  const [deleting, setDeleting] = useState(false)
+  const [renaming, setRenaming] = useState<LedgerRow | null>(null)
+  const [flash, setFlash] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
   const beginRequest = useLatestRequest()
-  const loaded = useRef(false)
 
   const load = useCallback(async () => {
     const request = beginRequest()
@@ -537,9 +1015,8 @@ export function ExecutionsPage() {
       setExecutions(manifest.executions ?? [])
       setCursor(manifest.next_cursor ?? null)
       setTotal(manifest.total ?? manifest.executions?.length ?? 0)
-      loaded.current = true
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(errorText(cause))
     } finally {
       setLoading(false)
     }
@@ -549,7 +1026,7 @@ export function ExecutionsPage() {
     void load()
   }, [load])
 
-  // Audit E-12: the ledger follows run changes instead of waiting for F5.
+  // Audit E-12: the list follows run changes instead of waiting for F5.
   useEffect(() => {
     if (!bridge) return
     let cancelled = false
@@ -586,350 +1063,413 @@ export function ExecutionsPage() {
       setCursor(page.next_cursor ?? null)
       setTotal(page.total ?? total)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(errorText(cause))
     } finally {
       setLoadingMore(false)
     }
   }
 
   const rows = useMemo(() => buildLedgerRows(executions), [executions])
+  const byId = useMemo(() => new Map(rows.map((row) => [row.id, row])), [rows])
+  // A tick outlives a reload only while its execution is still listed.
+  const ticked = useMemo(
+    () => selected.filter((id) => byId.has(id)),
+    [selected, byId],
+  )
   const visible = useMemo(
     () => filterLedgerRows(rows, filters),
     [rows, filters],
   )
-  const { running, groups } = useMemo(() => groupLedgerRows(visible), [visible])
-  // Comparing needs two executions; with fewer the hint and the column are noise.
-  const comparable = rows.length >= 2
+  const groups = useMemo(() => groupLedgerRows(visible), [visible])
   const setFilter = <K extends keyof LedgerFilters>(
     key: K,
     value: LedgerFilters[K],
   ) => setFilters((current) => ({ ...current, [key]: value }))
   const filtered = ledgerFiltersToParams(filters).toString() !== ''
+  const selectedRows = ticked.flatMap((id) => byId.get(id) ?? [])
+  const bar = selectionSummary(selectedRows)
+  const rowsOf = (ids: string[]) => ids.flatMap((id) => byId.get(id) ?? [])
+  const targets = rowsOf(confirm.ids)
 
-  const statusCounts = useMemo(() => {
-    const counts = new Map<string, { label: string; count: number }>()
-    for (const row of rows) {
-      const entry = counts.get(row.status.status)
-      counts.set(row.status.status, {
-        label: row.status.label,
-        count: (entry?.count ?? 0) + 1,
-      })
+  const act = async (work: () => Promise<unknown>) => {
+    setActionError(null)
+    try {
+      await work()
+      await load()
+    } catch (cause) {
+      setActionError(errorText(cause))
     }
-    return [...counts.entries()].sort(
-      ([left], [right]) =>
-        RESULT_ORDER.indexOf(left) - RESULT_ORDER.indexOf(right),
+  }
+
+  const actions: LedgerActions = {
+    open: (row) => {
+      window.location.hash = hashForExecution(row.id)
+    },
+    rename: (row) => setRenaming(row),
+    openOnGithub: (row) => {
+      if (row.github?.url) window.open(row.github.url, '_blank', 'noopener')
+    },
+    importAgain: (row) =>
+      void act(async () => {
+        if (bridge && row.github) await bridge.importGithubRun(row.github.runId)
+      }),
+    runAgain: (row) =>
+      setRerun({
+        parameters: rerunParameters(
+          { parameters: row.execution.parameters },
+          row.execution.subjects.flatMap((subject) =>
+            subject.scenarios.map((scenario) => scenario.id),
+          ),
+          buildExecutionPresentation(row.execution).subjects[0],
+        ),
+        label:
+          typeof row.execution.label === 'string' ? row.execution.label : '',
+      }),
+    copyId: (row) => {
+      void navigator.clipboard
+        ?.writeText(row.id)
+        .then(() => setFlash(`Copied ${row.id}.`))
+        .catch((cause) => setActionError(errorText(cause)))
+    },
+    // A composed execution stops by id; a native run is the runner's one.
+    cancel: (row) =>
+      void act(async () => {
+        if (!bridge) return
+        if (row.id.startsWith('plan-')) await bridge.cancelExecution(row.id)
+        else await bridge.cancelRun()
+      }),
+    delete: (row) => setConfirm({ ids: [row.id], kept: [] }),
+  }
+
+  // Deletes one after another; each refusal is said with its execution.
+  const deleteConfirmed = async () => {
+    if (!bridge) return
+    setDeleting(true)
+    setActionError(null)
+    const deleted: LedgerRow[] = []
+    const refused: string[] = []
+    for (const row of targets) {
+      try {
+        await bridge.deleteExecution(row.id)
+        deleted.push(row)
+      } catch (cause) {
+        refused.push(`“${row.title}”: ${errorText(cause)}`)
+      }
+    }
+    const gone = new Set(deleted.map((row) => row.id))
+    setExecutions((current) => current.filter((entry) => !gone.has(entry.id)))
+    setTotal((current) => Math.max(0, current - gone.size))
+    setSelected((current) => current.filter((id) => !gone.has(id)))
+    setConfirm(NO_CONFIRM)
+    setDeleting(false)
+    setFlash(
+      deleted.length ? deletedMessage(deleted.map((row) => row.title)) : null,
     )
-  }, [rows])
-  const eventCounts = useMemo(() => {
-    const counts = new Map<string, number>()
-    for (const row of rows) {
-      const event = row.execution.event
-      if (typeof event !== 'string' || !event) continue
-      counts.set(event, (counts.get(event) ?? 0) + 1)
-    }
-    return [...counts.entries()]
-  }, [rows])
+    if (refused.length)
+      setActionError(
+        `${refused.length === 1 ? 'One execution was' : `${refused.length} executions were`} not deleted. ${refused.join(' ')}`,
+      )
+    void load()
+  }
 
-  // Audit E-07: the page says what the ledger holds, in the column vocabulary.
-  const summary = [
-    `${total} executions`,
-    `${rows.length} loaded`,
-    ...statusCounts.map(([, entry]) => `${entry.count} ${entry.label}`),
-  ].join(' · ')
+  const importLabel = narrow ? 'Import' : 'Import from GitHub'
+  const headerActions = useMemo(
+    () =>
+      bridge ? (
+        <>
+          <button
+            className={dashboardHeaderActionClassName()}
+            type="button"
+            onClick={() => setImportOpen(true)}
+          >
+            <Download size={16} aria-hidden="true" />
+            {importLabel}
+          </button>
+          <button
+            className={dashboardHeaderActionClassName({ primary: true })}
+            type="button"
+            onClick={() => {
+              setRunnerScope([])
+              setRunnerOpen(true)
+            }}
+          >
+            Run tests
+          </button>
+        </>
+      ) : null,
+    [bridge, importLabel],
+  )
 
   return (
-    <div className="ds-root min-h-dvh bg-canvas text-ink">
+    <div className="ds-root ex-page">
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
-        actions={
-          bridge ? (
-            <>
-              <button
-                className={dashboardHeaderActionClassName()}
-                type="button"
-                onClick={() => setImportOpen(true)}
-              >
-                Import from GitHub
-              </button>
-              <button
-                className={dashboardHeaderActionClassName({ primary: true })}
-                type="button"
-                onClick={() => {
-                  setRunnerScope([])
-                  setRunnerOpen(true)
-                }}
-              >
-                Run tests
-              </button>
-            </>
-          ) : null
-        }
+        actions={headerActions}
       />
-      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
-        <PageHeader
-          title="executions"
-          summary={
-            loading && rows.length === 0 ? 'loading the ledger…' : summary
-          }
-          headingId="executions-title"
-          context="Recent activity and retained evidence"
-        />
+      <header className="ex-header">
+        <h1 id="executions-title">Executions</h1>
+        <p>
+          {loading && rows.length === 0
+            ? 'Loading the executions…'
+            : ledgerSummary(rows, total)}
+        </p>
+      </header>
 
-        {error ? (
-          <Callout
-            tone="danger"
-            title="Executions could not be loaded"
-            className="mt-6"
-          >
-            <span className="flex flex-wrap items-center justify-between gap-3">
-              {error}
-              <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
-                type="button"
-                onClick={() => void load()}
-              >
-                retry
-              </button>
-            </span>
-          </Callout>
-        ) : null}
-
-        {/* Audit E-13 / RD-05: one control vocabulary, an explicit grid. */}
-        <section className="mt-5 grid gap-3" aria-label="Execution filters">
-          <div className="grid gap-3 @[720px]:grid-cols-[minmax(0,1fr)_auto_auto] @[720px]:items-center">
-            <div className="relative max-w-[28rem]">
-              <Search
-                className="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-ink-muted"
-                size={14}
-                aria-hidden="true"
-              />
-              <Input
-                className="font-mono"
-                style={{ paddingInline: '2.25rem' }}
-                type="text"
-                value={filters.query}
-                placeholder="Search label, model, id or date…"
-                aria-label="Search executions"
-                onChange={(event) => setFilter('query', event.target.value)}
-              />
-              {filters.query ? (
-                <button
-                  className="absolute top-1/2 right-1 inline-grid size-7 -translate-y-1/2 place-items-center rounded-[6px] border-0 bg-transparent text-ink-muted hover:bg-[var(--surface-soft)] hover:text-ink"
-                  type="button"
-                  onClick={() => setFilter('query', '')}
-                  aria-label="Clear search"
-                >
-                  <X size={13} aria-hidden="true" />
-                </button>
-              ) : null}
-            </div>
-            {eventCounts.length > 1 ? (
-              <Select
-                aria-label="Filter by trigger"
-                className="max-w-[14rem]"
-                value={filters.event}
-                onChange={(event) => setFilter('event', event.target.value)}
-              >
-                <option value="all">all triggers · {rows.length}</option>
-                {eventCounts.map(([value, count]) => (
-                  <option key={value} value={value}>
-                    {triggerLabel(value)} · {count}
-                  </option>
-                ))}
-              </Select>
-            ) : null}
-            <Select
-              aria-label="Sort executions"
-              className="max-w-[14rem]"
-              value={filters.sort}
-              onChange={(event) =>
-                setFilter('sort', event.target.value as LedgerSort)
-              }
+      {error ? (
+        <Callout tone="danger" title="Executions could not be loaded">
+          <span className="ex-callout-line">
+            {error}
+            <button
+              className={buttonClassName({
+                variant: 'secondary',
+                size: 'compact',
+              })}
+              type="button"
+              onClick={() => void load()}
             >
-              <option value="newest">newest first</option>
-              <option value="oldest">oldest first</option>
-              <option value="result">result</option>
-              <option value="runtime">longest runtime</option>
-              <option value="tokens">most tokens</option>
-            </Select>
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <FilterChipGroup label="Result">
-              <FilterChip
-                active={filters.status === 'all'}
-                count={rows.length}
-                onClick={() => setFilter('status', 'all')}
+              retry
+            </button>
+          </span>
+        </Callout>
+      ) : null}
+
+      <section className="ex-toolbar" aria-label="Execution filters">
+        <div className="ex-search">
+          <Search size={16} aria-hidden="true" />
+          <Input
+            type="text"
+            value={filters.query}
+            placeholder="Search label, model, id or date"
+            aria-label="Search executions"
+            onChange={(event) => setFilter('query', event.target.value)}
+          />
+          {filters.query ? (
+            <button
+              className="ex-icon-button"
+              type="button"
+              onClick={() => setFilter('query', '')}
+              aria-label="Clear search"
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+        <SegmentedControl
+          variant="radio"
+          aria-label="Result"
+          className="ex-segments"
+          value={filters.status}
+          onChange={(value) => setFilter('status', value)}
+          options={resultSegments(rows).map((segment) => ({
+            value: segment.value,
+            label: (
+              <>
+                {segment.label}
+                <span className="ex-count">{segment.count}</span>
+              </>
+            ),
+          }))}
+        />
+        <Select
+          aria-label="Sort executions"
+          className="ex-sort"
+          value={filters.sort}
+          onChange={(event) =>
+            setFilter('sort', event.target.value as LedgerSort)
+          }
+        >
+          {SORTS.map((sort) => (
+            <option key={sort.value} value={sort.value}>
+              {sort.label}
+            </option>
+          ))}
+        </Select>
+      </section>
+
+      {flash ? (
+        <div className="ex-flash" role="status">
+          <Check size={16} aria-hidden="true" />
+          <span>{flash}</span>
+          <button
+            className="ex-icon-button"
+            type="button"
+            aria-label="Dismiss"
+            onClick={() => setFlash(null)}
+          >
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+      ) : null}
+
+      {actionError ? (
+        <Callout tone="danger" title="That did not go through">
+          <span className="ex-callout-line">
+            {actionError}
+            <button
+              className={buttonClassName({ variant: 'quiet', size: 'compact' })}
+              type="button"
+              onClick={() => setActionError(null)}
+            >
+              dismiss
+            </button>
+          </span>
+        </Callout>
+      ) : null}
+
+      {loading && rows.length === 0 ? (
+        <div className="ex-loading" aria-busy="true" role="status">
+          <span className="ds-visually-hidden">Loading executions</span>
+          {Array.from({ length: 6 }, (_, index) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+            <div key={index} />
+          ))}
+        </div>
+      ) : visible.length === 0 ? (
+        <EmptyState
+          title={
+            rows.length === 0
+              ? 'No executions retained yet'
+              : 'No executions match these filters'
+          }
+          description={
+            rows.length === 0
+              ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
+              : 'Widen the result filter or clear the search.'
+          }
+          actions={
+            filtered ? (
+              <button
+                className={buttonClassName({ variant: 'secondary' })}
+                type="button"
+                onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
               >
-                all
-              </FilterChip>
-              {statusCounts.map(([status, entry]) => (
-                <FilterChip
-                  key={status}
-                  active={filters.status === status}
-                  count={entry.count}
-                  onClick={() => setFilter('status', status)}
-                >
-                  {entry.label}
-                </FilterChip>
-              ))}
-            </FilterChipGroup>
-            {comparable ? (
-              <span className="ms-auto flex flex-wrap items-center gap-2">
-                <span className="font-mono text-label text-ink-muted">
-                  {compared.length === 0
-                    ? 'tick two executions to compare'
-                    : compared.length === 1
-                      ? 'A ticked · tick B'
-                      : 'A and B ticked'}
-                </span>
+                clear filters
+              </button>
+            ) : rows.length === 0 && bridge ? (
+              <>
                 <button
-                  className={buttonClassName({
-                    variant: 'primary',
-                    size: 'compact',
-                  })}
+                  className={buttonClassName({ variant: 'primary' })}
                   type="button"
-                  disabled={compared.length !== 2}
                   onClick={() => {
-                    window.location.hash = hashForComparison(
-                      compared[0],
-                      compared[1],
-                    )
+                    setRunnerScope([])
+                    setRunnerOpen(true)
                   }}
                 >
-                  compare
+                  run tests
                 </button>
-                {compared.length > 0 ? (
-                  <button
-                    className={buttonClassName({
-                      variant: 'quiet',
-                      size: 'compact',
-                    })}
-                    type="button"
-                    onClick={() => setCompared([])}
-                  >
-                    clear
-                  </button>
-                ) : null}
-              </span>
-            ) : null}
-            <output
-              className="font-mono text-label text-ink-muted"
-              aria-live="polite"
-            >
-              showing {visible.length} of {rows.length} loaded
-              {total > rows.length ? ` · ${total} retained` : ''}
-            </output>
-          </div>
-        </section>
-
-        {loading && rows.length === 0 ? (
-          <div className="mt-4 grid gap-px" aria-busy="true" role="status">
-            <span className="ds-visually-hidden">Loading executions</span>
-            {Array.from({ length: 6 }, (_, index) => (
-              <div
-                // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-                key={index}
-                className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-              />
-            ))}
-          </div>
-        ) : visible.length === 0 ? (
-          <EmptyState
-            className="mt-6"
-            title={
-              rows.length === 0
-                ? 'No executions retained yet'
-                : 'No executions match these filters'
-            }
-            description={
-              rows.length === 0
-                ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
-                : 'Widen the result or trigger filter, or clear the search.'
-            }
-            actions={
-              filtered ? (
                 <button
                   className={buttonClassName({ variant: 'secondary' })}
                   type="button"
-                  onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
+                  onClick={() => setImportOpen(true)}
                 >
-                  clear filters
+                  import from GitHub
                 </button>
-              ) : rows.length === 0 && bridge ? (
-                <>
-                  <button
-                    className={buttonClassName({ variant: 'primary' })}
-                    type="button"
-                    onClick={() => {
-                      setRunnerScope([])
-                      setRunnerOpen(true)
-                    }}
-                  >
-                    run tests
-                  </button>
-                  <button
-                    className={buttonClassName({ variant: 'secondary' })}
-                    type="button"
-                    onClick={() => setImportOpen(true)}
-                  >
-                    import from GitHub
-                  </button>
-                </>
-              ) : null
-            }
+              </>
+            ) : null
+          }
+        />
+      ) : (
+        <div className="ex-ledger" data-ledger>
+          <LedgerTable
+            groups={groups}
+            selected={ticked}
+            onSelect={setSelected}
+            actions={actions}
           />
-        ) : (
-          <div className="mt-4 grid min-w-0 gap-6" data-ledger>
-            <LedgerTable
-              caption={`Executions, ${visible.length} of ${rows.length} loaded`}
-              selection={
-                comparable
-                  ? {
-                      ids: compared,
-                      onToggle: (id) =>
-                        setCompared((current) =>
-                          toggleComparisonSelection(current, id),
-                        ),
-                    }
-                  : undefined
-              }
-              groups={
-                running.length > 0
-                  ? [
-                      { key: 'running', label: 'running', rows: running },
-                      ...groups,
-                    ]
-                  : groups
-              }
-            />
-            {cursor ? (
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => void loadMore()}
-                  disabled={loadingMore}
-                  aria-busy={loadingMore}
-                >
-                  {loadingMore ? 'loading…' : `load ${PAGE_SIZE} more`}
-                </button>
-                <span className="font-mono text-label text-ink-muted">
-                  {rows.length} of {total} loaded
-                </span>
-              </div>
-            ) : null}
-          </div>
-        )}
-      </div>
+          {cursor ? (
+            <button
+              className="ex-more"
+              type="button"
+              onClick={() => void loadMore()}
+              disabled={loadingMore}
+              aria-busy={loadingMore}
+            >
+              {loadingMore
+                ? 'Loading…'
+                : `Load older executions · ${rows.length} of ${total} loaded`}
+            </button>
+          ) : null}
+        </div>
+      )}
+
+      {selectedRows.length > 0 ? (
+        <div
+          className="ex-selection shadow-floating"
+          role="toolbar"
+          aria-label="Selected executions"
+        >
+          <span className="ex-selection-count">{bar.text}</span>
+          <span className="ex-selection-hint">{bar.hint}</span>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            disabled={!bar.compare}
+            onClick={() => {
+              if (bar.compare)
+                window.location.hash = hashForComparison(...bar.compare)
+            }}
+          >
+            <GitCompare aria-hidden="true" />
+            Compare A and B
+          </Button>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className="ex-danger"
+            disabled={bar.deletable.length === 0}
+            onClick={() =>
+              setConfirm({
+                ids: bar.deletable,
+                kept: selectedRows
+                  .filter((row) => row.live)
+                  .map((row) => row.id),
+              })
+            }
+          >
+            <Trash2 aria-hidden="true" />
+            {bar.deleteLabel}
+          </Button>
+          <Button
+            type="button"
+            variant="icon"
+            size="icon"
+            aria-label="Clear selection"
+            onClick={() => setSelected([])}
+          >
+            <X aria-hidden="true" />
+          </Button>
+        </div>
+      ) : null}
+
+      <DeleteDialog
+        targets={targets}
+        kept={rowsOf(confirm.kept)}
+        deleting={deleting}
+        onCancel={() => setConfirm(NO_CONFIRM)}
+        onConfirm={() => void deleteConfirmed()}
+      />
+      <RenameDialog
+        row={renaming}
+        onClose={() => setRenaming(null)}
+        onRename={async (row, label) => {
+          if (!bridge) return
+          await bridge.renameExecution(row.id, label)
+          await load()
+        }}
+      />
       <LocalRunnerDialog
         bridge={bridge}
-        open={runnerOpen}
-        initialScenarios={runnerScope}
-        onClose={() => setRunnerOpen(false)}
+        open={runnerOpen || rerun !== null}
+        initialScenarios={rerun ? undefined : runnerScope}
+        parameters={rerun?.parameters ?? null}
+        label={rerun?.label ?? ''}
+        onClose={() => {
+          setRunnerOpen(false)
+          setRerun(null)
+        }}
       />
       <GithubImportDialog
         bridge={bridge}

@@ -167,13 +167,28 @@ const b = execution(
 const details = { [a.id]: a, [b.id]: b }
 const started = []
 const read = []
+const renamed = []
+const deleted = []
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
-  if (id === 'executions-list')
+  if (id === 'executions-list') {
+    const listed = [b, a].filter((side) => !deleted.includes(side.id))
     return {
-      executions: [b, a].map(({ reports, ...summary }) => summary),
-      total: 2,
+      executions: listed.map(({ reports, ...summary }) => summary),
+      total: listed.length,
     }
+  }
+  if (id === 'execution-rename') {
+    renamed.push(request)
+    return details[request.execution_id].plan_execution
+  }
+  if (id === 'execution-delete') {
+    // The worker refuses what has not finished, in its own words.
+    if (request.execution_id === b.id)
+      throw new Error('Only a finished execution can be deleted.')
+    deleted.push(request.execution_id)
+    return {}
+  }
   if (id === 'execution-get') return { detail: details[request.execution_id] }
   if (id === 'evidence-read') {
     read.push(request)
@@ -208,10 +223,20 @@ try {
   // Tick A first, then B, and compare.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page
-    .getByRole('checkbox', { name: 'Compare smoke', exact: true })
+    .getByRole('checkbox', { name: 'Select smoke', exact: true })
     .check()
-  await page.getByRole('checkbox', { name: 'Compare smoke rerun' }).check()
-  await page.getByRole('button', { name: 'compare', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Select smoke rerun' }).check()
+  const selection = page.getByRole('toolbar', { name: 'Selected executions' })
+  await selection.getByText('A is the first you ticked.').waitFor()
+  assert.equal(
+    await page
+      .locator('[title="Compared as A"]')
+      .evaluate((mark) => mark.closest('tr')?.dataset.executionId),
+    a.id,
+  )
+  await selection
+    .getByRole('button', { name: 'Compare A and B', exact: true })
+    .click()
   await page.locator('[data-comparison-scenarios]').waitFor()
   assert.match(
     await page.evaluate(() => location.hash),
@@ -316,9 +341,53 @@ try {
       },
     },
   ])
+
+  // From the list: rename one through its menu, then delete both; the one
+  // the worker refuses stays, with the refusal said.
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Actions for smoke', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  const rename = page
+    .getByRole('dialog')
+    .filter({ hasText: 'Rename execution' })
+  await rename.getByRole('textbox', { name: 'Execution name' }).fill('smoke A')
+  await rename.getByRole('button', { name: 'Save', exact: true }).click()
+  await rename.waitFor({ state: 'detached' })
+  assert.deepEqual(renamed, [{ execution_id: a.id, label: 'smoke A' }])
+
+  await page
+    .getByRole('checkbox', { name: 'Select every execution shown' })
+    .check()
+  await selection.getByText('2 selected').waitFor()
+  await selection.getByRole('button', { name: 'Delete 2', exact: true }).click()
+  const confirm = page.getByRole('alertdialog')
+  await confirm.getByText('Delete 2 executions?').waitFor()
+  await confirm
+    .getByText('The run on GitHub is not touched. You can import #42 again.')
+    .waitFor()
+  await confirm
+    .getByRole('button', { name: 'Delete 2 executions', exact: true })
+    .click()
+  await page
+    .getByRole('status')
+    .getByText('Deleted “smoke” with its runs and evidence.')
+    .waitFor()
+  await page
+    .getByText('“smoke rerun”: Only a finished execution can be deleted.', {
+      exact: false,
+    })
+    .waitFor()
+  assert.deepEqual(deleted, [a.id])
+  await page
+    .locator(`[data-execution-id="${a.id}"]`)
+    .waitFor({ state: 'detached' })
+  await page.locator(`[data-execution-id="${b.id}"]`).waitFor()
+
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters.',
+    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename from the row menu, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()
