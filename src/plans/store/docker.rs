@@ -983,17 +983,12 @@ impl PlanStore {
     /// Import the folder as a GitHub run is imported; `stopped` says why the
     /// execution did not run to its end.
     async fn import_docker(&self, id: &str, stopped: Option<String>) -> Result<()> {
-        self.update_docker(id, |_, phase, _| *phase = "import".into())
+        let (attempt, _) = self
+            .update_docker(id, |_, phase, _| *phase = "import".into())
             .await?;
-        if let Err(error) = self.download_and_install(id, stopped).await {
-            return self
-                .end_docker(id, Some(format!("Importing its results failed: {error:#}")))
-                .await;
-        }
-        // The root bundles it no longer reads: its groups' bundles stay.
-        let ExecutionSource::Docker { attempt, .. } = self.read_execution(id).await?.source else {
-            return Ok(());
-        };
+        // The import reads the highest root bundle, the one finalize just
+        // wrote: the roots before it are never read again, and go before
+        // the import makes the execution terminal. Its groups' bundles stay.
         let artifacts = self.docker_artifacts(id);
         let stem = format!("e2e-observation-{id}");
         for path in directories(&artifacts).unwrap_or_default() {
@@ -1006,6 +1001,11 @@ impl PlanStore {
                 fs::remove_dir_all(&path)
                     .with_context(|| format!("remove the superseded {}", path.display()))?;
             }
+        }
+        if let Err(error) = self.download_and_install(id, stopped).await {
+            return self
+                .end_docker(id, Some(format!("Importing its results failed: {error:#}")))
+                .await;
         }
         Ok(())
     }
@@ -2527,12 +2527,11 @@ mod tests {
         let wrapper = checkout.join("scripts/run_in_image.sh");
         fs::write(
             &wrapper,
-            "printf '%s\\n' \"$@\" \"KEY=${EXECUTION_KEY:-}\" \"CARGO=${CARGO_MANIFEST_DIR:-unset}\"\n[ \"${!#}\" != fail ]\n",
+            "printf '%s\\n' \"$@\" \"KEY=${EXECUTION_KEY:-}\"\n\
+             env | cut -d= -f1 | sort >\"$0.env\"\n[ \"${!#}\" != fail ]\n",
         )
         .unwrap();
         fs::set_permissions(&wrapper, fs::Permissions::from_mode(0o755)).unwrap();
-        // Set for this test process, never passed on.
-        assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
         let log = root.path().join("phase.log");
         let phase = |args: &[&str]| Phase {
             args: args.iter().map(|arg| (*arg).to_owned()).collect(),
@@ -2559,9 +2558,19 @@ mod tests {
         assert_eq!(
             fs::read_to_string(&log).unwrap(),
             format!(
-                "--env-file\n{0}\ngroup\nKEY=plan-1\nCARGO=unset\n--env-file\n{0}\nprepare\nfail\nKEY=plan-1\nCARGO=unset\n",
+                "--env-file\n{0}\ngroup\nKEY=plan-1\n--env-file\n{0}\nprepare\nfail\nKEY=plan-1\n",
                 root.path().join("providers.env").display()
             )
         );
+        // Nothing of this process's environment but where Docker and a
+        // temporary directory are, and what bash sets itself.
+        let seen = fs::read_to_string(checkout.join("scripts/run_in_image.sh.env")).unwrap();
+        for name in seen.lines() {
+            assert!(
+                HOST_ENVIRONMENT.contains(&name)
+                    || ["EXECUTION_KEY", "PWD", "OLDPWD", "SHLVL", "_"].contains(&name),
+                "{name} reached the wrapper"
+            );
+        }
     }
 }
