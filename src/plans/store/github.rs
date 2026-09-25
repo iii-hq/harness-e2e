@@ -162,9 +162,9 @@ impl Bundles {
                     .await?;
                 Ok(())
             }
-            // Copied: installing moves its native runs out, and a later
+            // Linked: installing moves its native runs out, and a later
             // import reads the folder again.
-            Self::Folder(folder) => super::docker::copy_tree(&folder.join(name), destination).await,
+            Self::Folder(folder) => super::docker::link_tree(&folder.join(name), destination).await,
         }
     }
 }
@@ -681,12 +681,17 @@ impl PlanStore {
         next.finished_at = finished_at.or(next.finished_at.take());
         {
             let _guard = self.lock.lock().await;
+            let latest = self.read_execution(&next.id).await?;
             // A rename made while the import ran wins over the suite name.
-            next.label = self
-                .read_execution(&next.id)
-                .await?
-                .label
-                .or_else(|| text(&fields["suite_label"]));
+            next.label = latest.label.or_else(|| text(&fields["suite_label"]));
+            // So does a cancel asked while it ran: nothing was left to stop,
+            // but it was asked.
+            if latest.cancel_requested && !execution.cancel_requested {
+                next.cancel_requested = true;
+                if next.state == "completed" {
+                    next.state = "cancelled".into();
+                }
+            }
             self.write_execution(&next).await?;
         }
         let kept = next

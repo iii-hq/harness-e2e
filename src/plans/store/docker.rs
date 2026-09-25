@@ -117,6 +117,11 @@ pub(crate) struct DockerGroup {
     pub state: String,
     /// The attempt its latest run carries.
     pub attempt: u32,
+    /// The attempt the execution counts: the last one whose run ended, done
+    /// or failed; 0 until one did. A run cancelled or interrupted keeps the
+    /// one before.
+    #[serde(default)]
+    pub counted: u32,
     #[serde(default)]
     pub error: Option<String>,
 }
@@ -147,7 +152,10 @@ pub(super) trait Launcher: Send + Sync {
 }
 
 /// The host side: bash runs the checkout's wrapper, Docker the rest.
-struct ImageLauncher;
+struct ImageLauncher {
+    /// The Docker CLI that lists and stops containers; tests stand in for it.
+    docker: PathBuf,
+}
 
 /// What a phase keeps of the worker's environment: where Docker and a
 /// temporary directory are, nothing else. Credentials come from the env
@@ -202,13 +210,16 @@ impl Launcher for ImageLauncher {
         let mut child = command
             .spawn()
             .context("start scripts/run_in_image.sh with bash")?;
-        let mut watching = true;
-        let mut stopping = *cancel.borrow();
+        // Only this phase's own container stops: never another group's, and
+        // never a package or finalize, which what finished depends on.
+        let filters = stop_filters(execution, &phase);
+        let mut watching = !filters.is_empty();
+        let mut stopping = watching && *cancel.borrow();
         loop {
             if stopping {
-                // Again until the phase ends: a container may still be
+                // Again until the phase ends: its container may still be
                 // starting when the first stop looks for it.
-                stop(execution).await;
+                self.stop(&filters).await;
             }
             tokio::select! {
                 status = child.wait() => return Ok(status?.success()),
@@ -223,9 +234,10 @@ impl Launcher for ImageLauncher {
     }
 
     async fn remove(&self, execution: &str) {
-        let containers = containers(execution, "-aq").await;
+        let filters = [format!("label=harness-e2e.execution={execution}")];
+        let containers = self.containers("-aq", &filters).await;
         if !containers.is_empty() {
-            let _ = Command::new("docker")
+            let _ = Command::new(&self.docker)
                 .arg("rm")
                 .arg("-f")
                 .args(&containers)
@@ -235,40 +247,60 @@ impl Launcher for ImageLauncher {
     }
 }
 
-/// The containers `docker ps <flags>` lists for an execution, by label.
-async fn containers(execution: &str, flags: &str) -> Vec<String> {
-    match Command::new("docker")
-        .args([
-            "ps",
-            flags,
-            "--filter",
-            &format!("label=harness-e2e.execution={execution}"),
-        ])
-        .output()
-        .await
-    {
-        Ok(output) => String::from_utf8_lossy(&output.stdout)
-            .split_whitespace()
-            .map(str::to_owned)
-            .collect(),
-        Err(error) => {
-            tracing::warn!(%execution, %error, "cannot list the execution's containers");
-            Vec::new()
+impl ImageLauncher {
+    /// The containers `docker ps <flags>` lists with every label filter.
+    async fn containers(&self, flags: &str, filters: &[String]) -> Vec<String> {
+        let mut command = Command::new(&self.docker);
+        command.args(["ps", flags]);
+        for filter in filters {
+            command.args(["--filter", filter]);
+        }
+        match command.output().await {
+            Ok(output) => String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .map(str::to_owned)
+                .collect(),
+            Err(error) => {
+                tracing::warn!(?filters, %error, "cannot list the execution's containers");
+                Vec::new()
+            }
+        }
+    }
+
+    /// Stop the running containers the filters name; each launcher inside
+    /// takes its stack down before it exits.
+    async fn stop(&self, filters: &[String]) {
+        let containers = self.containers("-q", filters).await;
+        if !containers.is_empty() {
+            let _ = Command::new(&self.docker)
+                .args(["stop", "--time", "30"])
+                .args(&containers)
+                .output()
+                .await;
         }
     }
 }
 
-/// Stop an execution's running containers; each launcher inside takes its
-/// stack down before it exits.
-async fn stop(execution: &str) {
-    let containers = containers(execution, "-q").await;
-    if !containers.is_empty() {
-        let _ = Command::new("docker")
-            .args(["stop", "--time", "30"])
-            .args(&containers)
-            .output()
-            .await;
+/// The labels of the one container a cancel stops for this phase: a group's
+/// by its group, a preparation's by its phase. Nothing for the phases what
+/// finished depends on (`package`, `finalize`).
+fn stop_filters(execution: &str, phase: &Phase) -> Vec<String> {
+    let name = phase.args.first().map(String::as_str).unwrap_or_default();
+    if !matches!(name, "group" | "prepare") {
+        return Vec::new();
     }
+    let mut filters = vec![
+        format!("label=harness-e2e.execution={execution}"),
+        format!("label=harness-e2e.phase={name}"),
+    ];
+    if let Some((_, group)) = phase
+        .env
+        .iter()
+        .find(|(key, _)| key == "HARNESS_E2E_CAMPAIGN_GROUP_ID")
+    {
+        filters.push(format!("label=harness-e2e.group={group}"));
+    }
+    filters
 }
 
 /// The Docker side of the plan store: settings, the launcher, the group
@@ -277,12 +309,17 @@ pub(super) struct Docker {
     pub(super) settings: DockerSettings,
     launcher: Arc<dyn Launcher>,
     groups: Arc<Semaphore>,
-    cancels: std::sync::Mutex<HashMap<String, watch::Sender<bool>>>,
+    cancels: std::sync::Mutex<HashMap<String, Arc<watch::Sender<bool>>>>,
 }
 
 impl Docker {
     pub(super) fn new(settings: DockerSettings) -> Self {
-        Self::with_launcher(settings, Arc::new(ImageLauncher))
+        Self::with_launcher(
+            settings,
+            Arc::new(ImageLauncher {
+                docker: "docker".into(),
+            }),
+        )
     }
 
     pub(super) fn with_launcher(settings: DockerSettings, launcher: Arc<dyn Launcher>) -> Self {
@@ -294,13 +331,17 @@ impl Docker {
         }
     }
 
-    fn watch(&self, id: &str) -> watch::Receiver<bool> {
+    /// A channel of its own for each drive of an execution: a drive that is
+    /// still ending neither hands its cancel to the next nor takes the next
+    /// one's away.
+    fn watch(&self, id: &str) -> (Arc<watch::Sender<bool>>, watch::Receiver<bool>) {
+        let (sender, receiver) = watch::channel(false);
+        let sender = Arc::new(sender);
         self.cancels
             .lock()
             .unwrap()
-            .entry(id.to_owned())
-            .or_insert_with(|| watch::channel(false).0)
-            .subscribe()
+            .insert(id.to_owned(), sender.clone());
+        (sender, receiver)
     }
 
     pub(super) fn cancel(&self, id: &str) {
@@ -309,8 +350,15 @@ impl Docker {
         }
     }
 
-    fn forget(&self, id: &str) {
-        self.cancels.lock().unwrap().remove(id);
+    /// Forget a drive's channel, unless a newer drive holds the execution.
+    fn forget(&self, id: &str, sender: &Arc<watch::Sender<bool>>) {
+        let mut cancels = self.cancels.lock().unwrap();
+        if cancels
+            .get(id)
+            .is_some_and(|held| Arc::ptr_eq(held, sender))
+        {
+            cancels.remove(id);
+        }
     }
 }
 
@@ -449,7 +497,7 @@ impl PlanStore {
         let store = self.clone();
         let id = id.to_owned();
         // Subscribed now, so a cancel that arrives before the drive starts counts.
-        let cancel = self.docker.watch(&id);
+        let (sender, cancel) = self.docker.watch(&id);
         tokio::spawn(async move {
             if let Err(error) = store.drive_docker(&id, cancel, stopped).await {
                 let reason = format!("{error:#}");
@@ -458,7 +506,7 @@ impl PlanStore {
                     tracing::error!(execution_id = %id, error = %format!("{error:#}"), "cannot record the end of a Docker execution");
                 }
             }
-            store.docker.forget(&id);
+            store.docker.forget(&id, &sender);
         });
     }
 
@@ -628,14 +676,22 @@ impl PlanStore {
             .await?;
         // ponytail: Kanban groups share the fixture's node_modules install,
         // so they run one at a time; a checkout per group would lift this.
-        let kanban = tokio::sync::Mutex::new(());
-        let runs = queued
-            .into_iter()
-            .map(|index| self.run_docker_group(id, checkout, index, cancel.clone(), &kanban));
-        futures_util::future::join_all(runs)
-            .await
-            .into_iter()
-            .collect::<Result<Vec<_>>>()?;
+        let kanban = &tokio::sync::Mutex::new(());
+        let runs = queued.into_iter().map(|index| async move {
+            let ran = self
+                .run_docker_group(id, checkout, index, cancel.clone(), kanban)
+                .await;
+            (index, ran)
+        });
+        for (index, ran) in futures_util::future::join_all(runs).await {
+            // One group's error is that group's: what the others finished is
+            // still finalized and imported.
+            if let Err(error) = ran {
+                let error = format!("{error:#}");
+                tracing::warn!(execution_id = %id, %error, "a Docker group failed");
+                self.set_group(id, index, "failed", Some(error)).await?;
+            }
+        }
         Ok(())
     }
 
@@ -747,7 +803,16 @@ impl PlanStore {
                 )),
             )
         };
-        self.set_group(id, index, state, error).await
+        let ended = matches!(state, "done" | "failed");
+        self.update_docker(id, |_, _, groups| {
+            let current = &mut groups[index];
+            (current.state, current.error) = (state.into(), error);
+            if ended {
+                current.counted = group.attempt;
+            }
+        })
+        .await
+        .map(drop)
     }
 
     /// Hash each root into its bundle-manifest.json, as the workflow does
@@ -810,16 +875,24 @@ impl PlanStore {
             .iter()
             .map(|path| super::github::file_name(path))
             .collect::<Vec<_>>();
-        // Each group's last attempt, as the workflow selects a re-run job's.
+        // Each group's counted attempt: the last one whose run ended. A group
+        // none of whose runs ended shows its last one, whatever it left.
         let mut selected = serde_json::Map::new();
         for group in &groups {
             let stem = format!(
                 "e2e-observation-{id}-{}-{}",
                 group.campaign_id, group.group_id
             );
-            if let Some((name, _)) =
-                highest_attempt(names.iter().map(String::as_str), |found| found == stem)
-            {
+            let counted = format!("{stem}-gh-{}", group.counted);
+            let chosen = names
+                .iter()
+                .find(|name| group.counted > 0 && **name == counted)
+                .map(String::as_str)
+                .or_else(|| {
+                    highest_attempt(names.iter().map(String::as_str), |found| found == stem)
+                        .map(|(name, _)| name)
+                });
+            if let Some(name) = chosen {
                 // A group whose drive stopped (a worker restart) left its
                 // bundle unchecked: it is checked as any other first.
                 let bundle = artifacts.join(name);
@@ -912,13 +985,29 @@ impl PlanStore {
     async fn import_docker(&self, id: &str, stopped: Option<String>) -> Result<()> {
         self.update_docker(id, |_, phase, _| *phase = "import".into())
             .await?;
-        match self.download_and_install(id, stopped).await {
-            Ok(()) => Ok(()),
-            Err(error) => {
-                self.end_docker(id, Some(format!("Importing its results failed: {error:#}")))
-                    .await
+        if let Err(error) = self.download_and_install(id, stopped).await {
+            return self
+                .end_docker(id, Some(format!("Importing its results failed: {error:#}")))
+                .await;
+        }
+        // The root bundles it no longer reads: its groups' bundles stay.
+        let ExecutionSource::Docker { attempt, .. } = self.read_execution(id).await?.source else {
+            return Ok(());
+        };
+        let artifacts = self.docker_artifacts(id);
+        let stem = format!("e2e-observation-{id}");
+        for path in directories(&artifacts).unwrap_or_default() {
+            let superseded = super::github::file_name(&path)
+                .rsplit_once("-gh-")
+                .is_some_and(|(found, n)| {
+                    found == stem && n.parse().is_ok_and(|n: u32| n < attempt)
+                });
+            if superseded {
+                fs::remove_dir_all(&path)
+                    .with_context(|| format!("remove the superseded {}", path.display()))?;
             }
         }
+        Ok(())
     }
 
     /// End an execution that will import nothing more: what never ran is
@@ -1152,6 +1241,7 @@ fn placeholder_groups(slots: &[Slot]) -> Vec<DockerGroup> {
                 scenarios: vec![slot.scenario_id.clone()],
                 state: "queued".into(),
                 attempt: 1,
+                counted: 0,
                 error: None,
             }),
         }
@@ -1201,6 +1291,7 @@ fn prepared_groups(checkout: &Path) -> Result<(Vec<DockerGroup>, Option<String>)
             scenarios,
             state: "queued".into(),
             attempt: 1,
+            counted: 0,
             error: None,
         });
     }
@@ -1279,11 +1370,28 @@ fn private_fixtures(group_id: &str) -> bool {
 /// Copy a directory tree, as `cp -a` does, to `destination`, which must not
 /// exist yet.
 pub(super) async fn copy_tree(source: &Path, destination: &Path) -> Result<()> {
+    cp("-a", source, destination).await
+}
+
+/// `copy_tree` with hard links where the file system allows them: for a
+/// tree that stays where it is and whose files are never changed in place
+/// (bundles), without taking its size again.
+pub(super) async fn link_tree(source: &Path, destination: &Path) -> Result<()> {
+    if cp("-al", source, destination).await.is_ok() {
+        return Ok(());
+    }
+    if destination.exists() {
+        fs::remove_dir_all(destination)?;
+    }
+    copy_tree(source, destination).await
+}
+
+async fn cp(flags: &str, source: &Path, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent)?;
     }
     let output = Command::new("cp")
-        .arg("-a")
+        .arg(flags)
         .arg(source)
         .arg(destination)
         .output()
@@ -1327,6 +1435,8 @@ mod tests {
         most: AtomicUsize,
         /// Groups that run until they are cancelled.
         hold: std::sync::Mutex<BTreeSet<String>>,
+        /// Groups whose run errs before it ends (the disk is full).
+        broken: std::sync::Mutex<BTreeSet<String>>,
         removed: std::sync::Mutex<Vec<String>>,
     }
 
@@ -1398,6 +1508,10 @@ mod tests {
                     self.most.fetch_max(running, Ordering::SeqCst);
                     let artifacts = PathBuf::from(&env["HARNESS_E2E_ARTIFACTS_DIR"]);
                     let held = self.hold.lock().unwrap().contains(&group);
+                    if self.broken.lock().unwrap().contains(&group) {
+                        self.running.fetch_sub(1, Ordering::SeqCst);
+                        bail!("write the group's log: no space left on device");
+                    }
                     let succeeded = if held {
                         cancelled(&mut cancel).await;
                         fs::create_dir_all(&artifacts)?;
@@ -1459,19 +1573,15 @@ mod tests {
         Ok(())
     }
 
-    /// The native run one group leaves, keyed by its execution, group and
-    /// attempt, beside the contract it ran.
+    /// The native run one group leaves beside the contract it ran. Keyed as
+    /// `exact_stack_campaign.py` keys it, by what it runs and never by the
+    /// attempt: a group run again runs under the same native id.
     fn write_group_bundle(
         artifacts: &Path,
         contract: &Path,
         execution: &str,
         group: &str,
     ) -> Result<String> {
-        let attempt = artifacts
-            .to_string_lossy()
-            .rsplit_once("-gh-")
-            .map(|(_, attempt)| attempt.to_owned())
-            .context("attempt")?;
         let scenarios = read_json(contract)?["suite"]["groups"]
             .as_array()
             .context("groups")?
@@ -1480,7 +1590,7 @@ mod tests {
             .context("group")?["scenarios"]
             .clone();
         let request: RunRequest = serde_json::from_value(json!({
-            "idempotency_key": format!("{execution}:{group}:{attempt}"), "label": group,
+            "idempotency_key": format!("{execution}:{group}"), "label": group,
             "lane": "local", "model": "model", "provider": "provider",
             "scenarios": scenarios, "runs": 1, "technical_retries": 0,
         }))?;
@@ -1524,7 +1634,7 @@ mod tests {
                 let destination = root.join("groups").join(group);
                 match selected[format!("{campaign} · {group}")]["name"].as_str() {
                     Some(name) => {
-                        copy_tree(&checkout.join(bundles).join(name), &destination).await?
+                        link_tree(&checkout.join(bundles).join(name), &destination).await?
                     }
                     None => {
                         fs::create_dir_all(&destination)?;
@@ -1806,21 +1916,37 @@ mod tests {
         assert!(
             reran[4].env["HARNESS_E2E_ARTIFACTS_DIR"].ends_with("pr-r01-case-minimal-path-gh-2")
         );
-        assert!(store
-            .docker_artifacts(&id)
+        let artifacts = store.docker_artifacts(&id);
+        // The root it no longer reads goes; every group's bundle stays.
+        assert!(artifacts
             .join(format!("e2e-observation-{id}-gh-2"))
             .is_dir());
+        assert!(!artifacts
+            .join(format!("e2e-observation-{id}-gh-1"))
+            .exists());
+        assert!(artifacts
+            .join(format!(
+                "e2e-observation-{id}-pr-r01-case-minimal-path-gh-1"
+            ))
+            .is_dir());
+        // The same native id, as a re-run job's on GitHub, now holding the
+        // new attempt's evidence, linked rather than copied.
+        let native = execution_id_for_key(&format!("{id}:case-minimal-path"));
         for (old, new) in before.iter().zip(&again.slots) {
-            if new.scenario_id == "minimal_path" {
-                assert_eq!(
-                    new.execution_id,
-                    execution_id_for_key(&format!("{id}:case-minimal-path:2"))
-                );
-                assert!(runner.record(&old.execution_id).await.is_none());
-            } else {
-                assert_eq!(new.execution_id, old.execution_id);
-            }
+            assert_eq!(new.execution_id, old.execution_id);
         }
+        assert_eq!(again.slots[0].execution_id, native);
+        assert!(runner.record(&native).await.is_some());
+        let installed = fs::metadata(data.join(&native).join("results.json")).unwrap();
+        let bundle = |attempt: u32| {
+            fs::metadata(artifacts.join(format!(
+                "e2e-observation-{id}-pr-r01-case-minimal-path-gh-{attempt}/native/{native}/results.json"
+            )))
+            .unwrap()
+        };
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(installed.ino(), bundle(2).ino());
+        assert_ne!(installed.ino(), bundle(1).ino());
         assert_eq!(
             groups(&again)
                 .iter()
@@ -1833,6 +1959,47 @@ mod tests {
                 ("case-shell-coder-sandbox", 1),
             ]
         );
+
+        // Run again and cancelled before its group ended, the attempt that
+        // ended still counts.
+        launcher
+            .hold
+            .lock()
+            .unwrap()
+            .insert("case-minimal-path".into());
+        store.rerun_scenario(&id, "minimal_path").await.unwrap();
+        until(&store, &id, |execution| {
+            groups(execution)
+                .iter()
+                .any(|(group, state, _)| group == "case-minimal-path" && state == "running")
+        })
+        .await;
+        store.cancel(&id).await.unwrap();
+        let kept = until(&store, &id, |execution| {
+            settled(execution) && execution.rerun.is_none()
+        })
+        .await;
+        assert_eq!(kept.state, "completed", "{:?}", kept.error);
+        assert!(kept.warnings.contains(
+            &"Running minimal_path again was cancelled; what it did not run keeps its previous attempt."
+                .to_owned()
+        ));
+        assert!(matches!(
+            kept.source,
+            ExecutionSource::Docker { attempt: 3, .. }
+        ));
+        let slot = &kept.slots[0];
+        assert_eq!(
+            (
+                slot.execution_id.as_str(),
+                slot.state.as_str(),
+                slot.error.as_deref()
+            ),
+            (native.as_str(), "finished", None)
+        );
+        assert!(slot.eligible);
+        let installed = fs::metadata(data.join(&native).join("results.json")).unwrap();
+        assert_eq!(installed.ino(), bundle(2).ino());
     }
 
     #[tokio::test]
@@ -1935,9 +2102,26 @@ mod tests {
             "case-minimal-path",
         )
         .unwrap();
+        // And one running again as attempt 2 after its attempt 1 ended.
+        let artifacts = store.docker_artifacts(&id);
+        let rerun_native = write_group_bundle(
+            &artifacts.join(format!(
+                "e2e-observation-{id}-pr-r01-case-tool-contract-recovery-gh-1"
+            )),
+            &contracts.join("contracts/pr-r01.json"),
+            &id,
+            "case-tool-contract-recovery",
+        )
+        .unwrap();
+        let partial = artifacts.join(format!(
+            "e2e-observation-{id}-pr-r01-case-tool-contract-recovery-gh-2"
+        ));
+        fs::create_dir_all(&partial).unwrap();
+        fs::write(partial.join("failure.json"), r#"{"error": "stopped"}"#).unwrap();
         let (mut prepared, _) = prepared_groups(&folder.join("checkout")).unwrap();
-        prepared[0].state = "done".into();
+        (prepared[0].state, prepared[0].counted) = ("done".into(), 1);
         prepared[1].state = "running".into();
+        (prepared[2].state, prepared[2].attempt, prepared[2].counted) = ("running".into(), 2, 1);
         let mut execution = PlanExecution {
             id: id.clone(),
             idempotency_key: "execution:restarted".into(),
@@ -2000,9 +2184,19 @@ mod tests {
             groups(&restarted)
                 .into_iter()
                 .map(|(_, state, _)| state)
-                .take(2)
+                .take(3)
                 .collect::<Vec<_>>(),
-            ["done", "interrupted"]
+            ["done", "interrupted", "interrupted"]
+        );
+        // The attempt that ended counts, not the one the restart stopped.
+        let kept = &restarted.slots[2];
+        assert_eq!(
+            (
+                kept.execution_id.as_str(),
+                kept.state.as_str(),
+                kept.error.as_deref()
+            ),
+            (rerun_native.as_str(), "finished", None)
         );
         // No group ran again; the finished one was checked and imported.
         assert!(launcher.calls("group").is_empty());
@@ -2134,6 +2328,142 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_cancel_stops_only_the_phases_own_container() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let checkout = root.path().join("checkout");
+        fs::create_dir_all(checkout.join("scripts")).unwrap();
+        let executable = |path: &Path, body: &str| {
+            fs::write(path, body).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        };
+        // The phase ends on its own a moment after the cancel.
+        executable(
+            &checkout.join("scripts/run_in_image.sh"),
+            "sleep 0.3\nexit 143\n",
+        );
+        let calls = root.path().join("docker.log");
+        let docker = root.path().join("docker");
+        executable(
+            &docker,
+            &format!("#!/bin/sh\necho \"$*\" >>{}\n", calls.display()),
+        );
+        let launcher = ImageLauncher { docker };
+        let phase = |args: &[&str], group: Option<&str>| Phase {
+            args: args.iter().map(|arg| (*arg).to_owned()).collect(),
+            env: group
+                .map(|group| ("HARNESS_E2E_CAMPAIGN_GROUP_ID".to_owned(), group.to_owned()))
+                .into_iter()
+                .collect(),
+            env_file: None,
+            log: root.path().join("phase.log"),
+        };
+        let (sender, cancelled) = watch::channel(true);
+        assert!(!launcher
+            .run(
+                &checkout,
+                "plan-1",
+                phase(&["group"], Some("case-a")),
+                cancelled.clone()
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "ps -q --filter label=harness-e2e.execution=plan-1 \
+             --filter label=harness-e2e.phase=group --filter label=harness-e2e.group=case-a\n"
+        );
+        fs::remove_file(&calls).unwrap();
+        assert!(!launcher
+            .run(
+                &checkout,
+                "plan-1",
+                phase(&["prepare", "assemble"], None),
+                cancelled.clone()
+            )
+            .await
+            .unwrap());
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "ps -q --filter label=harness-e2e.execution=plan-1 --filter label=harness-e2e.phase=prepare\n"
+        );
+        fs::remove_file(&calls).unwrap();
+        // What finished depends on these: a cancel never stops them.
+        for args in [&["package", "{}", "target/a"][..], &["finalize"][..]] {
+            launcher
+                .run(
+                    &checkout,
+                    "plan-1",
+                    phase(args, Some("case-b")),
+                    cancelled.clone(),
+                )
+                .await
+                .unwrap();
+        }
+        assert!(!calls.exists());
+        drop(sender);
+    }
+
+    #[test]
+    fn each_drive_has_its_own_cancel() {
+        let docker =
+            Docker::with_launcher(DockerSettings::default(), Arc::new(FakeLauncher::default()));
+        let (first, first_cancel) = docker.watch("plan-x");
+        docker.cancel("plan-x");
+        assert!(*first_cancel.borrow());
+        // Run again before the cancelled drive forgot its channel.
+        let (second, second_cancel) = docker.watch("plan-x");
+        assert!(!*second_cancel.borrow(), "a new drive inherits no cancel");
+        docker.forget("plan-x", &first);
+        docker.cancel("plan-x");
+        assert!(
+            *second_cancel.borrow(),
+            "the ending drive took no one's cancel"
+        );
+        docker.forget("plan-x", &second);
+        assert!(docker.cancels.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_group_that_errs_fails_alone() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        launcher
+            .broken
+            .lock()
+            .unwrap()
+            .insert("case-persistent-state".into());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher,
+            DockerSettings::default(),
+        );
+        let id = store
+            .start_execution(docker_parameters("pr"), "")
+            .await
+            .unwrap()
+            .id;
+        let done = until(&store, &id, settled).await;
+        let ExecutionSource::Docker { groups, .. } = &done.source else {
+            panic!("{:?}", done.source);
+        };
+        let broken = &groups[1];
+        assert_eq!(broken.state, "failed");
+        assert!(broken
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no space left on device"));
+        // What the others finished was finalized and imported.
+        for index in [0, 2, 3] {
+            assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
+        }
+        assert_eq!(done.slots[1].state, "not_run");
+    }
+
     #[test]
     fn registry_groups_run_isolated_and_say_their_screenshots_are_missing() {
         let group = |id: &str| DockerGroup {
@@ -2143,6 +2473,7 @@ mod tests {
             scenarios: Vec::new(),
             state: "queued".into(),
             attempt: 1,
+            counted: 0,
             error: None,
         };
         assert_eq!(network_note(&[group("case-minimal-path")]), None);
@@ -2209,11 +2540,14 @@ mod tests {
             env_file: Some(root.path().join("providers.env")),
             log: log.clone(),
         };
-        assert!(ImageLauncher
+        let launcher = ImageLauncher {
+            docker: "docker".into(),
+        };
+        assert!(launcher
             .run(&checkout, "plan-1", phase(&["group"]), uncancellable())
             .await
             .unwrap());
-        assert!(!ImageLauncher
+        assert!(!launcher
             .run(
                 &checkout,
                 "plan-1",

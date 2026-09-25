@@ -394,12 +394,17 @@ data directory:
 `prepare materialize`, `assemble` and `fixtures` run once, then one `group`
 container per group, `docker_parallel_groups` (2) at a time across executions,
 each packaged, then `finalize`, whose root bundle is imported by the code that
-imports a GitHub run, from the folder. Cancel stops the execution's containers
-by label, then finalizes and imports what finished. Running a scenario again
-runs its groups in new containers as the execution's next attempt, with the
-same contract, lock, scripts and image, finalizes and imports again; the last
-attempt counts. A worker that restarts removes an active Docker execution's
-containers, interrupts what did not finish and imports what did.
+imports a GitHub run, from the folder. The root links its groups' bundles
+rather than copying them, and once an attempt is imported the roots before it
+go. Cancel stops the running groups' containers (never a `package` or
+`finalize`), then finalizes and imports what finished. Running a scenario
+again runs its groups in new containers as the execution's next attempt, with
+the same contract, lock, scripts and image, finalizes and imports again: a
+group's last attempt that ended counts, and one cancelled or cut by a restart
+leaves the attempt before it counted. A worker that restarts removes an active
+Docker execution's containers, interrupts what did not finish and imports what
+did. A worker older than this release cannot read a Docker execution and drops
+it from its database, as it drops any row it cannot read.
 
 Every group runs on a network of its own. The Registry fixture serves the
 application it screenshots on the host's loopback, which only a phase on the

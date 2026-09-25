@@ -509,6 +509,9 @@ impl PlanStore {
         Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
+        self.load_execution(id).await.map(ran_where_it_came_from)
+    }
+    async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
         if let Some(persistence) = &self.persistence {
             return persistence
@@ -563,13 +566,15 @@ impl PlanStore {
             .collect())
     }
     pub(crate) async fn executions(&self) -> Result<Vec<PlanExecution>> {
-        if let Some(persistence) = &self.persistence {
-            return persistence.saved_executions().await;
-        }
-        #[cfg(not(test))]
-        anyhow::bail!("the E2E control-plane persistence is not available");
-        #[cfg(test)]
-        read_json_directory(&self.root.join("plan-store/executions"))
+        let executions = if let Some(persistence) = &self.persistence {
+            persistence.saved_executions().await?
+        } else {
+            #[cfg(not(test))]
+            anyhow::bail!("the E2E control-plane persistence is not available");
+            #[cfg(test)]
+            read_json_directory(&self.root.join("plan-store/executions"))?
+        };
+        Ok(executions.into_iter().map(ran_where_it_came_from).collect())
     }
 
     /// Every suite an execution can run: the master plan's, read-only, then
@@ -1348,6 +1353,19 @@ fn safe_id(id: &str) -> Result<()> {
 }
 fn now() -> String {
     Utc::now().to_rfc3339()
+}
+/// An import recorded before executions stated where they ran (0.14.0)
+/// reads as run where it came from.
+fn ran_where_it_came_from(mut execution: PlanExecution) -> PlanExecution {
+    let from = match execution.source {
+        ExecutionSource::Github { .. } => Where::Github,
+        ExecutionSource::Docker { .. } => Where::Docker,
+        ExecutionSource::Local => return execution,
+    };
+    if let Some(parameters) = execution.parameters.as_mut() {
+        parameters.r#where = from;
+    }
+    execution
 }
 fn parameters_where(execution: &PlanExecution) -> Where {
     execution
@@ -2882,6 +2900,26 @@ pub(super) mod tests {
         assert_ne!(one.sha256, reviewed.profile_sha256);
     }
 
+    #[tokio::test]
+    async fn an_import_recorded_before_where_reads_as_run_on_github() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        // As 0.14.0 stored one: parameters without `where` or `stack`.
+        let mut stored = serde_json::to_value(import_stub()).unwrap();
+        stored["source"] = json!({"kind": "github", "repository": "o/r", "run_id": 7,
+            "run_attempt": 1, "url": "", "release_control_execution_id": null});
+        stored["parameters"] = json!({"scenarios": ["minimal_path"], "runs": 1,
+            "technical_retries": 0, "model": "m", "provider": "p", "agent": null});
+        write_json(&manager.execution_path("plan-stub").unwrap(), &stored).unwrap();
+        let read = manager.read_execution("plan-stub").await.unwrap();
+        assert_eq!(read.parameters.unwrap().r#where, Where::Github);
+        let listed = manager.executions().await.unwrap();
+        assert_eq!(
+            listed[0].parameters.as_ref().unwrap().r#where,
+            Where::Github
+        );
+    }
+
     #[test]
     fn a_suite_an_older_import_stored_by_id_reads_as_that_suite() {
         let mut stored = serde_json::to_value(suite_parameters("pr")).unwrap();
@@ -3245,6 +3283,27 @@ pub(super) mod tests {
             .unwrap()
             .label
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn a_cancel_asked_while_the_import_ran_is_kept() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let manager = manager(&data, Arc::new(FakeRunner::new(data.clone())));
+        let mut snapshot = import_stub();
+        snapshot.state = "running".into();
+        manager.write_execution(&snapshot).await.unwrap();
+        // Asked after the import read the execution.
+        manager.cancel(&snapshot.id).await.unwrap();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.path().join("bundle"), "rc:e2e:cancelled", "1.8.8");
+        manager
+            .install_bundle(&mut snapshot, &bundle, &contract, None)
+            .await
+            .unwrap();
+        let installed = manager.read_execution(&snapshot.id).await.unwrap();
+        assert!(installed.cancel_requested);
+        assert_eq!(installed.state, "cancelled");
     }
 
     #[tokio::test]
