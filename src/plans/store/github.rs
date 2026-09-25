@@ -497,7 +497,7 @@ impl PlanStore {
     /// never go through memory or the system temporary directory.
     fn scratch(&self) -> Result<tempfile::TempDir> {
         tempfile::Builder::new()
-            .prefix("github-")
+            .prefix("import-")
             .tempdir_in(self.imports_dir()?)
             .context("create an import directory in the data directory")
     }

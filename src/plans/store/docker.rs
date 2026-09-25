@@ -56,6 +56,24 @@ struct Scripts;
 /// The executor image's definition: its digest names the image.
 const DOCKERFILE: &str = include_str!("../../../Dockerfile");
 
+/// Files of this repository the scripts read beside them: the result
+/// contract the aggregator checks, the Kanban catalog the bootstrap compares
+/// its fixture with.
+const SUPPORT: &[(&str, &str)] = &[
+    (
+        "config/results-contract.json",
+        include_str!("../../../config/results-contract.json"),
+    ),
+    (
+        "schemas/results.json",
+        include_str!("../../../schemas/results.json"),
+    ),
+    (
+        "src/scenarios/kanban/catalog.json",
+        include_str!("../../../src/scenarios/kanban/catalog.json"),
+    ),
+];
+
 /// What the workflow gives a group job: ten minutes for polling, capture and
 /// packaging past the suite's deadline.
 const GROUP_DEADLINES: [(&str, &str); 2] = [
@@ -379,8 +397,9 @@ impl PlanStore {
         Ok(execution)
     }
 
-    /// The checkout the wrapper mounts: the embedded Dockerfile, and the
-    /// embedded scripts or a copy of `scripts_dir` as it is now.
+    /// The checkout the wrapper mounts: the embedded Dockerfile, stacks and
+    /// the files the scripts read beside them, and the embedded scripts or a
+    /// copy of `scripts_dir` as it is now.
     async fn write_checkout(&self, folder: &Path) -> Result<()> {
         use std::os::unix::fs::PermissionsExt;
         let checkout = folder.join("checkout");
@@ -388,6 +407,18 @@ impl PlanStore {
             .with_context(|| format!("create {}", checkout.display()))?;
         fs::create_dir_all(folder.join("logs"))?;
         fs::write(checkout.join("Dockerfile"), DOCKERFILE)?;
+        let stacks = stacks::REPOSITORY
+            .iter()
+            .map(|(id, yaml)| (format!("stacks/{id}.yaml"), *yaml));
+        for (path, content) in SUPPORT
+            .iter()
+            .map(|(path, content)| ((*path).to_owned(), *content))
+            .chain(stacks)
+        {
+            let path = checkout.join(path);
+            fs::create_dir_all(path.parent().context("support file path")?)?;
+            fs::write(path, content)?;
+        }
         if let Some(scripts) = &self.docker.settings.scripts_dir {
             return copy_tree(scripts, &checkout.join("scripts")).await;
         }
@@ -448,14 +479,8 @@ impl PlanStore {
             return self.end_docker(id, None).await;
         }
         self.run_docker_groups(id, &checkout, &cancel).await?;
-        let finished = match &self.read_execution(id).await?.source {
-            ExecutionSource::Docker { groups, .. } => groups
-                .iter()
-                .any(|group| matches!(group.state.as_str(), "done" | "failed" | "cancelled")),
-            _ => false,
-        };
-        // Nothing ran: nothing to finalize or import.
-        if !finished {
+        // No group left a bundle: nothing to finalize or import.
+        if !group_bundles(&checkout.join("target/artifacts"), id) {
             return self.end_docker(id, stopped).await;
         }
         self.finalize_docker(id, &checkout).await?;
@@ -549,6 +574,7 @@ impl PlanStore {
                 log.display()
             ));
         }
+        execution.warnings.extend(network_note(&groups));
         execution.slots = group_slots(&groups);
         if let ExecutionSource::Docker {
             phase,
@@ -621,22 +647,29 @@ impl PlanStore {
         mut cancel: watch::Receiver<bool>,
         kanban: &tokio::sync::Mutex<()>,
     ) -> Result<()> {
-        let permit = tokio::select! {
-            permit = self.docker.groups.clone().acquire_owned() => Some(permit?),
-            () = cancelled(&mut cancel) => None,
-        };
         let group = match &self.read_execution(id).await?.source {
             ExecutionSource::Docker { groups, .. } => groups[index].clone(),
             _ => bail!("execution {id} is not a Docker execution"),
         };
-        let _kanban = if group.group_id.starts_with("case-kanban-") {
-            Some(kanban.lock().await)
-        } else {
-            None
+        // The Kanban turn first, so a group waiting for it holds no slot.
+        let kanban = async {
+            if group.group_id.starts_with("case-kanban-") {
+                Some(kanban.lock().await)
+            } else {
+                None
+            }
         };
-        if permit.is_none() || *cancel.borrow() {
+        let started = tokio::select! {
+            started = async {
+                let kanban = kanban.await;
+                (kanban, self.docker.groups.clone().acquire_owned().await)
+            } => Some(started),
+            () = cancelled(&mut cancel) => None,
+        };
+        let Some((_kanban, permit)) = started else {
             return self.set_group(id, index, "cancelled", None).await;
-        }
+        };
+        let _permit = permit?;
         self.set_group(id, index, "running", None).await?;
         let name = format!(
             "e2e-observation-{id}-{}-{}-gh-{}",
@@ -669,15 +702,6 @@ impl PlanStore {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
         );
-        if registry(&group.group_id) {
-            // The Registry fixture publishes the application it screenshots
-            // on the host's loopback; its engine takes a port of its own there.
-            let port = std::net::TcpListener::bind("127.0.0.1:0")?
-                .local_addr()?
-                .port();
-            env.push(("HARNESS_E2E_DOCKER_NETWORK".into(), "host".into()));
-            env.push(("HARNESS_E2E_ENGINE_PORT".into(), port.to_string()));
-        }
         let folder = self.docker_folder(id);
         let log = folder.join(format!(
             "logs/group-{}-{}-{}.log",
@@ -794,6 +818,15 @@ impl PlanStore {
             if let Some((name, _)) =
                 highest_attempt(names.iter().map(String::as_str), |found| found == stem)
             {
+                // A group whose drive stopped (a worker restart) left its
+                // bundle unchecked: it is checked as any other first.
+                let bundle = artifacts.join(name);
+                if !bundle.join("bundle-manifest.json").is_file() {
+                    let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
+                        "group_id": group.group_id, "attempt": group.attempt, "job": "finalize"});
+                    self.package(id, checkout, &workflow, &[&bundle], "Group", name)
+                        .await?;
+                }
                 selected.insert(
                     format!("{} · {}", group.campaign_id, group.group_id),
                     json!({"name": name}),
@@ -1046,11 +1079,7 @@ impl PlanStore {
         {
             group.state = "interrupted".into();
         }
-        let finished = groups.iter().any(|group| {
-            !group.campaign_id.is_empty()
-                && matches!(group.state.as_str(), "done" | "failed" | "cancelled")
-        });
-        if !finished {
+        if !group_bundles(&self.docker_artifacts(&execution.id), &execution.id) {
             self.write_execution(&execution).await?;
             return self.end_docker(&execution.id, Some(reason)).await;
         }
@@ -1199,6 +1228,19 @@ fn group_slots(groups: &[DockerGroup]) -> Vec<Slot> {
         .collect()
 }
 
+/// Whether a group of the execution left a bundle, in any attempt.
+fn group_bundles(artifacts: &Path, id: &str) -> bool {
+    let prefix = format!("e2e-observation-{id}-");
+    directories(artifacts)
+        .unwrap_or_default()
+        .iter()
+        .any(|path| {
+            super::github::file_name(path)
+                .strip_prefix(&prefix)
+                .is_some_and(|rest| !rest.starts_with("gh-"))
+        })
+}
+
 /// Nothing was imported yet: the slots stand for the groups.
 fn placeholders(slots: &[Slot]) -> bool {
     slots.iter().all(|slot| slot.execution_id.is_empty())
@@ -1206,6 +1248,25 @@ fn placeholders(slots: &[Slot]) -> bool {
 
 fn registry(group_id: &str) -> bool {
     group_id.starts_with("case-registry-")
+}
+
+/// Every group runs on a network of its own. The Registry fixture serves the
+/// application it screenshots on the host's loopback, which only a phase on
+/// the host's network reaches; there a group's stack would take this host's
+/// ports (its Console binds 3113 on every address, as this host's iii does),
+/// so the Registry groups run isolated too, and without those screenshots.
+fn network_note(groups: &[DockerGroup]) -> Option<String> {
+    let registry = groups
+        .iter()
+        .filter(|group| registry(&group.group_id))
+        .map(|group| group.group_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    (!registry.is_empty()).then(|| {
+        format!(
+            "{} ran on an isolated network: the application the Registry fixture serves on the host's loopback cannot be reached for its screenshots, so they are missing. On the host's network the group's stack would take this host's ports (its Console binds 3113).",
+            registry.into_iter().collect::<Vec<_>>().join(", ")
+        )
+    })
 }
 
 /// Groups whose fixtures are private repositories.
@@ -1587,6 +1648,21 @@ mod tests {
             fs::read_to_string(folder.join("checkout/Dockerfile")).unwrap(),
             DOCKERFILE
         );
+        for support in [
+            "config/results-contract.json",
+            "schemas/results.json",
+            "src/scenarios/kanban/catalog.json",
+            "stacks/default.yaml",
+        ] {
+            assert!(folder.join("checkout").join(support).is_file(), "{support}");
+        }
+        // The aggregator's result contract loads from the checkout alone.
+        let loaded = std::process::Command::new("python3")
+            .args(["-c", "import result_contract"])
+            .current_dir(folder.join("checkout/scripts"))
+            .status()
+            .unwrap();
+        assert!(loaded.success());
         for script in ["executor.sh", "run_in_image.sh", "kanban_eval/bootstrap.py"] {
             let mode = fs::metadata(folder.join("checkout/scripts").join(script))
                 .unwrap()
@@ -1926,8 +2002,10 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["done", "interrupted"]
         );
-        // No group ran again; the finished one was imported.
+        // No group ran again; the finished one was checked and imported.
         assert!(launcher.calls("group").is_empty());
+        let packaged = launcher.calls("package");
+        assert!(packaged[0].args[2].ends_with("pr-r01-case-minimal-path-gh-1"));
         assert_eq!(restarted.slots[0].execution_id, native);
         assert!(runner.record(&native).await.is_some());
         assert_eq!(restarted.slots[1].state, "not_run");
@@ -2052,6 +2130,27 @@ mod tests {
             sent["scenarios"],
             json!(["minimal_path", "a_scenario_it_may_know"])
         );
+    }
+
+    #[test]
+    fn registry_groups_run_isolated_and_say_their_screenshots_are_missing() {
+        let group = |id: &str| DockerGroup {
+            round: 1,
+            campaign_id: "software-engineering-r01".into(),
+            group_id: id.into(),
+            scenarios: Vec::new(),
+            state: "queued".into(),
+            attempt: 1,
+            error: None,
+        };
+        assert_eq!(network_note(&[group("case-minimal-path")]), None);
+        let note = network_note(&[
+            group("case-registry-implementation"),
+            group("case-minimal-path"),
+        ])
+        .unwrap();
+        assert!(note.starts_with("case-registry-implementation ran on an isolated network"));
+        assert!(note.contains("screenshots"));
     }
 
     #[tokio::test]
