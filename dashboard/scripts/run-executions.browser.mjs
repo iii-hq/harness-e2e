@@ -826,6 +826,33 @@ try {
   })
   assert.equal(started[3].parameters.where, 'docker')
 
+  // On a phone the dialog is one column: the tests follow the fields, at
+  // the height of their content, and can be ticked.
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await runTests.getByText('Catalog ready', { exact: false }).waitFor()
+  await page.setViewportSize({ width: 390, height: 844 })
+  // The host fixes the dialog to the viewport (a bottom sheet here); the
+  // double renders it in the flow, so pin it as the host does.
+  await runTests.evaluate((dialog) => {
+    dialog.style.position = 'fixed'
+  })
+  const phoneList = runTests.getByRole('region', { name: 'Tests' })
+  assert.ok((await phoneList.boundingBox()).height > 300)
+  const phoneBox = box('timer_wake')
+  await phoneBox.scrollIntoViewIfNeeded()
+  assert.ok(await phoneBox.isVisible())
+  await phoneBox.click()
+  assert.ok(await phoneBox.isChecked())
+  await runTests
+    .getByRole('button', { name: 'Run 1 test', exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1280, height: 720 })
+
   // A finished execution can be deleted.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page

@@ -591,7 +591,7 @@ function TestPicker({
   return (
     <section
       aria-label="Tests"
-      className="mx-2 mb-3 flex min-h-0 flex-col overflow-hidden rounded-[6px] bg-panel outline outline-1 -outline-offset-1 outline-(--color-edge) md:mx-0 md:mr-3 md:mb-0"
+      className="mx-2 mb-3 flex flex-col overflow-clip rounded-[6px] bg-panel outline outline-1 -outline-offset-1 outline-(--color-edge) md:mx-0 md:mr-3 md:mb-0 md:min-h-0"
     >
       <div className="flex flex-none flex-wrap items-center gap-2 px-2.5 pt-2.5 pb-1 md:flex-nowrap">
         <SearchField
