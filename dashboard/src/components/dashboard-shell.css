@@ -160,6 +160,17 @@
     text-transform: none;
   }
 
+  /* The actions wrap onto the next line in a narrow container rather than
+   push the bar wider (audit S-05). */
+  .harness-e2e-page-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: var(--ds-space-1);
+    min-width: 0;
+  }
+
   /* Page actions: a quiet secondary and an ink primary, 32px, Inter. */
   .harness-e2e-header-action {
     display: inline-flex;
@@ -217,8 +228,15 @@
     outline-offset: 3px;
   }
 
+  /* A tab fills the 44px bar and the scroller clips above it, so its ring
+   sits inside, clear of the 2px current-section underline. Actions keep
+   the canvas's 1px offset. */
   .harness-e2e-shell .harness-e2e-nav-link:focus-visible {
-    outline-offset: -2px;
+    outline-offset: -4px;
+  }
+
+  .harness-e2e-shell .harness-e2e-header-action:focus-visible {
+    outline-offset: 1px;
   }
 
   /* Fields are fill-only, so their edge is an inset outline at 3:1 against the

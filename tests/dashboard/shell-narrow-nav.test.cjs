@@ -36,7 +36,8 @@ test("the narrow select is hidden by CSS, not by a Tailwind utility", () => {
 // inside the page and wrap in narrow containers.
 test("page actions live in the wrapping section bar, not the console header (S-02)", () => {
   assert.match(shellTsx, /<PageActionsBar/);
-  assert.match(shellTsx, /harness-e2e-page-actions flex min-w-0 flex-wrap/);
+  assert.match(shellTsx, /className="harness-e2e-page-actions"/);
+  assert.match(shellCss, /\.harness-e2e-page-actions\s*\{[^}]*flex-wrap:\s*wrap/);
   assert.doesNotMatch(shellTsx, /harness-e2e-header-overflow/);
   assert.doesNotMatch(shellCss, /harness-e2e-header-overflow/);
 });

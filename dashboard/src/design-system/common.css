@@ -86,6 +86,10 @@
   color: var(--color-ink);
 }
 
+.ds-row-menu-trigger:focus-visible {
+  outline-offset: 1px;
+}
+
 .ds-row-menu-trigger[data-state="open"] {
   background: var(--color-surface-selected);
   color: var(--color-ink);

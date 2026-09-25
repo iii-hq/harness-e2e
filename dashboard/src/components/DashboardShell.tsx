@@ -127,7 +127,7 @@ export function PageActionsBar({ actions, label }: PageActionsBarProps) {
   if (!actions) return null
   return (
     <section
-      className="harness-e2e-page-actions flex min-w-0 flex-wrap items-center justify-end gap-1"
+      className="harness-e2e-page-actions"
       aria-label={label ?? 'Page actions'}
     >
       {actions}
