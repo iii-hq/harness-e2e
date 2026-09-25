@@ -218,6 +218,8 @@ declare module '@iii-dev/console-ui' {
   export interface TableProps
     extends React.TableHTMLAttributes<HTMLTableElement> {
     density?: TableDensity
+    /** Keeps the outer padding of the first and last columns. */
+    inset?: boolean
   }
   export const TableViewport: React.ComponentType<
     React.HTMLAttributes<HTMLDivElement>

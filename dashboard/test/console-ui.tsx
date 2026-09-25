@@ -643,9 +643,20 @@ export function TableFrame(props: Div) {
 }
 export function Table({
   density = 'comfortable',
+  inset,
   ...props
-}: TableHTMLAttributes<HTMLTableElement> & { density?: string }) {
-  return <table className="iii-ui-table" data-density={density} {...props} />
+}: TableHTMLAttributes<HTMLTableElement> & {
+  density?: string
+  inset?: boolean
+}) {
+  return (
+    <table
+      className="iii-ui-table"
+      data-density={density}
+      data-inset={inset || undefined}
+      {...props}
+    />
+  )
 }
 export function TableHeader(props: HTMLAttributes<HTMLTableSectionElement>) {
   return <thead className="iii-ui-table__header" {...props} />
