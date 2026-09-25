@@ -290,14 +290,9 @@ if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; the
   [[ -d "$fixture_root/.git" ]] || fail "Kanban fixture checkout is unavailable: $fixture_root"
   kanban_runtime="$run_root/kanban-runtime.json"
   failure_phase=kanban_bootstrap
-  # Kanban's containers mount node through the host's Docker daemon. From the
-  # executor image only the run root is at the same path on both sides, so
-  # they get a copy of this node there, never whatever node the host has.
-  kanban_node="$run_root/kanban-node"
-  cp "$(realpath "$(command -v node)")" "$kanban_node"
   python3 "$kanban_bootstrap" \
     --fixture "$fixture_root" --iii "$iii_bin" --runtime-root "$run_root/kanban-runtime" \
-    --output "$kanban_runtime" --node "$kanban_node" \
+    --output "$kanban_runtime" --node "$(realpath "$(command -v node)")" \
     --npm "$(realpath "$(command -v npm)")"
   jq -e 'keys == ["browser-dependencies","browsers","dependencies","fixture","iii","image","node","playwright-module","pnpm"]' \
     "$kanban_runtime" >/dev/null
