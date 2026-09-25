@@ -660,13 +660,15 @@ impl PlanStore {
             }
         };
         let started = tokio::select! {
+            biased;
+            () = cancelled(&mut cancel) => None,
             started = async {
                 let kanban = kanban.await;
                 (kanban, self.docker.groups.clone().acquire_owned().await)
             } => Some(started),
-            () = cancelled(&mut cancel) => None,
         };
-        let Some((_kanban, permit)) = started else {
+        // Cancelled while it waited, even if its turn came at the same time.
+        let Some((_kanban, permit)) = started.filter(|_| !*cancel.borrow()) else {
             return self.set_group(id, index, "cancelled", None).await;
         };
         let _permit = permit?;

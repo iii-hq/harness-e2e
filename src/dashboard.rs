@@ -277,7 +277,7 @@ pub(crate) mod tests {
         assert_eq!(
             summary["parameters"],
             json!({"scenarios": ["context_pressure"], "runs": 1, "technical_retries": 1,
-                "model": "model", "provider": "provider", "agent": null})
+                "model": "model", "provider": "provider", "agent": null, "where": "harness"})
         );
         assert_eq!(summary["stack"]["mode"], "source");
         assert_eq!(
