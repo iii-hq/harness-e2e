@@ -635,15 +635,23 @@ export function DropdownMenuGroup(props: Div) {
   return <div {...props} />
 }
 
-export function TableViewport(props: Div) {
-  return <div className="iii-ui-table-viewport" {...props} />
+// The host merges a caller's className after the recipe's.
+function recipe(base: string, className?: string) {
+  return className ? `${base} ${className}` : base
 }
-export function TableFrame(props: Div) {
-  return <div className="iii-ui-table-frame" {...props} />
+
+export function TableViewport({ className, ...props }: Div) {
+  return (
+    <div className={recipe('iii-ui-table-viewport', className)} {...props} />
+  )
+}
+export function TableFrame({ className, ...props }: Div) {
+  return <div className={recipe('iii-ui-table-frame', className)} {...props} />
 }
 export function Table({
   density = 'comfortable',
   inset,
+  className,
   ...props
 }: TableHTMLAttributes<HTMLTableElement> & {
   density?: string
@@ -651,25 +659,41 @@ export function Table({
 }) {
   return (
     <table
-      className="iii-ui-table"
+      className={recipe('iii-ui-table', className)}
       data-density={density}
       data-inset={inset || undefined}
       {...props}
     />
   )
 }
-export function TableHeader(props: HTMLAttributes<HTMLTableSectionElement>) {
-  return <thead className="iii-ui-table__header" {...props} />
+export function TableHeader({
+  className,
+  ...props
+}: HTMLAttributes<HTMLTableSectionElement>) {
+  return (
+    <thead className={recipe('iii-ui-table__header', className)} {...props} />
+  )
 }
-export function TableBody(props: HTMLAttributes<HTMLTableSectionElement>) {
-  return <tbody className="iii-ui-table__body" {...props} />
+export function TableBody({
+  className,
+  ...props
+}: HTMLAttributes<HTMLTableSectionElement>) {
+  return (
+    <tbody className={recipe('iii-ui-table__body', className)} {...props} />
+  )
 }
-export function TableFooter(props: HTMLAttributes<HTMLTableSectionElement>) {
-  return <tfoot className="iii-ui-table__footer" {...props} />
+export function TableFooter({
+  className,
+  ...props
+}: HTMLAttributes<HTMLTableSectionElement>) {
+  return (
+    <tfoot className={recipe('iii-ui-table__footer', className)} {...props} />
+  )
 }
 export function TableRow({
   interactive,
   selected,
+  className,
   ...props
 }: HTMLAttributes<HTMLTableRowElement> & {
   interactive?: boolean
@@ -677,21 +701,35 @@ export function TableRow({
 }) {
   return (
     <tr
-      className="iii-ui-table__row"
+      className={recipe('iii-ui-table__row', className)}
       data-interactive={interactive || undefined}
       data-selected={selected || undefined}
       {...props}
     />
   )
 }
-export function TableHead(props: ThHTMLAttributes<HTMLTableCellElement>) {
-  return <th className="iii-ui-table__head" {...props} />
+export function TableHead({
+  className,
+  ...props
+}: ThHTMLAttributes<HTMLTableCellElement>) {
+  return <th className={recipe('iii-ui-table__head', className)} {...props} />
 }
-export function TableCell(props: TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className="iii-ui-table__cell" {...props} />
+export function TableCell({
+  className,
+  ...props
+}: TdHTMLAttributes<HTMLTableCellElement>) {
+  return <td className={recipe('iii-ui-table__cell', className)} {...props} />
 }
-export function TableCaption(props: HTMLAttributes<HTMLTableCaptionElement>) {
-  return <caption className="iii-ui-table__caption" {...props} />
+export function TableCaption({
+  className,
+  ...props
+}: HTMLAttributes<HTMLTableCaptionElement>) {
+  return (
+    <caption
+      className={recipe('iii-ui-table__caption', className)}
+      {...props}
+    />
+  )
 }
 
 /* ---- controls: the host's markup and roles, none of its styling ---- */

@@ -233,15 +233,16 @@ export function buildLedgerRows(
         .join(' · '),
       result,
       live,
+      // While it runs, what has not reported is still to come.
       issue:
         executionProgress(execution) ??
-        (presentation.primaryIssue
-          ? categoryMessage(
-              presentation.primaryIssue.category,
-              presentation.primaryIssue.count,
-            )
-          : live
-            ? null
+        (live
+          ? null
+          : presentation.primaryIssue
+            ? categoryMessage(
+                presentation.primaryIssue.category,
+                presentation.primaryIssue.count,
+              )
             : evidenceNote(execution)),
       model,
       models: modelNames(presentation.subjects),
@@ -612,9 +613,9 @@ export type LedgerTableProps = {
   selected: string[]
   onSelect: (ids: string[]) => void
   actions: LedgerActions
+  /** A narrow pane keeps execution, result, tests and the menu. */
+  narrow?: boolean
 }
-
-const WIDE = 'ex-wide'
 
 /** One table: the header is read once, each group is a body of its own
  *  with its heading row (audit E-07 / E-12). */
@@ -623,6 +624,7 @@ export function LedgerTable({
   selected,
   onSelect,
   actions,
+  narrow = false,
 }: LedgerTableProps) {
   const shown = groups.flatMap((group) => group.rows.map((row) => row.id))
   const all = shownSelection(selected, shown)
@@ -638,7 +640,13 @@ export function LedgerTable({
   return (
     <TableViewport className="ex-table-viewport">
       <TableFrame>
-        <Table density="compact" inset className="ex-table" data-ledger-table>
+        <Table
+          density="compact"
+          inset
+          className="ex-table"
+          data-narrow={narrow || undefined}
+          data-ledger-table
+        >
           <TableHeader>
             <TableRow>
               <TableHead className="ex-col-select" scope="col">
@@ -653,27 +661,30 @@ export function LedgerTable({
               <TableHead className="ex-col-result" scope="col">
                 Result
               </TableHead>
-              <TableHead className={`ex-col-model ${WIDE}`} scope="col">
-                Model
-              </TableHead>
+              {narrow ? null : (
+                <TableHead className="ex-col-model" scope="col">
+                  Model
+                </TableHead>
+              )}
               <TableHead className="ex-col-tests ex-num" scope="col">
                 Tests
               </TableHead>
-              <TableHead className={`ex-col-score ex-num ${WIDE}`} scope="col">
-                Score
-              </TableHead>
-              <TableHead className={`ex-col-pass ex-num ${WIDE}`} scope="col">
-                Pass rate
-              </TableHead>
-              <TableHead
-                className={`ex-col-runtime ex-num ${WIDE}`}
-                scope="col"
-              >
-                Runtime
-              </TableHead>
-              <TableHead className={`ex-col-tokens ex-num ${WIDE}`} scope="col">
-                Tokens
-              </TableHead>
+              {narrow ? null : (
+                <>
+                  <TableHead className="ex-col-score ex-num" scope="col">
+                    Score
+                  </TableHead>
+                  <TableHead className="ex-col-pass ex-num" scope="col">
+                    Pass rate
+                  </TableHead>
+                  <TableHead className="ex-col-runtime ex-num" scope="col">
+                    Runtime
+                  </TableHead>
+                  <TableHead className="ex-col-tokens ex-num" scope="col">
+                    Tokens
+                  </TableHead>
+                </>
+              )}
               <TableHead className="ex-col-menu" scope="col">
                 <span className="ds-visually-hidden">Actions</span>
               </TableHead>
@@ -686,7 +697,7 @@ export function LedgerTable({
               aria-label={group.label}
             >
               <TableRow className="ex-group">
-                <TableHead colSpan={10} scope="colgroup">
+                <TableHead colSpan={narrow ? 5 : 10} scope="colgroup">
                   <span className="ds-label">{group.label}</span>
                   <span className="ex-group-count">{group.rows.length}</span>
                 </TableHead>
@@ -742,33 +753,30 @@ export function LedgerTable({
                         </span>
                       ) : null}
                     </TableCell>
-                    <TableCell
-                      className={`ex-cell-stack ${WIDE}`}
-                      title={row.models}
-                    >
-                      <span className="ex-mono ex-model">{row.model}</span>
-                      <span className="ex-sub ex-mono">{row.profile}</span>
-                    </TableCell>
+                    {narrow ? null : (
+                      <TableCell className="ex-cell-stack" title={row.models}>
+                        <span className="ex-mono ex-model">{row.model}</span>
+                        <span className="ex-sub ex-mono">{row.profile}</span>
+                      </TableCell>
+                    )}
                     <TableCell className="ex-num">{row.tests}</TableCell>
-                    <TableCell className={`ex-num ${WIDE}`}>
-                      {row.score}
-                    </TableCell>
-                    <TableCell className={`ex-num ${WIDE}`}>
-                      {row.passRate}
-                    </TableCell>
-                    <TableCell className={`ex-num ${WIDE}`}>
-                      {row.runtime}
-                    </TableCell>
-                    <TableCell
-                      className={`ex-num ${WIDE}`}
-                      title={
-                        row.tokenCount === null
-                          ? undefined
-                          : `${formatCount(row.tokenCount)} tokens`
-                      }
-                    >
-                      {row.tokens}
-                    </TableCell>
+                    {narrow ? null : (
+                      <>
+                        <TableCell className="ex-num">{row.score}</TableCell>
+                        <TableCell className="ex-num">{row.passRate}</TableCell>
+                        <TableCell className="ex-num">{row.runtime}</TableCell>
+                        <TableCell
+                          className="ex-num"
+                          title={
+                            row.tokenCount === null
+                              ? undefined
+                              : `${formatCount(row.tokenCount)} tokens`
+                          }
+                        >
+                          {row.tokens}
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell className="ex-col-menu">
                       <RowMenu
                         label={`Actions for ${row.title}`}
@@ -1372,6 +1380,7 @@ export function ExecutionsPage() {
       ) : (
         <div className="ex-ledger" data-ledger>
           <LedgerTable
+            narrow={narrow}
             groups={groups}
             selected={ticked}
             onSelect={setSelected}

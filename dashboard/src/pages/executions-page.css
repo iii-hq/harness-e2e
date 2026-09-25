@@ -37,7 +37,8 @@
   font-variant-numeric: tabular-nums;
 }
 
-.ex-mono {
+.ex-mono,
+.ex-table.iii-ui-table .ex-mono {
   font-family: var(--font-mono);
 }
 
@@ -153,8 +154,7 @@
 }
 
 /* The table: the host's, at the canvas's gutters, fixed columns and the
-   execution taking what is left. Narrow keeps execution, result, tests and
-   the menu. */
+   execution taking what is left. */
 .ex-ledger {
   display: flex;
   flex-direction: column;
@@ -170,6 +170,19 @@
 .ex-table.iii-ui-table :is(.iii-ui-table__head, .iii-ui-table__cell) {
   padding: calc(var(--spacing) * 1.5);
   vertical-align: middle;
+  /* legacy.css styles bare th and td (mono, lowercase): not these. */
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.ex-table.iii-ui-table .iii-ui-table__cell {
+  color: var(--color-ink);
+}
+
+.ex-table.iii-ui-table .ex-group,
+.ex-table.iii-ui-table .ex-group:hover {
+  background: transparent;
 }
 
 .ex-table.iii-ui-table
@@ -187,12 +200,8 @@
   font-weight: 500;
 }
 
-.harness-e2e-shell[data-narrow="true"] .ex-table.iii-ui-table {
+.ex-table.iii-ui-table[data-narrow] {
   min-width: 0;
-}
-
-.harness-e2e-shell[data-narrow="true"] .ex-table .ex-wide {
-  display: none;
 }
 
 .ex-col-select {
@@ -229,18 +238,18 @@
   text-align: right;
 }
 
-.harness-e2e-shell[data-narrow="true"] .ex-col-result {
+.ex-table[data-narrow] .ex-col-result {
   width: calc(var(--spacing) * 32);
 }
 
-.ex-table .ex-num {
+.ex-table.iii-ui-table .ex-num {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
 }
 
-.ex-table .iii-ui-table__header .ex-num {
+.ex-table.iii-ui-table .iii-ui-table__header .ex-num {
   font-family: var(--font-sans);
 }
 
@@ -274,7 +283,7 @@
   overflow: hidden;
 }
 
-.ex-cell-stack > * {
+.ex-cell-stack > :not(.ds-status-label, .ex-title) {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -318,6 +327,7 @@
 }
 
 .ex-sub {
+  display: block;
   color: var(--color-ink-faint);
   font-size: var(--ds-text-label, 0.6875rem);
   line-height: calc(var(--spacing) * 4);

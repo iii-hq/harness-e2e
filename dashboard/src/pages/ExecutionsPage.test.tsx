@@ -415,6 +415,23 @@ describe('the executions table', () => {
     expect(html).not.toContain('Compared as')
   })
 
+  it('keeps execution, result, tests and the menu in a narrow pane', () => {
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        narrow
+        groups={groupLedgerRows(rows, LEDGER_NOW)}
+        selected={[]}
+        onSelect={noop}
+        actions={actions}
+      />,
+    )
+    for (const header of ['Execution', 'Result', 'Tests', 'Actions'])
+      expect(html).toContain(`>${header}<`)
+    for (const header of ['Model', 'Score', 'Pass rate', 'Runtime', 'Tokens'])
+      expect(html).not.toContain(`>${header}<`)
+    expect(html).toContain('colSpan="5"')
+  })
+
   it('marks A and B when exactly two are ticked', () => {
     const a = ledgerExecution('plan-81960bf0').id
     const b = ledgerExecution('plan-cf6ab5f9').id
