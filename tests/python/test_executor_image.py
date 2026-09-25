@@ -369,6 +369,37 @@ class ExecutorTests(unittest.TestCase):
             "git clone -q --depth 1 https://github.com/iii-hq/e2e-fixture.git target/registry-sources/e2e-fixture|" + header,
         ])
 
+    def test_a_checkout_that_fails_is_tried_again(self):
+        contracts = self.root / "target/harness-e2e-contract/contracts"
+        contracts.mkdir(parents=True)
+        (contracts / "resolution.json").write_text(json.dumps({
+            "matrix": {"include": [{"group_id": "case-linkly-tutorial"}]}}))
+        # The first fetch answers a 5xx; the next one works.
+        git = self.directory / "bin/git"
+        git.parent.mkdir()
+        git.write_text(textwrap.dedent("""\
+            #!/usr/bin/env bash
+            printf 'git %s\\n' "$*" >>"$FAKE_LOG"
+            case "$1" in
+              init) mkdir -p "$3/.git" ;;
+              -C)
+                if [[ "$3" == fetch && ! -f "$FAKE_STATE_FAILED" ]]; then
+                  touch "$FAKE_STATE_FAILED"
+                  echo "error: RPC failed; HTTP 502" >&2
+                  exit 128
+                fi
+                ;;
+            esac
+        """))
+        git.chmod(0o755)
+        result = self.executor("prepare", "fixtures", env={
+            "PATH": f"{git.parent}:{os.environ['PATH']}",
+            "FAKE_STATE_FAILED": str(self.directory / "failed-once")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("checking out iii-hq/templates failed (try 1 of 3)", result.stderr)
+        fetches = [line for line in self.log.read_text().splitlines() if " fetch " in line]
+        self.assertEqual(len(fetches), 2)
+
     def test_a_group_clones_its_fixture_repositories_from_the_checkouts(self):
         (self.root / "scripts/run_exact_stack_group.sh").write_text(
             'env | grep ^GIT_CONFIG_ | sort >>"$FAKE_LOG"\n')

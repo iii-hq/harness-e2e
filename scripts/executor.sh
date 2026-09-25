@@ -111,29 +111,37 @@ PRIVATE_REPOSITORIES=" iii-hq/registry iii-hq/e2e-fixture "
 # that already holds that commit is kept. The token of a private repository
 # goes in the environment of the git calls, never on disk or a command line.
 checkout() {
-  local repository=$1 ref=$2 directory=$3 depth=(--depth 1)
+  local repository=$1 ref=$2 directory=$3 depth=(--depth 1) try
   [[ "${4:-}" != full ]] || depth=()
-  if [[ -d "$directory/.git" ]]; then
-    if [[ "$ref" =~ ^[0-9a-f]{40}$ && "$(git -C "$directory" rev-parse HEAD 2>/dev/null)" == "$ref" ]]; then
+  if [[ -d "$directory/.git" && "$ref" =~ ^[0-9a-f]{40}$ ]] \
+    && [[ "$(git -C "$directory" rev-parse HEAD 2>/dev/null)" == "$ref" ]]; then
+    return 0
+  fi
+  # Three tries, as actions/checkout makes: a passing 5xx must not cost a
+  # group its fixture.
+  for try in 1 2 3; do
+    rm -rf "$directory"
+    if (
+      if [[ "$PRIVATE_REPOSITORIES" == *" $repository "* && -n "${GITHUB_TOKEN:-}" ]]; then
+        export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
+        GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+        export GIT_CONFIG_VALUE_0
+      fi
+      url=https://github.com/$repository.git
+      if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
+        git init -q "$directory" \
+          && git -C "$directory" fetch -q "${depth[@]}" "$url" "$ref" \
+          && git -C "$directory" checkout -q --detach FETCH_HEAD
+      else
+        git clone -q "${depth[@]}" ${ref:+--branch "$ref"} "$url" "$directory"
+      fi
+    ); then
       return 0
     fi
-    rm -rf "$directory"
-  fi
-  (
-    if [[ "$PRIVATE_REPOSITORIES" == *" $repository "* && -n "${GITHUB_TOKEN:-}" ]]; then
-      export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=http.https://github.com/.extraheader
-      GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
-      export GIT_CONFIG_VALUE_0
-    fi
-    url=https://github.com/$repository.git
-    if [[ "$ref" =~ ^[0-9a-f]{40}$ ]]; then
-      git init -q "$directory"
-      git -C "$directory" fetch -q "${depth[@]}" "$url" "$ref"
-      git -C "$directory" checkout -q --detach FETCH_HEAD
-    else
-      git clone -q "${depth[@]}" ${ref:+--branch "$ref"} "$url" "$directory"
-    fi
-  )
+    echo "::warning::checking out $repository failed (try $try of 3)" >&2
+    ((try == 3)) || sleep "$((try * 5))"
+  done
+  return 1
 }
 
 fixtures() {
@@ -207,8 +215,11 @@ restore() {
       [[ ! -f "$selected" ]] || name=$(jq -r --arg job "$campaign · $group" '.[$job].name // empty' "$selected")
       destination=$root/groups/$group
       if [[ -n "$name" && -d "$bundles/$name" ]]; then
-        # Copied: a group bundle stays where the next attempt looks for it.
-        cp -a "$bundles/$name" "$destination"
+        # Linked, not moved: a group bundle stays where the next attempt looks
+        # for it, without taking its size again. The aggregator writes new
+        # files and removes others, never changing one in place.
+        cp -al "$bundles/$name" "$destination" 2>/dev/null \
+          || { rm -rf "$destination" && cp -a "$bundles/$name" "$destination"; }
       else
         mkdir -p "$destination"
         jq -n --arg group_id "$group" --arg campaign_id "$campaign" \

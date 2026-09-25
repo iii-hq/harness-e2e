@@ -399,9 +399,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 missing = campaign_root / campaign / "groups/case-missing"
                 self.assertEqual(json.loads((missing / "failure.json").read_text())["outcome"], "infra_failed")
                 self.assertFalse((missing / "result.json").exists())
-                # The selected bundle stays where the next attempt looks for it.
-                self.assertTrue((root / "target/downloaded-groups" /
-                                 f"e2e-observation-execution-1-{campaign}-case-minimal-path-gh-1/result.json").is_file())
+                # The selected bundle stays where the next attempt looks for
+                # it, linked rather than copied: its bytes are not doubled.
+                kept = (root / "target/downloaded-groups" /
+                        f"e2e-observation-execution-1-{campaign}-case-minimal-path-gh-1/result.json")
+                restored = campaign_root / campaign / "groups/case-minimal-path/result.json"
+                self.assertEqual(kept.stat().st_ino, restored.stat().st_ino)
             self.assertFalse(
                 (campaign_root / "regression-r01/campaign-summary.json").exists()
             )

@@ -259,12 +259,13 @@ runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
 start from and no package brings (the Kanban fixture, the Linkly templates,
 the stack's template, the Registry sources and the trending topics fixture)
-below `target/`, and `group` routes the fixture repositories a scenario clones
-to those checkouts; `finalize` lays each campaign's groups out from the group
-bundles the execution selected before aggregating them. Only `group` gets the
-host's Docker socket, and only `prepare` a `GITHUB_TOKEN`: a group's subject
-has a shell. Interrupted, the wrapper stops its container; a group whose
-image or container never started still writes its `failure.json`.
+below `target/`, three tries each, and `group` routes the fixture repositories
+a scenario clones to those checkouts; `finalize` lays each campaign's groups
+out from the group bundles the execution selected (linked, not copied) before
+aggregating them. Only `group` gets the host's Docker socket, and only
+`prepare` a `GITHUB_TOKEN`: a group's subject has a shell. Interrupted, the
+wrapper stops its container; a group whose image or container never started
+still writes its `failure.json`.
 
 Each group's engine listens on 49134 in its own container, off the host's
 network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
