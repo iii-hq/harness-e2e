@@ -324,10 +324,11 @@ export function DialogClose({ onClick, ...props }: Trigger) {
   )
 }
 
-/** Closes on Escape and on the overlay, as Radix does. */
+/** Closes on Escape and on the overlay, as Radix does, and calls
+ *  onCloseAutoFocus once it has closed. */
 export function DialogContent({
   onOpenAutoFocus: _openFocus,
-  onCloseAutoFocus: _closeFocus,
+  onCloseAutoFocus,
   onEscapeKeyDown,
   onKeyDown,
   ...props
@@ -344,6 +345,17 @@ export function DialogContent({
       content.current
         ?.querySelector<HTMLElement>('button, [href], input, select, textarea')
         ?.focus()
+  }, [dialog.open])
+  // And calls onCloseAutoFocus once it has closed.
+  const wasOpen = useRef(dialog.open)
+  const closed = useRef(onCloseAutoFocus)
+  closed.current = onCloseAutoFocus
+  useEffect(() => {
+    if (wasOpen.current && !dialog.open)
+      closed.current?.(
+        new Event('focus.autoFocusOnUnmount', { cancelable: true }),
+      )
+    wasOpen.current = dialog.open
   }, [dialog.open])
   if (!dialog.open) return null
   return (
