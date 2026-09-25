@@ -362,13 +362,65 @@ release, date and conclusion. The worker calls the `gh` CLI, so sign it in once 
 **Import** answers at once with an execution in the `importing` state; the
 worker downloads the run's highest-attempt bundle into its data directory and
 installs every group's native run as an ordinary retained run. The execution
-records its parameters with its suite (name and snapshot digest), the stack its
-contract names, the workers each group resolved and observed, and its GitHub
-origin. Contracts from before the workflow stated its execution (plan and
+records its parameters with its suite (name and snapshot digest), the stack as
+its contract recorded it (the final `stack.yaml` and its digest, which Run
+again offers as recorded), the workers each group resolved and observed, and
+its GitHub origin. Contracts from before the workflow stated its execution (plan and
 profile only) import too. A group that left only `failure.json` is kept as a slot with
 that error. Importing a run again replaces the runs of the earlier import; the
 execution keeps its name. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
+
+### Run in Docker
+
+**Run tests** with **Where: Docker** runs the execution as the exact-stack
+workflow does, from this worker, with no checkout of this repository: the
+worker embeds the [Dockerfile](Dockerfile) (whose digest names the executor
+image) and [`scripts/`](scripts), and runs every phase through
+`scripts/run_in_image.sh` from `docker-executions/<execution id>/` under its
+data directory:
+
+- `inputs.json`: the dispatch (`DISPATCH_*`): a master-plan suite run as it is
+  by its id, any other suite whole as JSON, the stack's YAML, the model and the
+  agent profile.
+- `checkout/`: what the wrapper mounts, with the Dockerfile and the scripts,
+  frozen for the execution, and `target/`, every phase's work;
+  `target/artifacts/` keeps the bundles under the workflow's artifact names
+  (`e2e-contract-<id>-gh-1`, `e2e-observation-<id>-<campaign>-<group>-gh-<n>`,
+  `e2e-observation-<id>-gh-<n>`).
+- `logs/`: each phase's output.
+
+`prepare materialize`, `assemble` and `fixtures` run once, then one `group`
+container per group, `docker_parallel_groups` (2) at a time across executions,
+each packaged, then `finalize`, whose root bundle is imported by the code that
+imports a GitHub run, from the folder. Cancel stops the execution's containers
+by label, then finalizes and imports what finished. Running a scenario again
+runs its groups in new containers as the execution's next attempt, with the
+same contract, lock, scripts and image, finalizes and imports again; the last
+attempt counts. A worker that restarts removes an active Docker execution's
+containers, interrupts what did not finish and imports what did.
+
+Every group runs on a network of its own. The Registry fixture serves the
+application it screenshots on the host's loopback, which only a phase on the
+host's network reaches; there a group's stack takes host ports this machine's
+iii already holds (its Console binds 3113), so the Registry groups run isolated
+as well, and their executions say their screenshots are missing.
+
+Worker configuration:
+
+- `provider_env_file`: an env file with the provider credentials the GitHub
+  groups receive (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `TYPESAFE_API_KEY`),
+  passed to `prepare assemble` and every group with `--env-file`; never logged
+  or copied into the execution's folder. Without one, the execution says its
+  providers start without credentials.
+- `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
+  copied into each new execution, so an edited script takes effect on the next.
+- `docker_parallel_groups`: groups at once, 2 by default.
+
+The phases get none of the worker's environment but where Docker and
+`TMPDIR` are (keep `TMPDIR` short: Chromium's socket path holds 107 bytes).
+`prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
+for the private Registry and trending topics sources.
 
 ## Worker
 
