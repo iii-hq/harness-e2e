@@ -1028,15 +1028,17 @@ export async function listFirst(bridge: DashboardDataBridge, count: number) {
   let cursor: string | undefined
   let total: number | undefined
   for (;;) {
+    const limit = Math.min(MAX_PAGE, count - executions.length)
     const page = await bridge.listExecutions({
-      limit: Math.min(MAX_PAGE, count - executions.length),
+      limit,
       ...(cursor ? { cursor } : {}),
     })
     const listed = page.executions ?? []
     executions.push(...listed)
     total = page.total ?? total
     cursor = page.next_cursor ?? undefined
-    if (!cursor || listed.length === 0 || executions.length >= count) break
+    // A short page ends the reload; its cursor is where Load older goes on.
+    if (!cursor || listed.length < limit || executions.length >= count) break
   }
   return {
     executions,

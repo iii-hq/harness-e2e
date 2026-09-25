@@ -646,5 +646,18 @@ describe('what the list does through the bridge', () => {
     asked.length = 0
     expect((await listFirst(bridge, 50)).cursor).toBe('50')
     expect(asked).toEqual([{ limit: 50 }])
+    // A page shorter than asked ends it, whatever cursor it carries.
+    const short = bridgeDouble({
+      listExecutions: async () => ({
+        executions: all.slice(0, 16),
+        total: 58,
+        next_cursor: 'older',
+      }),
+    })
+    expect(await listFirst(short.bridge, 50)).toMatchObject({
+      cursor: 'older',
+      total: 58,
+      executions: all.slice(0, 16),
+    })
   })
 })
