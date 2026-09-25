@@ -14,8 +14,9 @@ export function dashboardHeaderActionClassName({
   primary?: boolean
   className?: string
 } = {}) {
+  // The look is in dashboard-shell.css, next to the section tabs it sits with.
   return classes(
-    'harness-e2e-header-action inline-flex min-h-7 shrink-0 items-center justify-center gap-1.5 rounded-[6px] border-0 bg-transparent px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink-soft no-underline transition-colors duration-150 ease-in-out',
+    'harness-e2e-header-action',
     primary
       ? 'harness-e2e-header-action-primary'
       : 'harness-e2e-header-action-secondary',

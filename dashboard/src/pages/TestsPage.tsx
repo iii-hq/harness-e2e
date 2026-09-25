@@ -1343,14 +1343,14 @@ export function TestsPage({
               disabled={!fromVersionId || !toVersionId}
             >
               <Link2 size={13} aria-hidden="true" />
-              {copied ? 'link copied' : 'share link'}
+              {copied ? 'Link copied' : 'Share link'}
             </button>
             <a
               className={dashboardHeaderActionClassName({ primary: true })}
               href={hashForWorkspace()}
               onClick={() => requestQuickExecution()}
             >
-              new run on b
+              New run on B
             </a>
           </>
         }

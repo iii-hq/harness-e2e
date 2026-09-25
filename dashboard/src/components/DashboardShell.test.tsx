@@ -85,6 +85,19 @@ describe('section navigation', () => {
     }
   })
 
+  // Redesign canvas: sentence-case tabs, no icons, the current one marked.
+  it('labels the sections in sentence case, without icons', () => {
+    const html = renderShell()
+    const tabs = html.match(
+      /<ul class="harness-e2e-navigation-wide">.*?<\/ul>/,
+    )?.[0]
+    expect(tabs).toBeTruthy()
+    expect(tabs).not.toContain('<svg')
+    expect(tabs).toContain('aria-current="page">Executions</a>')
+    for (const label of ['Tests', 'Suites', 'Stacks'])
+      expect(tabs).toContain(`>${label}</a>`)
+  })
+
   it('names the section without a slogan in the console header', () => {
     const html = renderShell()
     expect(html).not.toContain('evidence, plans and live evaluation control')

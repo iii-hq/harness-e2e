@@ -1,5 +1,4 @@
 import { PageBody, PageHeader, PageMain, PageShell } from '@iii-dev/console-ui'
-import { Boxes, FlaskConical, Layers, ListChecks } from 'lucide-react'
 import {
   createContext,
   type ReactNode,
@@ -17,6 +16,7 @@ import {
   routeRenderIdentity,
   type WorkspaceView,
 } from '@/hooks/use-hash-route'
+import '@/design-system/styles.css'
 import './dashboard-shell.css'
 
 export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
@@ -73,13 +73,6 @@ function hashForSection(section: DashboardSection): string {
   return hashForWorkspace(section as WorkspaceView)
 }
 
-const sectionIcons: Record<DashboardSection, ReactNode> = {
-  tests: <FlaskConical size={15} aria-hidden="true" />,
-  executions: <ListChecks size={15} aria-hidden="true" />,
-  suites: <Layers size={15} aria-hidden="true" />,
-  stacks: <Boxes size={15} aria-hidden="true" />,
-}
-
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
@@ -120,7 +113,7 @@ export function PageActionsBar({ actions, label }: PageActionsBarProps) {
   if (!actions) return null
   return (
     <section
-      className="harness-e2e-page-actions flex min-w-0 flex-wrap items-center justify-end gap-2"
+      className="harness-e2e-page-actions flex min-w-0 flex-wrap items-center justify-end gap-1"
       aria-label={label ?? 'Page actions'}
     >
       {actions}
@@ -212,13 +205,15 @@ export function DashboardShell({
             >
               {/* Audit S-04 / A11Y-05: sections are links with aria-current,
                   so the browser, assistive technology and the hash router all
-                  agree on what navigation is. Page actions share the bar. */}
+                  agree on what navigation is. Page actions share the bar.
+                  The bar's look lives in dashboard-shell.css: the extension's
+                  layers outrank Tailwind utilities inside the Console. */}
               <nav
-                className="harness-e2e-navigation sticky top-0 z-10 flex min-w-0 flex-wrap items-center justify-between gap-2 bg-panel px-4 py-1.5"
+                className="harness-e2e-navigation"
                 data-section={section}
                 aria-label="Harness E2E sections"
               >
-                <ul className="harness-e2e-navigation-wide m-0 min-w-0 list-none items-center gap-1 overflow-x-auto p-0 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <ul className="harness-e2e-navigation-wide">
                   {navigation.map((item) => (
                     <li key={item.value}>
                       <a
@@ -228,8 +223,7 @@ export function DashboardShell({
                           item.value === section ? 'page' : undefined
                         }
                       >
-                        {sectionIcons[item.value]}
-                        <span>{item.label}</span>
+                        {item.label}
                       </a>
                     </li>
                   ))}
@@ -237,9 +231,9 @@ export function DashboardShell({
                 {/* Visibility of the wide links and the narrow select lives in
                     dashboard-shell.css, keyed on data-narrow: a Tailwind
                     `hidden` here would win over that CSS (audit S-01). */}
-                <div className="harness-e2e-navigation-narrow min-w-32 flex-1">
+                <div className="harness-e2e-navigation-narrow">
                   <select
-                    className="harness-e2e-nav-select min-h-9 w-full rounded-[6px] border-0 bg-panel-soft px-2.5 font-mono text-[12px] font-medium lowercase leading-none text-ink"
+                    className="harness-e2e-nav-select"
                     value={section}
                     onChange={(event) =>
                       navigate(event.target.value as DashboardSection)

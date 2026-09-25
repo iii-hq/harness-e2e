@@ -309,7 +309,7 @@ export function TestsCatalogActions() {
       href={hashForVersionComparison()}
       aria-label="Compare system versions"
     >
-      compare versions
+      Compare versions
     </a>
   )
 }
