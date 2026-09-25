@@ -73,8 +73,6 @@ class WrapperTests(unittest.TestCase):
         docker.chmod(0o755)
         (self.directory / "state").mkdir()
         (self.directory / "tmp").mkdir()
-        self.socket = self.directory / "docker.sock"
-        self.socket.touch()
         self.log = self.directory / "docker.log"
         self.artifacts = self.root / "target/harness-e2e-exact-stack"
 
@@ -82,7 +80,7 @@ class WrapperTests(unittest.TestCase):
         return {
             "PATH": f"{self.directory / 'bin'}:{os.environ['PATH']}", "HOME": str(self.directory),
             "FAKE_LOG": str(self.log), "FAKE_STATE": str(self.directory / "state"),
-            "FAKE_DIGEST": DIGEST, "DOCKER_HOST": f"unix://{self.socket}", "TMPDIR": str(self.directory / "tmp"),
+            "FAKE_DIGEST": DIGEST, "TMPDIR": str(self.directory / "tmp"),
             **({"FAKE_PUBLISHED": "1"} if published else {}), **(env or {}),
         }
 
@@ -99,51 +97,58 @@ class WrapperTests(unittest.TestCase):
             "DEEPSEEK_API_KEY": "secret-value", "EXECUTION_KEY": "42", "CI": "true", "GITHUB_TOKEN": "ghs_token",
             "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "url.x.insteadOf", "GIT_CONFIG_VALUE_0": "y",
             "GIT_CONFIG_GLOBAL": "/host/gitconfig", "UNRELATED": "1", "HARNESS_E2E_EXECUTOR_IMAGE": "stale",
+            "HARNESS_E2E_EXECUTOR_USER": "0:0",
         })
         self.assertEqual(invoked[0], ["pull", "--quiet", TAG])
         run = next(call for call in invoked if call[0] == "run")
         self.assertEqual(run[-4:], [TAG, "bash", "scripts/executor.sh", "group"])
         options = pairs(run[:-4])
-        tmp = next(value for flag, value in options if flag == "--env" and value.startswith("TMPDIR="))[7:]
-        self.assertTrue(tmp.startswith(f"{self.directory / 'tmp'}/harness-e2e-executor."))
-        self.assertFalse(Path(tmp).exists(), "the phase's TMPDIR is removed afterwards")
+        cidfile = run[run.index("--cidfile") + 1]
+        self.assertTrue(cidfile.startswith(f"{self.directory / 'tmp'}/harness-e2e-executor."))
+        self.assertFalse(Path(cidfile).exists(), "the container id file is removed afterwards")
+        # Its own Docker daemon, started as root in a privileged container
+        # with a labelled volume for its data, and the group run as the
+        # caller: never the host's socket or network.
+        self.assertIn("--privileged", run)
         for pair in [
-            ("--user", f"{os.getuid()}:{os.getgid()}"),
+            ("--user", "0:0"),
+            ("--env", f"HARNESS_E2E_EXECUTOR_USER={os.getuid()}:{os.getgid()}"),
+            ("--mount", "type=volume,dst=/var/lib/docker,volume-label=harness-e2e.execution=42,"
+                        "volume-label=harness-e2e.phase=group,volume-label=harness-e2e.group=case-minimal-path"),
             ("--security-opt", "no-new-privileges"),
-            ("--group-add", str(self.socket.stat().st_gid)),
-            ("--volume", f"{self.socket}:/var/run/docker.sock"),
             ("--volume", f"{root}:{root}"),
             ("--workdir", str(root)),
-            ("--volume", f"{tmp}:{tmp}"),
             ("--env", f"HARNESS_E2E_EXECUTOR_IMAGE={DIGEST}"),
-            ("--cidfile", f"{tmp}.cid"),
             ("--label", "harness-e2e.execution=42"),
             ("--label", "harness-e2e.phase=group"),
             ("--label", "harness-e2e.group=case-minimal-path"),
         ]:
             self.assertIn(pair, options)
+        self.assertEqual([flag for flag, value in options if flag == "--volume"], ["--volume"])
+        for flag in ("--group-add", "--network", "--env-file"):
+            self.assertNotIn(flag, run)
+        self.assertFalse(any("docker.sock" in value or value.startswith("TMPDIR=") for value in run))
         passed = sorted(value for flag, value in options if flag == "--env" and "=" not in value)
         # By name only: the values never reach the command line. The subject
         # has a shell in a group, so no GitHub token enters it.
         self.assertEqual(passed, ["CI", "DEEPSEEK_API_KEY", "EXECUTION_KEY", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0",
                                   "GIT_CONFIG_VALUE_0", "HARNESS_E2E_CAMPAIGN_GROUP_ID", "HARNESS_E2E_CONTRACT"])
         self.assertNotIn("secret-value", "\n".join(run))
-        self.assertNotIn("--network", run)
-        self.assertNotIn("--env-file", run)
         self.assertNotIn("not published", result.stderr)
-        self.assertFalse(Path(f"{tmp}.cid").exists())
 
-    def test_only_prepare_gets_the_github_token_and_only_a_group_the_docker_socket(self):
-        _, invoked = self.run_wrapper("prepare", "materialize", env={"GITHUB_TOKEN": "ghs_token"})
-        run = next(call for call in invoked if call[0] == "run")
-        self.assertIn(("--env", "GITHUB_TOKEN"), pairs(run))
-        self.assertNotIn("--group-add", run)
-        self.assertFalse(any(value.endswith(":/var/run/docker.sock") for value in run))
-        self.log.unlink()
-        _, invoked = self.run_wrapper("finalize", env={"GITHUB_TOKEN": "ghs_token"})
-        run = next(call for call in invoked if call[0] == "run")
-        self.assertNotIn(("--env", "GITHUB_TOKEN"), pairs(run))
-        self.assertFalse(any(value.endswith(":/var/run/docker.sock") for value in run))
+    def test_only_prepare_gets_the_github_token_and_only_a_group_privileges(self):
+        for phase in (["prepare", "materialize"], ["finalize"]):
+            with self.subTest(phase=phase[0]):
+                if self.log.exists():
+                    self.log.unlink()
+                _, invoked = self.run_wrapper(*phase, env={"GITHUB_TOKEN": "ghs_token"})
+                run = next(call for call in invoked if call[0] == "run")
+                self.assertEqual(("--env", "GITHUB_TOKEN") in pairs(run), phase[0] == "prepare")
+                self.assertIn(("--user", f"{os.getuid()}:{os.getgid()}"), pairs(run))
+                self.assertIn(("--security-opt", "no-new-privileges"), pairs(run))
+                for flag in ("--privileged", "--mount", "--group-add", "--network"):
+                    self.assertNotIn(flag, run)
+                self.assertFalse(any("docker.sock" in value or "EXECUTOR_USER" in value for value in run))
 
     def test_an_unpublished_image_is_built_here_and_said_out_loud(self):
         result, invoked = self.run_wrapper("--env-file", "/secrets/providers.env", "prepare", "assemble",
@@ -196,13 +201,6 @@ class WrapperTests(unittest.TestCase):
         wrapper.stdout.close()
         wrapper.stderr.close()
         self.assertIn(["stop", "--time", "30", "cid-4f2a"], calls(self.log))
-
-    def test_a_host_that_runs_one_phase_at_a_time_may_put_it_on_its_network(self):
-        _, invoked = self.run_wrapper("group", env={"HARNESS_E2E_DOCKER_NETWORK": "host"})
-        run = next(call for call in invoked if call[0] == "run")
-        self.assertEqual(run[run.index("--network") + 1], "host")
-        # The wrapper's own setting, not the phase's.
-        self.assertNotIn("HARNESS_E2E_DOCKER_NETWORK", run)
 
     def test_the_image_is_named_by_the_dockerfile(self):
         result, invoked = self.run_wrapper("image")
@@ -426,6 +424,80 @@ class ExecutorTests(unittest.TestCase):
                 result = self.executor("group", env={"HARNESS_E2E_CAMPAIGN_GROUP_ID": group})
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(self.log.read_text().splitlines(), expected)
+
+    def daemon_fakes(self, launcher):
+        """A dockerd that runs until TERM, a docker that answers once it is
+        up, a setpriv that logs how it was called and runs the rest."""
+        bin_dir = self.directory / "bin"
+        bin_dir.mkdir()
+        state = self.directory / "daemon-up"
+        for name, body in {
+            "dockerd": f"""\
+                echo "dockerd $* as $(id -u)" >>"$FAKE_LOG"
+                [[ -z "${{FAKE_DOCKERD_FAILS:-}}" ]] || {{ echo "failed to start daemon: no iptables"; exit 1; }}
+                touch {state}
+                trap 'echo "dockerd stopped" >>"$FAKE_LOG"; rm -f {state}; kill $sleeper; exit 0' TERM
+                sleep 30 & sleeper=$!
+                wait
+            """,
+            "docker": f'[[ "$1" == version && -f {state} ]]\n',
+            "setpriv": """\
+                echo "setpriv $*" >>"$FAKE_LOG"
+                while [[ "$1" == --* ]]; do [[ "$1" == --clear-groups ]] && shift || shift 2; done
+                exec "$@"
+            """,
+        }.items():
+            (bin_dir / name).write_text("#!/usr/bin/env bash\n" + textwrap.dedent(body))
+            (bin_dir / name).chmod(0o755)
+        (self.root / "scripts/run_exact_stack_group.sh").write_text(textwrap.dedent(launcher))
+        return {"PATH": f"{bin_dir}:{os.environ['PATH']}", "HARNESS_E2E_EXECUTOR_USER": "4321:1234",
+                "HARNESS_E2E_CAMPAIGN_GROUP_ID": "case-minimal-path"}
+
+    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
+    def test_a_group_starts_its_own_docker_daemon_runs_as_the_user_and_stops_the_daemon_after(self):
+        env = self.daemon_fakes("""\
+            echo "group ran as the user" >>"$FAKE_LOG"
+            exit 3
+        """)
+        result = self.executor("group", env=env)
+        # The group's status is the phase's.
+        self.assertEqual(result.returncode, 3, result.stderr)
+        self.assertEqual(self.log.read_text().splitlines(), [
+            f"dockerd --group 1234 as {os.getuid()}",
+            "setpriv --reuid 4321 --regid 1234 --clear-groups bash scripts/run_exact_stack_group.sh",
+            "group ran as the user",
+            "dockerd stopped",
+        ])
+
+    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
+    def test_a_group_whose_daemon_does_not_start_never_runs(self):
+        result = self.executor("group", env={**self.daemon_fakes('echo "group ran" >>"$FAKE_LOG"\n'),
+                                             "FAKE_DOCKERD_FAILS": "1"})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("failed to start daemon: no iptables", result.stderr)
+        self.assertIn("the group's Docker daemon did not start", result.stderr)
+        self.assertNotIn("group ran", self.log.read_text())
+
+    @unittest.skipIf(os.geteuid() == 0, "moves this host's processes between cgroups as root")
+    def test_a_stopped_group_stops_its_stack_before_its_daemon(self):
+        env = self.daemon_fakes("""\
+            trap 'echo "stack down" >>"$FAKE_LOG"; kill $sleeper; exit 143' TERM
+            echo "group started" >>"$FAKE_LOG"
+            sleep 30 & sleeper=$!
+            wait
+        """)
+        executor = subprocess.Popen(["bash", str(self.root / "scripts/executor.sh"), "group"], cwd=self.directory,
+                                    env={**os.environ, "FAKE_LOG": str(self.log), "TMPDIR": str(self.directory),
+                                         **env},
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        deadline = time.monotonic() + 10
+        while "group started" not in self.log.read_text() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        executor.send_signal(signal.SIGTERM)
+        self.assertEqual(executor.wait(timeout=10), 143)
+        executor.stdout.close()
+        executor.stderr.close()
+        self.assertEqual(self.log.read_text().splitlines()[-3:], ["group started", "stack down", "dockerd stopped"])
 
     def test_package_hashes_each_root_beside_its_contract(self):
         result = self.executor("package", '{"job":"group"}', "target/a", "target/b")

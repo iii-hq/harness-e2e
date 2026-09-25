@@ -140,13 +140,18 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("strategy:\n      fail-fast: false", workflow)
         # Each phase runs in the executor image, which starts the group there.
         self.assertIn("scripts/run_in_image.sh group", workflow)
-        # Each group job owns its runner, and the Registry fixture publishes
-        # the application it screenshots on the runner's loopback.
+        # A group runs its own Docker daemon, never on the runner's network:
+        # the Registry fixture publishes the application it screenshots in
+        # the group's.
         group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
                      if step.get("id") == "common")
-        self.assertEqual(group["env"]["HARNESS_E2E_DOCKER_NETWORK"], "host")
-        self.assertIn("    route_fixtures\n    exec bash scripts/run_exact_stack_group.sh",
-                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
+        self.assertEqual(sorted(group["env"]), ["DEEPSEEK_API_KEY", "HARNESS_E2E_CONTRACT", "TYPESAFE_API_KEY",
+                                                "ZAI_API_KEY"])
+        executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
+        self.assertIn("  group) group ;;", executor)
+        self.assertIn("bash scripts/run_exact_stack_group.sh &", executor)
+        for path in (ROOT / "scripts/run_in_image.sh", ROOT / "README.md", ROOT / "src/plans/store/docker.rs"):
+            self.assertNotIn("HARNESS_E2E_DOCKER_NETWORK", path.read_text(encoding="utf-8"))
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
@@ -172,7 +177,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
             with self.subTest(job=job):
                 steps = jobs[job]["steps"]
                 runs = [step.get("run", "") for step in steps]
-                removal = next(index for index, run in enumerate(runs) if "docker rm -f" in run)
+                # With the volume of a group's Docker daemon.
+                removal = next(index for index, run in enumerate(runs) if "docker rm -fv" in run)
                 self.assertEqual(steps[removal]["if"], "always()")
                 self.assertIn('--filter "label=harness-e2e.execution=$EXECUTION_KEY"', runs[removal])
                 self.assertIn(f'--filter "label={phase_filter}"', runs[removal])

@@ -247,13 +247,14 @@ campaigns.
 Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first
 12 hex of the Dockerfile's sha256>` ([`Dockerfile`](Dockerfile)): git, curl, jq,
 gh, Python 3 with pip and PyYAML, Node 24 with pnpm, Go 1.25, Rust 1.98.1,
-Playwright's Chromium at `/usr/bin/chromium` and the Docker CLI with buildx and
-compose, much of what the `ubuntu-latest` runner gave the groups before.
-Bases, the Ubuntu archive snapshot and every download are pinned, so one
-Dockerfile is one set of tools. It holds no scripts:
+Playwright's Chromium at `/usr/bin/chromium`, the Docker CLI with buildx and
+compose, and the Docker Engine (`dockerd`, containerd, runc, iptables), much
+of what the `ubuntu-latest` runner gave the groups before. Bases, the Ubuntu
+archive snapshot and every download are pinned, so one Dockerfile is one set
+of tools. It holds no scripts:
 [`scripts/run_in_image.sh`](scripts/run_in_image.sh) `<phase>` mounts the
-checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
-with `no-new-privileges`, passes the phase's environment through by name, and
+checkout at the same path, runs as the caller's uid with
+`no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
 [materialize|assemble|fixtures]`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
@@ -262,18 +263,28 @@ the stack's template, the Registry sources and the trending topics fixture)
 below `target/`, three tries each, and `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
-aggregating them. Only `group` gets the host's Docker socket, and only
-`prepare` a `GITHUB_TOKEN`: a group's subject has a shell. Interrupted, the
-wrapper stops its container; a group whose image or container never started
-still writes its `failure.json`.
+aggregating them. Only `prepare` gets a `GITHUB_TOKEN`: a group's subject has
+a shell. Interrupted, the wrapper stops its container; a group whose image or
+container never started still writes its `failure.json`.
 
-Each group's engine listens on 49134 in its own container, off the host's
-network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
-host networking for their screenshots: the fixture publishes the application
-on the host's loopback, where only a phase on the host's network reaches it.
-The workflow runs every group on its runner's network, since each job owns
-its runner, and keeps on the runner what needs it: the GitHub App token for
-the private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
+No phase reaches the host's Docker or its network. Each container has a
+network of its own, where a group's engine listens on 49134. A `group`
+container runs a Docker daemon of its own: privileged, it starts as root with
+an anonymous volume, labelled like the container, at `/var/lib/docker`;
+`executor.sh group` starts `dockerd` there, runs the group as the caller's uid
+(whose group owns the daemon's socket) and stops the daemon after it, which
+stops its containers. Every container a scenario starts (Registry's runner,
+Kanban's, trending topics') is that daemon's, in the group's network, so the
+application the Registry fixture publishes on `127.0.0.1` is where its
+screenshots look, and it goes with the group's container and its volume
+(`docker rm -fv` for one left behind). The group's user reaches root in that
+container through the socket, and a privileged container is root on the
+host: what the host's socket gave a group before, and no more. It no longer
+sees the host's containers, such as a concurrent `prepare` holding a token.
+Each group starts with no image and pulls what its scenarios run.
+
+The workflow keeps on the runner what needs it: the GitHub App token for the
+private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
 removing a cancelled phase's container before anything is reported or
 packaged.
 
@@ -425,7 +436,7 @@ Worker configuration:
 - `docker_parallel_groups`: groups at once, 2 by default.
 
 The phases get none of the worker's environment but where Docker and
-`TMPDIR` are (keep `TMPDIR` short: Chromium's socket path holds 107 bytes).
+`TMPDIR` are.
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
 for the private Registry and trending topics sources.
 

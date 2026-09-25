@@ -142,7 +142,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=prepare")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: contract_upload
@@ -245,15 +245,13 @@ jobs:
 
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for
-      # alertmanager_route_match, Chromium for the browser worker, and the
-      # host's Docker through its socket. On the runner's network: this job
-      # owns the runner, and the Registry fixture publishes the application
-      # it screenshots on the runner's loopback.
+      # alertmanager_route_match, Chromium for the browser worker, and a
+      # Docker daemon of the group's own, in whose network the Registry
+      # fixture publishes the application it screenshots.
       - name: Execute common campaign group
         id: common
         continue-on-error: true
         env:
-          HARNESS_E2E_DOCKER_NETWORK: host
           ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
           TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
@@ -270,7 +268,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.group=$GROUP_ID")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       # Whatever the group did, its runs reach the ledger: from results.json
       # when the group finished, from the journal checkpoints when it did not,
@@ -449,7 +447,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=finalize")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       - name: Report the campaign summary
         if: always() && inputs.execution_id != ''

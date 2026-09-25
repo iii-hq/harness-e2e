@@ -22,6 +22,9 @@
 #   group     start one group's frozen stack and run its scenarios
 #             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...), with
 #             the fixture repositories it clones read from those checkouts.
+#             Started as root with HARNESS_E2E_EXECUTOR_USER=UID:GID (as
+#             run_in_image.sh does, privileged), it first starts a Docker
+#             daemon of its own and runs the group as that user.
 #   package WORKFLOW ROOT...
 #             check that each ROOT (below target/, its contract in
 #             stack-lock.json) holds nothing unsafe and hash it into its
@@ -46,10 +49,12 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 contract_dir=target/harness-e2e-contract
 contracts=$contract_dir/contracts
 
-# The container runs as the caller's uid, which the image may not know; git,
-# Node and Python ask the passwd database who that is.
-if ! getent passwd "$(id -u)" >/dev/null && [[ -w /etc/passwd ]]; then
-  printf 'executor:x:%s:%s::%s:/bin/bash\n' "$(id -u)" "$(id -g)" "$HOME" >>/etc/passwd
+# The container runs as the caller's uid (a group, as the uid it names),
+# which the image may not know; git, Node and Python ask the passwd database
+# who that is.
+user=${HARNESS_E2E_EXECUTOR_USER:-$(id -u):$(id -g)}
+if ! getent passwd "${user%:*}" >/dev/null && [[ -w /etc/passwd ]]; then
+  printf 'executor:x:%s:%s::%s:/bin/bash\n' "${user%:*}" "${user#*:}" "$HOME" >>/etc/passwd
 fi
 
 materialize() {
@@ -188,6 +193,52 @@ route_fixtures() {
   ((${#routes[@]} == 0)) || export GIT_CONFIG_COUNT=$((${#routes[@]} / 2))
 }
 
+# A group's own Docker daemon: every container a scenario starts is this
+# container's (its network, so a port published on 127.0.0.1 is where the
+# group looks for it; its data root, the /var/lib/docker volume) and dies
+# with it. The group runs as the user, who reaches the daemon's socket
+# through its group; that socket makes it root in this container, as the
+# host's socket made it root on the host before. Stopped, the daemon stops
+# its containers.
+group() {
+  route_fixtures
+  if [[ -z "${HARNESS_E2E_EXECUTOR_USER:-}" ]]; then
+    exec bash scripts/run_exact_stack_group.sh
+  fi
+  # cgroup v2: dockerd hands the controllers down only from a cgroup that
+  # holds no process, so this container's move into a leaf first, as
+  # Docker's own dind does.
+  if [[ -w /sys/fs/cgroup/cgroup.subtree_control ]]; then
+    mkdir -p /sys/fs/cgroup/init
+    xargs -rn1 </sys/fs/cgroup/cgroup.procs >/sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
+    sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+  fi
+  local log=${TMPDIR:-/tmp}/dockerd.log try status=0
+  dockerd --group "${user#*:}" >"$log" 2>&1 &
+  daemon=$!
+  for ((try = 0; try < 60; try++)); do
+    docker version >/dev/null 2>&1 && break
+    kill -0 "$daemon" 2>/dev/null || try=60
+    sleep 1
+  done
+  if ((try >= 60)); then
+    tail -n 50 "$log" >&2
+    echo "the group's Docker daemon did not start" >&2
+    kill "$daemon" 2>/dev/null || true
+    return 1
+  fi
+  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups bash scripts/run_exact_stack_group.sh &
+  launcher=$!
+  # A stopped container stops the group first: the launcher takes its stack
+  # down, then the daemon its containers.
+  trap 'kill -TERM "$launcher" 2>/dev/null || true' INT TERM
+  wait "$launcher" || status=$?
+  while kill -0 "$launcher" 2>/dev/null; do wait "$launcher" || status=$?; done
+  kill -TERM "$daemon" 2>/dev/null || true
+  wait "$daemon" || true
+  return "$status"
+}
+
 package() {
   local workflow=${1:?package needs the workflow identity} root
   shift
@@ -265,10 +316,7 @@ case "${1:-}" in
       *) usage ;;
     esac
     ;;
-  group)
-    route_fixtures
-    exec bash scripts/run_exact_stack_group.sh
-    ;;
+  group) group ;;
   package)
     shift
     package "$@"

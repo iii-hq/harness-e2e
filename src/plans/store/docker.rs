@@ -237,9 +237,10 @@ impl Launcher for ImageLauncher {
         let filters = [format!("label=harness-e2e.execution={execution}")];
         let containers = self.containers("-aq", &filters).await;
         if !containers.is_empty() {
+            // With the volume a group's Docker daemon keeps its images in.
             let _ = Command::new(&self.docker)
                 .arg("rm")
-                .arg("-f")
+                .arg("-fv")
                 .args(&containers)
                 .output()
                 .await;
@@ -1870,7 +1871,6 @@ mod tests {
             "target/harness-e2e-contract/contracts/pr-r01.json"
         );
         assert_eq!(group.env["HARNESS_E2E_SUITE_DEADLINE_SECONDS"], "10200");
-        assert!(!group.env.contains_key("HARNESS_E2E_DOCKER_NETWORK"));
         // Every artifact under the name the workflow gives it.
         let mut names = directories(&store.docker_artifacts(&id))
             .unwrap()
@@ -2403,6 +2403,28 @@ mod tests {
         }
         assert!(!calls.exists());
         drop(sender);
+    }
+
+    #[tokio::test]
+    async fn removing_an_execution_takes_its_containers_volumes_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let calls = root.path().join("docker.log");
+        let docker = root.path().join("docker");
+        fs::write(
+            &docker,
+            format!(
+                "#!/bin/sh\necho \"$*\" >>{}\n[ \"$1\" != ps ] || echo cid-1\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        ImageLauncher { docker }.remove("plan-1").await;
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "ps -aq --filter label=harness-e2e.execution=plan-1\nrm -fv cid-1\n"
+        );
     }
 
     #[test]
