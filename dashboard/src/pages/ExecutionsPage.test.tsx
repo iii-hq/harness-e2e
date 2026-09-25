@@ -1,11 +1,20 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import type {
+  DashboardDataBridge,
+  ExecutionListInput,
+} from '@/lib/dashboard-data-source'
 import {
   buildLedgerRows,
+  cancelLedgerExecution,
+  copyExecutionId,
   deleteConfirmation,
   deletedMessage,
+  deleteExecutions,
+  deleteFailure,
   filterLedgerRows,
   groupLedgerRows,
+  importLedgerExecutionAgain,
   LEDGER_DEFAULT_FILTERS,
   type LedgerActions,
   type LedgerRow,
@@ -13,6 +22,7 @@ import {
   ledgerFiltersFromParams,
   ledgerFiltersToParams,
   ledgerSummary,
+  listFirst,
   resultSegments,
   rowMenuItems,
   selectionSummary,
@@ -447,6 +457,7 @@ describe('the executions table', () => {
   const render = (selected: string[]) =>
     renderToStaticMarkup(
       <LedgerTable
+        caption="Executions, 16 of 16 loaded"
         groups={groupLedgerRows(rows, LEDGER_NOW)}
         selected={selected}
         onSelect={noop}
@@ -468,6 +479,9 @@ describe('the executions table', () => {
       'Actions',
     ])
       expect(html).toContain(`>${header}<`)
+    expect(html).toContain(
+      '<caption class="iii-ui-table__caption ds-visually-hidden">Executions, 16 of 16 loaded</caption>',
+    )
     expect(html).toContain('aria-label="Select every execution shown"')
     expect(html.match(/data-execution-id=/g)).toHaveLength(16)
     expect(html).toContain('aria-label="Select no profile"')
@@ -486,6 +500,7 @@ describe('the executions table', () => {
   it('keeps execution, result, tests and the menu in a narrow pane', () => {
     const html = renderToStaticMarkup(
       <LedgerTable
+        caption="Executions, 16 of 16 loaded"
         narrow
         groups={groupLedgerRows(rows, LEDGER_NOW)}
         selected={[]}
@@ -512,5 +527,124 @@ describe('the executions table', () => {
     expect(render([a, b, ledgerExecution('c3cdb199').id])).not.toContain(
       'Compared as',
     )
+  })
+})
+
+/** A bridge double: records what the page asked of it. */
+function bridgeDouble(overrides: Partial<DashboardDataBridge> = {}) {
+  const calls: Array<[string, unknown]> = []
+  const record =
+    (name: string) =>
+    async (input?: unknown): Promise<never> => {
+      calls.push([name, input])
+      return {} as never
+    }
+  const bridge = {
+    deleteExecution: record('delete'),
+    cancelExecution: record('cancel'),
+    cancelRun: record('cancelRun'),
+    importGithubRun: record('import'),
+    ...overrides,
+  } as unknown as DashboardDataBridge
+  return { bridge, calls }
+}
+
+describe('what the list does through the bridge', () => {
+  it('deletes what it can and titles each refusal in the worker’s words', async () => {
+    const targets = [
+      row('plan-00ec9877'),
+      row('plan-3ef1b6a7'),
+      row('c3cdb199'),
+    ]
+    const { bridge, calls } = bridgeDouble({
+      deleteExecution: async (id: string) => {
+        calls.push(['delete', id])
+        if (id.startsWith('plan-3ef1'))
+          throw new Error('Only a finished execution can be deleted.')
+      },
+    })
+    const { deleted, refused } = await deleteExecutions(bridge, targets)
+    expect(calls.map(([, id]) => id)).toEqual(targets.map((entry) => entry.id))
+    expect(deleted.map((entry) => entry.title)).toEqual([
+      'no profile',
+      'e2e::* control-plane run',
+    ])
+    expect(deleteFailure(refused)).toEqual({
+      title:
+        'Couldn’t delete “claude-code/claude-opus-5-5 · Sep 24, 2026, 6:43 AM”',
+      message: 'Only a finished execution can be deleted.',
+    })
+    expect(
+      deleteFailure([
+        ...refused,
+        { row: row('c3cdb199'), message: 'not found' },
+      ])?.title,
+    ).toBe('Couldn’t delete 2 executions')
+    expect(deleteFailure([])).toBeNull()
+  })
+
+  it('cancels an execution by its id and a native run through the runner', async () => {
+    const { bridge, calls } = bridgeDouble()
+    await cancelLedgerExecution(bridge, row('plan-2b7e41c0'))
+    await cancelLedgerExecution(bridge, {
+      ...row('c3cdb199'),
+      live: true,
+    })
+    expect(calls).toEqual([
+      ['cancel', row('plan-2b7e41c0').id],
+      ['cancelRun', undefined],
+    ])
+  })
+
+  it('imports a GitHub run again by its run id', async () => {
+    const { bridge, calls } = bridgeDouble()
+    await importLedgerExecutionAgain(bridge, row('plan-958b1543'))
+    expect(calls).toEqual([['import', 35925167026]])
+    await expect(
+      importLedgerExecutionAgain(bridge, row('plan-cf6ab5f9')),
+    ).rejects.toThrow('not imported from GitHub')
+  })
+
+  it('copies an id, or says why the page cannot', async () => {
+    const written: string[] = []
+    await expect(
+      copyExecutionId('plan-1', {
+        writeText: async (text) => {
+          written.push(text)
+        },
+      }),
+    ).resolves.toBe('Copied plan-1.')
+    expect(written).toEqual(['plan-1'])
+    await expect(copyExecutionId('plan-1', undefined)).rejects.toThrow(
+      'This page cannot reach the clipboard (it needs https or localhost). The id is plan-1.',
+    )
+  })
+
+  it('reloads as many as were loaded, a page of at most 100 at a time', async () => {
+    const asked: ExecutionListInput[] = []
+    const all = Array.from({ length: 240 }, (_, index) => ({
+      ...LEDGER_EXECUTIONS[0],
+      id: `plan-${index}`,
+    }))
+    const { bridge } = bridgeDouble({
+      listExecutions: async (input = {}) => {
+        asked.push(input)
+        const start = Number(input.cursor ?? 0)
+        const end = start + (input.limit ?? 50)
+        return {
+          executions: all.slice(start, end),
+          total: all.length,
+          next_cursor: end < all.length ? String(end) : null,
+        }
+      },
+    })
+    const listed = await listFirst(bridge, 150)
+    expect(asked).toEqual([{ limit: 100 }, { limit: 50, cursor: '100' }])
+    expect(listed.executions).toHaveLength(150)
+    expect(listed).toMatchObject({ cursor: '150', total: 240 })
+    // Load older goes on from where the reload stopped.
+    asked.length = 0
+    expect((await listFirst(bridge, 50)).cursor).toBe('50')
+    expect(asked).toEqual([{ limit: 50 }])
   })
 })

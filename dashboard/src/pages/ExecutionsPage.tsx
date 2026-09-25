@@ -8,6 +8,7 @@ import {
   SegmentedControl,
   Table,
   TableBody,
+  TableCaption,
   TableCell,
   TableFrame,
   TableHead,
@@ -37,6 +38,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import {
@@ -620,6 +622,8 @@ export function deletedMessage(titles: string[]) {
 /* -------------------------------------------------------------- table */
 
 export type LedgerTableProps = {
+  /** The table's name: `Executions, 12 of 16 loaded`. */
+  caption: string
   groups: LedgerGroup[]
   selected: string[]
   onSelect: (ids: string[]) => void
@@ -631,6 +635,7 @@ export type LedgerTableProps = {
 /** One table: the header is read once, each group is a body of its own
  *  with its heading row (audit E-07 / E-12). */
 export function LedgerTable({
+  caption,
   groups,
   selected,
   onSelect,
@@ -658,6 +663,7 @@ export function LedgerTable({
           data-narrow={narrow || undefined}
           data-ledger-table
         >
+          <TableCaption className="ds-visually-hidden">{caption}</TableCaption>
           <TableHeader>
             <TableRow>
               <TableHead className="ex-col-select" scope="col">
@@ -815,23 +821,33 @@ export function LedgerTable({
 
 const FACT_ICONS = { gone: Minus, kept: Check, warn: AlertTriangle }
 
+export type DeleteRequest = { rows: LedgerRow[]; kept: LedgerRow[] }
+
 function DeleteDialog({
-  targets,
-  kept,
+  request,
   deleting,
   onCancel,
   onConfirm,
+  onClosed,
 }: {
-  targets: LedgerRow[]
-  kept: LedgerRow[]
+  /** The rows themselves, so a reload while it deletes cannot shrink it. */
+  request: DeleteRequest | null
   deleting: boolean
   onCancel: () => void
   onConfirm: () => void
+  /** After it closes: where focus goes back. */
+  onClosed: () => void
 }) {
-  const confirmation = deleteConfirmation(targets, kept)
+  // The last request stays on screen while the dialog animates out.
+  const shown = useRef<DeleteRequest>({ rows: [], kept: [] })
+  if (request) shown.current = request
+  const confirmation = deleteConfirmation(
+    shown.current.rows,
+    shown.current.kept,
+  )
   return (
     <Dialog
-      open={targets.length > 0}
+      open={request !== null}
       onOpenChange={(open) => {
         if (!open && !deleting) onCancel()
       }}
@@ -840,6 +856,10 @@ function DeleteDialog({
         role="alertdialog"
         className="ex-dialog"
         aria-describedby="ex-delete-body"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          onClosed()
+        }}
       >
         <div className="ex-dialog-head">
           <span className="ex-dialog-icon" aria-hidden="true">
@@ -907,10 +927,13 @@ function RenameDialog({
   row,
   onClose,
   onRename,
+  onClosed,
 }: {
   row: LedgerRow | null
   onClose: () => void
   onRename: (row: LedgerRow, label: string) => Promise<void>
+  /** After it closes: where focus goes back. */
+  onClosed: () => void
 }) {
   const [draft, setDraft] = useState('')
   const [saving, setSaving] = useState(false)
@@ -942,7 +965,13 @@ function RenameDialog({
         if (!open && !saving) onClose()
       }}
     >
-      <DialogContent className="ex-dialog">
+      <DialogContent
+        className="ex-dialog"
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          onClosed()
+        }}
+      >
         <DialogTitle className="ex-dialog-title">Rename execution</DialogTitle>
         <DialogDescription className="ex-dialog-body">
           An empty name gives it back its default one.
@@ -980,12 +1009,118 @@ function RenameDialog({
   )
 }
 
-/* --------------------------------------------------------------- page */
+/* ------------------------------------------------------------ actions */
 
-const NO_CONFIRM = { ids: [], kept: [] }
+// What the page does through the bridge, apart from the page so each can be
+// tried with a bridge double.
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
+}
+
+/** The worker lists at most this many executions per request. */
+const MAX_PAGE = 100
+
+/** The first `count` executions, a page of at most MAX_PAGE at a time: a
+ *  reload keeps what was loaded instead of falling back to the first page. */
+export async function listFirst(bridge: DashboardDataBridge, count: number) {
+  const executions: DashboardExecutionSummary[] = []
+  let cursor: string | undefined
+  let total: number | undefined
+  for (;;) {
+    const page = await bridge.listExecutions({
+      limit: Math.min(MAX_PAGE, count - executions.length),
+      ...(cursor ? { cursor } : {}),
+    })
+    const listed = page.executions ?? []
+    executions.push(...listed)
+    total = page.total ?? total
+    cursor = page.next_cursor ?? undefined
+    if (!cursor || listed.length === 0 || executions.length >= count) break
+  }
+  return {
+    executions,
+    cursor: cursor ?? null,
+    total: total ?? executions.length,
+  }
+}
+
+/** What went wrong with an action, titled by the action. */
+export type ActionFailure = { title: string; message: string }
+
+/** Deletes one after another; the worker refuses what has not finished. */
+export async function deleteExecutions(
+  bridge: DashboardDataBridge,
+  rows: LedgerRow[],
+) {
+  const deleted: LedgerRow[] = []
+  const refused: Array<{ row: LedgerRow; message: string }> = []
+  for (const row of rows) {
+    try {
+      await bridge.deleteExecution(row.id)
+      deleted.push(row)
+    } catch (cause) {
+      refused.push({ row, message: errorText(cause) })
+    }
+  }
+  return { deleted, refused }
+}
+
+/** Each refusal in the worker's words, with its execution. */
+export function deleteFailure(
+  refused: Array<{ row: LedgerRow; message: string }>,
+): ActionFailure | null {
+  const [first] = refused
+  if (!first) return null
+  return refused.length === 1
+    ? { title: `Couldn’t delete “${first.row.title}”`, message: first.message }
+    : {
+        title: `Couldn’t delete ${refused.length} executions`,
+        message: refused
+          .map(({ row, message }) => `“${row.title}”: ${message}`)
+          .join(' '),
+      }
+}
+
+/** A composed execution stops by its id; a native run is the runner's one. */
+export function cancelLedgerExecution(
+  bridge: DashboardDataBridge,
+  row: LedgerRow,
+) {
+  return row.id.startsWith('plan-')
+    ? bridge.cancelExecution(row.id)
+    : bridge.cancelRun()
+}
+
+/** Imports the row's GitHub run again, replacing its evidence. */
+export async function importLedgerExecutionAgain(
+  bridge: DashboardDataBridge,
+  row: LedgerRow,
+) {
+  if (!row.github) throw new Error('It was not imported from GitHub.')
+  await bridge.importGithubRun(row.github.runId)
+}
+
+/** Copies an execution id, or says why it cannot: browsers give the
+ *  clipboard only to https pages and localhost. */
+export async function copyExecutionId(
+  id: string,
+  clipboard: Pick<Clipboard, 'writeText'> | undefined,
+) {
+  if (!clipboard)
+    throw new Error(
+      `This page cannot reach the clipboard (it needs https or localhost). The id is ${id}.`,
+    )
+  await clipboard.writeText(id)
+  return `Copied ${id}.`
+}
+
+/* --------------------------------------------------------------- page */
+
+function menuButton(id: string) {
+  return document.querySelector<HTMLElement>(
+    `[data-execution-id="${CSS.escape(id)}"] [aria-haspopup="menu"]`,
+  )
 }
 
 export function ExecutionsPage() {
@@ -1018,15 +1153,17 @@ export function ExecutionsPage() {
   const [error, setError] = useState<string | null>(null)
   // Ticked executions, in the order they were ticked: the first is A.
   const [selected, setSelected] = useState<string[]>([])
-  // What the delete confirmation deletes, and the running ones it keeps.
-  const [confirm, setConfirm] = useState<{ ids: string[]; kept: string[] }>(
-    NO_CONFIRM,
-  )
+  const [confirm, setConfirm] = useState<DeleteRequest | null>(null)
   const [deleting, setDeleting] = useState(false)
   const [renaming, setRenaming] = useState<LedgerRow | null>(null)
   const [flash, setFlash] = useState<string | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionError, setActionError] = useState<ActionFailure | null>(null)
   const beginRequest = useLatestRequest()
+  // A reload lists as many as were loaded: Load older is not undone.
+  const loadedCount = useRef(PAGE_SIZE)
+  loadedCount.current = Math.max(PAGE_SIZE, executions.length)
+  // Rows whose ⋯ takes the focus back when a dialog closes, in order.
+  const focusBack = useRef<string[]>([])
 
   const load = useCallback(async () => {
     const request = beginRequest()
@@ -1035,11 +1172,11 @@ export function ExecutionsPage() {
       const nextBridge = bridge ?? (await getDashboardDataBridge())
       if (!request.isCurrent()) return
       setBridge(nextBridge)
-      const manifest = await nextBridge.listExecutions({ limit: PAGE_SIZE })
+      const listed = await listFirst(nextBridge, loadedCount.current)
       if (!request.isCurrent()) return
-      setExecutions(manifest.executions ?? [])
-      setCursor(manifest.next_cursor ?? null)
-      setTotal(manifest.total ?? manifest.executions?.length ?? 0)
+      setExecutions(listed.executions)
+      setCursor(listed.cursor)
+      setTotal(listed.total)
     } catch (cause) {
       setError(errorText(cause))
     } finally {
@@ -1088,7 +1225,10 @@ export function ExecutionsPage() {
       setCursor(page.next_cursor ?? null)
       setTotal(page.total ?? total)
     } catch (cause) {
-      setError(errorText(cause))
+      setActionError({
+        title: 'Couldn’t load older executions',
+        message: errorText(cause),
+      })
     } finally {
       setLoadingMore(false)
     }
@@ -1113,16 +1253,41 @@ export function ExecutionsPage() {
   const filtered = ledgerFiltersToParams(filters).toString() !== ''
   const selectedRows = ticked.flatMap((id) => byId.get(id) ?? [])
   const bar = selectionSummary(selectedRows)
-  const rowsOf = (ids: string[]) => ids.flatMap((id) => byId.get(id) ?? [])
-  const targets = rowsOf(confirm.ids)
+  const failedFirstLoad = Boolean(error) && rows.length === 0
+  const shownText = `Executions, ${visible.length} of ${rows.length} loaded`
 
-  const act = async (work: () => Promise<unknown>) => {
+  // The row itself, else the ones after and before it (it may be gone),
+  // else the selection bar, else the box over the rows.
+  const aroundRow = (id: string) => {
+    const order = visible.map((row) => row.id)
+    const index = order.indexOf(id)
+    return [id, order[index + 1], order[index - 1]].filter(
+      (entry): entry is string => Boolean(entry),
+    )
+  }
+  const restoreFocus = () => {
+    const ids = focusBack.current
+    focusBack.current = []
+    window.requestAnimationFrame(() => {
+      const target =
+        ids.map(menuButton).find(Boolean) ??
+        document.querySelector<HTMLElement>(
+          '[data-selection-bar] button:not(:disabled)',
+        ) ??
+        document.querySelector<HTMLElement>(
+          '[data-ledger-table] thead input[type="checkbox"]',
+        )
+      target?.focus()
+    })
+  }
+
+  const act = async (title: string, work: () => Promise<unknown>) => {
     setActionError(null)
     try {
       await work()
       await load()
     } catch (cause) {
-      setActionError(errorText(cause))
+      setActionError({ title, message: errorText(cause) })
     }
   }
 
@@ -1130,13 +1295,16 @@ export function ExecutionsPage() {
     open: (row) => {
       window.location.hash = hashForExecution(row.id)
     },
-    rename: (row) => setRenaming(row),
+    rename: (row) => {
+      focusBack.current = aroundRow(row.id)
+      setRenaming(row)
+    },
     openOnGithub: (row) => {
       if (row.github?.url) window.open(row.github.url, '_blank', 'noopener')
     },
     importAgain: (row) =>
-      void act(async () => {
-        if (bridge && row.github) await bridge.importGithubRun(row.github.runId)
+      void act(`Couldn’t import “${row.title}” again`, async () => {
+        if (bridge) await importLedgerExecutionAgain(bridge, row)
       }),
     runAgain: (row) =>
       setRerun({
@@ -1151,49 +1319,41 @@ export function ExecutionsPage() {
           typeof row.execution.label === 'string' ? row.execution.label : '',
       }),
     copyId: (row) => {
-      void navigator.clipboard
-        ?.writeText(row.id)
-        .then(() => setFlash(`Copied ${row.id}.`))
-        .catch((cause) => setActionError(errorText(cause)))
+      setActionError(null)
+      copyExecutionId(row.id, globalThis.navigator?.clipboard)
+        .then(setFlash)
+        .catch((cause) =>
+          setActionError({
+            title: 'Couldn’t copy the execution id',
+            message: errorText(cause),
+          }),
+        )
     },
-    // A composed execution stops by id; a native run is the runner's one.
     cancel: (row) =>
-      void act(async () => {
-        if (!bridge) return
-        if (row.id.startsWith('plan-')) await bridge.cancelExecution(row.id)
-        else await bridge.cancelRun()
+      void act(`Couldn’t cancel “${row.title}”`, async () => {
+        if (bridge) await cancelLedgerExecution(bridge, row)
       }),
-    delete: (row) => setConfirm({ ids: [row.id], kept: [] }),
+    delete: (row) => {
+      focusBack.current = aroundRow(row.id)
+      setConfirm({ rows: [row], kept: [] })
+    },
   }
 
-  // Deletes one after another; each refusal is said with its execution.
   const deleteConfirmed = async () => {
-    if (!bridge) return
+    if (!bridge || !confirm) return
     setDeleting(true)
     setActionError(null)
-    const deleted: LedgerRow[] = []
-    const refused: string[] = []
-    for (const row of targets) {
-      try {
-        await bridge.deleteExecution(row.id)
-        deleted.push(row)
-      } catch (cause) {
-        refused.push(`“${row.title}”: ${errorText(cause)}`)
-      }
-    }
+    const { deleted, refused } = await deleteExecutions(bridge, confirm.rows)
     const gone = new Set(deleted.map((row) => row.id))
     setExecutions((current) => current.filter((entry) => !gone.has(entry.id)))
     setTotal((current) => Math.max(0, current - gone.size))
     setSelected((current) => current.filter((id) => !gone.has(id)))
-    setConfirm(NO_CONFIRM)
+    setConfirm(null)
     setDeleting(false)
     setFlash(
       deleted.length ? deletedMessage(deleted.map((row) => row.title)) : null,
     )
-    if (refused.length)
-      setActionError(
-        `${refused.length === 1 ? 'One execution was' : `${refused.length} executions were`} not deleted. ${refused.join(' ')}`,
-      )
+    setActionError(deleteFailure(refused))
     void load()
   }
 
@@ -1234,15 +1394,24 @@ export function ExecutionsPage() {
       />
       <header className="ex-header">
         <h1 id="executions-title">Executions</h1>
-        <p>
-          {loading && rows.length === 0
-            ? 'Loading the executions…'
-            : ledgerSummary(rows, total)}
-        </p>
+        {failedFirstLoad ? null : (
+          <p>
+            {loading && rows.length === 0
+              ? 'Loading the executions…'
+              : ledgerSummary(rows, total)}
+          </p>
+        )}
       </header>
+      {/* Read out as they change: how many rows show, and what was done. */}
+      <p className="ds-visually-hidden" role="status">
+        {loading || failedFirstLoad ? '' : `${shownText}.`}
+      </p>
+      <p className="ds-visually-hidden" role="status">
+        {flash ?? ''}
+      </p>
 
-      {error ? (
-        <Callout tone="danger" title="Executions could not be loaded">
+      {error && !failedFirstLoad ? (
+        <Callout tone="danger" title="Executions could not be reloaded">
           <span className="ex-callout-line">
             {error}
             <button
@@ -1253,7 +1422,7 @@ export function ExecutionsPage() {
               type="button"
               onClick={() => void load()}
             >
-              retry
+              try again
             </button>
           </span>
         </Callout>
@@ -1313,7 +1482,7 @@ export function ExecutionsPage() {
       </section>
 
       {flash ? (
-        <div className="ex-flash" role="status">
+        <div className="ex-flash">
           <Check size={16} aria-hidden="true" />
           <span>{flash}</span>
           <button
@@ -1328,9 +1497,9 @@ export function ExecutionsPage() {
       ) : null}
 
       {actionError ? (
-        <Callout tone="danger" title="That did not go through">
+        <Callout tone="danger" title={actionError.title}>
           <span className="ex-callout-line">
-            {actionError}
+            {actionError.message}
             <button
               className={buttonClassName({ variant: 'quiet', size: 'compact' })}
               type="button"
@@ -1350,6 +1519,21 @@ export function ExecutionsPage() {
             <div key={index} />
           ))}
         </div>
+      ) : failedFirstLoad ? (
+        <EmptyState
+          tone="error"
+          title="Executions could not be loaded"
+          description={error}
+          actions={
+            <button
+              className={buttonClassName({ variant: 'secondary' })}
+              type="button"
+              onClick={() => void load()}
+            >
+              try again
+            </button>
+          }
+        />
       ) : visible.length === 0 ? (
         <EmptyState
           title={
@@ -1360,7 +1544,7 @@ export function ExecutionsPage() {
           description={
             rows.length === 0
               ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
-              : 'Widen the result filter or clear the search.'
+              : 'Widen the result filter, clear the search or load older executions.'
           }
           actions={
             filtered ? (
@@ -1397,33 +1581,37 @@ export function ExecutionsPage() {
       ) : (
         <div className="ex-ledger" data-ledger>
           <LedgerTable
+            caption={shownText}
             narrow={narrow}
             groups={groups}
             selected={ticked}
             onSelect={setSelected}
             actions={actions}
           />
-          {cursor ? (
-            <button
-              className="ex-more"
-              type="button"
-              onClick={() => void loadMore()}
-              disabled={loadingMore}
-              aria-busy={loadingMore}
-            >
-              {loadingMore
-                ? 'Loading…'
-                : `Load older executions · ${rows.length} of ${total} loaded`}
-            </button>
-          ) : null}
         </div>
       )}
+      {/* Outside the table: a filter that matches nothing loaded may match
+          older executions. */}
+      {cursor && rows.length > 0 ? (
+        <button
+          className="ex-more"
+          type="button"
+          onClick={() => void loadMore()}
+          disabled={loadingMore}
+          aria-busy={loadingMore}
+        >
+          {loadingMore
+            ? 'Loading…'
+            : `Load older executions · ${rows.length} of ${total} loaded`}
+        </button>
+      ) : null}
 
       {selectedRows.length > 0 ? (
         <div
           className="ex-selection shadow-floating"
           role="toolbar"
           aria-label="Selected executions"
+          data-selection-bar
         >
           <span className="ex-selection-count">{bar.text}</span>
           <span className="ex-selection-hint">{bar.hint}</span>
@@ -1446,14 +1634,13 @@ export function ExecutionsPage() {
             size="sm"
             className="ex-danger"
             disabled={bar.deletable.length === 0}
-            onClick={() =>
+            onClick={() => {
+              focusBack.current = []
               setConfirm({
-                ids: bar.deletable,
-                kept: selectedRows
-                  .filter((row) => row.live)
-                  .map((row) => row.id),
+                rows: selectedRows.filter((row) => !row.live),
+                kept: selectedRows.filter((row) => row.live),
               })
-            }
+            }}
           >
             <Trash2 aria-hidden="true" />
             {bar.deleteLabel}
@@ -1471,11 +1658,11 @@ export function ExecutionsPage() {
       ) : null}
 
       <DeleteDialog
-        targets={targets}
-        kept={rowsOf(confirm.kept)}
+        request={confirm}
         deleting={deleting}
-        onCancel={() => setConfirm(NO_CONFIRM)}
+        onCancel={() => setConfirm(null)}
         onConfirm={() => void deleteConfirmed()}
+        onClosed={restoreFocus}
       />
       <RenameDialog
         row={renaming}
@@ -1485,6 +1672,7 @@ export function ExecutionsPage() {
           await bridge.renameExecution(row.id, label)
           await load()
         }}
+        onClosed={restoreFocus}
       />
       <LocalRunnerDialog
         bridge={bridge}
