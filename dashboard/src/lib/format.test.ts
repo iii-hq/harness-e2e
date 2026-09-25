@@ -13,25 +13,34 @@ import {
 const now = new Date(2026, 8, 24, 20, 12)
 
 describe('formatDuration', () => {
-  it('reads seconds, minutes and hours the way the canvas does', () => {
-    expect(formatDuration(42)).toBe('42s')
-    expect(formatDuration(8.8)).toBe('8.8s')
-    expect(formatDuration(8)).toBe('8s')
-    expect(formatDuration(220)).toBe('3m 40s')
-    expect(formatDuration(65)).toBe('1m 05s')
-    expect(formatDuration(8951)).toBe('2h 29m')
+  it('reads milliseconds as seconds, minutes and hours', () => {
+    expect(formatDuration(42_000)).toBe('42s')
+    expect(formatDuration(8_800)).toBe('8.8s')
+    expect(formatDuration(8_000)).toBe('8s')
+    expect(formatDuration(450)).toBe('0.5s')
+    expect(formatDuration(220_000)).toBe('3m 40s')
+    expect(formatDuration(65_000)).toBe('1m 05s')
+    expect(formatDuration(8_951_000)).toBe('2h 29m')
   })
 
-  it('rounds the total first, so a unit never reads 60', () => {
-    expect(formatDuration(59.6)).toBe('1m 00s')
-    expect(formatDuration(3599.6)).toBe('1h 00m')
+  it('rounds first and picks the unit after, so no unit reads 60', () => {
+    expect(formatDuration(9_960)).toBe('10s')
+    expect(formatDuration(59_600)).toBe('1m 00s')
+    expect(formatDuration(3_599_600)).toBe('1h 00m')
+    expect(formatDuration(7_199_999)).toBe('2h 00m')
+  })
+
+  it('signs a negative duration, unless it rounds to zero', () => {
+    expect(formatDuration(-220_000)).toBe('-3m 40s')
+    expect(formatDuration(-8_800)).toBe('-8.8s')
+    expect(formatDuration(-8_951_000)).toBe('-2h 29m')
+    expect(formatDuration(-40)).toBe('0s')
   })
 
   it('shows a dash for what was not reported', () => {
     expect(formatDuration(null)).toBe('—')
     expect(formatDuration(undefined)).toBe('—')
     expect(formatDuration(Number.NaN)).toBe('—')
-    expect(formatDuration(-1)).toBe('—')
   })
 })
 
@@ -45,8 +54,21 @@ describe('formatTokens', () => {
     expect(formatTokens(11_878_141)).toBe('11.9M')
   })
 
-  it('moves to M when K would round to a thousand', () => {
+  it('picks the unit and the decimals after rounding', () => {
+    expect(formatTokens(999.6)).toBe('1K')
+    expect(formatTokens(99_960)).toBe('100K')
     expect(formatTokens(999_600)).toBe('1.00M')
+    expect(formatTokens(9_999_999)).toBe('10.0M')
+    expect(formatTokens(99_960_000)).toBe('100M')
+    expect(formatTokens(1_500_000_000)).toBe('1.50B')
+    expect(formatTokens(999_999_999)).toBe('1.00B')
+  })
+
+  it('signs every range the same way', () => {
+    expect(formatTokens(-812)).toBe('-812')
+    expect(formatTokens(-94_419)).toBe('-94.4K')
+    expect(formatTokens(-5_000_000)).toBe('-5.00M')
+    expect(formatTokens(-0.4)).toBe('0')
   })
 
   it('shows a dash for what was not reported', () => {
@@ -57,6 +79,8 @@ describe('formatTokens', () => {
 describe('formatCount', () => {
   it('writes the whole number, for titles behind a compact value', () => {
     expect(formatCount(3_339_305)).toBe('3,339,305')
+    expect(formatCount(-3_339_305)).toBe('-3,339,305')
+    expect(formatCount(-0.4)).toBe('0')
     expect(formatCount(null)).toBe('—')
   })
 })
@@ -68,8 +92,18 @@ describe('formatCost', () => {
     expect(formatCost(0)).toBe('$0.0000')
   })
 
+  it('switches to cents once the amount rounds to a dollar', () => {
+    expect(formatCost(0.99996)).toBe('$1.00')
+    expect(formatCost(0.99994)).toBe('$0.9999')
+  })
+
   it('never rounds a real cost down to zero', () => {
     expect(formatCost(0.00004)).toBe('<$0.0001')
+  })
+
+  it('signs a negative amount in front of the dollar', () => {
+    expect(formatCost(-2.5712)).toBe('-$2.57')
+    expect(formatCost(-0.0025)).toBe('-$0.0025')
   })
 
   it('shows a dash for what was not reported', () => {
@@ -120,6 +154,12 @@ describe('formatDayLabel', () => {
     expect(formatDayLabel(new Date(2026, 11, 30, 22), newYear)).toBe(
       'Dec 30, 2026',
     )
+  })
+
+  it('reads a bare day as a local calendar day', () => {
+    expect(formatDayLabel('2026-09-21', now)).toBe('Sep 21')
+    expect(formatDayLabel('2026-09-24', now)).toBe('Today')
+    expect(formatDateTime('2026-09-21', now)).toBe('Sep 21, 12:00 AM')
   })
 
   it('shows a dash for a missing date', () => {
