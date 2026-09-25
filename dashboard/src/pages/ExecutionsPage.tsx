@@ -1430,58 +1430,60 @@ export function ExecutionsPage() {
         </Callout>
       ) : null}
 
-      <section className="ex-toolbar" aria-label="Execution filters">
-        <div className="ex-search">
-          <Search size={16} aria-hidden="true" />
-          <Input
-            type="text"
-            value={filters.query}
-            placeholder="Search label, model, id or date"
-            aria-label="Search executions"
-            onChange={(event) => setFilter('query', event.target.value)}
+      {failedFirstLoad ? null : (
+        <section className="ex-toolbar" aria-label="Execution filters">
+          <div className="ex-search">
+            <Search size={16} aria-hidden="true" />
+            <Input
+              type="text"
+              value={filters.query}
+              placeholder="Search label, model, id or date"
+              aria-label="Search executions"
+              onChange={(event) => setFilter('query', event.target.value)}
+            />
+            {filters.query ? (
+              <button
+                className="ex-icon-button"
+                type="button"
+                onClick={() => setFilter('query', '')}
+                aria-label="Clear search"
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+          <SegmentedControl
+            variant="radio"
+            aria-label="Result"
+            className="ex-segments"
+            value={filters.status}
+            onChange={(value) => setFilter('status', value)}
+            options={resultSegments(rows, filters.status).map((segment) => ({
+              value: segment.value,
+              label: (
+                <>
+                  {segment.label}{' '}
+                  <span className="ex-count">{segment.count}</span>
+                </>
+              ),
+            }))}
           />
-          {filters.query ? (
-            <button
-              className="ex-icon-button"
-              type="button"
-              onClick={() => setFilter('query', '')}
-              aria-label="Clear search"
-            >
-              <X size={14} aria-hidden="true" />
-            </button>
-          ) : null}
-        </div>
-        <SegmentedControl
-          variant="radio"
-          aria-label="Result"
-          className="ex-segments"
-          value={filters.status}
-          onChange={(value) => setFilter('status', value)}
-          options={resultSegments(rows, filters.status).map((segment) => ({
-            value: segment.value,
-            label: (
-              <>
-                {segment.label}{' '}
-                <span className="ex-count">{segment.count}</span>
-              </>
-            ),
-          }))}
-        />
-        <Select
-          aria-label="Sort executions"
-          className="ex-sort"
-          value={filters.sort}
-          onChange={(event) =>
-            setFilter('sort', event.target.value as LedgerSort)
-          }
-        >
-          {SORTS.map((sort) => (
-            <option key={sort.value} value={sort.value}>
-              {sort.label}
-            </option>
-          ))}
-        </Select>
-      </section>
+          <Select
+            aria-label="Sort executions"
+            className="ex-sort"
+            value={filters.sort}
+            onChange={(event) =>
+              setFilter('sort', event.target.value as LedgerSort)
+            }
+          >
+            {SORTS.map((sort) => (
+              <option key={sort.value} value={sort.value}>
+                {sort.label}
+              </option>
+            ))}
+          </Select>
+        </section>
+      )}
 
       {flash ? (
         <div className="ex-flash">
