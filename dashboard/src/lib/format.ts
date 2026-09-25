@@ -143,13 +143,28 @@ function sameDay(left: Date, right: Date) {
   )
 }
 
+function clock(date: Date) {
+  const hours = date.getHours()
+  return `${hours % 12 || 12}:${pad2(date.getMinutes())} ${hours < 12 ? 'AM' : 'PM'}`
+}
+
 /** `Sep 24, 3:33 AM`; the year appears only when it is not this one. */
 export function formatDateTime(value: DateInput, now = new Date()): string {
   const date = toDate(value)
   if (!date) return unparsed(value)
-  const hours = date.getHours()
-  const time = `${hours % 12 || 12}:${pad2(date.getMinutes())} ${hours < 12 ? 'AM' : 'PM'}`
-  return `${shortDay(date, now)}, ${time}`
+  return `${shortDay(date, now)}, ${clock(date)}`
+}
+
+/** `3:33 AM`, for a row under a heading that already names the day. */
+export function formatTime(value: DateInput): string {
+  const date = toDate(value)
+  return date ? clock(date) : unparsed(value)
+}
+
+/** `Sep 24`, or `Dec 31, 2025` outside this year: the day alone. */
+export function formatDay(value: DateInput, now = new Date()): string {
+  const date = toDate(value)
+  return date ? shortDay(date, now) : unparsed(value)
 }
 
 /** `Today`, `Yesterday`, `Sep 21`, by the local calendar. */
