@@ -337,12 +337,21 @@ export function DialogContent({
   onEscapeKeyDown?(event: KeyboardEvent): void
 }) {
   const dialog = useContext(DialogContext)
+  const content = useRef<HTMLDivElement>(null)
+  // Radix moves focus into the content as it opens.
+  useEffect(() => {
+    if (dialog.open)
+      content.current
+        ?.querySelector<HTMLElement>('button, [href], input, select, textarea')
+        ?.focus()
+  }, [dialog.open])
   if (!dialog.open) return null
   return (
     <>
       {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: the host overlay closes on a pointer; Escape is on the content */}
       <div data-overlay="" onClick={() => dialog.setOpen(false)} />
       <div
+        ref={content}
         role="dialog"
         aria-labelledby={dialog.titleId}
         aria-describedby={dialog.descriptionId}

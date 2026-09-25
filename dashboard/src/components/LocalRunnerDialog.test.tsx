@@ -136,6 +136,12 @@ describe('where and stack fields', () => {
       ['stack-0123456789ab', 'local'],
       ['recorded', 'recorded'],
     ])
+    // Each says what it declares; the recorded one, the iii its YAML pins.
+    expect(choices.map((choice) => choice.declares)).toEqual([
+      'iii latest · 0 workers',
+      'iii latest · 0 workers',
+      'iii 0.24.2',
+    ])
     const picked = pickedStack(form.stack, choices, docker)
     expect(executionStartRequest(form, null, picked).parameters).toMatchObject({
       where: 'docker',
