@@ -272,8 +272,15 @@ export function buildLedgerRows(
       searchText: [
         title,
         execution.id,
-        model,
+        execution.run_id,
+        execution.workflow_name,
+        typeof source.sha === 'string' ? source.sha : null,
+        ...presentation.subjects.flatMap((subject) => [
+          subject.model,
+          providerModel(subject),
+        ]),
         execution.parameters?.agent,
+        ...(execution.parameters?.scenarios ?? []),
         origin.label,
         date ? formatDateTime(date, now) : null,
       ]

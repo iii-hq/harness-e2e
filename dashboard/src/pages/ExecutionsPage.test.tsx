@@ -80,6 +80,51 @@ describe('executions list filters', () => {
     expect(search('deepseek/deepseek-flash')).toHaveLength(8)
   })
 
+  it('also searches the tests, workflow, run id, commit and every model', () => {
+    const native = ledgerExecution('c3cdb199')
+    const paired = ledgerExecution('a1d33f69')
+    const [first, second] = buildLedgerRows(
+      [
+        {
+          ...native,
+          run_id: 'run-7781',
+          workflow_name: 'Harness E2E Local',
+          source: { kind: 'local', sha: '88aee14d0c' },
+          parameters: native.parameters && {
+            ...native.parameters,
+            scenarios: ['kanban_c2_persistence'],
+          },
+        },
+        {
+          ...paired,
+          subjects: [
+            ...paired.subjects,
+            {
+              id: 'fable',
+              provider: 'claude-code',
+              model: 'fable-5',
+              scenarios: [],
+            },
+          ],
+        },
+      ],
+      LEDGER_NOW,
+    )
+    const search = (query: string) =>
+      filterLedgerRows([first, second], {
+        ...LEDGER_DEFAULT_FILTERS,
+        query,
+      }).map((entry) => entry.id)
+    for (const query of [
+      'kanban_c2',
+      'harness e2e local',
+      'run-7781',
+      '88aee14',
+    ])
+      expect(search(query)).toEqual([first.id])
+    expect(search('claude-code/fable-5')).toEqual([second.id])
+  })
+
   it('filters by result and sorts newest first, or as asked', () => {
     expect(
       ids(
