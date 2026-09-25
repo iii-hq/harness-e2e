@@ -15,6 +15,14 @@
   background: var(--color-ink-ghost);
 }
 
+.ds-status-label[data-tinted][data-tone="alert"] {
+  color: color-mix(in srgb, var(--color-alert) 80%, var(--color-ink));
+}
+
+.ds-status-label[data-tinted][data-tone="ghost"] {
+  color: var(--color-ink-faint);
+}
+
 .ds-fact-list {
   display: flex;
   flex-wrap: wrap;

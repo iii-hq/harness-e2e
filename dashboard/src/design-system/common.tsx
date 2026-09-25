@@ -28,12 +28,16 @@ export type StatusLabelProps = HTMLAttributes<HTMLSpanElement> & {
   state: ResultState
   /** Replaces the state's label (`Cancelling`); the tone stays the state's. */
   label?: string
+  /** Paints the label by its tone too, as the execution detail does: alert
+   *  states in strong alert, ghost states (queued, cancelled) faint. */
+  tinted?: boolean
 }
 
 /** A 6px dot and a label; the dot pulses only while the state is live. */
 export function StatusLabel({
   state,
   label,
+  tinted = false,
   className,
   ...props
 }: StatusLabelProps) {
@@ -44,6 +48,7 @@ export function StatusLabel({
       className={classes('ds-status-label', className)}
       data-state={state}
       data-tone={tone}
+      data-tinted={tinted || undefined}
       {...props}
     >
       {/* The host dot has no ghost tone: the label paints it (common.css). */}

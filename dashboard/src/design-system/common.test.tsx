@@ -34,6 +34,15 @@ describe('StatusLabel', () => {
     expect(queued).toContain('bg-ink')
   })
 
+  it('paints the label by its tone only when asked', () => {
+    expect(renderToStaticMarkup(<StatusLabel state="not_run" />)).not.toContain(
+      'data-tinted',
+    )
+    const tinted = renderToStaticMarkup(<StatusLabel state="not_run" tinted />)
+    expect(tinted).toContain('data-tinted="true"')
+    expect(tinted).toContain('data-tone="alert"')
+  })
+
   it('takes a label of its own and keeps the state tone', () => {
     const html = renderToStaticMarkup(
       <StatusLabel state="running" label="Cancelling" />,
