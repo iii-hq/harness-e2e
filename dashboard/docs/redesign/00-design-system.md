@@ -88,6 +88,7 @@ not settled facts.
 The Console ships recipes the extension currently reimplements in
 `primitives.css` (939 lines). The redesign adopts the recipe wherever one
 exists; the primitive becomes the React wrapper that emits the recipe's markup.
+The one exception is the section bar, which the extension owns (below).
 
 | Extension primitive | Host recipe | Markup contract |
 |---|---|---|
@@ -95,7 +96,7 @@ exists; the primitive becomes the React wrapper that emits the recipe's markup.
 | `FilterChip` / `FilterChipGroup` | `.iii-ui-chip[data-selected]` | inline-flex, 24px, `--color-surface` fill |
 | `StatusBadge` | `.iii-ui-chip[data-tone=accent\|success\|warning\|danger]` | tone = host status colors with muted fills |
 | `DataTable` / `DataTableRow` | `.iii-ui-table-viewport > .iii-ui-table-frame > table.iii-ui-table` with `__header`, `__body`, `__row[data-interactive\|data-selected]`, `__head`, `__cell`, `__caption`; `data-density="compact"` | rows separated by `--color-edge`, no vertical lines, container-query type size |
-| section navigation (`.harness-e2e-nav-link`) | `.iii-ui-tabs-list > .iii-ui-tab[aria-selected]` | underline indicator, 40px targets |
+| section navigation (`.harness-e2e-nav-link`) | none: extension-owned, see below | links with `aria-current`, 2px ink underline, 44px targets |
 | view toggles (sort, theme, grouped/by-test) | `.iii-ui-segmented > .iii-ui-segmented__item[aria-checked]` | |
 | `Field` / `Input` / `Select` / `Textarea` | `.iii-ui-field` with `__label`, `__description`, `__error` | controls keep the shell's fill-only outline |
 | toggles | `.iii-ui-switch` with `__input`, `__thumb` | |
@@ -103,6 +104,14 @@ exists; the primitive becomes the React wrapper that emits the recipe's markup.
 | `Dialog` | host motion recipes `.iii-ui-motion-overlay`, `.iii-ui-motion-sheet` | the dialog itself stays a primitive |
 | `Button` | none in the host (its buttons are utility compositions) | stays a primitive, tokenised |
 | `EmptyState`, `Callout`, `MetricCard`, `DeltaValue`, `PageHeader` | none | stay primitives, tokenised |
+
+The section bar does not adopt `.iii-ui-tabs-list > .iii-ui-tab`. That recipe
+spaces tabs 20px apart with 2px of side padding, sets every tab in 600 at
+40px and draws an inset 1px edge under the list; the redesign canvas wants a
+44px raised strip with 10px of side padding, 4px gaps, 500 tabs with the
+current one in 600, and only the 2px ink underline. The bar, its tabs and the
+page actions beside them live in `components/dashboard-shell.css`, on host
+tokens, with 44px targets.
 
 Adopting a recipe is a per-primitive change with a visible effect on every
 page, so it belongs to the redesign, screen by screen, not to this branch.
