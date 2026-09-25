@@ -232,6 +232,8 @@ declare module '@iii-dev/console-ui' {
     details?: readonly string[]
     confirmLabel?: string
     cancelLabel?: string
+    /** `danger` draws the confirm button in the alert color. */
+    tone?: 'default' | 'danger'
     onConfirm: () => void
     onCancel?: () => void
   }

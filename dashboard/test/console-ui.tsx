@@ -6,10 +6,14 @@ import {
   isValidElement,
   type ReactElement,
   type ReactNode,
+  type Ref,
+  type RefObject,
   type TableHTMLAttributes,
   type TdHTMLAttributes,
   type ThHTMLAttributes,
   useContext,
+  useEffect,
+  useRef,
   useState,
 } from 'react'
 
@@ -127,18 +131,55 @@ export function TabsTrigger({
 /* ---- the host's shared components; markup mirrors the host recipes ---- */
 
 type Div = HTMLAttributes<HTMLDivElement>
-type Trigger = ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
+type Trigger = ButtonHTMLAttributes<HTMLButtonElement> & {
+  asChild?: boolean
+  ref?: Ref<HTMLButtonElement>
+}
 
-// Radix `asChild`: the child element becomes the trigger and gets its props.
-function Slot({ asChild, children, ...props }: Trigger) {
+// Radix composeEventHandlers: the caller's handler runs first, the
+// component's own only if the caller did not prevent the default.
+function compose<E extends { defaultPrevented: boolean }>(
+  theirs: ((event: E) => void) | undefined,
+  ours: ((event: E) => void) | undefined,
+) {
+  return (event: E) => {
+    theirs?.(event)
+    if (!event.defaultPrevented) ours?.(event)
+  }
+}
+
+// Radix `asChild`: the child element becomes the trigger, handlers composed.
+function Slot({ asChild, children, onClick, onKeyDown, ...props }: Trigger) {
   if (asChild && isValidElement(children)) {
-    return cloneElement(children as ReactElement<Trigger>, props)
+    const child = children as ReactElement<Trigger>
+    return cloneElement(child, {
+      ...props,
+      onClick: compose(child.props.onClick, onClick),
+      onKeyDown: compose(child.props.onKeyDown, onKeyDown),
+    })
   }
   return (
-    <button type="button" {...props}>
+    <button type="button" {...props} onClick={onClick} onKeyDown={onKeyDown}>
       {children}
     </button>
   )
+}
+
+/** Closes on a pointer down outside `inside`, like Radix's dismissable layer. */
+function useOutsidePointer(
+  open: boolean,
+  inside: Array<RefObject<HTMLElement | null>>,
+  close: () => void,
+) {
+  useEffect(() => {
+    if (!open) return
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node
+      if (!inside.some((ref) => ref.current?.contains(target))) close()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  })
 }
 
 export function Badge({
@@ -172,9 +213,14 @@ export function StatusDot({
   return (
     <span
       aria-hidden="true"
-      data-ui="status-dot"
-      data-tone={tone}
-      className={[pulse && 'pulse-dot', className].filter(Boolean).join(' ')}
+      className={[
+        'inline-block size-1.5 rounded-full shrink-0',
+        `bg-${tone}`,
+        pulse && 'pulse-dot',
+        className,
+      ]
+        .filter(Boolean)
+        .join(' ')}
       {...props}
     />
   )
@@ -256,20 +302,26 @@ export function Dialog({
   )
 }
 
-export function DialogTrigger(props: Trigger) {
+export function DialogTrigger({ onClick, ...props }: Trigger) {
   const dialog = useContext(DialogContext)
-  return <Slot {...props} onClick={() => dialog.setOpen(true)} />
+  return (
+    <Slot {...props} onClick={compose(onClick, () => dialog.setOpen(true))} />
+  )
 }
 
-export function DialogClose(props: Trigger) {
+export function DialogClose({ onClick, ...props }: Trigger) {
   const dialog = useContext(DialogContext)
-  return <Slot {...props} onClick={() => dialog.setOpen(false)} />
+  return (
+    <Slot {...props} onClick={compose(onClick, () => dialog.setOpen(false))} />
+  )
 }
 
+/** Closes on Escape and on the overlay, as Radix does. */
 export function DialogContent({
   onOpenAutoFocus: _openFocus,
   onCloseAutoFocus: _closeFocus,
-  onEscapeKeyDown: _escape,
+  onEscapeKeyDown,
+  onKeyDown,
   ...props
 }: Div & {
   onOpenAutoFocus?(event: Event): void
@@ -278,7 +330,21 @@ export function DialogContent({
 }) {
   const dialog = useContext(DialogContext)
   if (!dialog.open) return null
-  return <div role="dialog" {...props} />
+  return (
+    <>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: the host overlay closes on a pointer; Escape is on the content */}
+      <div data-overlay="" onClick={() => dialog.setOpen(false)} />
+      <div
+        role="dialog"
+        {...props}
+        onKeyDown={compose(onKeyDown, (key) => {
+          if (key.key !== 'Escape') return
+          onEscapeKeyDown?.(key.nativeEvent)
+          if (!key.nativeEvent.defaultPrevented) dialog.setOpen(false)
+        })}
+      />
+    </>
+  )
 }
 
 export function DialogTitle(props: HTMLAttributes<HTMLHeadingElement>) {
@@ -289,13 +355,16 @@ export function DialogDescription(props: HTMLAttributes<HTMLParagraphElement>) {
   return <p {...props} />
 }
 
+/** The host settles through onOpenChange(false) first, then the callback. */
 export function ConfirmDialog({
   open,
+  onOpenChange,
   title,
   description,
   details,
   confirmLabel = 'Continue',
   cancelLabel = 'Cancel',
+  tone = 'default',
   onConfirm,
   onCancel,
 }: {
@@ -306,28 +375,42 @@ export function ConfirmDialog({
   details?: readonly string[]
   confirmLabel?: string
   cancelLabel?: string
+  tone?: 'default' | 'danger'
   onConfirm: () => void
   onCancel?: () => void
 }) {
-  if (!open) return null
+  const settle = (confirmed: boolean) => {
+    onOpenChange(false)
+    if (confirmed) onConfirm()
+    else onCancel?.()
+  }
   return (
-    <div role="alertdialog" data-ui="confirm-dialog">
-      <h2>{title}</h2>
-      {description}
-      {details?.length ? (
-        <ul>
-          {details.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
-      ) : null}
-      <button type="button" onClick={onCancel}>
-        {cancelLabel}
-      </button>
-      <button type="button" onClick={onConfirm}>
-        {confirmLabel}
-      </button>
-    </div>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) settle(false)
+      }}
+    >
+      <DialogContent role="alertdialog">
+        <DialogTitle>{title}</DialogTitle>
+        {description ? (
+          <DialogDescription>{description}</DialogDescription>
+        ) : null}
+        {details?.length ? (
+          <ul>
+            {details.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
+        <button type="button" onClick={() => settle(false)}>
+          {cancelLabel}
+        </button>
+        <button type="button" data-tone={tone} onClick={() => settle(true)}>
+          {confirmLabel}
+        </button>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -392,7 +475,14 @@ export function CollapsibleCardContent(props: HTMLAttributes<HTMLElement>) {
 const MenuContext = createContext<{
   open: boolean
   setOpen(open: boolean): void
-}>({ open: false, setOpen() {} })
+  trigger: RefObject<HTMLButtonElement | null>
+  content: RefObject<HTMLDivElement | null>
+}>({
+  open: false,
+  setOpen() {},
+  trigger: { current: null },
+  content: { current: null },
+})
 
 export function DropdownMenu({
   open,
@@ -407,6 +497,8 @@ export function DropdownMenu({
   children?: ReactNode
 }) {
   const [internal, setInternal] = useState(defaultOpen)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const content = useRef<HTMLDivElement>(null)
   return (
     <MenuContext.Provider
       value={{
@@ -415,6 +507,8 @@ export function DropdownMenu({
           setInternal(next)
           onOpenChange?.(next)
         },
+        trigger,
+        content,
       }}
     >
       {children}
@@ -422,19 +516,21 @@ export function DropdownMenu({
   )
 }
 
-export function DropdownMenuTrigger(props: Trigger) {
+export function DropdownMenuTrigger({ onClick, ...props }: Trigger) {
   const menu = useContext(MenuContext)
   return (
     <Slot
       aria-haspopup="menu"
       aria-expanded={menu.open}
       data-state={menu.open ? 'open' : 'closed'}
+      ref={menu.trigger}
       {...props}
-      onClick={() => menu.setOpen(!menu.open)}
+      onClick={compose(onClick, () => menu.setOpen(!menu.open))}
     />
   )
 }
 
+/** Closes on Escape and on a pointer down outside the menu and its trigger. */
 export function DropdownMenuContent({
   align: _align,
   side: _side,
@@ -442,6 +538,7 @@ export function DropdownMenuContent({
   alignOffset: _alignOffset,
   collisionPadding: _collisionPadding,
   loop: _loop,
+  onKeyDown,
   ...props
 }: Div & {
   align?: string
@@ -452,14 +549,30 @@ export function DropdownMenuContent({
   loop?: boolean
 }) {
   const menu = useContext(MenuContext)
-  return <div role="menu" hidden={!menu.open} {...props} />
+  useOutsidePointer(menu.open, [menu.content, menu.trigger], () =>
+    menu.setOpen(false),
+  )
+  return (
+    <div
+      role="menu"
+      ref={menu.content}
+      hidden={!menu.open}
+      {...props}
+      onKeyDown={compose(onKeyDown, (key) => {
+        if (key.key === 'Escape') menu.setOpen(false)
+      })}
+    />
+  )
 }
 
+/** Selecting closes the menu unless onSelect prevents the default. */
 export function DropdownMenuItem({
   disabled,
   onSelect,
   textValue: _textValue,
   asChild: _asChild,
+  onClick,
+  onKeyDown,
   ...props
 }: Omit<Div, 'onSelect'> & {
   disabled?: boolean
@@ -467,24 +580,32 @@ export function DropdownMenuItem({
   textValue?: string
   asChild?: boolean
 }) {
+  const menu = useContext(MenuContext)
   return (
     <div
       role="menuitem"
-      tabIndex={-1}
+      tabIndex={disabled ? undefined : -1}
       aria-disabled={disabled || undefined}
       data-disabled={disabled ? '' : undefined}
       {...props}
-      onClick={disabled ? undefined : (click) => onSelect?.(click.nativeEvent)}
-      onKeyDown={(key) => {
-        if (!disabled && (key.key === 'Enter' || key.key === ' '))
-          onSelect?.(key.nativeEvent)
-      }}
+      onClick={compose(onClick, () => {
+        if (disabled) return
+        const select = new Event('menu.itemSelect', { cancelable: true })
+        onSelect?.(select)
+        if (!select.defaultPrevented) menu.setOpen(false)
+      })}
+      onKeyDown={compose(onKeyDown, (key) => {
+        if (disabled || (key.key !== 'Enter' && key.key !== ' ')) return
+        key.preventDefault()
+        key.currentTarget.click()
+      })}
     />
   )
 }
 
-export function DropdownMenuSeparator(props: HTMLAttributes<HTMLHRElement>) {
-  return <hr {...props} />
+export function DropdownMenuSeparator(props: Div) {
+  // biome-ignore lint/a11y/useSemanticElements lint/a11y/useFocusableInteractive lint/a11y/useAriaPropsForRole: Radix's separator markup
+  return <div role="separator" aria-orientation="horizontal" {...props} />
 }
 
 export function DropdownMenuLabel(props: Div) {

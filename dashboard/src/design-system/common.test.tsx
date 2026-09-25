@@ -23,12 +23,14 @@ describe('StatusLabel', () => {
       )
   })
 
+  // The host dot paints its tone with a bg-<tone> class; it has no ghost.
   it('maps tones onto the host dot, ghost drawn by the label', () => {
     const passed = renderToStaticMarkup(<StatusLabel state="passed" />)
     expect(passed).toContain('data-tone="ok"')
+    expect(passed).toContain('bg-ok')
     const queued = renderToStaticMarkup(<StatusLabel state="queued" />)
     expect(queued).toContain('data-tone="ghost"')
-    expect(queued).toContain('data-tone="ink"')
+    expect(queued).toContain('bg-ink')
   })
 
   it('takes a label of its own and keeps the state tone', () => {
@@ -98,26 +100,32 @@ describe('RowMenu', () => {
     />,
   )
 
+  const tag = (pattern: RegExp) => html.match(pattern)?.[0] ?? ''
+
   it('opens from a named ⋯ button', () => {
-    expect(html).toMatch(
-      /<button type="button" class="ds-row-menu-trigger" aria-label="Actions for Regression" aria-haspopup="menu" aria-expanded="false"/,
+    const trigger = tag(/<button[^>]*ds-row-menu-trigger[^>]*>/)
+    expect(trigger).toContain('type="button"')
+    expect(trigger).toContain('aria-label="Actions for Regression"')
+    expect(trigger).toContain('aria-haspopup="menu"')
+    expect(trigger).toContain('aria-expanded="false"')
+    expect(tag(/<div[^>]*role="menu"[^>]*>/)).toContain(
+      'aria-label="Actions for Regression"',
     )
-    expect(html).toContain('role="menu"')
-    expect(html).toMatch(/role="menu"[^>]*aria-label="Actions for Regression"/)
   })
 
   it('shows hints under their items and separates the dangerous one', () => {
     expect(html).toContain(
       '<span class="ds-row-menu-hint">Replaces its evidence with the run’s</span>',
     )
-    const separator = html.indexOf('<hr')
+    const separator = html.indexOf('role="separator"')
     const danger = html.indexOf('data-danger="true"')
     expect(separator).toBeGreaterThan(html.indexOf('Copy execution id'))
     expect(danger).toBeGreaterThan(separator)
   })
 
   it('disables an item with its reason in sight', () => {
-    const deleteItem = html.slice(html.lastIndexOf('<div role="menuitem"'))
+    const deleteItem = html.split('role="menuitem"').at(-1) ?? ''
+
     expect(deleteItem).toContain('aria-disabled="true"')
     expect(deleteItem).toContain(
       '<span class="ds-row-menu-hint">Finish or cancel it first</span>',
