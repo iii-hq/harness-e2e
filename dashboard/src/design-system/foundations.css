@@ -83,6 +83,21 @@
 
 /* The one uppercase style in the dashboard: 11px mono labels over data
    (audit DS-04). Everything else stays in sentence or lower case. */
+/* Colors the redesign derives from the host's. They are declared on every
+   element of the extension, not only in the shell, because menus and
+   dialogs render in a portal outside it; the bundle prefixes every rule with
+   the extension's scope, so this reaches exactly those. */
+* {
+  /* Alert text on light fills and on --color-alert-muted (at least 4.6:1
+     over the raised panel in both themes): the host has no light
+     --color-alert-strong. */
+  --ds-danger-text: color-mix(
+    in srgb,
+    var(--color-alert) 80%,
+    var(--color-ink)
+  );
+}
+
 .ds-label {
   font-family: var(--font-mono);
   font-size: var(--ds-text-label);
