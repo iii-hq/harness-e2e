@@ -579,7 +579,10 @@ try {
     'true',
   )
   await rowMenu.getByText('Finish or cancel it first').waitFor()
-  await page.keyboard.press('Escape')
+  await rowMenu.getByRole('menuitem', { name: 'Cancel execution' }).click()
+  for (let tries = 0; !cancelled.length && tries < 50; tries += 1)
+    await page.waitForTimeout(100)
+  assert.deepEqual(cancelled, [nightly])
 
   // Run tests: it starts from the last execution's model; this harness is
   // busy, which the footer says with a way to open what runs; a sequential
@@ -678,7 +681,7 @@ try {
   const cancel = page.getByRole('button', { name: 'cancel execution' })
   await cancel.click()
   await cancel.waitFor({ state: 'detached' })
-  assert.deepEqual(cancelled, [`plan-${'1'.padStart(32, 'f')}`])
+  assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
   await page.getByText('Execution · running').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
@@ -891,7 +894,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history and the button off with the reason, family blocks and sequences, suite custom and reset, filters and clear, quick list with contracts read per row, progress, cancelled row and whole runtime, the menu of a running row, last model by default, busy harness named with a link before and after a submit, sequential group ticked whole, box/label/Space toggles, no seed, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite without a catalog, selected-first prefill, Run in Docker from the busy alert, stacks with warnings, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history and the button off with the reason, family blocks and sequences, suite custom and reset, filters and clear, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, busy harness named with a link before and after a submit, sequential group ticked whole, box/label/Space toggles, no seed, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite without a catalog, selected-first prefill, Run in Docker from the busy alert, stacks with warnings, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

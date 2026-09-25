@@ -169,14 +169,34 @@ const started = []
 const read = []
 const renamed = []
 const deleted = []
+const reimported = []
+// At the end fifty older executions join, to load older ones.
+const older = Array.from({ length: 50 }, (_, index) => ({
+  ...b,
+  id: `plan-${String(index).padStart(32, 'e')}`,
+  label: `older ${index}`,
+  completed_at: '2026-09-01T11:00:00Z',
+}))
+let withOlder = false
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
-    const listed = [b, a].filter((side) => !deleted.includes(side.id))
+    const listed = [b, a, ...(withOlder ? older : [])].filter(
+      (side) => !deleted.includes(side.id),
+    )
+    const start = Number(request.cursor ?? 0)
+    const end = start + (request.limit ?? 50)
     return {
-      executions: listed.map(({ reports, ...summary }) => summary),
+      executions: listed
+        .slice(start, end)
+        .map(({ reports, ...summary }) => summary),
       total: listed.length,
+      next_cursor: end < listed.length ? String(end) : null,
     }
+  }
+  if (id === 'github-run-import') {
+    reimported.push(request.run_id)
+    return { execution_id: a.id, state: 'importing' }
   }
   if (id === 'execution-rename') {
     renamed.push(request)
@@ -356,6 +376,29 @@ try {
   await rename.getByRole('button', { name: 'Save', exact: true }).click()
   await rename.waitFor({ state: 'detached' })
   assert.deepEqual(renamed, [{ execution_id: a.id, label: 'smoke A' }])
+  // Focus goes back to the menu button the rename came from.
+  await page.waitForFunction(
+    (id) =>
+      document.activeElement?.getAttribute('aria-label') ===
+        'Actions for smoke' &&
+      document.activeElement.closest('[data-execution-id]')?.dataset
+        .executionId === id,
+    a.id,
+  )
+
+  // Import again sends the run back through the import; Copy says it copied.
+  await page
+    .getByRole('button', { name: 'Actions for smoke', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: /^Import again/ }).click()
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'])
+  await page
+    .getByRole('button', { name: 'Actions for smoke', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Copy execution id' }).click()
+  await page.locator('.ex-flash').getByText(`Copied ${a.id}.`).waitFor()
+  assert.deepEqual(reimported, [42])
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), a.id)
 
   // Run again from the menu opens the form on that execution's parameters.
   await page
@@ -382,23 +425,43 @@ try {
     .getByRole('button', { name: 'Delete 2 executions', exact: true })
     .click()
   await page
-    .getByRole('status')
+    .locator('.ex-flash')
     .getByText('Deleted “smoke” with its runs and evidence.')
     .waitFor()
+  await page.getByText('Couldn’t delete “smoke rerun”').waitFor()
   await page
-    .getByText('“smoke rerun”: Only a finished execution can be deleted.', {
-      exact: false,
-    })
+    .getByText('Only a finished execution can be deleted.', { exact: false })
     .waitFor()
   assert.deepEqual(deleted, [a.id])
+  // The refused one stays ticked, and focus is back on the selection bar.
+  await page.waitForFunction(() =>
+    document.activeElement?.closest('[data-selection-bar]'),
+  )
   await page
     .locator(`[data-execution-id="${a.id}"]`)
     .waitFor({ state: 'detached' })
   await page.locator(`[data-execution-id="${b.id}"]`).waitFor()
 
+  // Older executions arrive by cursor, and stay loaded after an action.
+  withOlder = true
+  await page.reload()
+  const last = older.at(-1).id
+  await page
+    .getByRole('button', { name: 'Load older executions · 50 of 51 loaded' })
+    .click()
+  await page.locator(`[data-execution-id="${last}"]`).waitFor()
+  await page
+    .getByRole('button', { name: 'Actions for smoke rerun', exact: true })
+    .click()
+  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  await rename.getByRole('button', { name: 'Save', exact: true }).click()
+  await rename.waitFor({ state: 'detached' })
+  await page.waitForTimeout(300)
+  assert.equal(await page.locator(`[data-execution-id="${last}"]`).count(), 1)
+
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename and run again from the row menu, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()
