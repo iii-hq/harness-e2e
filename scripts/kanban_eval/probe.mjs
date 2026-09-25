@@ -20,6 +20,10 @@ const CASES = [
 
 const RUBRIC = JSON.parse(await readFile(new URL('./rubric.json', import.meta.url), 'utf8'))
 
+// board_settings switches stores twice, more round trips than any other
+// check, so on a loaded runner its waits need more than the 8s the rest use.
+const STORE_SWITCH_TIMEOUT_MS = 20_000
+
 const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
 
 Environment:
@@ -771,14 +775,14 @@ export const PROBES = {
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
-        await expectText(boardEmptyFeedback(page), /no tickets|empty/i)
-        await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong')
+        await expectText(boardEmptyFeedback(page), /no tickets|empty/i, STORE_SWITCH_TIMEOUT_MS)
+        await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
         await page.getByLabel('Data directory').fill(initialConfig.data_dir)
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
-        await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store')
+        await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store', STORE_SWITCH_TIMEOUT_MS)
       } finally {
         await json(await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir: initialConfig.data_dir }) }))
       }
@@ -1615,8 +1619,8 @@ export function criterionDependencyStatus(checks, dependencies) {
   return statuses.every((status) => status === 'passed') ? 'passed' : 'unverified'
 }
 
-async function expectText(locator, pattern) {
-  await eventually(async () => pattern.test(await locator.first().textContent() ?? ''), `expected text ${pattern}`)
+async function expectText(locator, pattern, timeout = 8_000) {
+  await eventually(async () => pattern.test(await locator.first().textContent() ?? ''), `expected text ${pattern}`, timeout)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main()
