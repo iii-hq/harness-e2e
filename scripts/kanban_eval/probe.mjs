@@ -20,11 +20,19 @@ const CASES = [
 
 const RUBRIC = JSON.parse(await readFile(new URL('./rubric.json', import.meta.url), 'utf8'))
 
+// board_settings does two full store switches (more round trips than any
+// other check), so a loaded CI runner can need more than the 8s every other
+// check uses. Production scoring never sets this, so it always sees 8s.
+const KANBAN_PROBE_SLOW_TIMEOUT_MS = Number(process.env.HARNESS_E2E_KANBAN_PROBE_SLOW_TIMEOUT_MS) || 8_000
+
 const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
 
 Environment:
   III_SDK_MODULE       Absolute path to the trusted iii-sdk module
   PLAYWRIGHT_MODULE    Absolute path to the trusted Playwright module
+  HARNESS_E2E_KANBAN_PROBE_SLOW_TIMEOUT_MS
+                       Test-only override (ms) for board_settings' heaviest
+                       waits; unset keeps the default 8000ms used everywhere
 
 Other:
   --list-cases         Print the supported case ids as JSON
@@ -771,14 +779,14 @@ export const PROBES = {
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
-        await expectText(boardEmptyFeedback(page), /no tickets|empty/i)
-        await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong')
+        await expectText(boardEmptyFeedback(page), /no tickets|empty/i, KANBAN_PROBE_SLOW_TIMEOUT_MS)
+        await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', KANBAN_PROBE_SLOW_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
         await page.getByLabel('Data directory').fill(initialConfig.data_dir)
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
-        await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store')
+        await eventually(async () => await boardTicketTitle(page, restored.title).count() > 0, 'returning from settings did not reload the restored store', KANBAN_PROBE_SLOW_TIMEOUT_MS)
       } finally {
         await json(await api('/api/config', { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ data_dir: initialConfig.data_dir }) }))
       }
@@ -1615,8 +1623,8 @@ export function criterionDependencyStatus(checks, dependencies) {
   return statuses.every((status) => status === 'passed') ? 'passed' : 'unverified'
 }
 
-async function expectText(locator, pattern) {
-  await eventually(async () => pattern.test(await locator.first().textContent() ?? ''), `expected text ${pattern}`)
+async function expectText(locator, pattern, timeout = 8_000) {
+  await eventually(async () => pattern.test(await locator.first().textContent() ?? ''), `expected text ${pattern}`, timeout)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) await main()
