@@ -2,6 +2,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   DashboardShell,
+  nextHeader,
   PageActionsBar,
   sectionForRoute,
 } from '@/components/DashboardShell'
@@ -121,5 +122,28 @@ describe('page actions in the section bar', () => {
 
   it('renders nothing when a page has no actions', () => {
     expect(renderToStaticMarkup(<PageActionsBar />)).toBe('')
+  })
+})
+
+describe('header updates', () => {
+  const disabled = (
+    <button type="button" disabled>
+      Share link
+    </button>
+  )
+  const enabled = <button type="button">Share link</button>
+  const header = { key: 'tests:Comparison actions:true:compare' }
+
+  // TestsPage enables "Share link" once both versions are picked, under the
+  // same key. Until now only the effect cleanup (clearHeader) let it through.
+  it('takes new actions under the same key', () => {
+    const current = { ...header, actions: disabled }
+    const next = { ...header, actions: enabled }
+    expect(nextHeader(current, next)).toBe(next)
+  })
+
+  it('keeps the current header when nothing changed', () => {
+    const current = { ...header, actions: enabled }
+    expect(nextHeader(current, { ...header, actions: enabled })).toBe(current)
   })
 })

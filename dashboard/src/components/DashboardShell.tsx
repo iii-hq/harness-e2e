@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from 'react'
 import { useContainerNarrow } from '@/hooks/use-container-narrow'
@@ -101,6 +102,19 @@ function HarnessE2eIcon() {
   )
 }
 
+/** The header a page asks for. The key says which page and labels; the
+ *  actions are compared too, since a page re-renders them as its state
+ *  changes (a button that enables, a label that flips) under the same key,
+ *  and the shell should not rely on the page clearing its header first. */
+export function nextHeader(
+  current: DashboardHeaderState,
+  next: DashboardHeaderState,
+): DashboardHeaderState {
+  return current.key === next.key && current.actions === next.actions
+    ? current
+    : next
+}
+
 export type PageActionsBarProps = {
   actions?: ReactNode
   label?: string
@@ -141,18 +155,17 @@ export function DashboardShell({
   const [mainRef, narrow] = useContainerNarrow(720)
   const [header, setHeaderState] = useState<DashboardHeaderState>({ key: '' })
   const setHeader = useCallback((next: DashboardHeaderState) => {
-    setHeaderState((current) => (current.key === next.key ? current : next))
+    setHeaderState((current) => nextHeader(current, next))
   }, [])
   const clearHeader = useCallback(() => setHeaderState({ key: '' }), [])
   const section = sectionForRoute(route)
   const sectionLabel = sectionLabels[section]
-  const contextValue: DashboardChromeContextValue = {
-    tabId,
-    panelSide,
-    narrow,
-    setHeader,
-    clearHeader,
-  }
+  // Stable across header updates, so a page that reads the chrome does not
+  // re-render (and re-send its actions) because its own actions changed.
+  const contextValue = useMemo<DashboardChromeContextValue>(
+    () => ({ tabId, panelSide, narrow, setHeader, clearHeader }),
+    [tabId, panelSide, narrow, setHeader, clearHeader],
+  )
 
   const navigate = (next: DashboardSection) => {
     window.location.hash = hashForSection(next)
