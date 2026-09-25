@@ -132,8 +132,7 @@ type Trigger = ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }
 // Radix `asChild`: the child element becomes the trigger and gets its props.
 function Slot({ asChild, children, ...props }: Trigger) {
   if (asChild && isValidElement(children)) {
-    const child = children as ReactElement<Record<string, unknown>>
-    return cloneElement(child, { ...props, ...child.props })
+    return cloneElement(children as ReactElement<Trigger>, props)
   }
   return (
     <button type="button" {...props}>
