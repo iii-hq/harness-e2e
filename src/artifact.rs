@@ -58,6 +58,7 @@ where
     let mut bytes = serde_json::to_vec_pretty(value)
         .with_context(|| format!("serialize {}", relative_path.display()))?;
     bytes.push(b'\n');
+    let bytes = crate::redaction::redact_credentials(bytes);
     write_atomic(&path, &bytes)?;
     Ok(ArtifactReference {
         id: id.into(),
@@ -77,6 +78,8 @@ pub fn write_bytes(
     media_type: impl Into<String>,
     bytes: &[u8],
 ) -> Result<ArtifactReference> {
+    let redacted = crate::redaction::redact_credentials(bytes.to_vec());
+    let bytes = redacted.as_slice();
     validate_relative_path(relative_path)?;
     let path = output.join(relative_path);
     if let Some(parent) = path.parent() {

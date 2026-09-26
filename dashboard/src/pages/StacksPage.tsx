@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { ProviderCredentials } from '@/components/ProviderCredentials'
 import {
   buttonClassName,
   Callout,
@@ -223,7 +224,8 @@ function StackEditor({
 }
 
 /** Stacks: the repository's, read-only, and this Console's. Any stack can
- *  be copied into one of this Console to edit. */
+ *  be copied into one of this Console to edit. Below them, the provider
+ *  credentials a Docker execution's stack receives. */
 export function StacksPage() {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [stacks, setStacks] = useState<Stack[] | null>(null)
@@ -429,6 +431,7 @@ export function StacksPage() {
             </DataTable>
           </div>
         )}
+        <ProviderCredentials bridge={bridge} />
       </div>
       {editing && bridge ? (
         <StackEditor

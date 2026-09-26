@@ -35,6 +35,10 @@ const runtimeConfig: RuntimeConfig = {
     stack_create: 'e2e::dashboard::stack-create',
     stack_update: 'e2e::dashboard::stack-update',
     stack_delete: 'e2e::dashboard::stack-delete',
+    credentials_list: 'e2e::dashboard::credentials-list',
+    credential_set: 'e2e::dashboard::credential-set',
+    credential_delete: 'e2e::dashboard::credential-delete',
+    credentials_import: 'e2e::dashboard::credentials-import',
     changed_trigger: 'e2e::dashboard::changed',
   },
 }

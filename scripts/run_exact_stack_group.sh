@@ -331,19 +331,14 @@ if [[ "$linkly_fixture" == true ]]; then
 fi
 
 # One env file for the whole project, written after any template scaffold so
-# it replaces the placeholder the template ships. A provider without its key
-# is said out loud and the group still runs; TYPESAFE_API_KEY is optional.
+# it replaces the placeholder the template ships: every credential the group
+# received (those HARNESS_E2E_CREDENTIALS names, which run_in_image.sh sets
+# from its --env-file, and DEEPSEEK_API_KEY, ZAI_API_KEY and TYPESAFE_API_KEY
+# from the environment), nothing else of it. The model's provider without its
+# key is said out loud and the group still runs.
 : >"$env_file"
 chmod 600 "$env_file"
-for variable in DEEPSEEK_API_KEY ZAI_API_KEY TYPESAFE_API_KEY; do
-  if [[ -z "${!variable:-}" ]]; then
-    if [[ "$variable" != TYPESAFE_API_KEY ]]; then
-      log "[WARN] $variable is not set; its provider starts without a credential"
-    fi
-    continue
-  fi
-  printf '%s=%s\n' "$variable" "${!variable}" >>"$env_file"
-done
+python3 "$contract_tool" credentials-env --contract "$contract_path" --output "$env_file"
 
 project_args=(
   --contract "$contract_path"
@@ -357,6 +352,12 @@ project_args=(
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
+# The runner replaces their values in every artifact before it hashes it,
+# the names the catalog lists and these alike.
+credential_names=$(cut -d= -f1 "$env_file" | paste -sd' ' -)
+if [[ -n "$credential_names" ]]; then
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names")
+fi
 # Without a group the scaffold is the stack the whole suite shares.
 if [[ -n "$assemble_only" ]]; then
   project_args+=(--assemble)

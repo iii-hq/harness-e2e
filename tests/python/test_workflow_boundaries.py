@@ -139,14 +139,16 @@ class WorkflowBoundaryTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("strategy:\n      fail-fast: false", workflow)
         # Each phase runs in the executor image, which starts the group there.
-        self.assertIn("scripts/run_in_image.sh group", workflow)
+        self.assertIn('scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group', workflow)
         # A group runs its own Docker daemon, never on the runner's network:
         # the Registry fixture publishes the application it screenshots in
         # the group's.
         group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
                      if step.get("id") == "common")
-        self.assertEqual(sorted(group["env"]), ["DEEPSEEK_API_KEY", "HARNESS_E2E_CONTRACT", "TYPESAFE_API_KEY",
-                                                "ZAI_API_KEY"])
+        # The provider credentials come in a private file, never as secrets
+        # in the step's environment.
+        self.assertEqual(sorted(group["env"]), ["HARNESS_E2E_CONTRACT"])
+        self.assertEqual(group["run"], 'scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group')
         executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
         self.assertIn("  group) group ;;", executor)
         self.assertIn("bash scripts/run_exact_stack_group.sh &", executor)
@@ -193,6 +195,48 @@ class WorkflowBoundaryTests(unittest.TestCase):
         for label in ("harness-e2e.execution=${EXECUTION_KEY:-}", "harness-e2e.phase=$phase",
                       "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}"):
             self.assertIn(f'--label "{label}"', wrapper)
+
+    def test_provider_credentials_reach_a_phase_and_its_packaging_by_one_private_file(self):
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        jobs = yaml.safe_load(workflow)["jobs"]
+        credentials = '"$RUNNER_TEMP/provider-credentials.env"'
+        catalog = json.loads((ROOT / "config/provider-credentials.json").read_text())
+        secrets = sorted(set(catalog["providers"].values()) | set(catalog["others"]))
+        # Never every secret: toJSON(secrets) holds the run for approval
+        # (action_required, no job starts) and hands a step all the others.
+        self.assertNotIn("toJSON(secrets)", workflow)
+        # Each catalog secret is named by the steps that write the file, and
+        # by no other step.
+        self.assertEqual(len(re.findall(r"secrets\.[A-Z_]*API_KEY", workflow)), 2 * len(secrets))
+        for job, phase, package in (("prepare", "Assemble the stack and lock every contract to it",
+                                     "Package the stack assembly evidence"),
+                                    ("groups", "Execute common campaign group", "Package factual group evidence")):
+            with self.subTest(job=job):
+                steps = jobs[job]["steps"]
+                names = [step.get("name") for step in steps]
+                write = names.index("Write the provider credentials")
+                self.assertLess(write, names.index(phase))
+                self.assertLess(names.index(phase), names.index(package))
+                self.assertEqual(steps[write]["env"], {name: "${{ secrets." + name + " }}" for name in secrets})
+                self.assertEqual(
+                    steps[write]["run"],
+                    "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)
+                self.assertIn(f"scripts/run_in_image.sh --env-file {credentials}", steps[names.index(phase)]["run"])
+                self.assertIn(f"--credentials {credentials}", steps[names.index(package)]["run"])
+        # Release Control gets a shard's runs from the tree that is uploaded,
+        # after packaging checked it: the diagnostic alone when it refused.
+        steps = jobs["groups"]["steps"]
+        groups = [step.get("name") for step in steps]
+        report = steps[groups.index("Report this shard's runs")]
+        upload = steps[groups.index("Upload group observation bundle")]
+        self.assertLess(groups.index("Preserve safe group packaging diagnostic"), groups.index("Report this shard's runs"))
+        self.assertLess(groups.index("Report this shard's runs"), groups.index("Upload group observation bundle"))
+        self.assertEqual(report["env"]["UPLOADED"], upload["with"]["path"])
+        self.assertIn('"${artifacts[@]}"', report["run"])
+        self.assertNotIn("--artifacts target/", report["run"])
+        # The finalizer holds no credential: the bundles it lays out were
+        # redacted when their group packaged them.
+        self.assertNotIn("provider-credentials", json.dumps(jobs["finalize"]))
 
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
         """Contract fields are read by the scripts, never by the workflow: a
@@ -283,9 +327,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/run_in_image.sh prepare materialize", steps[order[0]]["run"])
         # Assembled with the credentials the groups get, and tried twice.
         assemble = steps["Assemble the stack and lock every contract to it"]
-        for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
-            self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
-        self.assertIn("scripts/run_in_image.sh prepare assemble", assemble["run"])
+        self.assertIn('scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare assemble',
+                      assemble["run"])
         self.assertIn("for attempt in 1 2; do", (ROOT / "scripts/executor.sh").read_text())
         # Its evidence passes the group packaging checks before upload, and
         # never fails a prepared execution.

@@ -263,8 +263,10 @@ ran stay, without a suite.
 
 `e2e::dashboard::suites-list`, `suite-create`, `suite-update` and
 `suite-delete` read and change suites; `stacks-list`, `stack-create`,
-`stack-update` and `stack-delete` read and change stacks; `execution-cancel`
-stops an execution.
+`stack-update` and `stack-delete` read and change stacks; `credentials-list`,
+`credential-set`, `credential-delete` and `credentials-import` read (names
+only) and change the provider credentials Docker executions receive, shown
+below the stacks; `execution-cancel` stops an execution.
 
 Run deterministic browser acceptance after building the dashboard and Rust binary:
 

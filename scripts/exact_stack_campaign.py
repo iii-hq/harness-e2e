@@ -14,7 +14,9 @@ import argparse
 import copy
 import hashlib
 import json
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,20 @@ DATABASE_PRIMARY_URL = "sqlite:./data/iii.db"
 DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
 EXECUTOR_KEYS = ("iii", "template")
+#: The key each provider reads, and the other credentials workers read.
+CREDENTIAL_CATALOG = Path(__file__).resolve().parents[1] / "config" / "provider-credentials.json"
+#: A credential is an environment variable.
+CREDENTIAL_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+#: Taken from a phase's own environment when set, as groups always were.
+ENVIRONMENT_CREDENTIALS = ("DEEPSEEK_API_KEY", "ZAI_API_KEY", "TYPESAFE_API_KEY")
+#: Shorter values are not looked for in evidence: they would match anywhere
+#: and break the JSON they sit in.
+REDACTION_MIN_LENGTH = 8
+#: What the launcher captures from the processes it starts, below a bundle's
+#: root: nothing hashes it, so a credential found there is replaced. Every
+#: other file is bound by a digest (the runner's references, the aggregator's
+#: campaign bundle, Release Control's checks) and is never rewritten.
+REWRITABLE_ROOT = "logs"
 
 
 def load_yaml(text: str) -> Any:
@@ -90,6 +106,106 @@ def declared_base() -> dict[str, Any]:
     """The Compose project of the default stack."""
     stack = load_yaml(DEFAULT_STACK.read_text())
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
+
+
+def credential_catalog() -> tuple[dict[str, str], set[str]]:
+    """The key each provider reads, and every name the catalog knows."""
+    catalog = json.loads(CREDENTIAL_CATALOG.read_text())
+    return catalog["providers"], set(catalog["providers"].values()) | set(catalog["others"])
+
+
+def usable_credential(name: Any, value: Any) -> bool:
+    """A named, non-empty, one-line value: what an env file can carry."""
+    return (
+        isinstance(name, str) and CREDENTIAL_NAME.fullmatch(name) is not None
+        and isinstance(value, str) and value != "" and "\n" not in value and "\r" not in value
+    )
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """`NAME=value` lines, as `docker run --env-file` reads them."""
+    values = {}
+    for line in path.read_text().splitlines():
+        name, separator, value = line.lstrip().partition("=")
+        if separator and usable_credential(name, value):
+            values[name] = value
+    return values
+
+
+def received_credentials(environ: Any, env_file: Path | None = None) -> dict[str, str]:
+    """The credentials a phase received, and nothing else of its environment:
+    the variables HARNESS_E2E_CREDENTIALS names (the env file
+    run_in_image.sh passed the container), the three groups always took from
+    their environment, and the entries of `env_file` when it exists."""
+    names = set(environ.get("HARNESS_E2E_CREDENTIALS", "").split()) | set(ENVIRONMENT_CREDENTIALS)
+    values = {name: environ[name] for name in sorted(names) if usable_credential(name, environ.get(name))}
+    if env_file is not None and env_file.is_file():
+        values.update(read_env_file(env_file))
+    return values
+
+
+def catalog_credentials(environ: Any) -> dict[str, str]:
+    """The catalog's names that `environ` sets, and nothing else of it: a
+    workflow step names exactly those secrets, never `toJSON(secrets)`,
+    which holds a run for approval and hands the step every other secret."""
+    _, known = credential_catalog()
+    return {name: environ[name] for name in sorted(known) if usable_credential(name, environ.get(name))}
+
+
+def write_private(path: Path, values: dict[str, str]) -> None:
+    """An env file only its owner reads (mode 600), whatever was there."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        file.write("".join(f"{name}={value}\n" for name, value in sorted(values.items())))
+
+
+def credential_forms(value: str) -> list[str]:
+    """A value as written and as JSON escapes it, longest first."""
+    forms = {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}
+    return sorted(forms, key=len, reverse=True)
+
+
+def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> dict[str, Any]:
+    """Look for each credential's value in the files at `paths`. Found in the
+    launcher's logs, it is replaced by `[redacted:NAME]`; found anywhere else,
+    nothing is rewritten and the tree is refused. Says how often per name,
+    never the value."""
+    scanned = {name: value for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH}
+    # Longest first: a value that holds another is replaced whole.
+    ordered = sorted(scanned.items(), key=lambda item: (-len(item[1]), item[0]))
+    hits = dict.fromkeys(sorted(scanned), 0)
+    rewrites: dict[Path, bytes] = {}
+    bound = []
+    for relative in paths:
+        path = root / relative
+        payload = original = path.read_bytes()
+        found = set()
+        for name, value in ordered:
+            for form in credential_forms(value):
+                count = payload.count(form.encode())
+                if count:
+                    hits[name] += count
+                    found.add(name)
+                    payload = payload.replace(form.encode(), f"[redacted:{name}]".encode())
+        if payload == original:
+            continue
+        if Path(relative).parts[0] == REWRITABLE_ROOT:
+            rewrites[path] = payload
+        else:
+            bound.append(f"{relative} ({', '.join(sorted(found))})")
+    if bound:
+        raise ValueError(
+            "provider credentials found in files bound by digests, which are never rewritten: "
+            + "; ".join(bound)
+        )
+    for path, payload in rewrites.items():
+        path.write_bytes(payload)
+    return {
+        "credentials": hits,
+        "files": sorted(path.relative_to(root).as_posix() for path in rewrites),
+        "too_short": sorted(set(credentials) - set(scanned)),
+    }
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -773,8 +889,18 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
     return files
 
 
-def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+def package_bundle(
+    root: Path,
+    contract: dict[str, Any],
+    workflow: dict[str, Any],
+    credentials: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Check the tree and look for the credentials the phase received in it
+    (see `redact_tree`), then hash it: the digests are of what is uploaded."""
     files = _package_files(root)
+    redaction = redact_tree(root, [entry["path"] for entry in files], credentials or {})
+    if redaction["files"]:
+        files = _package_files(root)
     return {
         "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
@@ -785,6 +911,7 @@ def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any
         "terminal_payload": "results.json" if (root / "results.json").is_file() else None,
         "failure_payload": "failure.json" if (root / "failure.json").is_file() else None,
         "files": files,
+        "redaction": redaction,
     }
 
 
@@ -835,6 +962,14 @@ def main() -> int:
     package.add_argument("--contract", type=Path, required=True)
     package.add_argument("--workflow", required=True)
     package.add_argument("--output", type=Path, required=True)
+    package.add_argument("--credentials", type=Path,
+                         help="an env file of the credentials the phase received, redacted out of the tree")
+    stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
+    stack_env.add_argument("--contract", type=Path, required=True)
+    stack_env.add_argument("--output", type=Path, required=True)
+    credentials_file = commands.add_parser(
+        "credentials-file", help="a private env file of the catalog's credentials this environment sets")
+    credentials_file.add_argument("--output", type=Path, required=True)
     layout = commands.add_parser("validate-layout")
     layout.add_argument("--artifact-root", type=Path, required=True)
     layout.add_argument("--runtime-root", type=Path, required=True)
@@ -849,6 +984,11 @@ def main() -> int:
             # The declaration answers this one; there is no contract to read.
             for root in project_roots(args.compose):
                 print(root)
+            return 0
+        if args.command == "credentials-file":
+            values = catalog_credentials(os.environ)
+            write_private(args.output, values)
+            print("provider credentials: " + (", ".join(values) or "none"))
             return 0
         contract = validate_contract(load_object(args.contract, "contract"))
         if args.command == "validate":
@@ -918,6 +1058,14 @@ def main() -> int:
                 args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
         elif args.command == "group-template":
             print(group_template(contract, args.group_id))
+        elif args.command == "credentials-env":
+            values = received_credentials(os.environ)
+            write_private(args.output, values)
+            # Said out loud; the group still runs.
+            provider = contract["suite"]["subject"]["provider"]
+            key = credential_catalog()[0].get(provider)
+            if key and key not in values:
+                print(f"[WARN] {key} is not set; provider-{provider} starts without a credential", file=sys.stderr)
         elif args.command == "compose-evidence":
             manifest = compose_evidence(
                 contract,
@@ -936,9 +1084,14 @@ def main() -> int:
             workflow = json.loads(args.workflow)
             if not isinstance(workflow, dict):
                 raise ValueError("workflow must be a JSON object")
-            args.output.write_text(json.dumps(package_bundle(args.root, contract, workflow), indent=2, sort_keys=True) + "\n")
+            credentials = received_credentials(os.environ, args.credentials)
+            manifest = package_bundle(args.root, contract, workflow, credentials)
+            for name in manifest["redaction"]["too_short"]:
+                print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
+                      "the evidence is not checked for it")
+            args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         return 0
-    except (ValueError, json.JSONDecodeError) as error:
+    except (ValueError, json.JSONDecodeError, OSError) as error:
         print(f"error: {error}")
         return 2
 

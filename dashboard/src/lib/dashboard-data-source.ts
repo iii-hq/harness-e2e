@@ -76,6 +76,24 @@ export type ExecutionSuite = {
  *  or on GitHub (imported runs). */
 export type ExecutionWhere = 'harness' | 'docker' | 'github'
 
+/** A provider credential Docker executions receive, by name: the worker
+ *  never answers with a value. `source` is where it is set from: this
+ *  Console, or only the worker's `provider_env_file`. */
+export type Credential = {
+  name: string
+  set: boolean
+  source?: 'console' | 'provider_env_file'
+  /** The providers that read it. */
+  providers: string[]
+}
+
+/** What an import from the worker's own environment found. */
+export type CredentialsImport = {
+  found: string[]
+  not_found: string[]
+  credentials: Credential[]
+}
+
 /** The stack an execution ran on in Docker or on GitHub: once imported, the
  *  final `stack.yaml` its contract recorded. The worker sets `sha256`. */
 export type ExecutionStack = {
@@ -603,6 +621,10 @@ export type RuntimeConfig = {
     stack_create: string
     stack_update: string
     stack_delete: string
+    credentials_list: string
+    credential_set: string
+    credential_delete: string
+    credentials_import: string
     changed_trigger: string
   }
 }
@@ -661,6 +683,15 @@ export type DashboardDataBridge = {
     changes: Partial<Pick<Stack, 'label' | 'yaml'>>,
   ): Promise<Stack>
   deleteStack(stackId: string): Promise<void>
+  /** By name, whether each is set and where from; never a value. */
+  listCredentials(): Promise<{ credentials: Credential[] }>
+  setCredential(
+    name: string,
+    value: string,
+  ): Promise<{ credentials: Credential[] }>
+  deleteCredential(name: string): Promise<{ credentials: Credential[] }>
+  /** Sets the known provider keys the worker's own environment holds. */
+  importCredentials(): Promise<CredentialsImport>
   getCatalog(url?: string): Promise<JsonObject>
   /** Starts an execution on this harness or in Docker; Run tests and Run
    *  again alike. */
@@ -773,6 +804,14 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call(runtime.functions.stack_delete, { stack_id: stackId }).then(
         () => undefined,
       ),
+    listCredentials: () => call(runtime.functions.credentials_list, {}),
+    // `secret`: a key the iii SDKs redact from the invocation payloads they
+    // record in traces.
+    setCredential: (name, value) =>
+      call(runtime.functions.credential_set, { name, secret: value }),
+    deleteCredential: (name) =>
+      call(runtime.functions.credential_delete, { name }),
+    importCredentials: () => call(runtime.functions.credentials_import, {}),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
     startExecution: (request) =>
