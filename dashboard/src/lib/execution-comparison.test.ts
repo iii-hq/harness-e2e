@@ -710,6 +710,28 @@ describe('comparing two executions', () => {
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
     )
   })
+
+  it('compares a worker built from a commit by the commit, not its Cargo version', () => {
+    const harness = (detail: DashboardExecutionDetail, commit: string | null) =>
+      detail.plan_execution?.stack.push({
+        name: 'harness',
+        source: 'package',
+        requested: null,
+        observed: '1.8.8-rc.3',
+        commit,
+        dirty: null,
+      })
+    const a = imported()
+    const b = local()
+    harness(a, '3f2a9c1dddddddddddddddddddddddddddddddd')
+    harness(b, null)
+    expect(compareExecutions(a, b).stack.versions).toEqual([
+      { field: 'harness', a: '@3f2a9c1', b: '1.8.8-rc.3' },
+    ])
+    const same = local()
+    harness(same, '3f2a9c1dddddddddddddddddddddddddddddddd')
+    expect(compareExecutions(a, same).stack.versions).toEqual([])
+  })
 })
 
 describe('comparison summary', () => {

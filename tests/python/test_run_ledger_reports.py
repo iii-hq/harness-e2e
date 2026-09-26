@@ -636,8 +636,9 @@ class CommitPinTests(unittest.TestCase):
 
     FULL = "3f2a9c1" + "d" * 33
 
-    def resolve(self, containers, commits=None, graph=None):
-        """resolve_commits against a Registry and GitHub that answer as told."""
+    def resolve(self, containers, commits=None, graph=None, status="behind"):
+        """resolve_commits against a Registry and GitHub that answer as told:
+        `commits` by repository, and how each compares to its default branch."""
         commits = commits if commits is not None else {"iii-hq/workers": self.FULL}
         urls = []
 
@@ -645,13 +646,21 @@ class CommitPinTests(unittest.TestCase):
             urls.append((url, body))
             if url.endswith("/resolve"):
                 return graph or release(body["worker"])
-            repository, _, ref = url.removeprefix(prepare_execution.GITHUB_API_URL + "/repos/").partition("/commits/")
+            path = url.removeprefix(prepare_execution.GITHUB_API_URL + "/repos/")
+            if "/compare/" in path:
+                return {"status": status}
+            repository, _, ref = path.partition("/commits/")
+            if not ref:
+                return {"default_branch": "main"}
             if repository not in commits:
                 raise prepare_execution.ResolutionError(f"{url} answered HTTP 422")
             return {"sha": commits[repository]}
 
-        with patch.object(prepare_execution, "get_json", side_effect=get):
-            return prepare_execution.resolve_commits({"containers": containers}, "token"), urls
+        with patch.object(prepare_execution, "get_json", side_effect=get), \
+                patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
+            pins = prepare_execution.resolve_commits({"containers": containers}, "token")
+        self.printed = printed.getvalue()
+        return pins, urls
 
     def test_the_repository_and_folder_come_from_the_registry_and_the_commit_resolves_whole(self):
         pins, urls = self.resolve({
@@ -665,6 +674,9 @@ class CommitPinTests(unittest.TestCase):
         self.assertEqual(urls[0], (prepare_execution.REGISTRY_URL + "/resolve",
                                    {"worker": "harness", "version": "latest", "target": prepare_execution.CLI_TARGET}))
         self.assertTrue(urls[1][0].endswith("/repos/iii-hq/workers/commits/3f2a9c1"))
+        self.assertTrue(urls[3][0].endswith(f"/repos/iii-hq/workers/compare/main...{self.FULL}?per_page=1"))
+        self.assertTrue(pin["on_default_branch"])
+        self.assertEqual(self.printed, "")
         # The newest release's graph, exact, without the engine's own workers.
         self.assertEqual(pin["release"]["nodes"], {
             "harness": "1.8.36", "llm-router": "1.4.27", "state": "0.22.17", "provider-zai": "0.5.13"})
@@ -686,6 +698,26 @@ class CommitPinTests(unittest.TestCase):
         )
         self.assertEqual((pins["harness"]["repository"], pins["harness"]["path"]), ("someone/fork", "workers/harness"))
         self.assertTrue(urls[1][0].endswith("/repos/someone/fork/commits/3f2a9c1"))
+
+    def test_a_commit_the_default_branch_does_not_have_is_a_warning(self):
+        for status in ("ahead", "diverged"):
+            pins, _ = self.resolve({"harness": {"worker": "package://harness", "commit": "3f2a9c1"}}, status=status)
+            self.assertFalse(pins["harness"]["on_default_branch"])
+            self.assertIn(f"::warning::harness pins iii-hq/workers@{self.FULL[:12]}, which is not on its default "
+                          "branch main: it may come from a fork", self.printed)
+        pins, _ = self.resolve({"harness": {"worker": "package://harness", "commit": "3f2a9c1"}}, status="identical")
+        self.assertTrue(pins["harness"]["on_default_branch"])
+
+    def test_the_build_cache_entry_is_the_pinned_commits_whatever_the_containers(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": "a" * 40}
+        key = prepare_execution.builds_key({"harness": pin})
+        self.assertRegex(key, r"^worker-builds-[0-9a-f]{32}$")
+        self.assertEqual(prepare_execution.builds_key({"app": {**pin, "worker": "other", "release": {}}}), key)
+        self.assertNotEqual(prepare_execution.builds_key({"harness": {**pin, "commit": "b" * 40}}), key)
+        other = {**pin, "worker": "llm-router", "path": "llm-router"}
+        self.assertEqual(prepare_execution.builds_key({"a": pin, "b": other}),
+                         prepare_execution.builds_key({"b": other, "a": pin}))
+        self.assertIsNone(prepare_execution.builds_key({}))
 
     def test_a_commit_that_does_not_exist_is_an_error(self):
         harness = {"worker": "package://harness", "commit": "3f2a9c1"}
@@ -736,8 +768,9 @@ class CommitPinTests(unittest.TestCase):
             fetch = next(command for command, _ in calls if "fetch" in command)
             self.assertEqual(fetch[-2:], ["https://github.com/iii-hq/workers.git", self.FULL])
             self.assertFalse(any("GITHUB_TOKEN" in kwargs["env"] for _, kwargs in calls))
-            # Nothing but the build is left in the cache.
-            self.assertEqual([path.name for path in cache.iterdir()], ["iii-hq"])
+            # Built outside the cache, which holds nothing but the entry.
+            self.assertFalse(Path(cargo[cargo.index("--target-dir") + 1]).is_relative_to(cache))
+            self.assertEqual([path.name for path in built.parent.iterdir()], ["harness"])
             built_again = prepare_execution.build_worker(pin, cache)
             self.assertEqual(built_again, built)
             self.assertEqual(len([command for command, _ in calls if command[0] == "cargo"]), 1)
@@ -745,6 +778,32 @@ class CommitPinTests(unittest.TestCase):
                 patch.object(prepare_execution.subprocess, "run", side_effect=self.fake_build([], "node")), \
                 self.assertRaisesRegex(prepare_execution.ResolutionError, "not a Rust worker"):
             prepare_execution.build_worker(pin, Path(directory))
+
+    def test_a_build_another_execution_completed_first_stands_and_leftovers_go(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL}
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            entry = cache / "iii-hq/workers" / self.FULL / "harness"
+            stale = entry.parent / ".build-interrupted"
+            stale.mkdir(parents=True)
+            os.utime(stale, (0, 0))
+            fresh = entry.parent / ".build-copying"
+            fresh.mkdir()
+            build = self.fake_build([])
+
+            def racing(command, **kwargs):
+                result = build(command, **kwargs)
+                if command[0] == "cargo":
+                    # Another execution's build lands while this one runs.
+                    (entry / "bin").mkdir(parents=True)
+                    (entry / "build.json").write_text('{"first": true}')
+                return result
+
+            with patch.object(prepare_execution.subprocess, "run", side_effect=racing):
+                self.assertEqual(prepare_execution.build_worker(pin, cache), entry)
+            self.assertEqual(json.loads((entry / "build.json").read_text()), {"first": True})
+            # What an interrupted build left goes; a copy under way stays.
+            self.assertEqual(sorted(path.name for path in entry.parent.iterdir()), [".build-copying", "harness"])
 
     def test_a_built_worker_is_declared_as_a_path_worker_with_its_release_dependencies_and_config(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -784,10 +843,14 @@ class CommitPinTests(unittest.TestCase):
         self.assertEqual(containers["state"], {"worker": "package://state", "version": "0.22.17"})
         self.assertEqual(containers["zai"], {"worker": "package://provider-zai", "version": "latest"})
         self.assertEqual(pin["dependencies"], ["llm-router", "state"])
+        # What a template's own declaration of the worker gets under its values.
+        self.assertEqual((pin["config"], pin["env"]), ({"max_depth": 3, "limits": {"turns": 5, "tokens": 9}},
+                                                       {"RUST_LOG": "info"}))
 
     def test_the_contract_and_the_reports_name_the_commit_that_ran(self):
         pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL,
-               "dependencies": ["llm-router"], "release": {"nodes": {}, "edges": []}}
+               "on_default_branch": True, "dependencies": ["llm-router"], "config": {"max_depth": 3}, "env": {},
+               "release": {"nodes": {}, "edges": []}}
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
@@ -799,12 +862,24 @@ class CommitPinTests(unittest.TestCase):
                 SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e"))
             contract = json.loads((root / "contracts/regression-r01.json").read_text())
             resolution = root / "contracts/resolution.json"
-            self.assertEqual(json.loads(resolution.read_text())["stack_commits"], {"harness": self.FULL})
+            commits = {"harness": {"commit": self.FULL, "repository": "iii-hq/workers", "path": "harness",
+                                   "on_default_branch": True}}
+            self.assertEqual(json.loads(resolution.read_text())["stack_commits"], commits)
+            # As the lock step completes it: the versions the lock resolved.
+            written = json.loads(resolution.read_text())
+            resolution.write_text(json.dumps({**written, "stack_versions": {"state": "0.22.17"}}))
             identity = report_execution.identity_of(Args(resolution=resolution), None)
+            # What the engine reports for the build is its Cargo version.
+            (root / "compose-evidence.json").write_text(json.dumps(
+                {"runtime": {"observed_versions": {"harness": "1.8.8-rc.3", "state": "0.22.17"}}}))
+            observed = report_execution.identity_of(Args(resolution=resolution), root)
         # What the scaffold and the launcher read, without the release graph.
-        self.assertEqual(contract["runtime"]["commits"], {"app": {
-            key: pin[key] for key in ("worker", "repository", "path", "commit", "dependencies")}})
-        self.assertEqual(identity["stack_commits"], {"harness": self.FULL})
+        self.assertEqual(contract["runtime"]["commits"], {"app": {key: pin[key] for key in (
+            "worker", "repository", "path", "commit", "on_default_branch", "dependencies", "config", "env")}})
+        self.assertEqual(identity["stack_commits"], commits)
+        # Named by its commit, never a release a series would compare it with.
+        self.assertEqual(identity["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
+        self.assertEqual(observed["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
         self.assertNotIn("stack_commits", report_execution.identity_of(Args(), None))
 
     def test_a_runner_built_from_a_commit_materializes_and_aggregates(self):

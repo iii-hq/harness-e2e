@@ -18,11 +18,13 @@
 //!   `e2e-observation-<id>-gh-<attempt>`.
 //! - `logs/`: each phase's output.
 //!
-//! `worker-builds/` beside it keeps the workers stacks pin to a `commit:`,
-//! built once per repository, commit and folder by `prepare materialize`,
-//! which gets it mounted.
+//! `worker-builds/<entry>/` beside it keeps the workers stacks pin to a
+//! `commit:`, one entry per set of pinned commits (what `prepare resolve`
+//! names), mounted into `prepare build` alone: a build only ever reaches the
+//! entry of the commits it was asked to build.
 //!
-//! `prepare` (resolve, materialize, assemble, fixtures), one `group` container per
+//! `prepare` (resolve, build when the stack pins a commit, materialize,
+//! assemble, fixtures), one `group` container per
 //! group, `docker_parallel_groups` at a time across executions, each packaged,
 //! then `finalize`, whose root bundle is imported once every group ended.
 //! Running a scenario again runs its groups as the next attempt, finalizes
@@ -580,15 +582,35 @@ impl PlanStore {
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
             dispatch.push(("GITHUB_TOKEN".into(), token));
         }
-        let builds = (
-            "HARNESS_E2E_WORKER_BUILDS".to_owned(),
-            self.root.join("worker-builds").display().to_string(),
-        );
-        for (step, env) in [
-            ("resolve", dispatch),
-            ("materialize", [key(), vec![builds]].concat()),
-            ("assemble", key()),
-        ] {
+        let mut warnings = Vec::new();
+        for step in ["resolve", "build", "materialize", "assemble"] {
+            let env = match step {
+                "resolve" => dispatch.clone(),
+                "build" => {
+                    let resolved =
+                        read_json(&checkout.join("target/harness-e2e-contract/execution.json"))?;
+                    warnings.extend(off_default_branch(&resolved));
+                    // Nothing pinned to a commit, nothing to build.
+                    let Some(entry) = resolved["builds"].as_str() else {
+                        continue;
+                    };
+                    ensure!(
+                        entry
+                            .strip_prefix("worker-builds-")
+                            .is_some_and(|digest| !digest.is_empty()
+                                && digest.bytes().all(|byte| byte.is_ascii_hexdigit())),
+                        "prepare resolve named an unexpected build cache entry {entry:?}"
+                    );
+                    let cache = self.root.join("worker-builds").join(entry);
+                    let mut env = key();
+                    env.push((
+                        "HARNESS_E2E_WORKER_BUILDS".into(),
+                        cache.display().to_string(),
+                    ));
+                    env
+                }
+                _ => key(),
+            };
             let log = folder.join(format!("logs/prepare-{step}.log"));
             // Held until the phase ends, then removed.
             let credentials = match step {
@@ -648,6 +670,7 @@ impl PlanStore {
         }
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
+        execution.warnings.extend(warnings);
         if !fetched {
             execution.warnings.push(format!(
                 "Checking out the groups' fixtures failed (see {}); a group that needs one says so.",
@@ -1293,6 +1316,24 @@ fn docker_phase(execution: &PlanExecution) -> &str {
     }
 }
 
+/// A warning for each commit pinned that its repository's default branch
+/// does not have, which may be a fork's.
+fn off_default_branch(execution: &Value) -> Vec<String> {
+    execution["commits"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, pin)| pin["on_default_branch"] == false)
+        .map(|(name, pin)| {
+            format!(
+                "{name} pins {}@{}, which its default branch does not have: it may come from a fork.",
+                pin["repository"].as_str().unwrap_or_default(),
+                pin["commit"].as_str().unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
 /// What `prepare` sends as `DISPATCH_SUITE`: a suite of the master plan by
 /// its id when it runs as reviewed, so its digest is the workflow's for that
 /// suite; any other suite whole, as JSON, with every scenario given.
@@ -1577,13 +1618,17 @@ mod tests {
                 ["resolve"] => {
                     fs::create_dir_all(&contracts)?;
                     let suite = &env["DISPATCH_SUITE"];
-                    fs::write(
-                        contracts.join("execution.json"),
-                        json!({"suite": suite, "stack": "inline", "model": env["DISPATCH_MODEL"]})
-                            .to_string(),
-                    )?;
+                    let mut execution =
+                        json!({"suite": suite, "stack": "inline", "model": env["DISPATCH_MODEL"]});
+                    if env["DISPATCH_STACK"].contains("commit:") {
+                        execution["builds"] = json!("worker-builds-0123abcd");
+                        execution["commits"] = json!({"harness": {"commit": "3f2a9c1".repeat(5),
+                            "repository": "someone/fork", "on_default_branch": false}});
+                    }
+                    fs::write(contracts.join("execution.json"), execution.to_string())?;
                     fs::write(contracts.join("stack.yaml"), &env["DISPATCH_STACK"])?;
                 }
+                ["build"] => {}
                 ["materialize"] => {
                     let master = test_plan::embedded()?;
                     let execution = read_json(&contracts.join("execution.json"))?;
@@ -1981,15 +2026,11 @@ mod tests {
                 "prepare fixtures"
             ]
         );
-        // Only the build gets the cache of workers built from a commit.
-        for call in launcher.calls("prepare") {
-            assert_eq!(
-                call.env.get("HARNESS_E2E_WORKER_BUILDS").map(PathBuf::from),
-                (call.args[1] == "materialize").then(|| data.join("worker-builds")),
-                "{:?}",
-                call.args
-            );
-        }
+        // A stack that pins no commit has nothing to build.
+        assert!(launcher
+            .calls("prepare")
+            .iter()
+            .all(|call| !call.env.contains_key("HARNESS_E2E_WORKER_BUILDS")));
         // Each group packaged after it ran, then the root after the finalizer.
         assert_eq!(phases[phases.len() - 2..], ["finalize", "package"]);
         assert_eq!(phases.iter().filter(|phase| *phase == "package").count(), 5);
@@ -2740,6 +2781,61 @@ mod tests {
         let after = "OPENAI_API_KEY=sk-after-0123456789\n";
         assert_eq!(seen("group", "case-persistent-state"), after);
         assert_eq!(seen("package", "case-persistent-state"), after);
+    }
+
+    #[tokio::test]
+    async fn a_stack_pinned_to_a_commit_builds_it_on_its_own_with_its_cache_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings::default(),
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-openai-0123456789")
+            .unwrap();
+        let mut parameters = docker_parameters("pr");
+        if let Some(stack) = parameters.stack.as_mut() {
+            stack.yaml =
+                "containers:\n  harness:\n    worker: package://harness\n    commit: 3f2a9c1\n"
+                    .into();
+        }
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        let prepared = launcher
+            .calls("prepare")
+            .into_iter()
+            .map(|call| {
+                let cache = call.env.get("HARNESS_E2E_WORKER_BUILDS").cloned();
+                (
+                    call.args[1].clone(),
+                    cache,
+                    call.env.contains_key("GITHUB_TOKEN") || call.credentials.is_some(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let entry = data.join("worker-builds/worker-builds-0123abcd");
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|(step, cache, _)| (step.as_str(), cache.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("resolve", None),
+                ("build", Some(entry.display().to_string())),
+                ("materialize", None),
+                ("assemble", None),
+                ("fixtures", None),
+            ]
+        );
+        // The build holds neither the token nor the credentials.
+        assert!(!prepared[1].2);
+        assert!(done.warnings.iter().any(|warning| warning
+            == &format!("harness pins someone/fork@{}, which its default branch does not have: it may come from a fork.", "3f2a9c1".repeat(5))), "{:?}", done.warnings);
     }
 
     #[tokio::test]

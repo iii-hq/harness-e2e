@@ -156,23 +156,32 @@ class WrapperTests(unittest.TestCase):
         run = next(call for call in invoked if call[0] == "run")
         self.assertFalse(any("HARNESS_E2E_CREDENTIALS" in value for value in run))
 
-    def test_only_prepare_gets_the_github_token_and_only_a_group_privileges(self):
-        for phase in (["prepare", "materialize"], ["finalize"]):
-            with self.subTest(phase=phase[0]):
+    def test_only_resolving_and_fixtures_get_the_github_token_and_only_a_group_privileges(self):
+        root = self.root.resolve()
+        for phase in (["prepare", "resolve"], ["prepare", "fixtures"], ["prepare", "build"],
+                      ["prepare", "materialize"], ["prepare", "assemble"], ["finalize"]):
+            with self.subTest(phase=phase):
                 if self.log.exists():
                     self.log.unlink()
                 _, invoked = self.run_wrapper(*phase, env={"GITHUB_TOKEN": "ghs_token"})
                 run = next(call for call in invoked if call[0] == "run")
-                self.assertEqual(("--env", "GITHUB_TOKEN") in pairs(run), phase[0] == "prepare")
+                self.assertEqual(("--env", "GITHUB_TOKEN") in pairs(run), phase[1:] in (["resolve"], ["fixtures"]))
+                # Preparing, only target/ is writable: a pinned commit's build
+                # or the stack's runner cannot rewrite the scripts.
+                volumes = [value for flag, value in zip(run, run[1:]) if flag == "--volume"]
+                if phase[0] == "prepare":
+                    self.assertEqual(volumes, [f"{root}:{root}:ro", f"{root}/target:{root}/target"])
+                else:
+                    self.assertEqual(volumes, [f"{root}:{root}"])
                 self.assertIn(("--user", f"{os.getuid()}:{os.getgid()}"), pairs(run))
                 self.assertIn(("--security-opt", "no-new-privileges"), pairs(run))
                 for flag in ("--privileged", "--cgroupns", "--mount", "--group-add", "--network"):
                     self.assertNotIn(flag, run)
                 self.assertFalse(any("docker.sock" in value or "EXECUTOR_USER" in value for value in run))
 
-    def test_prepare_alone_mounts_the_build_cache_where_it_is(self):
+    def test_the_build_alone_mounts_the_build_cache_where_it_is(self):
         cache = self.directory / "data/worker-builds"
-        for phase, mounted in ((["prepare", "materialize"], True), (["group"], False)):
+        for phase, mounted in ((["prepare", "build"], True), (["prepare", "materialize"], False), (["group"], False)):
             with self.subTest(phase=phase[0]):
                 if self.log.exists():
                     self.log.unlink()
@@ -181,6 +190,34 @@ class WrapperTests(unittest.TestCase):
                 self.assertEqual(("--volume", f"{cache}:{cache}") in pairs(run), mounted)
                 self.assertIn(("--env", "HARNESS_E2E_WORKER_BUILDS"), pairs(run))
         self.assertTrue(cache.is_dir())
+
+    def test_the_build_gets_no_credentials_by_name_or_file(self):
+        credentials = self.directory / "provider-credentials.env"
+        credentials.write_text("OPENAI_API_KEY=sk-openai-secret\n")
+        result, invoked = self.run_wrapper("--env-file", str(credentials), "prepare", "build",
+                                           env={"DEEPSEEK_API_KEY": "sk-deepseek", "GITHUB_TOKEN": "ghs_token"})
+        run = next(call for call in invoked if call[0] == "run")
+        for flag, value in (("--env-file", str(credentials)), ("--env", "DEEPSEEK_API_KEY"),
+                            ("--env", "GITHUB_TOKEN")):
+            self.assertNotIn((flag, value), pairs(run))
+        self.assertFalse(any(value.startswith("HARNESS_E2E_CREDENTIALS") for value in run))
+        self.assertIn("prepare build takes no credentials", result.stderr)
+        self.log.unlink()
+        _, invoked = self.run_wrapper("prepare", "assemble", env={"DEEPSEEK_API_KEY": "sk-deepseek"})
+        self.assertIn(("--env", "DEEPSEEK_API_KEY"), pairs(next(call for call in invoked if call[0] == "run")))
+
+    def test_prepare_without_a_step_runs_each_in_a_container_of_its_own(self):
+        _, invoked = self.run_wrapper("--env-file", "/secrets/providers.env", "prepare",
+                                      env={"GITHUB_TOKEN": "ghs_token"})
+        runs = [call for call in invoked if call[0] == "run"]
+        self.assertEqual([run[run.index("scripts/executor.sh") + 1:] for run in runs],
+                         [["prepare", "resolve"], ["prepare", "build"], ["prepare", "materialize"],
+                          ["prepare", "assemble"]])
+        # The token where it resolves, the credentials where they assemble:
+        # neither where the commits a stack pins are built.
+        self.assertEqual([("--env", "GITHUB_TOKEN") in pairs(run) for run in runs], [True, False, False, False])
+        self.assertEqual([("--env-file", "/secrets/providers.env") in pairs(run) for run in runs],
+                         [False, False, False, True])
 
     def test_an_unpublished_image_is_built_here_and_said_out_loud(self):
         result, invoked = self.run_wrapper("--env-file", "/secrets/providers.env", "prepare", "assemble",
@@ -322,8 +359,11 @@ class ExecutorTests(unittest.TestCase):
                               env=environment, capture_output=True, text=True)
 
     def test_preparation_materializes_with_the_stacks_runner_then_assembles_with_one_more_try(self):
-        result = self.executor("prepare")
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for step in ("resolve", "build", "materialize", "assemble"):
+            result = self.executor("prepare", step)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        # The steps run one by one: never all in one process.
+        self.assertEqual(self.executor("prepare").returncode, 2)
         contract_dir = "--contract-dir target/harness-e2e-contract"
         assembly = f"{self.root}/target/harness-e2e-assembly"
         self.assertEqual([line.split(" --work-dir")[0] for line in self.log.read_text().splitlines()], [
@@ -346,8 +386,9 @@ class ExecutorTests(unittest.TestCase):
         # --env-file (a provider_env_file) overrides the image's ENV.
         self.runner.write_text('#!/usr/bin/env bash\necho "telemetry=$III_TELEMETRY_ENABLED" >>"$FAKE_LOG"\n'
                                'echo \'{"campaigns":[{"campaign_id":"pr-r01"}]}\'\n')
-        result = self.executor("prepare", env={"III_TELEMETRY_ENABLED": "true"})
-        self.assertEqual(result.returncode, 0, result.stderr)
+        for step in ("resolve", "materialize"):
+            result = self.executor("prepare", step, env={"III_TELEMETRY_ENABLED": "true"})
+            self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("telemetry=false", self.log.read_text().splitlines())
 
     def test_finalize_aggregates_every_campaign_into_one_summary(self):

@@ -4,14 +4,16 @@
 # below target/, as the workflow always has; GitHub's jobs and the Console's
 # Docker executions run the same phases:
 #
-#   prepare [resolve|materialize|assemble|fixtures]
+#   prepare resolve|build|materialize|assemble|fixtures
 #       resolve      read the dispatch (DISPATCH_*), resolve iii, the template
 #                    and every `commit:` the stack pins, with GITHUB_TOKEN
 #                    when there is one.
-#       materialize  build what the stack pins to a commit, never with a
-#                    token, into the contract through the build cache
-#                    HARNESS_E2E_WORKER_BUILDS (default target/worker-builds),
-#                    fetch the stack's runner and materialize the suite with it.
+#       build        build what the stack pins to a commit into the contract,
+#                    through the build cache HARNESS_E2E_WORKER_BUILDS
+#                    (default target/worker-builds). It runs the commits'
+#                    code: never with a token or credentials, and on its own,
+#                    so what else the execution runs cannot reach the cache.
+#       materialize  fetch the stack's runner and materialize the suite with it.
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
 #       fixtures     check out below target/ what the groups start from and
@@ -20,9 +22,9 @@
 #                    the trending topics fixture. For the group
 #                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
 #                    of the execution. The private ones read GITHUB_TOKEN.
-#       Without an argument, resolve, materialize and assemble. GitHub
-#       restores and saves the build cache around materialize and reports
-#       the materialized suite to Release Control before anything is
+#       In that order; scripts/run_in_image.sh runs each in a container of
+#       its own. GitHub restores and saves the build cache around build and
+#       reports the materialized suite to Release Control before anything is
 #       assembled.
 #   group     start one group's frozen stack and run its scenarios
 #             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...), with
@@ -53,7 +55,7 @@ set -Eeuo pipefail
 export III_TELEMETRY_ENABLED=false
 
 usage() {
-  echo "usage: executor.sh prepare [resolve|materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
+  echo "usage: executor.sh prepare resolve|build|materialize|assemble|fixtures | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2
 }
 
@@ -74,9 +76,12 @@ resolve() {
   python3 scripts/prepare_execution.py runtime --contract-dir "$contract_dir"
 }
 
-materialize() {
+build() {
   python3 scripts/prepare_execution.py commits --contract-dir "$contract_dir" \
     --cache-dir "${HARNESS_E2E_WORKER_BUILDS:-target/worker-builds}"
+}
+
+materialize() {
   # The suite is materialized by the runner the stack runs, never by a build
   # of this checkout: its master plan and scenario catalog are the ones every
   # group executes. suite.json is the snapshot; profile.json is the same file
@@ -357,14 +362,10 @@ case "${1:-}" in
   prepare)
     case "${2:-}" in
       resolve) resolve ;;
+      build) build ;;
       materialize) materialize ;;
       assemble) assemble ;;
       fixtures) fixtures ;;
-      "")
-        resolve
-        materialize
-        assemble
-        ;;
       *) usage ;;
     esac
     ;;

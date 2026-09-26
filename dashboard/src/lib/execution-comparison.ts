@@ -823,7 +823,12 @@ function stackComparison(
     distinct(
       stacks[side]
         .filter((worker) => worker.name === name)
-        .map((worker) => worker.observed ?? 'version not observed'),
+        .map((worker) =>
+          // Built from a commit, a worker is that commit, not its Cargo version.
+          worker.commit
+            ? `@${worker.commit.slice(0, 7)}`
+            : (worker.observed ?? 'version not observed'),
+        ),
     )
       .sort()
       .join(' | ')

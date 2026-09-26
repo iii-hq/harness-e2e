@@ -415,11 +415,20 @@ else
     # well is a second, conflicting spec. Declared, one keeps its pin unasked.
     # So do the dependencies of a worker built from a commit, declared at the
     # versions of its newest release.
-    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory "
-    ensured+="$(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
+    held=" $(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
+    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory $held"
+    roots=$(python3 "$contract_tool" roots --compose "$compose_file")
     while IFS= read -r root; do
-      [[ "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
-    done < <(python3 "$contract_tool" roots --compose "$compose_file")
+      [[ -z "$root" || "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
+    done <<<"$roots"
+    # Every root built from a commit: its held dependencies are asked for at
+    # the exact versions one release graph resolved together.
+    if ((${#add_args[@]} == 1)); then
+      while IFS= read -r root; do
+        [[ -z "$root" || "$held" != *" ${root%@*} "* ]] || add_args+=("worker=$root")
+      done <<<"$roots"
+    fi
+    ((${#add_args[@]} > 1)) || fail "the stack declares no package worker for compose::add to assemble"
   fi
   if ((${#add_args[@]} > 1)) || [[ -z "$project_template" ]]; then
     compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"

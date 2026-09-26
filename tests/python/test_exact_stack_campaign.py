@@ -923,7 +923,8 @@ fail() {
         contract["runtime"]["lock"] = lock_of({"llm-router": "1.4.27", "harness-e2e": "0.15.1"})
         contract["runtime"]["commits"] = {"app": {
             "worker": "harness", "repository": "iii-hq/workers", "path": "harness",
-            "commit": "3f2a9c1" + "d" * 33, "dependencies": ["llm-router"]}}
+            "commit": "3f2a9c1" + "d" * 33, "dependencies": ["llm-router"],
+            "config": {"max_depth": 3, "mode": "loop"}, "env": {"RUST_LOG": "info"}}}
         return contract, built
 
     def test_a_worker_built_from_a_commit_is_still_the_package_it_was_built_from(self):
@@ -940,24 +941,43 @@ fail() {
     def test_a_template_runs_the_build_the_stack_pinned_with_its_held_dependencies(self):
         contract, built = self.pinned_contract()
         template = {"containers": {
-            "subject": {"worker": "package://harness", "version": "1.8.17"},
+            "subject": {"worker": "package://harness", "version": "1.8.17", "start_after": ["console"],
+                        "config_name": "subject", "config_override": {"mode": "chat"},
+                        "environment": {"RUST_LOG": "warn"}, "scripts": {"pre_run": "true"}},
             "router": {"worker": "package://llm-router", "version": "1.4.0"},
             "console": {"worker": "package://ade"},
         }}
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
         containers = project["containers"]
-        self.assertEqual(containers["subject"]["worker"], f"path://{built}")
-        self.assertNotIn("version", containers["subject"])
-        # Its edge points at the template's own name for the dependency, which
-        # runs what the execution locked.
-        self.assertEqual(containers["subject"]["start_after"], ["router"])
+        # Only where it comes from and how it starts change; the template's
+        # role keeps its own, over the build's defaults.
+        self.assertEqual(containers["subject"], {
+            "worker": f"path://{built}",
+            "scripts": {"pre_run": "true", "run": f"exec {built}/bin/harness"},
+            "working_dir": ".",
+            "start_after": ["console"],
+            "config_name": "subject",
+            "config_override": {"max_depth": 3, "mode": "chat"},
+            "environment": {"RUST_LOG": "warn", "III_TELEMETRY_ENABLED": "false"},
+        })
+        # The dependency the template declares runs what the execution locked.
         self.assertEqual(containers["router"]["version"], "1.4.27")
         self.assertNotIn("llm-router", containers)
         # Without it, the held dependency is declared as the stack declared it.
         template["containers"].pop("router")
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
         self.assertEqual(project["containers"]["llm-router"]["version"], "1.4.27")
-        self.assertEqual(project["containers"]["subject"]["start_after"], ["llm-router"])
+
+    def test_the_run_names_a_worker_built_from_a_commit_by_its_commit(self):
+        contract, _ = self.pinned_contract()
+        contract["suite"]["groups"][0]["scenarios"] = ["direct_answer"]
+        request = MODULE.materialize_request(
+            contract, catalog(), group_id="daily-core",
+            installed=MODULE.built_versions({"harness": "1.8.8-rc.3", "state": "0.22.17"}, contract),
+        )
+        target = request["run_contract"]["target"]
+        self.assertEqual(target["version"], "@3f2a9c1")
+        self.assertEqual(target["stack"]["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
 
     def test_compose_evidence_binds_the_declaration_yaml_namespace_and_lifecycle(self):
         contract = campaign_contract()
@@ -1346,6 +1366,8 @@ compose_trigger() {
             (True, "", "linkly-agentic", False, False, "false", ["compose::up --json"], "runner"),
             # What a worker built from a commit depends on is held, not asked.
             (False, "1", "", False, False, "false", ["compose::add file="], "harness"),
+            # Unless nothing else is left: then at the versions it holds.
+            (False, "1", "", False, False, "false", ["compose::add file="], "everything"),
         )
         for locked, assemble_only, template, profile, brought, frozen, calls, *pinned in cases:
             with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
@@ -1361,10 +1383,13 @@ compose_trigger() {
                 if pinned == ["runner"]:
                     declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
                     commits = {"harness-e2e": {"worker": "harness-e2e", "dependencies": []}}
-                elif pinned == ["harness"]:
+                elif pinned in (["harness"], ["everything"]):
                     declared["containers"]["harness"] = {"worker": "path:///built/harness"}
                     declared["containers"]["llm-router"] = {"worker": "package://llm-router", "version": "1.4.27"}
                     commits = {"harness": {"worker": "harness", "dependencies": ["llm-router"]}}
+                    if pinned == ["everything"]:
+                        declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
+                        commits["harness-e2e"] = {"worker": "harness-e2e", "dependencies": []}
                 (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(declared))
                 (root / "brings.yaml").write_text(
                     yaml.safe_dump({"containers": {"iii-directory": directory_from_graph}}).split("\n", 1)[1]
@@ -1394,6 +1419,9 @@ compose_trigger() {
                     self.assertFalse(any("compose::up" in call for call in made), "preparation stops at the lock")
                 if pinned == ["runner"]:
                     self.assertEqual(json.loads((root / "stack/add.json").read_text())["status"], "skipped")
+                elif pinned == ["everything"]:
+                    self.assertTrue(made[0].endswith("worker=llm-router@1.4.27"), made[0])
+                    self.assertNotIn("worker=provider-deepseek", made[0])
                 elif pinned == ["harness"]:
                     self.assertIn("worker=harness-e2e@0.12.3", made[0])
                     self.assertNotIn("worker=harness@", made[0])

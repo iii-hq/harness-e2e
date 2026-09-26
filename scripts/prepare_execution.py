@@ -46,7 +46,7 @@ from pathlib import Path
 from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from exact_stack_campaign import load_yaml, worker_name  # noqa: E402
+from exact_stack_campaign import load_yaml, merged, worker_name  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -264,12 +264,21 @@ def resolve_commits(stack: dict[str, Any], token: str | None) -> dict[str, dict[
         # A branch or tag named like a sha resolves too; only the commit counts.
         if not isinstance(commit, str) or not commit.startswith(requested):
             raise ResolutionError(f"{repository} has no commit {requested}")
+        # GitHub serves a fork's commits through the repository it forked, so
+        # a commit its default branch never had is said out loud.
+        branch = get_json(f"{GITHUB_API_URL}/repos/{repository}", token=token).get("default_branch")
+        compared = get_json(f"{GITHUB_API_URL}/repos/{repository}/compare/{branch}...{commit}?per_page=1", token=token)
+        on_default_branch = compared.get("status") in ("identical", "behind")
+        if not on_default_branch:
+            print(f"::warning::{name} pins {repository}@{commit[:12]}, which is not on its default branch "
+                  f"{branch}: it may come from a fork", flush=True)
         engine = {node for node, value in nodes.items() if value.get("type") == "engine"}
         commits[name] = {
             "worker": worker,
             "repository": repository,
             "path": path,
             "commit": commit,
+            "on_default_branch": on_default_branch,
             "release": {
                 "version": release.get("version"),
                 "nodes": {node: value["version"] for node, value in nodes.items() if node not in engine},
@@ -286,15 +295,21 @@ def build_worker(pin: dict[str, Any], cache: Path) -> Path:
     """The worker at a pinned commit, built with its own manifest once per
     (repository, commit, folder): a folder of the cache holding the binary
     under `bin/`, its `iii.worker.yaml`, its `config.yaml` if it has one, and
-    `build.json`. Fetched anonymously and built without the token: a build
-    runs the commit's code."""
+    `build.json`. Fetched anonymously and built without the token, outside
+    the cache: a build runs the commit's code. The entry appears whole, by a
+    rename; one another build completed first is kept."""
     built = cache / pin["repository"] / pin["commit"] / (pin["path"] or "_root")
     if (built / "build.json").is_file():
         print(f"{pin['worker']} @{pin['commit'][:12]}: built before, from the cache", file=sys.stderr)
         return built
-    cache.mkdir(parents=True, exist_ok=True)
+    built.parent.mkdir(parents=True, exist_ok=True)
+    # ponytail: an hour is far longer than copying a build takes; what is
+    # older is what an interrupted build left.
+    for stale in built.parent.glob(".build-*"):
+        if time.time() - stale.stat().st_mtime > 3600:
+            shutil.rmtree(stale, ignore_errors=True)
     environment = {key: value for key, value in os.environ.items() if key != "GITHUB_TOKEN"}
-    with tempfile.TemporaryDirectory(dir=cache, prefix=".build-") as scratch:
+    with tempfile.TemporaryDirectory(prefix="harness-e2e-build-") as scratch:
         scratch = Path(scratch)
         source = scratch / "source"
         source.mkdir()
@@ -318,30 +333,28 @@ def build_worker(pin: dict[str, Any], cache: Path) -> Path:
              "--target-dir", str(scratch / "target")],
             cwd=folder, env=environment, check=True, stdout=sys.stderr,
         )
-        result = scratch / "result"
-        (result / "bin").mkdir(parents=True)
-        shutil.copy2(scratch / "target/release" / binary, result / "bin" / binary)
+        # Beside the entry, then renamed into place: the cache may be another
+        # filesystem, and a reader never sees half an entry.
+        staging = Path(tempfile.mkdtemp(dir=built.parent, prefix=".build-"))
+        staging.chmod(0o755)
+        (staging / "bin").mkdir()
+        shutil.copy2(scratch / "target/release" / binary, staging / "bin" / binary)
         for name in ("iii.worker.yaml", "config.yaml"):
             if (folder / name).is_file():
-                shutil.copy2(folder / name, result / name)
-        digest = hashlib.sha256((result / "bin" / binary).read_bytes()).hexdigest()
-        (result / "build.json").write_text(json.dumps({
+                shutil.copy2(folder / name, staging / name)
+        digest = hashlib.sha256((staging / "bin" / binary).read_bytes()).hexdigest()
+        (staging / "build.json").write_text(json.dumps({
             "worker": pin["worker"], "repository": pin["repository"], "path": pin["path"],
             "commit": pin["commit"], "bin": binary, "sha256": f"sha256:{digest}",
         }, indent=2) + "\n")
-        shutil.rmtree(built, ignore_errors=True)
-        built.parent.mkdir(parents=True, exist_ok=True)
-        result.rename(built)
+        try:
+            staging.rename(built)
+        except OSError:
+            shutil.rmtree(staging, ignore_errors=True)
+            # Another execution built the same commit first: its entry stands.
+            if not (built / "build.json").is_file():
+                raise
     return built
-
-
-def merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
-    """`over` on top of `base`, mappings key by key, anything else replaced."""
-    result = dict(base)
-    for key, value in over.items():
-        both = isinstance(value, dict) and isinstance(result.get(key), dict)
-        result[key] = merged(result[key], value) if both else value
-    return result
 
 
 def declare_commits(containers: dict[str, Any], commits: dict[str, dict[str, Any]], folders: dict[str, Path]) -> None:
@@ -376,6 +389,9 @@ def declare_commits(containers: dict[str, Any], commits: dict[str, dict[str, Any
             container["config_override"] = merged(shipped, container.get("config_override") or {})
         if isinstance(manifest.get("env"), dict) and manifest["env"]:
             container["environment"] = {**manifest["env"], **(container.get("environment") or {})}
+        # What a template's own declaration of the worker gets under its values.
+        pin["config"] = shipped if isinstance(shipped, dict) else {}
+        pin["env"] = manifest["env"] if isinstance(manifest.get("env"), dict) else {}
 
         edges = [tuple(edge) for edge in pin["release"]["edges"]]
 
@@ -541,7 +557,8 @@ def build_contract(
         # the scaffold knows a path:// worker by it, the launcher asks for
         # none of its dependencies, and the Console names its commit.
         runtime["commits"] = {
-            name: {key: pin[key] for key in ("worker", "repository", "path", "commit", "dependencies")}
+            name: {key: pin.get(key) for key in (
+                "worker", "repository", "path", "commit", "on_default_branch", "dependencies", "config", "env")}
             for name, pin in commits.items()
         }
     return seal(
@@ -566,9 +583,21 @@ def stack_versions(lock: dict[str, Any]) -> dict[str, str]:
     return dict(sorted(versions.items()))
 
 
-def stack_commits(commits: dict[str, dict[str, Any]]) -> dict[str, str]:
-    """Every worker built from a commit, by the name it is known by."""
-    return dict(sorted((pin["worker"], pin["commit"]) for pin in commits.values()))
+def stack_commits(commits: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """Every worker built from a commit, by the name it is known by: the
+    commit, where it was built from, and whether its default branch has it."""
+    return {
+        pin["worker"]: {key: pin.get(key) for key in ("commit", "repository", "path", "on_default_branch")}
+        for pin in sorted(commits.values(), key=lambda pin: pin["worker"])
+    }
+
+
+def builds_key(commits: dict[str, dict[str, Any]]) -> str | None:
+    """The build cache entry of an execution: its pins, whatever the
+    containers are named. Only executions pinning the same commits share
+    one, so a build can only ever reach its own."""
+    pins = sorted(canonical({key: pin[key] for key in ("repository", "commit", "path")}) for pin in commits.values())
+    return f"worker-builds-{hashlib.sha256(canonical(pins).encode()).hexdigest()[:32]}" if pins else None
 
 
 def contract_paths(directory: Path) -> list[Path]:
@@ -600,8 +629,9 @@ def command_runtime(args: argparse.Namespace) -> None:
     execution = json.loads((args.contract_dir / "execution.json").read_text())
     stack = load_yaml((args.contract_dir / "stack.yaml").read_text())
     cli = resolve_cli(stack.get("iii") or "latest", token)
+    commits = resolve_commits(stack, token)
     execution.update(iii=cli["version"], cli=cli, template=resolve_template(stack.get("template"), token),
-                     commits=resolve_commits(stack, token))
+                     commits=commits, builds=builds_key(commits))
     write_json(args.contract_dir / "execution.json", execution)
 
 

@@ -92,12 +92,13 @@ jobs:
         run: |
           set -euo pipefail
           scripts/run_in_image.sh prepare resolve
-          # The workers built from a commit, cached by what they were built from.
-          pins=$(jq -cS '[.commits // {} | .[] | {repository, commit, path}] | sort' target/harness-e2e-contract/execution.json)
-          if [[ "$pins" != "[]" ]]; then
-            printf 'builds=worker-builds-%s\n' "$(printf '%s' "$pins" | sha256sum | cut -c1-32)" >>"$GITHUB_OUTPUT"
-          fi
+          # The cache entry of the commits the stack pins, when it pins any.
+          printf 'builds=%s\n' "$(jq -r '.builds // empty' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
 
+      # The workers built from those commits, cached by the commits alone:
+      # restored, built on their own (the commits' code, with no token and
+      # nothing else running) and saved before the stack's runner runs, so
+      # nothing but the pinned commits' own builds ever writes an entry.
       - name: Restore the workers built from those commits
         id: builds
         if: steps.resolved.outputs.builds != ''
@@ -106,15 +107,9 @@ jobs:
           path: target/worker-builds
           key: ${{ steps.resolved.outputs.builds }}
 
-      # This half builds what the stack pins to a commit, with no token, and
-      # has the stack's own runner, pinned in the stack, materialize the
-      # suite. The reports name that runner by the revision it reports.
-      - name: Materialize the suite with the stack's runner
-        id: stack_runner
-        run: |
-          set -euo pipefail
-          scripts/run_in_image.sh prepare materialize
-          printf 'revision=%s\n' "$(jq -r '.runner_revision' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
+      - name: Build the workers the stack pins to a commit
+        if: steps.resolved.outputs.builds != ''
+        run: scripts/run_in_image.sh prepare build
 
       - name: Save the workers built from those commits
         if: steps.resolved.outputs.builds != '' && steps.builds.outputs.cache-hit != 'true'
@@ -122,6 +117,16 @@ jobs:
         with:
           path: target/worker-builds
           key: ${{ steps.resolved.outputs.builds }}
+
+      # This half has the stack's own runner, pinned in the stack,
+      # materialize the suite. The reports name that runner by the revision
+      # it reports.
+      - name: Materialize the suite with the stack's runner
+        id: stack_runner
+        run: |
+          set -euo pipefail
+          scripts/run_in_image.sh prepare materialize
+          printf 'revision=%s\n' "$(jq -r '.runner_revision' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
 
       # Posted before anything runs and before the stack is assembled: this is
       # what tells Release Control which shards to expect, so a campaign that
