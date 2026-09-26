@@ -157,6 +157,9 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
             "stack_versions": observed or resolution.get("stack_versions"),
+            # A worker built from a commit reports its Cargo version; the
+            # commit is what says which code ran.
+            "stack_commits": resolution.get("stack_commits"),
             "stack_lock_sha256": args.stack_lock_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,

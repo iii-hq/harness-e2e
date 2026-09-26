@@ -908,6 +908,57 @@ fail() {
                 self.assertEqual(harness["config_override"], expected)
                 self.assertEqual(harness["config_name"], "project-one-harness")
 
+    def pinned_contract(self):
+        """A contract whose stack built harness from a commit: the path://
+        worker preparation declared, and one dependency held beside it."""
+        contract = campaign_contract()
+        built = "/checkout/target/harness-e2e-contract/workers/app"
+        contract["runtime"]["compose"] = {"containers": {
+            "app": {"worker": f"path://{built}", "scripts": {"run": f"exec {built}/bin/harness"},
+                    "working_dir": ".", "config_override": {"max_depth": 3, "mode": "loop"},
+                    "start_after": ["llm-router"]},
+            "llm-router": {"worker": "package://llm-router", "version": "1.4.27"},
+            "harness-e2e": {"worker": "package://harness-e2e", "version": "0.15.1"},
+        }}
+        contract["runtime"]["lock"] = lock_of({"llm-router": "1.4.27", "harness-e2e": "0.15.1"})
+        contract["runtime"]["commits"] = {"app": {
+            "worker": "harness", "repository": "iii-hq/workers", "path": "harness",
+            "commit": "3f2a9c1" + "d" * 33, "dependencies": ["llm-router"]}}
+        return contract, built
+
+    def test_a_worker_built_from_a_commit_is_still_the_package_it_was_built_from(self):
+        contract, built = self.pinned_contract()
+        contract["suite"]["groups"][0]["scenarios"] = ["depth_ladder"]
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
+        app = project["containers"]["app"]
+        self.assertEqual(app["worker"], f"path://{built}")
+        # Harness's limits reach it over its own default config.
+        self.assertEqual(app["config_override"], {"max_depth": 6, "mode": "loop"})
+        self.assertEqual(app["config_name"], "project-one-harness")
+        self.assertNotIn("harness", project["containers"])
+
+    def test_a_template_runs_the_build_the_stack_pinned_with_its_held_dependencies(self):
+        contract, built = self.pinned_contract()
+        template = {"containers": {
+            "subject": {"worker": "package://harness", "version": "1.8.17"},
+            "router": {"worker": "package://llm-router", "version": "1.4.0"},
+            "console": {"worker": "package://ade"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        containers = project["containers"]
+        self.assertEqual(containers["subject"]["worker"], f"path://{built}")
+        self.assertNotIn("version", containers["subject"])
+        # Its edge points at the template's own name for the dependency, which
+        # runs what the execution locked.
+        self.assertEqual(containers["subject"]["start_after"], ["router"])
+        self.assertEqual(containers["router"]["version"], "1.4.27")
+        self.assertNotIn("llm-router", containers)
+        # Without it, the held dependency is declared as the stack declared it.
+        template["containers"].pop("router")
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        self.assertEqual(project["containers"]["llm-router"]["version"], "1.4.27")
+        self.assertEqual(project["containers"]["subject"]["start_after"], ["llm-router"])
+
     def test_compose_evidence_binds_the_declaration_yaml_namespace_and_lifecycle(self):
         contract = campaign_contract()
         expected = {"harness": "1.9.0", "harness-e2e": "0.6.0-experimental"}
@@ -1242,7 +1293,8 @@ fail() {
         start = block.index('if [[ -n "$project_template" ]]')
         template_branch = block[start:block.index("else", start)]
         # Only the runner, at the version the scaffold gave it; no template role.
-        self.assertIn('add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep \'^harness-e2e@\')")', template_branch)
+        self.assertIn('roots --compose "$compose_file" | grep \'^harness-e2e@\'', template_branch)
+        self.assertIn('add_args+=("worker=$runner_root")', template_branch)
         # One add assembles the project; preparation's second asks only for
         # what no graph brought.
         self.assertEqual(block.count("compose_trigger compose::add"), 2)
@@ -1290,8 +1342,12 @@ compose_trigger() {
             # Preparation assembles the stack itself, never a template project.
             (False, "1", "linkly-agentic", False, False, "false", ["compose::add file="]),
             (True, "", "linkly-agentic", False, False, "false", ["compose::add file=", "compose::up --json"]),
+            # A template whose runner is built from a commit has nothing to ask for.
+            (True, "", "linkly-agentic", False, False, "false", ["compose::up --json"], "runner"),
+            # What a worker built from a commit depends on is held, not asked.
+            (False, "1", "", False, False, "false", ["compose::add file="], "harness"),
         )
-        for locked, assemble_only, template, profile, brought, frozen, calls in cases:
+        for locked, assemble_only, template, profile, brought, frozen, calls, *pinned in cases:
             with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
                               profile=profile, brought=brought), \
                     tempfile.TemporaryDirectory() as directory:
@@ -1300,12 +1356,21 @@ compose_trigger() {
                 project = "project" if template and not assemble_only else "stack"
                 (root / "stack").mkdir()
                 (root / project).mkdir(exist_ok=True)
-                (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(compose))
+                declared = json.loads(json.dumps(compose))
+                commits = None
+                if pinned == ["runner"]:
+                    declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
+                    commits = {"harness-e2e": {"worker": "harness-e2e", "dependencies": []}}
+                elif pinned == ["harness"]:
+                    declared["containers"]["harness"] = {"worker": "path:///built/harness"}
+                    declared["containers"]["llm-router"] = {"worker": "package://llm-router", "version": "1.4.27"}
+                    commits = {"harness": {"worker": "harness", "dependencies": ["llm-router"]}}
+                (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(declared))
                 (root / "brings.yaml").write_text(
                     yaml.safe_dump({"containers": {"iii-directory": directory_from_graph}}).split("\n", 1)[1]
                 )
                 (root / "contract.json").write_text(json.dumps({
-                    "runtime": {"lock": lock_of({}) if locked else None},
+                    "runtime": {"lock": lock_of({}) if locked else None, "commits": commits},
                     "suite": {"subject": {"provider": "deepseek"}},
                 }))
                 variables = (f"assemble_only={assemble_only!r}\nproject_template={template!r}\n"
@@ -1327,7 +1392,13 @@ compose_trigger() {
                     self.assertIn('"frozen":true', made[-1])
                 if assemble_only:
                     self.assertFalse(any("compose::up" in call for call in made), "preparation stops at the lock")
-                if project == "project":
+                if pinned == ["runner"]:
+                    self.assertEqual(json.loads((root / "stack/add.json").read_text())["status"], "skipped")
+                elif pinned == ["harness"]:
+                    self.assertIn("worker=harness-e2e@0.12.3", made[0])
+                    self.assertNotIn("worker=harness@", made[0])
+                    self.assertNotIn("worker=llm-router", made[0])
+                elif project == "project":
                     self.assertIn("worker=harness-e2e@0.12.3", made[0])
                     self.assertNotIn("worker=harness@", made[0])
                 elif not locked:

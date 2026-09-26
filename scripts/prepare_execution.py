@@ -9,7 +9,13 @@ reports go to. Everything else is resolved here, once for the whole execution:
                `stack.yaml`, and `plan.json`, the plan shape older Console
                imports and `report_execution.py` read.
     runtime    `iii: latest` becomes the newest iii release candidate, with
-               its archive digest, and a template one commit.
+               its archive digest, a template one commit, and every
+               container pinned to a `commit:` its repository, folder, full
+               commit and the dependency graph of its newest release.
+    commits    each of those built at its commit, once per (repository,
+               commit, folder) in a build cache, and declared as the
+               path:// worker it is now, with what a package would have
+               brought: its dependencies, default config and env.
     runner     the `harness-e2e` the stack declares, resolved by Compose and
                pinned in the stack, so the suite is materialized by the very
                runner every group runs. Prints that binary's path.
@@ -27,9 +33,12 @@ import hashlib
 import json
 import os
 import re
+import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -43,6 +52,7 @@ from exact_stack_campaign import load_yaml, worker_name  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 STACKS = ROOT / "stacks"
 GITHUB_API_URL = os.environ.get("GITHUB_API_URL", "https://api.github.com")
+REGISTRY_URL = "https://api.workers.iii.dev"
 III_REPOSITORY = "iii-hq/iii"
 TEMPLATES_REPOSITORY = "iii-hq/templates"
 
@@ -56,6 +66,12 @@ RUNNER = "harness-e2e"
 #: A release candidate tag of iii-hq/iii, as Release Control's release grammar reads one.
 RELEASE_CANDIDATE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.([1-9]\d*)$")
 SHA256 = re.compile(r"^(?:sha256:)?[0-9a-f]{64}$")
+#: What a stack may write as `commit:`, short or full.
+COMMIT = re.compile(r"^[0-9a-f]{4,40}$")
+#: Where the Registry points a release: the repository it was built from.
+RELEASE_ASSET = re.compile(r"^https://github\.com/([^/]+/[^/]+)/releases/download/")
+#: A pinned container's keys that only say where its commit is.
+PIN_KEYS = ("version", "commit", "repository", "path")
 
 
 class ResolutionError(RuntimeError):
@@ -66,11 +82,16 @@ def canonical(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
 
 
-def get_json(url: str, token: str | None = None) -> Any:
+def get_json(url: str, token: str | None = None, body: Any = None) -> Any:
+    """The JSON `url` answers; POSTed `body` when there is one."""
     headers = {"Accept": "application/json"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, headers=headers)
+    data = None
+    if body is not None:
+        data = json.dumps(body).encode()
+        headers["Content-Type"] = "application/json"
+    request = urllib.request.Request(url, data=data, headers=headers)
     # Only load shedding and gateway faults are worth another call; every other
     # answer is the service's considered one about this exact question.
     last: Exception | None = None
@@ -191,6 +212,199 @@ def resolve_template(value: Any, token: str | None) -> dict[str, str] | None:
     return {"id": template_id, "repository": TEMPLATES_REPOSITORY, "ref": ref, "revision": revision}
 
 
+def release_graph(reference: str) -> dict[str, Any]:
+    """What the Registry resolves `<reference>@latest` to, as `compose::add`
+    asks it: every worker of the graph, exact, and who calls whom."""
+    host, _, name = reference.rpartition("/")
+    url = f"https://{host}/resolve" if host else f"{REGISTRY_URL}/resolve"
+    return get_json(url, body={"worker": name, "version": "latest", "target": CLI_TARGET})
+
+
+def resolve_commits(stack: dict[str, Any], token: str | None) -> dict[str, dict[str, Any]]:
+    """Every container the stack pins to a `commit:`, by container name.
+
+    The repository is the one the Registry downloads the worker's newest
+    release from, the folder the worker's name there, or the root of a
+    repository named after it; `repository:` and `path:` only override. The
+    commit resolves to its full sha, and one that does not exist is an error.
+    Compose brings none of a path:// worker's dependencies, so that release's
+    graph goes with the pin: its versions and edges, engine built-ins left out.
+    """
+    commits: dict[str, dict[str, Any]] = {}
+    for name, container in (stack.get("containers") or {}).items():
+        if not isinstance(container, dict) or container.get("commit") in (None, ""):
+            continue
+        source = str(container.get("worker", ""))
+        requested = str(container["commit"]).strip().lower()
+        if not source.startswith("package://"):
+            raise ResolutionError(f"{name} pins a commit, but only a package:// worker is built from one")
+        if not COMMIT.fullmatch(requested):
+            raise ResolutionError(f"{name}: commit {requested!r} is not a commit sha")
+        worker = worker_name(source)
+        graph = release_graph(source.removeprefix("package://"))
+        nodes = {node["name"]: node for node in graph.get("graph") or [] if isinstance(node, dict)}
+        release = nodes.get(worker)
+        if release is None:
+            raise ResolutionError(f"the Registry has no release of {worker}")
+        repository = str(container.get("repository") or "").strip("/")
+        if not repository:
+            artifact = (release.get("binaries") or {}).get(CLI_TARGET) or {}
+            match = RELEASE_ASSET.match(artifact.get("url") or release.get("archive_url") or "")
+            if not match:
+                raise ResolutionError(f"{worker}'s release names no GitHub repository; state its `repository:`")
+            repository = match[1]
+        path = container.get("path")
+        path = ("" if repository.rsplit("/", 1)[-1] == worker else worker) if path is None else str(path).strip("/")
+        if ".." in Path(path).parts:
+            raise ResolutionError(f"{name}: path {path!r} leaves the repository")
+        try:
+            commit = get_json(f"{GITHUB_API_URL}/repos/{repository}/commits/{requested}", token=token).get("sha")
+        except ResolutionError as error:
+            raise ResolutionError(f"{repository} has no commit {requested} ({error})") from error
+        # A branch or tag named like a sha resolves too; only the commit counts.
+        if not isinstance(commit, str) or not commit.startswith(requested):
+            raise ResolutionError(f"{repository} has no commit {requested}")
+        engine = {node for node, value in nodes.items() if value.get("type") == "engine"}
+        commits[name] = {
+            "worker": worker,
+            "repository": repository,
+            "path": path,
+            "commit": commit,
+            "release": {
+                "version": release.get("version"),
+                "nodes": {node: value["version"] for node, value in nodes.items() if node not in engine},
+                "edges": sorted({
+                    (edge["from"], edge["to"]) for edge in graph.get("edges") or []
+                    if edge["from"] not in engine and edge["to"] not in engine and edge["from"] != edge["to"]
+                }),
+            },
+        }
+    return commits
+
+
+def build_worker(pin: dict[str, Any], cache: Path) -> Path:
+    """The worker at a pinned commit, built with its own manifest once per
+    (repository, commit, folder): a folder of the cache holding the binary
+    under `bin/`, its `iii.worker.yaml`, its `config.yaml` if it has one, and
+    `build.json`. Fetched anonymously and built without the token: a build
+    runs the commit's code."""
+    built = cache / pin["repository"] / pin["commit"] / (pin["path"] or "_root")
+    if (built / "build.json").is_file():
+        print(f"{pin['worker']} @{pin['commit'][:12]}: built before, from the cache", file=sys.stderr)
+        return built
+    cache.mkdir(parents=True, exist_ok=True)
+    environment = {key: value for key, value in os.environ.items() if key != "GITHUB_TOKEN"}
+    with tempfile.TemporaryDirectory(dir=cache, prefix=".build-") as scratch:
+        scratch = Path(scratch)
+        source = scratch / "source"
+        source.mkdir()
+        for command in (["init", "-q"],
+                        ["fetch", "-q", "--depth", "1", f"https://github.com/{pin['repository']}.git", pin["commit"]],
+                        ["checkout", "-q", "--detach", "FETCH_HEAD"]):
+            subprocess.run(["git", "-C", str(source), *command], env=environment, check=True, stdout=sys.stderr)
+        folder = source / pin["path"]
+        at = f"{pin['repository']}@{pin['commit'][:12]}"
+        if not (folder / "iii.worker.yaml").is_file():
+            raise ResolutionError(f"{at} has no {pin['path'] or '.'}/iii.worker.yaml")
+        manifest = load_yaml((folder / "iii.worker.yaml").read_text()) or {}
+        # ponytail: Rust binaries only, what every worker of the Registry is today.
+        if manifest.get("language") != "rust":
+            raise ResolutionError(f"{pin['worker']} at {at} is not a Rust worker; only those are built from a commit")
+        binary = str(manifest.get("bin") or pin["worker"])
+        # From the worker's folder, so the repository's rust-toolchain.toml applies.
+        subprocess.run(
+            ["cargo", "build", "--release", "--locked", "--bin", binary,
+             "--manifest-path", str(folder / str(manifest.get("manifest") or "Cargo.toml")),
+             "--target-dir", str(scratch / "target")],
+            cwd=folder, env=environment, check=True, stdout=sys.stderr,
+        )
+        result = scratch / "result"
+        (result / "bin").mkdir(parents=True)
+        shutil.copy2(scratch / "target/release" / binary, result / "bin" / binary)
+        for name in ("iii.worker.yaml", "config.yaml"):
+            if (folder / name).is_file():
+                shutil.copy2(folder / name, result / name)
+        digest = hashlib.sha256((result / "bin" / binary).read_bytes()).hexdigest()
+        (result / "build.json").write_text(json.dumps({
+            "worker": pin["worker"], "repository": pin["repository"], "path": pin["path"],
+            "commit": pin["commit"], "bin": binary, "sha256": f"sha256:{digest}",
+        }, indent=2) + "\n")
+        shutil.rmtree(built, ignore_errors=True)
+        built.parent.mkdir(parents=True, exist_ok=True)
+        result.rename(built)
+    return built
+
+
+def merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """`over` on top of `base`, mappings key by key, anything else replaced."""
+    result = dict(base)
+    for key, value in over.items():
+        both = isinstance(value, dict) and isinstance(result.get(key), dict)
+        result[key] = merged(result[key], value) if both else value
+    return result
+
+
+def declare_commits(containers: dict[str, Any], commits: dict[str, dict[str, Any]], folders: dict[str, Path]) -> None:
+    """Each pinned container becomes the path:// worker its build is.
+
+    Compose runs a path:// worker as the operator's: without the manifest's
+    dependencies, the default config the Registry would ship, or its env, and
+    from the worker's folder. So it is declared with that config under the
+    stack's own `config_override`, that env under its `environment`, the
+    compose file's folder to run in, as a package does, and every dependency
+    of the newest release the stack does not declare itself, at that
+    release's exact version and edges. Those are recorded on the pin as
+    `dependencies`: held, never asked for, so `compose::add` keeps their pins.
+    """
+    by_package = {
+        worker_name(container["worker"]): name for name, container in containers.items()
+        if isinstance(container, dict) and str(container.get("worker", "")).startswith("package://")
+    }
+    for name, pin in commits.items():
+        folder = folders[name]
+        build = json.loads((folder / "build.json").read_text())
+        manifest = load_yaml((folder / "iii.worker.yaml").read_text()) or {}
+        shipped = manifest.get("config")
+        if shipped is None and (folder / "config.yaml").is_file():
+            shipped = load_yaml((folder / "config.yaml").read_text())
+        container = {key: value for key, value in containers[name].items() if key not in ("worker", *PIN_KEYS)}
+        container["worker"] = f"path://{folder}"
+        container["scripts"] = {**(container.get("scripts") or {}),
+                                "run": f"exec {shlex.quote(str(folder / 'bin' / build['bin']))}"}
+        container.setdefault("working_dir", ".")
+        if isinstance(shipped, dict) and shipped:
+            container["config_override"] = merged(shipped, container.get("config_override") or {})
+        if isinstance(manifest.get("env"), dict) and manifest["env"]:
+            container["environment"] = {**manifest["env"], **(container.get("environment") or {})}
+
+        edges = [tuple(edge) for edge in pin["release"]["edges"]]
+
+        def needs(node: str) -> list[str]:
+            return sorted({by_package.get(to, to) for source, to in edges if source == node})
+
+        reachable, visit = set(), [pin["worker"]]
+        while visit:
+            node = visit.pop()
+            if node not in reachable:
+                reachable.add(node)
+                visit.extend(to for source, to in edges if source == node)
+        held = []
+        for dependency in sorted(reachable - {pin["worker"]} - set(by_package)):
+            if dependency in containers:
+                raise ResolutionError(f"container {dependency} is not the {dependency} worker {pin['worker']} depends on")
+            containers[dependency] = {"worker": f"package://{dependency}", "version": pin["release"]["nodes"][dependency]}
+            by_package[dependency] = dependency
+            held.append(dependency)
+        for dependency in held:
+            if needs(dependency):
+                containers[dependency]["start_after"] = needs(dependency)
+        start_after = sorted({*(container.get("start_after") or []), *needs(pin["worker"])})
+        if start_after:
+            container["start_after"] = start_after
+        containers[name] = container
+        pin["dependencies"] = held
+
+
 def download(url: str, sha256: str, destination: Path) -> Path:
     """Fetch `url` and check it against the digest the release or lock states.
     Tried three times, as the groups' `curl --retry 3`; a digest that does not
@@ -257,6 +471,21 @@ def fetch_runner(lock: dict[str, Any], work_dir: Path) -> Path:
     return binary
 
 
+def built_runner(contract_dir: Path) -> Path | None:
+    """The runner the stack pinned to a commit, as `commits` built it into
+    the contract, or None when the stack runs a release of it."""
+    execution = contract_dir / "execution.json"
+    commits = (json.loads(execution.read_text()).get("commits") or {}) if execution.is_file() else {}
+    for name, pin in commits.items():
+        if pin["worker"] == RUNNER:
+            folder = contract_dir / "workers" / name
+            binary = folder / "bin" / json.loads((folder / "build.json").read_text())["bin"]
+            # Artifacts lose the executable bit on their way to another job.
+            binary.chmod(0o755)
+            return binary
+    return None
+
+
 def seal(body: dict[str, Any]) -> dict[str, Any]:
     digest = hashlib.sha256(canonical({**body, "idempotency_key": ""}).encode()).hexdigest()
     return {**body, "idempotency_key": f"rc:e2e:{digest}"}
@@ -287,6 +516,7 @@ def build_contract(
     oidc_audience: str,
     template: dict[str, str] | None = None,
     lock: dict[str, Any] | None = None,
+    commits: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     provider, _, model = execution["model"].partition("/")
     suite = {
@@ -306,6 +536,14 @@ def build_contract(
         runtime["template"] = template
     if lock:
         runtime["lock"] = lock
+    if commits:
+        # Which containers are built from a commit and what each one holds:
+        # the scaffold knows a path:// worker by it, the launcher asks for
+        # none of its dependencies, and the Console names its commit.
+        runtime["commits"] = {
+            name: {key: pin[key] for key in ("worker", "repository", "path", "commit", "dependencies")}
+            for name, pin in commits.items()
+        }
     return seal(
         {
             "schema": CONTRACT_SCHEMA,
@@ -326,6 +564,11 @@ def stack_versions(lock: dict[str, Any]) -> dict[str, str]:
         name = str(entry.get("worker", "")).removeprefix("package://").rsplit("/", 1)[-1]
         versions[name] = str((entry.get("resolved") or {}).get("version"))
     return dict(sorted(versions.items()))
+
+
+def stack_commits(commits: dict[str, dict[str, Any]]) -> dict[str, str]:
+    """Every worker built from a commit, by the name it is known by."""
+    return dict(sorted((pin["worker"], pin["commit"]) for pin in commits.values()))
 
 
 def contract_paths(directory: Path) -> list[Path]:
@@ -357,8 +600,31 @@ def command_runtime(args: argparse.Namespace) -> None:
     execution = json.loads((args.contract_dir / "execution.json").read_text())
     stack = load_yaml((args.contract_dir / "stack.yaml").read_text())
     cli = resolve_cli(stack.get("iii") or "latest", token)
-    execution.update(iii=cli["version"], cli=cli, template=resolve_template(stack.get("template"), token))
+    execution.update(iii=cli["version"], cli=cli, template=resolve_template(stack.get("template"), token),
+                     commits=resolve_commits(stack, token))
     write_json(args.contract_dir / "execution.json", execution)
+
+
+def command_commits(args: argparse.Namespace) -> None:
+    """Build every pinned worker and declare it in the stack. Each build goes
+    into the contract (`workers/<container>/`), which the groups receive."""
+    import yaml
+
+    directory = args.contract_dir
+    execution = json.loads((directory / "execution.json").read_text())
+    commits = execution.get("commits") or {}
+    if not commits:
+        return
+    stack = load_yaml((directory / "stack.yaml").read_text())
+    folders = {}
+    for name, pin in commits.items():
+        built = build_worker(pin, args.cache_dir.resolve())
+        folders[name] = (directory / "workers" / name).resolve()
+        shutil.rmtree(folders[name], ignore_errors=True)
+        shutil.copytree(built, folders[name])
+    declare_commits(stack["containers"], commits, folders)
+    (directory / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
+    write_json(directory / "execution.json", execution)
 
 
 def command_runner(args: argparse.Namespace) -> None:
@@ -367,6 +633,10 @@ def command_runner(args: argparse.Namespace) -> None:
 
     directory, work = args.contract_dir, args.work_dir
     execution = json.loads((directory / "execution.json").read_text())
+    binary = built_runner(directory)
+    if binary is not None:
+        pin = next(pin for pin in execution["commits"].values() if pin["worker"] == RUNNER)
+        return report_runner(directory, execution, binary, pin["commit"])
     stack = load_yaml((directory / "stack.yaml").read_text())
     iii = install_cli(execution["cli"], work)
     name, container = runner_declaration(stack)
@@ -385,7 +655,11 @@ def command_runner(args: argparse.Namespace) -> None:
     # by the time it runs.
     stack.setdefault("containers", {})[name] = {**container, "version": version}
     (directory / "stack.yaml").write_text(yaml.safe_dump(stack, sort_keys=False))
-    binary = fetch_runner(lock, work)
+    report_runner(directory, execution, fetch_runner(lock, work), version)
+
+
+def report_runner(directory: Path, execution: dict[str, Any], binary: Path, version: str) -> None:
+    """Record the runner's identity and print its path."""
     catalog = subprocess.run([str(binary), "catalog"], capture_output=True, text=True, check=True).stdout
     identity = {"name": RUNNER, "version": version, **(json.loads(catalog).get("runner") or {})}
     write_json(directory / "runner.json", identity)
@@ -413,6 +687,7 @@ def command_contracts(args: argparse.Namespace) -> None:
             compose=compose_of(stack),
             oidc_audience=args.oidc_audience,
             template=template,
+            commits=execution.get("commits"),
         )
         write_json(directory / "contracts" / f"{campaign['campaign_id']}.json", contract)
         for group in contract["suite"]["groups"]:
@@ -434,6 +709,9 @@ def command_contracts(args: argparse.Namespace) -> None:
             "cli_version": cli["version"],
             "campaign_ids": [campaign["campaign_id"] for campaign in snapshot["campaigns"]],
             **({"template": template} if template else {}),
+            # What a worker built from a commit reports is its Cargo version;
+            # the reports name it by the commit.
+            **({"stack_commits": stack_commits(execution["commits"])} if execution.get("commits") else {}),
             # The executor image the execution was prepared in, as
             # scripts/run_in_image.sh resolved it.
             **({"executor_image": image} if image else {}),
@@ -468,7 +746,8 @@ def command_lock(args: argparse.Namespace) -> None:
 
 
 def command_runner_binary(args: argparse.Namespace) -> None:
-    print(fetch_runner(load_yaml(args.lock.read_text()), args.work_dir))
+    # The lock sits in the contract, beside the runner built from a commit.
+    print(built_runner(args.lock.parent) or fetch_runner(load_yaml(args.lock.read_text()), args.work_dir))
 
 
 def main() -> int:
@@ -476,6 +755,8 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     dispatch = commands.add_parser("dispatch", help="read the DISPATCH_* inputs")
     runtime = commands.add_parser("runtime")
+    commits = commands.add_parser("commits")
+    commits.add_argument("--cache-dir", type=Path, required=True, help="builds by repository/commit/folder")
     runner = commands.add_parser("runner")
     runner.add_argument("--work-dir", type=Path, required=True)
     contracts = commands.add_parser("contracts")
@@ -483,14 +764,15 @@ def main() -> int:
     contracts.add_argument("--oidc-audience", required=True)
     lock = commands.add_parser("lock")
     lock.add_argument("--assembled", type=Path, required=True, help="directory with the assembled worker-compose.{yaml,lock}")
-    for command in (dispatch, runtime, runner, contracts, lock):
+    for command in (dispatch, runtime, commits, runner, contracts, lock):
         command.add_argument("--contract-dir", type=Path, required=True)
     runner_binary = commands.add_parser("runner-binary")
     runner_binary.add_argument("--lock", type=Path, required=True)
     runner_binary.add_argument("--work-dir", type=Path, required=True)
     args = parser.parse_args()
     handlers = {
-        "dispatch": command_dispatch, "runtime": command_runtime, "runner": command_runner,
+        "dispatch": command_dispatch, "runtime": command_runtime, "commits": command_commits,
+        "runner": command_runner,
         "contracts": command_contracts, "lock": command_lock, "runner-binary": command_runner_binary,
     }
     try:

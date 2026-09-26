@@ -14,6 +14,7 @@ import sys
 import tempfile
 import textwrap
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -605,6 +606,234 @@ class StackResolutionTests(unittest.TestCase):
         self.assertRegex(contract["idempotency_key"], r"^rc:e2e:[0-9a-f]{64}$")
         self.assertEqual(resolution["stack_versions"], {"harness": "1.9.3", "state": "0.22.8"})
         self.assertEqual(stack, {"iii": "0.24.2", **compose})
+
+
+
+def release(worker="harness", repository="iii-hq/workers"):
+    """What the Registry answers `/resolve` for a worker's newest release."""
+    url = f"https://github.com/{repository}/releases/download/build-1/{worker}-x86_64-unknown-linux-gnu.tar.gz"
+    return {
+        "graph": [
+            {"name": worker, "version": "1.8.36", "type": "binary",
+             "binaries": {prepare_execution.CLI_TARGET: {"url": url, "sha256": "0" * 64}}},
+            {"name": "llm-router", "version": "1.4.27", "type": "binary"},
+            {"name": "state", "version": "0.22.17", "type": "binary"},
+            {"name": "provider-zai", "version": "0.5.13", "type": "binary"},
+            {"name": "configuration", "version": "0.24.3", "type": "engine"},
+        ],
+        "edges": [
+            {"from": worker, "to": "llm-router"}, {"from": worker, "to": "provider-zai"},
+            {"from": worker, "to": "configuration"}, {"from": "llm-router", "to": "state"},
+            {"from": "provider-zai", "to": "llm-router"}, {"from": "state", "to": "configuration"},
+            # Listed once per path to it, as the Registry does.
+            {"from": "llm-router", "to": "state"},
+        ],
+    }
+
+
+class CommitPinTests(unittest.TestCase):
+    """A stack container pinned to `commit:` runs that commit, built once."""
+
+    FULL = "3f2a9c1" + "d" * 33
+
+    def resolve(self, containers, commits=None, graph=None):
+        """resolve_commits against a Registry and GitHub that answer as told."""
+        commits = commits if commits is not None else {"iii-hq/workers": self.FULL}
+        urls = []
+
+        def get(url, token=None, body=None):
+            urls.append((url, body))
+            if url.endswith("/resolve"):
+                return graph or release(body["worker"])
+            repository, _, ref = url.removeprefix(prepare_execution.GITHUB_API_URL + "/repos/").partition("/commits/")
+            if repository not in commits:
+                raise prepare_execution.ResolutionError(f"{url} answered HTTP 422")
+            return {"sha": commits[repository]}
+
+        with patch.object(prepare_execution, "get_json", side_effect=get):
+            return prepare_execution.resolve_commits({"containers": containers}, "token"), urls
+
+    def test_the_repository_and_folder_come_from_the_registry_and_the_commit_resolves_whole(self):
+        pins, urls = self.resolve({
+            "harness": {"worker": "package://harness", "version": "latest", "commit": "3f2a9c1"},
+            "fp": {"worker": "package://fp", "version": "latest"},
+        })
+        self.assertEqual(list(pins), ["harness"])
+        pin = pins["harness"]
+        self.assertEqual((pin["worker"], pin["repository"], pin["path"], pin["commit"]),
+                         ("harness", "iii-hq/workers", "harness", self.FULL))
+        self.assertEqual(urls[0], (prepare_execution.REGISTRY_URL + "/resolve",
+                                   {"worker": "harness", "version": "latest", "target": prepare_execution.CLI_TARGET}))
+        self.assertTrue(urls[1][0].endswith("/repos/iii-hq/workers/commits/3f2a9c1"))
+        # The newest release's graph, exact, without the engine's own workers.
+        self.assertEqual(pin["release"]["nodes"], {
+            "harness": "1.8.36", "llm-router": "1.4.27", "state": "0.22.17", "provider-zai": "0.5.13"})
+        self.assertEqual(pin["release"]["edges"], [
+            ("harness", "llm-router"), ("harness", "provider-zai"), ("llm-router", "state"),
+            ("provider-zai", "llm-router")])
+
+    def test_a_repository_named_after_its_worker_builds_from_the_root_and_overrides_win(self):
+        pins, _ = self.resolve(
+            {"runner": {"worker": "package://harness-e2e", "commit": "abcd1234"}},
+            commits={"iii-hq/harness-e2e": "abcd1234" + "0" * 32},
+            graph=release("harness-e2e", "iii-hq/harness-e2e"),
+        )
+        self.assertEqual((pins["runner"]["repository"], pins["runner"]["path"]), ("iii-hq/harness-e2e", ""))
+        pins, urls = self.resolve(
+            {"harness": {"worker": "package://harness", "commit": "3f2a9c1",
+                         "repository": "someone/fork", "path": "workers/harness/"}},
+            commits={"someone/fork": self.FULL},
+        )
+        self.assertEqual((pins["harness"]["repository"], pins["harness"]["path"]), ("someone/fork", "workers/harness"))
+        self.assertTrue(urls[1][0].endswith("/repos/someone/fork/commits/3f2a9c1"))
+
+    def test_a_commit_that_does_not_exist_is_an_error(self):
+        harness = {"worker": "package://harness", "commit": "3f2a9c1"}
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "iii-hq/workers has no commit 3f2a9c1"):
+            self.resolve({"harness": harness}, commits={})
+        # A branch named like a sha resolves to another commit: not this one.
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "has no commit 3f2a9c1"):
+            self.resolve({"harness": harness}, commits={"iii-hq/workers": "e" * 40})
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "not a commit sha"):
+            self.resolve({"harness": {**harness, "commit": "main"}})
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "only a package:// worker"):
+            self.resolve({"harness": {"worker": "path://./harness", "commit": "3f2a9c1"}})
+        with self.assertRaisesRegex(prepare_execution.ResolutionError, "leaves the repository"):
+            self.resolve({"harness": {**harness, "path": "../elsewhere"}})
+
+    def fake_build(self, calls, language="rust"):
+        """git and cargo as the build calls them: the fetch leaves a worker
+        folder, cargo a binary."""
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            if command[0] == "git" and command[3] == "checkout":
+                folder = Path(command[2]) / "harness"
+                folder.mkdir(parents=True)
+                (folder / "iii.worker.yaml").write_text(
+                    f"name: harness\nlanguage: {language}\nbin: harness\nconfig:\n  max_depth: 3\n  mode: loop\n"
+                    "env:\n  RUST_LOG: info\n")
+            if command[0] == "cargo":
+                target = Path(command[command.index("--target-dir") + 1]) / "release"
+                target.mkdir(parents=True)
+                (target / "harness").write_bytes(b"binary")
+            return subprocess.CompletedProcess(command, 0)
+        return run
+
+    def test_a_commit_is_built_once_per_repository_commit_and_folder_and_never_with_the_token(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL}
+        calls = []
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(prepare_execution.subprocess, "run", side_effect=self.fake_build(calls)), \
+                patch.dict(os.environ, {"GITHUB_TOKEN": "secret"}):
+            cache = Path(directory)
+            built = prepare_execution.build_worker(pin, cache)
+            self.assertEqual(built, cache / "iii-hq/workers" / self.FULL / "harness")
+            self.assertEqual((built / "bin/harness").read_bytes(), b"binary")
+            self.assertTrue((built / "iii.worker.yaml").is_file())
+            self.assertEqual(json.loads((built / "build.json").read_text())["commit"], self.FULL)
+            cargo = next(command for command, _ in calls if command[0] == "cargo")
+            self.assertEqual(cargo[:5], ["cargo", "build", "--release", "--locked", "--bin"])
+            fetch = next(command for command, _ in calls if "fetch" in command)
+            self.assertEqual(fetch[-2:], ["https://github.com/iii-hq/workers.git", self.FULL])
+            self.assertFalse(any("GITHUB_TOKEN" in kwargs["env"] for _, kwargs in calls))
+            # Nothing but the build is left in the cache.
+            self.assertEqual([path.name for path in cache.iterdir()], ["iii-hq"])
+            built_again = prepare_execution.build_worker(pin, cache)
+            self.assertEqual(built_again, built)
+            self.assertEqual(len([command for command, _ in calls if command[0] == "cargo"]), 1)
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.object(prepare_execution.subprocess, "run", side_effect=self.fake_build([], "node")), \
+                self.assertRaisesRegex(prepare_execution.ResolutionError, "not a Rust worker"):
+            prepare_execution.build_worker(pin, Path(directory))
+
+    def test_a_built_worker_is_declared_as_a_path_worker_with_its_release_dependencies_and_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory) / "workers/harness"
+            (folder / "bin").mkdir(parents=True)
+            (folder / "build.json").write_text(json.dumps({"bin": "harness"}))
+            (folder / "iii.worker.yaml").write_text(
+                "name: harness\nconfig:\n  max_depth: 3\n  limits: {turns: 5, tokens: 9}\nenv:\n  RUST_LOG: info\n")
+            containers = {
+                "harness": {"worker": "package://harness", "version": "latest", "commit": "3f2a9c1",
+                            "config_override": {"limits": {"turns": 7}}, "environment": {"RUST_LOG": "debug"}},
+                # The stack's own declaration of a dependency is kept, and
+                # the edges point at it by its container name.
+                "zai": {"worker": "package://provider-zai", "version": "latest"},
+            }
+            pin = {"worker": "harness", "release": {
+                "nodes": {"harness": "1.8.36", "llm-router": "1.4.27", "state": "0.22.17", "provider-zai": "0.5.13"},
+                "edges": [["harness", "llm-router"], ["harness", "provider-zai"], ["llm-router", "state"],
+                          ["provider-zai", "llm-router"]],
+            }}
+            prepare_execution.declare_commits(containers, {"harness": pin}, {"harness": folder})
+            with self.assertRaisesRegex(prepare_execution.ResolutionError, "container state is not the state worker"):
+                prepare_execution.declare_commits(
+                    {"harness": {"worker": "package://harness"}, "state": {"worker": "package://other"}},
+                    {"harness": {**pin}}, {"harness": folder})
+        self.assertEqual(containers["harness"], {
+            "worker": f"path://{folder}",
+            "config_override": {"max_depth": 3, "limits": {"turns": 7, "tokens": 9}},
+            "environment": {"RUST_LOG": "debug"},
+            "scripts": {"run": f"exec {folder}/bin/harness"},
+            # Where a package runs: the compose file's folder.
+            "working_dir": ".",
+            "start_after": ["llm-router", "zai"],
+        })
+        self.assertEqual(containers["llm-router"], {"worker": "package://llm-router", "version": "1.4.27",
+                                                    "start_after": ["state"]})
+        self.assertEqual(containers["state"], {"worker": "package://state", "version": "0.22.17"})
+        self.assertEqual(containers["zai"], {"worker": "package://provider-zai", "version": "latest"})
+        self.assertEqual(pin["dependencies"], ["llm-router", "state"])
+
+    def test_the_contract_and_the_reports_name_the_commit_that_ran(self):
+        pin = {"worker": "harness", "repository": "iii-hq/workers", "path": "harness", "commit": self.FULL,
+               "dependencies": ["llm-router"], "release": {"nodes": {}, "edges": []}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "suite.json").write_text(json.dumps(PROFILE_SNAPSHOT))
+            (root / "execution.json").write_text(json.dumps({
+                "model": "deepseek/deepseek-v4-flash", "cli": {"version": "0.24.2"}, "template": None,
+                "commits": {"app": pin}}))
+            (root / "stack.yaml").write_text("containers: {}\n")
+            prepare_execution.command_contracts(
+                SimpleNamespace(contract_dir=root, execution_key="42", oidc_audience="release-control-harness-e2e"))
+            contract = json.loads((root / "contracts/regression-r01.json").read_text())
+            resolution = root / "contracts/resolution.json"
+            self.assertEqual(json.loads(resolution.read_text())["stack_commits"], {"harness": self.FULL})
+            identity = report_execution.identity_of(Args(resolution=resolution), None)
+        # What the scaffold and the launcher read, without the release graph.
+        self.assertEqual(contract["runtime"]["commits"], {"app": {
+            key: pin[key] for key in ("worker", "repository", "path", "commit", "dependencies")}})
+        self.assertEqual(identity["stack_commits"], {"harness": self.FULL})
+        self.assertNotIn("stack_commits", report_execution.identity_of(Args(), None))
+
+    def test_a_runner_built_from_a_commit_materializes_and_aggregates(self):
+        with tempfile.TemporaryDirectory() as directory:
+            contract = pathlib.Path(directory)
+            folder = contract / "workers/runner"
+            (folder / "bin").mkdir(parents=True)
+            (folder / "build.json").write_text(json.dumps({"bin": "harness-e2e"}))
+            runner = folder / "bin/harness-e2e"
+            runner.write_text("#!/bin/sh\necho '{\"runner\":{\"name\":\"harness-e2e\",\"version\":\"0.15.1\",\"revision\":\""
+                              + "a" * 40 + "\"}}'\n")
+            (contract / "execution.json").write_text(json.dumps({"commits": {
+                "runner": {"worker": "harness-e2e", "commit": "a" * 40}}}))
+            (contract / "stack.yaml").write_text("containers: {}\n")
+            # As an artifact delivers it: not executable.
+            runner.chmod(0o644)
+            with patch.object(prepare_execution, "install_cli") as installed, \
+                    patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
+                prepare_execution.command_runner(SimpleNamespace(contract_dir=contract, work_dir=contract))
+            installed.assert_not_called()
+            self.assertEqual(printed.getvalue().strip(), str(runner))
+            self.assertEqual(json.loads((contract / "execution.json").read_text())["runner_revision"], "a" * 40)
+            runner.chmod(0o644)
+            (contract / "worker-compose.lock").write_text("version: 1\ncontainers: {}\n")
+            with patch("sys.stdout", new_callable=__import__("io").StringIO) as printed:
+                prepare_execution.command_runner_binary(
+                    SimpleNamespace(lock=contract / "worker-compose.lock", work_dir=contract))
+            self.assertEqual(printed.getvalue().strip(), str(runner))
+            self.assertTrue(os.access(runner, os.X_OK))
 
 
 if __name__ == "__main__":

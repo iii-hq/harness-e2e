@@ -647,11 +647,18 @@ def project_scaffold(
         raise ValueError("env file must be absolute")
     manifest = copy.deepcopy(template if template is not None else (runtime.get("compose") or declared_base()))
     containers = manifest.setdefault("containers", {})
+    # A worker the stack built from a commit is a path:// worker that is
+    # still the package it was built from, known by its path.
+    commits = runtime.get("commits") or {}
+    assembled = (runtime.get("compose") or {}).get("containers") or {}
+    built = {assembled[name]["worker"]: pin["worker"] for name, pin in commits.items() if name in assembled}
+
+    def package_of(container: dict[str, Any]) -> str | None:
+        source = str(container.get("worker", ""))
+        return worker_name(source) if source.startswith("package://") else built.get(source)
+
     def declares(package: str) -> bool:
-        return any(
-            str(item.get("worker", "")).startswith("package://") and worker_name(item["worker"]) == package
-            for item in containers.values()
-        )
+        return any(package_of(item) == package for item in containers.values())
 
     if not declares(RUNNER):
         containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
@@ -706,6 +713,18 @@ def project_scaffold(
             container["version"] = locked.get(package, DEFAULT_SELECTOR)
         package_names.setdefault(package, []).append(name)
     if template is not None:
+        # A worker the stack built from a commit runs that build, not the
+        # template's package, with the dependencies declared beside it.
+        for pinned, pin in commits.items():
+            for name in package_names.pop(pin["worker"], []):
+                containers[name] = copy.deepcopy(assembled[pinned])
+            for dependency in pin.get("dependencies") or []:
+                if dependency in package_names:
+                    continue
+                if dependency in containers:
+                    raise ValueError(f"container {dependency} is not the {dependency} worker {pin['worker']} depends on")
+                containers[dependency] = copy.deepcopy(assembled[dependency])
+                package_names[dependency] = [dependency]
         # Compose expands dependencies by container name, so a template that
         # renamed a role has to point at the name its own project uses.
         for container in containers.values():
@@ -717,8 +736,7 @@ def project_scaffold(
                     for dependency in container["start_after"]
                 ]
     for name, container in containers.items():
-        source = str(container["worker"])
-        worker = worker_name(source) if source.startswith("package://") else None
+        worker = package_of(container)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:

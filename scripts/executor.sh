@@ -4,10 +4,14 @@
 # below target/, as the workflow always has; GitHub's jobs and the Console's
 # Docker executions run the same phases:
 #
-#   prepare [materialize|assemble|fixtures]
-#       materialize  read the dispatch (DISPATCH_*), resolve iii and the
-#                    template, fetch the stack's runner and materialize the
-#                    suite with it.
+#   prepare [resolve|materialize|assemble|fixtures]
+#       resolve      read the dispatch (DISPATCH_*), resolve iii, the template
+#                    and every `commit:` the stack pins, with GITHUB_TOKEN
+#                    when there is one.
+#       materialize  build what the stack pins to a commit, never with a
+#                    token, into the contract through the build cache
+#                    HARNESS_E2E_WORKER_BUILDS (default target/worker-builds),
+#                    fetch the stack's runner and materialize the suite with it.
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
 #       fixtures     check out below target/ what the groups start from and
@@ -16,9 +20,10 @@
 #                    the trending topics fixture. For the group
 #                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
 #                    of the execution. The private ones read GITHUB_TOKEN.
-#       Without an argument, materialize and assemble. GitHub reports the
-#       materialized suite to Release Control between the two, before
-#       anything is assembled.
+#       Without an argument, resolve, materialize and assemble. GitHub
+#       restores and saves the build cache around materialize and reports
+#       the materialized suite to Release Control before anything is
+#       assembled.
 #   group     start one group's frozen stack and run its scenarios
 #             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...), with
 #             the fixture repositories it clones read from those checkouts.
@@ -48,7 +53,7 @@ set -Eeuo pipefail
 export III_TELEMETRY_ENABLED=false
 
 usage() {
-  echo "usage: executor.sh prepare [materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
+  echo "usage: executor.sh prepare [resolve|materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2
 }
 
@@ -64,9 +69,14 @@ if ! getent passwd "${user%:*}" >/dev/null && [[ -w /etc/passwd ]]; then
   printf 'executor:x:%s:%s::%s:/bin/bash\n' "${user%:*}" "${user#*:}" "$HOME" >>/etc/passwd
 fi
 
-materialize() {
+resolve() {
   python3 scripts/prepare_execution.py dispatch --contract-dir "$contract_dir"
   python3 scripts/prepare_execution.py runtime --contract-dir "$contract_dir"
+}
+
+materialize() {
+  python3 scripts/prepare_execution.py commits --contract-dir "$contract_dir" \
+    --cache-dir "${HARNESS_E2E_WORKER_BUILDS:-target/worker-builds}"
   # The suite is materialized by the runner the stack runs, never by a build
   # of this checkout: its master plan and scenario catalog are the ones every
   # group executes. suite.json is the snapshot; profile.json is the same file
@@ -208,6 +218,9 @@ route_fixtures() {
 # container is privileged: root-equivalent on the host, as the host's socket
 # was before. Stopped, the daemon stops its containers.
 group() {
+  # Artifacts lose the executable bit on their way to a group job; the
+  # workers built from a commit get it back.
+  chmod -f a+x "$contract_dir"/workers/*/bin/* 2>/dev/null || true
   route_fixtures
   if [[ -z "${HARNESS_E2E_EXECUTOR_USER:-}" ]]; then
     exec bash scripts/run_exact_stack_group.sh
@@ -343,10 +356,12 @@ aggregate() {
 case "${1:-}" in
   prepare)
     case "${2:-}" in
+      resolve) resolve ;;
       materialize) materialize ;;
       assemble) assemble ;;
       fixtures) fixtures ;;
       "")
+        resolve
         materialize
         assemble
         ;;

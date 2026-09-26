@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one phase of an execution in the executor image.
 #
-#   scripts/run_in_image.sh [--env-file FILE] prepare [materialize|assemble]
+#   scripts/run_in_image.sh [--env-file FILE] prepare [resolve|materialize|assemble|fixtures]
 #   scripts/run_in_image.sh [--env-file FILE] group
 #   scripts/run_in_image.sh [--env-file FILE] finalize
 #   scripts/run_in_image.sh image    print the image this checkout runs in
@@ -114,6 +114,12 @@ if [[ -n "$env_file" ]]; then
   fi
 fi
 ((${#credentials[@]} == 0)) || args+=(--env "HARNESS_E2E_CREDENTIALS=${credentials[*]}")
+# A build cache outside the checkout, at the same path: the Console's Docker
+# executions keep the workers built from a commit under its data directory.
+if [[ "$phase" == prepare && -n "${HARNESS_E2E_WORKER_BUILDS:-}" ]]; then
+  mkdir -p "$HARNESS_E2E_WORKER_BUILDS"
+  args+=(--volume "$HARNESS_E2E_WORKER_BUILDS:$HARNESS_E2E_WORKER_BUILDS")
+fi
 for name in $(compgen -e); do
   case "$name" in
     HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER | HARNESS_E2E_CREDENTIALS) ;;

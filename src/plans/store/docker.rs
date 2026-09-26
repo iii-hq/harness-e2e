@@ -18,7 +18,11 @@
 //!   `e2e-observation-<id>-gh-<attempt>`.
 //! - `logs/`: each phase's output.
 //!
-//! `prepare` (materialize, assemble, fixtures), one `group` container per
+//! `worker-builds/` beside it keeps the workers stacks pin to a `commit:`,
+//! built once per repository, commit and folder by `prepare materialize`,
+//! which gets it mounted.
+//!
+//! `prepare` (resolve, materialize, assemble, fixtures), one `group` container per
 //! group, `docker_parallel_groups` at a time across executions, each packaged,
 //! then `finalize`, whose root bundle is imported once every group ended.
 //! Running a scenario again runs its groups as the next attempt, finalizes
@@ -576,7 +580,15 @@ impl PlanStore {
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
             dispatch.push(("GITHUB_TOKEN".into(), token));
         }
-        for (step, env) in [("materialize", dispatch), ("assemble", key())] {
+        let builds = (
+            "HARNESS_E2E_WORKER_BUILDS".to_owned(),
+            self.root.join("worker-builds").display().to_string(),
+        );
+        for (step, env) in [
+            ("resolve", dispatch),
+            ("materialize", [key(), vec![builds]].concat()),
+            ("assemble", key()),
+        ] {
             let log = folder.join(format!("logs/prepare-{step}.log"));
             // Held until the phase ends, then removed.
             let credentials = match step {
@@ -1562,22 +1574,26 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice()
             {
-                ["materialize"] => {
+                ["resolve"] => {
                     fs::create_dir_all(&contracts)?;
-                    let master = test_plan::embedded()?;
                     let suite = &env["DISPATCH_SUITE"];
-                    let snapshot = if suite.starts_with('{') {
-                        master.materialize_suite(serde_json::from_str(suite)?)?
-                    } else {
-                        master.materialize(suite)?
-                    };
-                    fs::write(contracts.join("suite.json"), serde_json::to_vec(&snapshot)?)?;
                     fs::write(
                         contracts.join("execution.json"),
                         json!({"suite": suite, "stack": "inline", "model": env["DISPATCH_MODEL"]})
                             .to_string(),
                     )?;
                     fs::write(contracts.join("stack.yaml"), &env["DISPATCH_STACK"])?;
+                }
+                ["materialize"] => {
+                    let master = test_plan::embedded()?;
+                    let execution = read_json(&contracts.join("execution.json"))?;
+                    let suite = execution["suite"].as_str().unwrap_or_default();
+                    let snapshot = if suite.starts_with('{') {
+                        master.materialize_suite(serde_json::from_str(suite)?)?
+                    } else {
+                        master.materialize(suite)?
+                    };
+                    fs::write(contracts.join("suite.json"), serde_json::to_vec(&snapshot)?)?;
                 }
                 ["assemble"] => {
                     let snapshot = read_json(&contracts.join("suite.json"))?;
@@ -1957,13 +1973,23 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            &phases[..3],
+            &phases[..4],
             [
+                "prepare resolve",
                 "prepare materialize",
                 "prepare assemble",
                 "prepare fixtures"
             ]
         );
+        // Only the build gets the cache of workers built from a commit.
+        for call in launcher.calls("prepare") {
+            assert_eq!(
+                call.env.get("HARNESS_E2E_WORKER_BUILDS").map(PathBuf::from),
+                (call.args[1] == "materialize").then(|| data.join("worker-builds")),
+                "{:?}",
+                call.args
+            );
+        }
         // Each group packaged after it ran, then the root after the finalizer.
         assert_eq!(phases[phases.len() - 2..], ["finalize", "package"]);
         assert_eq!(phases.iter().filter(|phase| *phase == "package").count(), 5);

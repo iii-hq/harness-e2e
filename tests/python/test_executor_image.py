@@ -170,6 +170,18 @@ class WrapperTests(unittest.TestCase):
                     self.assertNotIn(flag, run)
                 self.assertFalse(any("docker.sock" in value or "EXECUTOR_USER" in value for value in run))
 
+    def test_prepare_alone_mounts_the_build_cache_where_it_is(self):
+        cache = self.directory / "data/worker-builds"
+        for phase, mounted in ((["prepare", "materialize"], True), (["group"], False)):
+            with self.subTest(phase=phase[0]):
+                if self.log.exists():
+                    self.log.unlink()
+                _, invoked = self.run_wrapper(*phase, env={"HARNESS_E2E_WORKER_BUILDS": str(cache)})
+                run = next(call for call in invoked if call[0] == "run")
+                self.assertEqual(("--volume", f"{cache}:{cache}") in pairs(run), mounted)
+                self.assertIn(("--env", "HARNESS_E2E_WORKER_BUILDS"), pairs(run))
+        self.assertTrue(cache.is_dir())
+
     def test_an_unpublished_image_is_built_here_and_said_out_loud(self):
         result, invoked = self.run_wrapper("--env-file", "/secrets/providers.env", "prepare", "assemble",
                                            published=False)
@@ -317,6 +329,7 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual([line.split(" --work-dir")[0] for line in self.log.read_text().splitlines()], [
             f"prepare dispatch {contract_dir}",
             f"prepare runtime {contract_dir}",
+            f"prepare commits {contract_dir} --cache-dir target/worker-builds",
             f"prepare runner {contract_dir}",
             "runner test-plan materialize --profile pr",
             f"prepare contracts {contract_dir} --execution-key 42 --oidc-audience release-control-harness-e2e",

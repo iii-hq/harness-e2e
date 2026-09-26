@@ -250,9 +250,10 @@ pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
             )),
         }
         let commit = container.get("commit").filter(|commit| !commit.is_null());
-        if commit.is_some() {
+        let package = matches!(container.get("worker"), Some(Value::String(worker)) if worker.starts_with("package://"));
+        if commit.is_some() && !package {
             warnings.push(format!(
-                "{name} pins a commit; it takes effect once the executor runs commit pins."
+                "{name} pins a commit, but only a package:// worker is built from one; the executor refuses it."
             ));
         }
         for key in ["version", "commit"] {
@@ -528,7 +529,7 @@ mod tests {
     #[test]
     fn what_may_not_run_as_written_is_a_warning() {
         let summary = summarize(
-            "iii: latest\nregistry: https://example.test\ncontainers:\n  bare: {}\n  plain: package://harness\n  empty:\n  local:\n    worker: path://../workers/harness\n  image:\n    worker: docker://harness\n  pinned:\n    worker: package://harness\n    commit: 0123456789abcdef\n  unpinned:\n    worker: package://harness\n    commit: ~\n",
+            "iii: latest\nregistry: https://example.test\ncontainers:\n  bare: {}\n  plain: package://harness\n  empty:\n  local:\n    worker: path://../workers/harness\n  image:\n    worker: docker://harness\n  pinned:\n    worker: package://harness\n    commit: 0123456789abcdef\n  unpinned:\n    worker: package://harness\n    commit: ~\n  built:\n    worker: path://./harness\n    commit: abcdef0\n",
         )
         .unwrap();
         assert_eq!(
@@ -540,11 +541,12 @@ mod tests {
                 "empty is not a mapping; a container is a mapping with `worker:`, and the executor fails on anything else.",
                 "local runs path://../workers/harness, a path on this machine; the stack runs it only here.",
                 "image: worker docker://harness is neither package:// nor path://.",
-                "pinned pins a commit; it takes effect once the executor runs commit pins.",
+                "built runs path://./harness, a path on this machine; the stack runs it only here.",
+                "built pins a commit, but only a package:// worker is built from one; the executor refuses it.",
             ]
         );
         assert_eq!(
-            summary.containers[summary.containers.len() - 2..],
+            summary.containers[summary.containers.len() - 3..summary.containers.len() - 1],
             [
                 StackContainer {
                     name: "pinned".into(),
@@ -573,9 +575,7 @@ mod tests {
                 "`template` reads as the boolean true; quote it to keep it as written.",
                 "float: `version` reads as the number 1.1; quote it to keep it as written.",
                 "exponent: `version` reads as the number 1000.0; quote it to keep it as written.",
-                "octal pins a commit; it takes effect once the executor runs commit pins.",
                 "octal: `commit` reads as the number 123456 to the executor; quote it to keep it as written.",
-                "quoted pins a commit; it takes effect once the executor runs commit pins.",
                 "listed: `version` reads as a list or a mapping; quote it to keep it as written.",
             ]
         );

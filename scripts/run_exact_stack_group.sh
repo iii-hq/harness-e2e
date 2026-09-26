@@ -405,18 +405,29 @@ else
   # this repository's addition, and the engine installs what it needs with it.
   add_args=("file=$compose_file")
   if [[ -n "$project_template" ]]; then
-    add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@')")
+    # A runner built from a commit is declared with its dependencies, and
+    # then there is nothing to ask for: compose::up starts the project.
+    runner_root=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@' || true)
+    [[ -z "$runner_root" ]] || add_args+=("worker=$runner_root")
   else
     # Except what the executor only needs to exist: the model's provider and
     # the Directory. Harness's graph brings them pinned, and asking for one as
     # well is a second, conflicting spec. Declared, one keeps its pin unasked.
+    # So do the dependencies of a worker built from a commit, declared at the
+    # versions of its newest release.
     ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory "
+    ensured+="$(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
     while IFS= read -r root; do
       [[ "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
     done < <(python3 "$contract_tool" roots --compose "$compose_file")
   fi
-  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  if ((${#add_args[@]} > 1)) || [[ -z "$project_template" ]]; then
+    compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+    await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  else
+    jq -n '{status:"skipped",reason:"the runner is built from a commit and declared; compose::up starts the project"}' \
+      >"$artifact_dir/stack/add.json"
+  fi
   [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
 if [[ -n "$assemble_only" ]]; then

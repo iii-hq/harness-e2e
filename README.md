@@ -197,18 +197,52 @@ stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.
 Scripts always come from the dispatched ref.
 
+A container may pin `commit:` (short or full sha) instead of `version:`:
+
+```yaml
+containers:
+  harness:
+    worker: package://harness
+    commit: 3f2a9c1
+    # repository: iii-hq/workers   # override only
+    # path: harness                # override only
+```
+
+The repository is the one the Registry downloads the worker's releases from
+(`github.com/<org>/<repo>/releases/download/…`), the folder is the worker's
+name there, or the root of a repository named after the worker
+(`iii-hq/harness-e2e`); `repository:` and `path:` only override. A commit
+that does not exist fails the preparation. The worker is built at that commit
+with its own manifest (`iii.worker.yaml`: Rust workers, `cargo build
+--release --locked`) and runs as a `path://` worker. Compose gives a
+`path://` worker none of what a package gets, so the executor declares it with
+the default config its manifest ships (under the stack's `config_override`),
+its `env`, the compose file's folder to run in, and every dependency of the
+worker's newest release at that release's exact versions and edges (Registry
+`/resolve`), which are held: never asked of `compose::add`. The contract
+carries the build and `runtime.commits`; the reports name each such worker
+by its commit in `identity.stack_commits`, since it reports its Cargo version.
+
 Preparation resolves the rest, once:
 
 1. `scripts/prepare_execution.py dispatch` reads the inputs into
-   `execution.json`, `stack.yaml` and `plan.json`; `runtime` resolves `iii`
-   and the template.
-2. `runner` resolves the stack's own `harness-e2e` with `iii compose build`,
+   `execution.json`, `stack.yaml` and `plan.json`; `runtime` resolves `iii`,
+   the template and every `commit:` (`executor.sh prepare resolve`, the one
+   step with a `GITHUB_TOKEN`).
+2. `commits` builds each pinned worker, without a token, once per
+   repository, commit and folder: in `target/worker-builds`, which GitHub
+   restores and saves with `actions/cache` keyed by the pins, or the
+   `worker-builds/` folder of a Docker execution's data directory. It copies
+   the build into the contract (`workers/<container>/`) and declares it in
+   the stack.
+3. `runner` resolves the stack's own `harness-e2e` with `iii compose build`,
    pins that release in the stack and fetches it. That binary materializes the
    suite (`suite.json`, also kept as `profile.json`), so the suite always comes
    from the runner every group runs, and the finalizer aggregates with it. The
-   runner's identity in the reports is its revision.
-3. `contracts` writes one contract per campaign.
-4. The stack is assembled once with `compose::add`, which expands every
+   runner's identity in the reports is its revision. A runner pinned to a
+   commit is its build.
+4. `contracts` writes one contract per campaign.
+5. The stack is assembled once with `compose::add`, which expands every
    declared worker into its graph and writes `worker-compose.lock`; it gets
    the groups' provider credentials and one retry. The model's provider and,
    for an agent profile, the Directory come from Harness's graph with its pins;
@@ -256,7 +290,7 @@ of tools. It holds no scripts:
 checkout at the same path, runs as the caller's uid with
 `no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
-[materialize|assemble|fixtures]`, `group`, `package` or `finalize
+[resolve|materialize|assemble|fixtures]`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
 start from and no package brings (the Kanban fixture, the Linkly templates,
 the stack's template, the Registry sources and the trending topics fixture)
@@ -412,7 +446,11 @@ data directory:
   `e2e-observation-<id>-gh-<n>`).
 - `logs/`: each phase's output.
 
-`prepare materialize`, `assemble` and `fixtures` run once, then one `group`
+`worker-builds/` beside `docker-executions/` keeps the workers stacks pin to
+a `commit:`, one build per repository, commit and folder, mounted into
+`prepare materialize`.
+
+`prepare resolve`, `materialize`, `assemble` and `fixtures` run once, then one `group`
 container per group, `docker_parallel_groups` (2) at a time across executions,
 each packaged, then `finalize`, whose root bundle is imported by the code that
 imports a GitHub run, from the folder. The root links its groups' bundles

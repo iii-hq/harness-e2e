@@ -18,7 +18,7 @@ use tokio::process::Command;
 
 use super::{
     finish, now, update_slot, ExecutionParameters, ExecutionSource, ExecutionStack, ExecutionSuite,
-    PlanExecution, PlanStore, Runner, Slot, StackWorker, Where,
+    PlanExecution, PlanStore, Runner, Slot, StackWorker, Where, WorkerSource,
 };
 use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
@@ -931,14 +931,15 @@ fn contract_fields(contract: &Path) -> Value {
 }
 
 /// Workers one group ran on: what its compose lock resolved and what the
-/// engine reported running. Engine built-ins are left out.
+/// engine reported running, with the commit each worker the stack pinned to
+/// one was built from (its contract says). Engine built-ins are left out.
 fn group_stack(directory: &Path) -> Vec<StackWorker> {
     let lock = fs::read_to_string(directory.join("stack/worker-compose.lock"))
         .ok()
         .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
         .unwrap_or(Value::Null);
     let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
-    super::stack::rows(
+    let mut rows = super::stack::rows(
         &lock["containers"],
         |container| {
             container["resolved"]["version"]
@@ -947,7 +948,28 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
                 .map(str::to_owned)
         },
         super::stack::observed_versions(&workers, None),
-    )
+    );
+    let contract = read_json(&directory.join("stack-lock.json")).unwrap_or(Value::Null);
+    for (name, pin) in contract["runtime"]["commits"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        let commit = pin["commit"].as_str().map(str::to_owned);
+        match rows.iter_mut().find(|row| &row.name == name) {
+            Some(row) => row.commit = commit,
+            None => rows.push(StackWorker {
+                name: name.clone(),
+                source: WorkerSource::Package,
+                requested: None,
+                observed: None,
+                commit,
+                dirty: None,
+                groups: Vec::new(),
+            }),
+        }
+    }
+    rows
 }
 
 /// One row per distinct worker version; groups are listed only for a worker
@@ -1193,6 +1215,41 @@ mod tests {
                 ("harness", "1.8.8", "a,c".to_owned()),
                 ("harness", "1.8.9", "b".to_owned()),
                 ("state", "1.0.0", String::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_worker_built_from_a_commit_is_named_by_its_commit() {
+        let group = tempfile::tempdir().unwrap();
+        fs::create_dir_all(group.path().join("stack")).unwrap();
+        fs::write(
+            group.path().join("stack/worker-compose.lock"),
+            "version: 1\ncontainers:\n  state:\n    worker: package://state\n    requested: 0.22.17\n    resolved:\n      version: 0.22.17\n",
+        )
+        .unwrap();
+        let commit = format!("3f2a9c1{}", "d".repeat(33));
+        let pins = json!({"runtime": {"commits": {
+            "harness": {"worker": "harness", "commit": commit},
+            "router": {"worker": "llm-router", "commit": "e".repeat(40)},
+        }}});
+        fs::write(group.path().join("stack-lock.json"), pins.to_string()).unwrap();
+        // The engine reports the Cargo version of what ran; the router never started.
+        fs::write(
+            group.path().join("stack/workers.json"),
+            json!({"workers": [{"name": "harness", "version": "1.8.37-rc.1"}]}).to_string(),
+        )
+        .unwrap();
+        let rows = group_stack(group.path())
+            .into_iter()
+            .map(|row| (row.name, row.observed, row.commit))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            rows,
+            vec![
+                ("state".into(), None, None),
+                ("harness".into(), Some("1.8.37-rc.1".into()), Some(commit)),
+                ("router".into(), None, Some("e".repeat(40))),
             ]
         );
     }
