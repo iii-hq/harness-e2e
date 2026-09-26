@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run one phase of an execution in the executor image.
 #
-#   scripts/run_in_image.sh [--env-file FILE] prepare [materialize|assemble]
+#   scripts/run_in_image.sh [--env-file FILE] prepare [resolve|build|materialize|assemble|fixtures]
 #   scripts/run_in_image.sh [--env-file FILE] group
 #   scripts/run_in_image.sh [--env-file FILE] finalize
 #   scripts/run_in_image.sh image    print the image this checkout runs in
@@ -22,7 +22,12 @@
 # The environment the phases read passes through by name, never by value on
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
 # GIT_CONFIG_COUNT states, CI, the execution key, the provider credentials
-# and, to `prepare` alone, GITHUB_TOKEN; --env-file adds a file of them.
+# and, to `prepare resolve` and `prepare fixtures` alone, GITHUB_TOKEN;
+# --env-file adds a file of them. `prepare` without a step runs resolve,
+# build, materialize and assemble, each in a container of its own, the env
+# file only for assemble: the commits a stack pins are built with neither.
+# A `prepare` container sees the checkout read-only but for target/, and
+# `prepare build` alone the build cache HARNESS_E2E_WORKER_BUILDS names.
 # The phase learns which variables are credentials from
 # HARNESS_E2E_CREDENTIALS, the names of that file: the launcher writes those
 # into the stack's .env and packaging redacts their values out of evidence.
@@ -48,6 +53,17 @@ if [[ "$phase" == image ]]; then
 fi
 
 warn() { printf '::warning::%s\n' "$*" >&2; }
+
+if [[ "$phase" == prepare && $# -eq 0 ]]; then
+  for step in resolve build materialize assemble; do
+    if [[ "$step" == assemble && -n "$env_file" ]]; then
+      bash "${BASH_SOURCE[0]}" --env-file "$env_file" prepare "$step" || exit
+    else
+      bash "${BASH_SOURCE[0]}" prepare "$step" || exit
+    fi
+  done
+  exit 0
+fi
 
 # A group that fails before its container ran leaves its failure where the
 # launcher would have, so it reports an infrastructure failure, not nothing.
@@ -83,9 +99,16 @@ trap 'rm -f "$cidfile"' EXIT
 
 labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
   --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")
+mounts=(--volume "$root:$root")
+if [[ "$phase" == prepare ]]; then
+  # What a pinned commit's build or the stack's runner writes stays below
+  # target/: the scripts the host runs afterwards are out of its reach.
+  mkdir -p "$root/target"
+  mounts=(--volume "$root:$root:ro" --volume "$root/target:$root/target")
+fi
 args=(run --rm --init --cidfile "$cidfile" "${labels[@]}"
   --security-opt no-new-privileges
-  --volume "$root:$root" --workdir "$root"
+  "${mounts[@]}" --workdir "$root"
   --env "HARNESS_E2E_EXECUTOR_IMAGE=$reference")
 if [[ "$phase" == group ]]; then
   # Anonymous, so --rm removes it; labelled like the container.
@@ -101,7 +124,11 @@ else
   args+=(--user "$(id -u):$(id -g)")
 fi
 credentials=()
-if [[ -n "$env_file" ]]; then
+# A build runs the commits a stack pins: no credentials reach it.
+building=false
+[[ "$phase" != prepare || "${1:-}" != build ]] || building=true
+[[ -z "$env_file" || "$building" == false ]] || warn "prepare build takes no credentials; ignoring --env-file $env_file"
+if [[ -n "$env_file" && "$building" == false ]]; then
   args+=(--env-file "$env_file")
   # Names only, as Docker reads the file; Docker refuses a file it cannot.
   if [[ -r "$env_file" ]]; then
@@ -114,13 +141,21 @@ if [[ -n "$env_file" ]]; then
   fi
 fi
 ((${#credentials[@]} == 0)) || args+=(--env "HARNESS_E2E_CREDENTIALS=${credentials[*]}")
+# A build cache outside the checkout, at the same path: the Console's Docker
+# executions keep the workers built from a commit under its data directory.
+if [[ "$phase" == prepare && "${1:-}" == build && -n "${HARNESS_E2E_WORKER_BUILDS:-}" ]]; then
+  mkdir -p "$HARNESS_E2E_WORKER_BUILDS"
+  args+=(--volume "$HARNESS_E2E_WORKER_BUILDS:$HARNESS_E2E_WORKER_BUILDS")
+fi
 for name in $(compgen -e); do
   case "$name" in
     HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER | HARNESS_E2E_CREDENTIALS) ;;
-    # Only prepare calls GitHub; a group's subject has a shell.
-    GITHUB_TOKEN) [[ "$phase" != prepare ]] || args+=(--env "$name") ;;
+    # Only resolving a dispatch and fetching fixtures call GitHub; a group's
+    # subject has a shell, and a build runs a commit's code.
+    GITHUB_TOKEN) [[ "$phase" != prepare || ! "${1:-}" =~ ^(resolve|fixtures)$ ]] || args+=(--env "$name") ;;
+    DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY) [[ "$building" == true ]] || args+=(--env "$name") ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | CI | EXECUTION_KEY | \
-      RELEASE_CONTROL_OIDC_AUDIENCE | DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY)
+      RELEASE_CONTROL_OIDC_AUDIENCE)
       args+=(--env "$name") ;;
   esac
 done

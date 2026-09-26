@@ -573,6 +573,23 @@ def with_fixture(template: dict[str, Any], fixture: dict[str, Any]) -> dict[str,
     return result
 
 
+def merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """`over` on top of `base`, mappings key by key, anything else replaced."""
+    result = dict(base)
+    for key, value in over.items():
+        both = isinstance(value, dict) and isinstance(result.get(key), dict)
+        result[key] = merged(result[key], value) if both else value
+    return result
+
+
+def built_versions(versions: dict[str, str], contract: dict[str, Any]) -> dict[str, str]:
+    """`versions` with each worker built from a commit named `@<sha7>`: what
+    it reports is its Cargo version, which a release series must not take
+    for a release."""
+    pins = ((contract.get("runtime") or {}).get("commits") or {}).values()
+    return dict(sorted({**versions, **{pin["worker"]: f"@{pin['commit'][:7]}" for pin in pins}}.items()))
+
+
 def scoped_config_name(namespace: str, name: str) -> str:
     """A configuration id both Compose and the engine accept.
 
@@ -647,11 +664,18 @@ def project_scaffold(
         raise ValueError("env file must be absolute")
     manifest = copy.deepcopy(template if template is not None else (runtime.get("compose") or declared_base()))
     containers = manifest.setdefault("containers", {})
+    # A worker the stack built from a commit is a path:// worker that is
+    # still the package it was built from, known by its path.
+    commits = runtime.get("commits") or {}
+    assembled = (runtime.get("compose") or {}).get("containers") or {}
+    built = {assembled[name]["worker"]: pin["worker"] for name, pin in commits.items() if name in assembled}
+
+    def package_of(container: dict[str, Any]) -> str | None:
+        source = str(container.get("worker", ""))
+        return worker_name(source) if source.startswith("package://") else built.get(source)
+
     def declares(package: str) -> bool:
-        return any(
-            str(item.get("worker", "")).startswith("package://") and worker_name(item["worker"]) == package
-            for item in containers.values()
-        )
+        return any(package_of(item) == package for item in containers.values())
 
     if not declares(RUNNER):
         containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
@@ -706,6 +730,29 @@ def project_scaffold(
             container["version"] = locked.get(package, DEFAULT_SELECTOR)
         package_names.setdefault(package, []).append(name)
     if template is not None:
+        # A worker the stack built from a commit runs that build, not the
+        # template's package: its source, start and folder change, and the
+        # build's default config and env go under the template's own, as
+        # they do for any worker built from a commit. The dependencies are
+        # declared beside it.
+        for pinned, pin in commits.items():
+            for name in package_names.pop(pin["worker"], []):
+                container = containers[name]
+                container.pop("version", None)
+                container["worker"] = assembled[pinned]["worker"]
+                container["scripts"] = {**(container.get("scripts") or {}), "run": assembled[pinned]["scripts"]["run"]}
+                container["working_dir"] = assembled[pinned].get("working_dir", ".")
+                if pin.get("config"):
+                    container["config_override"] = merged(pin["config"], container.get("config_override") or {})
+                if pin.get("env"):
+                    container["environment"] = {**pin["env"], **(container.get("environment") or {})}
+            for dependency in pin.get("dependencies") or []:
+                if dependency in package_names:
+                    continue
+                if dependency in containers:
+                    raise ValueError(f"container {dependency} is not the {dependency} worker {pin['worker']} depends on")
+                containers[dependency] = copy.deepcopy(assembled[dependency])
+                package_names[dependency] = [dependency]
         # Compose expands dependencies by container name, so a template that
         # renamed a role has to point at the name its own project uses.
         for container in containers.values():
@@ -717,8 +764,7 @@ def project_scaffold(
                     for dependency in container["start_after"]
                 ]
     for name, container in containers.items():
-        source = str(container["worker"])
-        worker = worker_name(source) if source.startswith("package://") else None
+        worker = package_of(container)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
@@ -1001,9 +1047,9 @@ def main() -> int:
         elif args.command == "manifest":
             args.output.write_text(json.dumps(campaign_manifest(contract), indent=2) + "\n")
         elif args.command == "materialize":
-            installed = observed_versions(
+            installed = built_versions(observed_versions(
                 load_object(args.workers, "engine workers"), args.namespace
-            ) if args.workers else {}
+            ), contract) if args.workers else {}
             request = materialize_request(
                 contract, load_object(args.catalog, "scenario catalog"),
                 group_id=args.group_id, installed=installed,

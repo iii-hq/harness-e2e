@@ -218,6 +218,22 @@ describe('an execution as it runs', () => {
     )
     expect(workerVersion(stack, 'state')).toBeNull()
     expect(workerVersion(undefined, 'harness')).toBeNull()
+    // A package the stack pinned to a commit is named by the commit.
+    expect(
+      workerVersion(
+        [
+          {
+            name: 'harness',
+            source: 'package' as const,
+            requested: null,
+            observed: '1.8.37-rc.1',
+            commit: '3f2a9c1dddddddddddddddddddddddddddddddd',
+            dirty: null,
+          },
+        ],
+        'harness',
+      ),
+    ).toBe('@3f2a9c1')
   })
 })
 

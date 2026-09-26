@@ -405,18 +405,38 @@ else
   # this repository's addition, and the engine installs what it needs with it.
   add_args=("file=$compose_file")
   if [[ -n "$project_template" ]]; then
-    add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@')")
+    # A runner built from a commit is declared with its dependencies, and
+    # then there is nothing to ask for: compose::up starts the project.
+    runner_root=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@' || true)
+    [[ -z "$runner_root" ]] || add_args+=("worker=$runner_root")
   else
     # Except what the executor only needs to exist: the model's provider and
     # the Directory. Harness's graph brings them pinned, and asking for one as
     # well is a second, conflicting spec. Declared, one keeps its pin unasked.
-    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory "
+    # So do the dependencies of a worker built from a commit, declared at the
+    # versions of its newest release.
+    held=" $(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
+    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory $held"
+    roots=$(python3 "$contract_tool" roots --compose "$compose_file")
     while IFS= read -r root; do
-      [[ "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
-    done < <(python3 "$contract_tool" roots --compose "$compose_file")
+      [[ -z "$root" || "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
+    done <<<"$roots"
+    # Every root built from a commit: its held dependencies are asked for at
+    # the exact versions one release graph resolved together.
+    if ((${#add_args[@]} == 1)); then
+      while IFS= read -r root; do
+        [[ -z "$root" || "$held" != *" ${root%@*} "* ]] || add_args+=("worker=$root")
+      done <<<"$roots"
+    fi
+    ((${#add_args[@]} > 1)) || fail "the stack declares no package worker for compose::add to assemble"
   fi
-  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  if ((${#add_args[@]} > 1)) || [[ -z "$project_template" ]]; then
+    compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+    await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  else
+    jq -n '{status:"skipped",reason:"the runner is built from a commit and declared; compose::up starts the project"}' \
+      >"$artifact_dir/stack/add.json"
+  fi
   [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
 if [[ -n "$assemble_only" ]]; then

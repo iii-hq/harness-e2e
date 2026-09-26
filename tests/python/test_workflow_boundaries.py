@@ -291,11 +291,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         """The inputs reach disk as the execution, the requested stack, and
         the plan shape older Console imports and the ledger reports read."""
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
-        step = next(step for step in workflow["jobs"]["prepare"]["steps"]
-                    if step.get("name") == "Materialize the suite with the stack's runner")
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        step = steps["Resolve the dispatch"]
         names = ("suite", "stack", "model", "profile", "execution_id")
         self.assertEqual({name: step["env"][f"DISPATCH_{name.upper()}"] for name in names},
                          {name: "${{ inputs." + name + " }}" for name in names})
+        self.assertIn("scripts/run_in_image.sh prepare resolve", step["run"])
+        # What a commit pin builds runs its code: that step gets no token.
+        self.assertNotIn("env", steps["Materialize the suite with the stack's runner"])
         self.assertIn("python3 scripts/prepare_execution.py dispatch --contract-dir \"$contract_dir\"",
                       (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as directory:
@@ -315,6 +318,45 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(execution["stack"], "default")
         self.assertEqual(execution["execution_id"], "b0607faa-096a-4efe-a4a2-a2a9bc06de83")
         self.assertEqual(stack["iii"], "latest")
+
+    def test_workers_built_from_a_commit_are_cached_around_their_build_alone(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
+        names = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
+        # Saved before the stack's runner runs, so nothing but the pinned
+        # commits' own builds ever writes an entry.
+        order = ["Resolve the dispatch", "Restore the workers built from those commits",
+                 "Build the workers the stack pins to a commit", "Save the workers built from those commits",
+                 "Materialize the suite with the stack's runner"]
+        self.assertEqual([name for name in names if name in order], order)
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        restore, build, save = steps[order[1]], steps[order[2]], steps[order[3]]
+        self.assertTrue(restore["uses"].startswith("actions/cache/restore@"))
+        self.assertTrue(save["uses"].startswith("actions/cache/save@"))
+        for step in (restore, save):
+            # Where the executor builds when no cache is mounted.
+            self.assertEqual(step["with"], {"path": "target/worker-builds", "key": "${{ steps.resolved.outputs.builds }}"})
+        self.assertEqual(build["run"], "scripts/run_in_image.sh prepare build")
+        self.assertNotIn("env", build)
+        self.assertEqual(build["if"], "steps.resolved.outputs.builds != ''")
+        self.assertEqual(save["if"], "steps.resolved.outputs.builds != '' && steps.builds.outputs.cache-hit != 'true'")
+        self.assertIn("${HARNESS_E2E_WORKER_BUILDS:-target/worker-builds}",
+                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
+        # The key is the one resolve names from the pins.
+        script = steps["Resolve the dispatch"]["run"]
+        key = script[script.index("printf 'builds="):]
+        with tempfile.TemporaryDirectory() as directory:
+            contract = pathlib.Path(directory) / "target/harness-e2e-contract"
+            contract.mkdir(parents=True)
+
+            def output(execution):
+                (contract / "execution.json").write_text(json.dumps(execution))
+                (pathlib.Path(directory) / "out").write_text("")
+                subprocess.run(["bash", "-c", "set -euo pipefail\n" + key], cwd=directory, check=True,
+                               env={**os.environ, "GITHUB_OUTPUT": f"{directory}/out"})
+                return (pathlib.Path(directory) / "out").read_text()
+
+            self.assertEqual(output({"builds": "worker-builds-0123"}), "builds=worker-builds-0123\n")
+            self.assertEqual(output({"builds": None}), "builds=\n")
 
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))

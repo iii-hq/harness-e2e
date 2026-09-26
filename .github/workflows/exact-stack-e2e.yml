@@ -77,12 +77,11 @@ jobs:
           [[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]
 
       # Every phase runs in the executor image (Dockerfile) with this
-      # checkout's scripts; see scripts/executor.sh. This half reads the
-      # dispatch, resolves the iii release and the template, and has the
-      # stack's own runner, pinned in the stack, materialize the suite. The
-      # reports name that runner by the revision it reports.
-      - name: Materialize the suite with the stack's runner
-        id: stack_runner
+      # checkout's scripts; see scripts/executor.sh. This one reads the
+      # dispatch and resolves the iii release, the template and every
+      # `commit:` the stack pins, to its full commit.
+      - name: Resolve the dispatch
+        id: resolved
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
           DISPATCH_STACK: ${{ inputs.stack }}
@@ -90,6 +89,40 @@ jobs:
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
           GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          scripts/run_in_image.sh prepare resolve
+          # The cache entry of the commits the stack pins, when it pins any.
+          printf 'builds=%s\n' "$(jq -r '.builds // empty' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
+
+      # The workers built from those commits, cached by the commits alone:
+      # restored, built on their own (the commits' code, with no token and
+      # nothing else running) and saved before the stack's runner runs, so
+      # nothing but the pinned commits' own builds ever writes an entry.
+      - name: Restore the workers built from those commits
+        id: builds
+        if: steps.resolved.outputs.builds != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/worker-builds
+          key: ${{ steps.resolved.outputs.builds }}
+
+      - name: Build the workers the stack pins to a commit
+        if: steps.resolved.outputs.builds != ''
+        run: scripts/run_in_image.sh prepare build
+
+      - name: Save the workers built from those commits
+        if: steps.resolved.outputs.builds != '' && steps.builds.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/worker-builds
+          key: ${{ steps.resolved.outputs.builds }}
+
+      # This half has the stack's own runner, pinned in the stack,
+      # materialize the suite. The reports name that runner by the revision
+      # it reports.
+      - name: Materialize the suite with the stack's runner
+        id: stack_runner
         run: |
           set -euo pipefail
           scripts/run_in_image.sh prepare materialize
