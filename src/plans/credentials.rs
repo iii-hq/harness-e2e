@@ -51,10 +51,10 @@ static WRITES: Mutex<()> = Mutex::new(());
 struct Catalog {
     providers: BTreeMap<String, String>,
     others: Vec<String>,
-    /// What a subscription provider's group receives from this machine's
-    /// login (see `subscription`): never set here, still redacted.
+    /// The access token a subscription provider's group receives from this
+    /// machine's login (see `subscription`): never set here, still redacted.
     #[serde(default)]
-    subscriptions: BTreeMap<String, Vec<String>>,
+    subscriptions: BTreeMap<String, String>,
 }
 
 fn catalog() -> Catalog {
@@ -69,7 +69,7 @@ pub(crate) fn known_names() -> Vec<String> {
         .providers
         .into_values()
         .chain(catalog.others)
-        .chain(catalog.subscriptions.into_values().flatten())
+        .chain(catalog.subscriptions.into_values())
         .collect()
 }
 

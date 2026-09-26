@@ -602,7 +602,15 @@ project_trigger() {
 
             contract["suite"]["subject"]["provider"] = "claude-code"
             environ = {"CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-access", "CLAUDE_CODE_EXPIRES_AT": str((now + 3600) * 1000)}
-            assignment, evidence = MODULE.subscription_login(contract, environ, root, now)
+            # An hour is less than the group may run: said, and it still runs.
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                assignment, evidence = MODULE.subscription_login(contract, environ, root, now)
+            self.assertEqual(said.getvalue(),
+                             "[WARN] CLAUDE_CODE_ACCESS_TOKEN expires at 2027-01-15T09:00:00+00:00, before the group's "
+                             "deadline; provider-claude-code may be signed out before the group ends\n")
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                MODULE.subscription_login(contract, {**environ, "HARNESS_E2E_RUN_TIMEOUT_SECONDS": "600"}, root, now)
+            self.assertEqual(said.getvalue(), "")
             folder = root / "claude-code"
             self.assertEqual(assignment, f"provider-claude-code.CLAUDE_CONFIG_DIR={folder}")
             self.assertEqual(json.loads((folder / ".credentials.json").read_text()),
@@ -615,12 +623,12 @@ project_trigger() {
             contract["suite"]["subject"]["provider"] = "deepseek"
             self.assertIsNone(MODULE.subscription_login(contract, {}, root, now))
             # On GitHub the group job's secrets reach the credentials file by
-            # the catalog's names: the access token and its account, nothing
-            # a login holds besides.
+            # the catalog's names: the access token alone is a credential,
+            # its account no secret, and nothing else a login holds.
             self.assertEqual(
                 MODULE.catalog_credentials({"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1",
                                             "CODEX_REFRESH_TOKEN": "never", "CODEX_ID_TOKEN": "never"}),
-                {"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1"})
+                {"CODEX_ACCESS_TOKEN": token})
             contract["suite"]["subject"]["provider"] = "claude-code"
             with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
                 self.assertIsNone(MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token}, root, now))
@@ -668,8 +676,9 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
         with tempfile.TemporaryDirectory() as directory:
             expires_at = str(int((time.time() + 7200) * 1000))
             result = launch(Path(directory), "claude-code", {
-                # As run_in_image.sh names the --env-file's variables.
-                "HARNESS_E2E_CREDENTIALS": "CLAUDE_CODE_ACCESS_TOKEN CLAUDE_CODE_EXPIRES_AT ZAI_API_KEY",
+                # As run_in_image.sh names the --env-file's variables; the
+                # expiry, no secret, comes by name.
+                "HARNESS_E2E_CREDENTIALS": "CLAUDE_CODE_ACCESS_TOKEN ZAI_API_KEY",
                 "CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-group-access",
                 "CLAUDE_CODE_EXPIRES_AT": expires_at,
                 "ZAI_API_KEY": "zai-key", "DEEPSEEK_API_KEY": "deepseek-key",
@@ -684,7 +693,6 @@ trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
             # received, for the runner to redact by value.
             self.assertEqual((Path(directory) / "run/.env").read_text(),
                              "CLAUDE_CODE_ACCESS_TOKEN=sk-ant-oat01-group-access\n"
-                             f"CLAUDE_CODE_EXPIRES_AT={expires_at}\n"
                              "DEEPSEEK_API_KEY=deepseek-key\nZAI_API_KEY=zai-key\n")
             evidence = Path(directory) / "artifacts/stack/credentials.json"
             self.assertEqual(json.loads(evidence.read_text())["source"], "env")

@@ -574,46 +574,58 @@ for the private Registry and trending topics sources.
 API key: `${CODEX_HOME:-~/.codex}/auth.json` (`codex login`) and
 `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json` (`claude`). A group gets
 the login's access token and nothing else: no refresh or id token ever enters
-a container or GitHub. Before each group starts, the worker reads the login;
-when its access token would expire before the group's deadline (10800 s and
-15 minutes), it refreshes the login first and writes the rotated tokens back
-into that file (atomically, mode 600, every other field kept), so the CLI
-goes on working with them. Refresh tokens rotate on every use and only one
-holder may refresh: the worker's groups take turns, and two workers on one
-machine take `<login>.harness-e2e.lock`; the CLI does not, so one refreshing
-at the same moment can cost one side its rotation (the worker retries once
-with the token the CLI wrote). A Codex access token lasts 10 days, so it is
-rarely refreshed; Claude's lasts hours. A login that is signed out or refused
-is a warning on the execution ("provider-claude-code starts without
-credentials: the Claude login on this machine expired; run `claude`"), and
-the group runs without it.
+a container or GitHub. Before an execution's first group, the worker reads the
+login; when its access token would expire before the group's deadline
+(10800 s and 15 minutes), it refreshes the login first, as the CLI does. The
+execution's later groups get that same token while it lasts a group, so one
+group's refresh never rotates the token another is running with.
 
-The group gets `CODEX_ACCESS_TOKEN` and `CODEX_ACCOUNT_ID`, or
-`CLAUDE_CODE_ACCESS_TOKEN` and `CLAUDE_CODE_EXPIRES_AT` (epoch milliseconds),
-with the provider credentials above: in the same file of
-`data_dir/.phase-credentials/`, handed to the group and to the packaging that
-checks its evidence, removed when each ends; `prepare assemble` gets no token.
-[`config/provider-credentials.json`](config/provider-credentials.json) names
-them under `subscriptions`: never set on the Stacks page, but redacted like
-any other credential, by the runner and again by packaging. The launcher
-writes the login the provider reads from them, into the group's runtime tree
-and not its evidence, and points only the provider at it (`CODEX_HOME`,
-`CLAUDE_CONFIG_DIR`); `stack/credentials.json` says where the token came from
-and when it expires, without it. A token already expired fails the group in
-its `credentials` phase. The subject is denied the credential vault
-(`auth::*`) and each provider's own sign-in, status and logout
-(`provider::*::auth::*`), and the audit flags a call to either. It can still
-read the access token (from its workers' environment or the login file), as
-it can an API key; the runner redacts it by value from what it records, and
-any JWT by its shape. As the [Executor image](#executor-image) section says,
-a subject is also root-equivalent on this host, where the login itself is.
+Refresh tokens rotate on every use, so only one holder may refresh. The
+worker's groups take turns, two workers on one machine take
+`<login>.harness-e2e.lock`, and a Claude refresh also takes the `claude` CLI's
+own refresh lock (`<config>/.oauth_refresh.lock` and `<config>.lock`, renewed
+while held). Under the locks the login is read again; the refresh is written
+back only over the login it came from (atomically, mode 600), with the tokens
+alone replaced and everything else the CLI wrote meanwhile kept, its keys in
+sorted order. If the login was rotated by someone else meanwhile, theirs
+stands. The `codex` CLI takes no such lock, so a refresh racing it can cost
+one side its rotation; a refused refresh is retried once with the token the
+CLI wrote. A Codex access token lasts 10 days, so it is rarely refreshed;
+Claude's lasts hours. A refresh that fails (the service busy, the login
+refused) while the token still works hands that token over with a warning on
+the execution; a login that is signed out or dead is a warning too
+("provider-claude-code starts without credentials: the Claude login on this
+machine expired; run `claude`"), and the group runs without it.
+
+The access token (`CODEX_ACCESS_TOKEN`, `CLAUDE_CODE_ACCESS_TOKEN`) is a
+credential: it goes with the provider credentials above, in the same file of
+`data_dir/.phase-credentials/` handed to the group and to the packaging that
+checks its evidence, removed when each ends; `prepare assemble` and a commit's
+build get none. [`config/provider-credentials.json`](config/provider-credentials.json)
+names it under `subscriptions`: never set on the Stacks page, but redacted
+like any other credential, by the runner and again by packaging. What else the
+login holds is no secret and goes to the group by name: `CODEX_ACCOUNT_ID`,
+`CLAUDE_CODE_EXPIRES_AT` (epoch milliseconds). The launcher writes the login
+the provider reads, into the group's runtime tree and not its evidence, and
+points only the provider at it (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`);
+`stack/credentials.json` says where the token came from and when it expires,
+without it. A token already expired fails the group in its `credentials`
+phase; one that expires before the group's deadline is said out loud. The
+subject is denied the credential vault (`auth::*`) and each provider's own
+sign-in, status and logout (`provider::*::auth::*`), and the audit flags a
+call to either. It can still read the access token (from its workers'
+environment or the login file), as it can an API key; the runner redacts it by
+value from what it records, and any JWT (`eyJ….eyJ….…`) by its shape. As the
+[Executor image](#executor-image) section says, a subject is also
+root-equivalent on this host, where the login itself is.
 
 On GitHub the group job's credentials step also reads the optional secrets
-`CODEX_ACCESS_TOKEN` (and `CODEX_ACCOUNT_ID`) and `CLAUDE_CODE_ACCESS_TOKEN`
-(and `CLAUDE_CODE_EXPIRES_AT`) of the `harness-e2e-trusted` environment into
-its file; the preparation's does not. Without one, the provider starts signed
-out. Paste the access token from the login file, never the refresh token. A
-Codex token pasted there lasts 10 days; Claude's lasts hours, which makes it
+`CODEX_ACCESS_TOKEN` and `CLAUDE_CODE_ACCESS_TOKEN` of the
+`harness-e2e-trusted` environment into its file, and the group step the
+optional variables `CODEX_ACCOUNT_ID` and `CLAUDE_CODE_EXPIRES_AT`; the
+preparation reads none. Without a token, its provider starts signed out.
+Paste the access token from the login file, never the refresh token. A Codex
+token pasted there lasts 10 days; Claude's lasts hours, which makes it
 impractical on GitHub.
 
 ## Worker

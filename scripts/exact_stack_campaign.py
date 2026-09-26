@@ -123,9 +123,9 @@ def declared_base() -> dict[str, Any]:
 
 def credential_catalog() -> tuple[dict[str, str], set[str]]:
     """The key each provider reads, and every name the catalog knows: a
-    subscription login's variables too, which a group job may carry."""
+    subscription login's access token too, which a group job may carry."""
     catalog = json.loads(CREDENTIAL_CATALOG.read_text())
-    subscriptions = {name for names in catalog.get("subscriptions", {}).values() for name in names}
+    subscriptions = set(catalog.get("subscriptions", {}).values())
     return catalog["providers"], set(catalog["providers"].values()) | set(catalog["others"]) | subscriptions
 
 
@@ -888,6 +888,13 @@ def subscription_login(
         login = {"claudeAiOauth": {"accessToken": token, **({"expiresAt": int(milliseconds)} if milliseconds else {})}}
     if expires_at is not None and expires_at <= now + 60:
         raise ValueError(f"{variable} expired before the group started; provider-{provider} would start signed out")
+    # A pasted token (GitHub) is not refreshed: said when it may not last the
+    # group (its run timeout and fifteen minutes to start its stack).
+    budget = int(environ.get("HARNESS_E2E_RUN_TIMEOUT_SECONDS") or 10800) + 900
+    if expires_at is not None and expires_at < now + budget:
+        at = datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
+        print(f"[WARN] {variable} expires at {at}, before the group's deadline; "
+              f"provider-{provider} may be signed out before the group ends", file=sys.stderr)
     folder = root / provider
     folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     folder.chmod(0o700)

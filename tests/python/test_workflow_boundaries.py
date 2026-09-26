@@ -146,8 +146,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
         group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
                      if step.get("id") == "common")
         # The provider credentials come in a private file, never as secrets
-        # in the step's environment.
-        self.assertEqual(sorted(group["env"]), ["HARNESS_E2E_CONTRACT"])
+        # in the step's environment; a subscription login's account and
+        # expiry, no secrets, come from variables.
+        self.assertEqual(sorted(group["env"]), ["CLAUDE_CODE_EXPIRES_AT", "CODEX_ACCOUNT_ID", "HARNESS_E2E_CONTRACT"])
+        self.assertFalse(any("secrets." in str(value) for value in group["env"].values()))
         self.assertEqual(group["run"], 'scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group')
         executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
         self.assertIn("  group) group ;;", executor)
@@ -203,11 +205,15 @@ class WorkflowBoundaryTests(unittest.TestCase):
         catalog = json.loads((ROOT / "config/provider-credentials.json").read_text())
         secrets = sorted(set(catalog["providers"].values()) | set(catalog["others"]))
         # A subscription login's access token reaches a group alone, never
-        # the stack's assembly, and never as a refresh token.
-        subscriptions = sorted(name for names in catalog["subscriptions"].values() for name in names)
+        # the stack's assembly, and never as a refresh token; its account
+        # and expiry, no secrets, come to the group step by name.
+        subscriptions = sorted(catalog["subscriptions"].values())
         self.assertNotIn("REFRESH_TOKEN", workflow)
         for name in subscriptions:
             self.assertEqual(workflow.count(f"secrets.{name} "), 1)
+        for name in ("CODEX_ACCOUNT_ID", "CLAUDE_CODE_EXPIRES_AT"):
+            self.assertEqual(workflow.count(f"vars.{name} "), 1)
+            self.assertNotIn(f"secrets.{name}", workflow)
         # Never every secret: toJSON(secrets) holds the run for approval
         # (action_required, no job starts) and hands a step all the others.
         self.assertNotIn("toJSON(secrets)", workflow)
