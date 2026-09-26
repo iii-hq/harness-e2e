@@ -51,6 +51,10 @@ static WRITES: Mutex<()> = Mutex::new(());
 struct Catalog {
     providers: BTreeMap<String, String>,
     others: Vec<String>,
+    /// The access token a subscription provider's group receives from this
+    /// machine's login (see `subscription`): never set here, still redacted.
+    #[serde(default)]
+    subscriptions: BTreeMap<String, String>,
 }
 
 fn catalog() -> Catalog {
@@ -58,13 +62,14 @@ fn catalog() -> Catalog {
         .expect("config/provider-credentials.json is the catalog")
 }
 
-/// Every name the catalog knows.
+/// Every name the catalog knows, a subscription's too.
 pub(crate) fn known_names() -> Vec<String> {
     let catalog = catalog();
     catalog
         .providers
         .into_values()
         .chain(catalog.others)
+        .chain(catalog.subscriptions.into_values())
         .collect()
 }
 

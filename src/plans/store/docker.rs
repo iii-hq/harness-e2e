@@ -8,7 +8,10 @@
 //!   the master plan, or the whole suite as JSON), the stack's YAML, the
 //!   model and the agent profile. Credentials never go here: `prepare
 //!   assemble`, each group and each packaging get this Console's (see
-//!   `credentials`) in a private temporary file that goes after the phase.
+//!   `credentials`) in a private temporary file that goes after the phase. A
+//!   group of a subscription provider (`openai-codex`, `claude-code`) and its
+//!   packaging also get the access token of this machine's login (see
+//!   `subscription`), refreshed first when it would not last the group.
 //! - `checkout/`: what the wrapper mounts, at the same path: the Dockerfile
 //!   this worker embeds (it names the image), the scripts it embeds or a copy
 //!   of `scripts_dir`, both frozen for the execution, and `target/`, every
@@ -52,6 +55,7 @@ use super::{
 use crate::artifact;
 use crate::plans::credentials::{self, Credentials};
 use crate::plans::stacks;
+use crate::subscription::{Access, Subscription};
 use crate::test_plan::{self, MasterPlan};
 
 /// The scripts every phase runs, extracted into each execution's checkout.
@@ -94,6 +98,10 @@ const GROUP_DEADLINES: [(&str, &str); 2] = [
     ("HARNESS_E2E_RUN_TIMEOUT_SECONDS", "10800"),
 ];
 
+/// How long a group's access token must last: its run timeout and fifteen
+/// minutes to start its stack.
+const SUBSCRIPTION_BUDGET: Duration = Duration::from_secs(10800 + 900);
+
 /// How this worker runs Docker executions (worker configuration).
 #[derive(Debug, Clone)]
 pub(crate) struct DockerSettings {
@@ -108,6 +116,11 @@ pub(crate) struct DockerSettings {
     /// A pull-through cache per registry for each group's Docker daemon,
     /// handed to the group as `HARNESS_E2E_REGISTRY_MIRRORS`.
     pub registry_mirrors: BTreeMap<String, String>,
+    /// Where the subscription providers' CLI logins are read, as a home
+    /// (`.codex/auth.json`, `.claude/.credentials.json`); `None` reads them
+    /// where the CLIs keep them for this process (`CODEX_HOME`,
+    /// `CLAUDE_CONFIG_DIR`, `HOME`).
+    pub logins: Option<PathBuf>,
 }
 
 impl Default for DockerSettings {
@@ -117,6 +130,7 @@ impl Default for DockerSettings {
             provider_env_file: None,
             scripts_dir: None,
             registry_mirrors: BTreeMap::new(),
+            logins: None,
         }
     }
 }
@@ -328,6 +342,10 @@ pub(super) struct Docker {
     launcher: Arc<dyn Launcher>,
     groups: Arc<Semaphore>,
     cancels: std::sync::Mutex<HashMap<String, Arc<watch::Sender<bool>>>>,
+    /// The access token each running execution's groups sign in with, by
+    /// execution: reused while it lasts a group, so one group refreshing
+    /// the login never rotates the token another group runs with.
+    accesses: std::sync::Mutex<HashMap<String, Access>>,
 }
 
 impl Docker {
@@ -346,6 +364,7 @@ impl Docker {
             settings,
             launcher,
             cancels: std::sync::Mutex::new(HashMap::new()),
+            accesses: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -532,6 +551,7 @@ impl PlanStore {
                 }
             }
             store.docker.forget(&id, &sender);
+            store.docker.accesses.lock().unwrap().remove(&id);
         });
     }
 
@@ -831,8 +851,14 @@ impl PlanStore {
             group.campaign_id, group.group_id, group.attempt
         ));
         // One set for the group and the packaging that checks its evidence:
-        // a credential changed meanwhile is still looked for.
-        let values = self.credentials().merged()?;
+        // a credential changed meanwhile is still looked for, and so is the
+        // access token a subscription provider signs in with. What else its
+        // login holds is no secret, and goes by name.
+        let mut values = self.credentials().merged()?;
+        if let Some(access) = self.subscription_access(id).await? {
+            values.insert(access.token.0, access.token.1);
+            env.extend(access.env);
+        }
         let credentials = self.credentials().phase_file(&values)?;
         let succeeded = self
             .docker
@@ -894,6 +920,52 @@ impl PlanStore {
         })
         .await
         .map(drop)
+    }
+
+    /// For a subscription provider, the access token of this machine's login:
+    /// the one the execution's groups already got while it lasts a group,
+    /// else the login's, refreshed first if it would not. What cannot be had,
+    /// or may not last, is a warning; the group runs either way.
+    async fn subscription_access(&self, id: &str) -> Result<Option<Access>> {
+        let execution = self.read_execution(id).await?;
+        let Some(subscription) = execution
+            .parameters
+            .as_ref()
+            .and_then(|parameters| Subscription::from_provider(&parameters.provider))
+        else {
+            return Ok(None);
+        };
+        let held = self.docker.accesses.lock().unwrap().get(id).cloned();
+        if let Some(access) = held.filter(|access| access.covers(SUBSCRIPTION_BUDGET)) {
+            return Ok(Some(access));
+        }
+        let got = subscription
+            .access(self.docker.settings.logins.as_deref(), SUBSCRIPTION_BUDGET)
+            .await;
+        let note = match &got {
+            Ok(access) => access.warning.clone(),
+            Err(error) => Some(format!(
+                "provider-{} starts without credentials: {error:#}",
+                subscription.provider()
+            )),
+        };
+        if let Some(note) = note {
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            if !execution.warnings.contains(&note) {
+                execution.warnings.push(note);
+                self.write_execution(&execution).await?;
+            }
+        }
+        let access = got.ok();
+        if let Some(access) = &access {
+            self.docker
+                .accesses
+                .lock()
+                .unwrap()
+                .insert(id.to_owned(), access.clone());
+        }
+        Ok(access)
     }
 
     /// Hash each root into its bundle-manifest.json, as the workflow does
@@ -1295,8 +1367,12 @@ impl PlanStore {
 }
 
 /// What an execution says when its model's provider starts without a key:
-/// it still runs.
+/// it still runs. A subscription provider signs in with this machine's login
+/// instead, and says so when its group cannot.
 fn credential_warning(provider: &str, credentials: &BTreeMap<String, String>) -> Option<String> {
+    if Subscription::from_provider(provider).is_some() {
+        return None;
+    }
     match credentials::provider_key(provider) {
         Some(key) if !credentials.contains_key(&key) => Some(format!(
             "{key} is not set (Stacks, provider credentials): provider-{provider} starts without a credential."
@@ -2526,10 +2602,228 @@ mod tests {
             Some("OPENAI_API_KEY is not set (Stacks, provider credentials): provider-openai starts without a credential.")
         );
         // A provider the catalog does not know: only none at all is said.
-        assert_eq!(credential_warning("openai-codex", &set), None);
-        assert!(credential_warning("openai-codex", &BTreeMap::new())
+        assert_eq!(credential_warning("ollama", &set), None);
+        assert!(credential_warning("ollama", &BTreeMap::new())
             .unwrap()
             .starts_with("No provider credential is set"));
+        // A subscription provider needs no key.
+        for provider in ["openai-codex", "claude-code"] {
+            assert_eq!(credential_warning(provider, &BTreeMap::new()), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subscription_group_and_its_packaging_get_the_access_token_alone() {
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let providers = root.path().join("providers.env");
+        fs::write(&providers, "ZAI_API_KEY=sk-zai-0123456789\n").unwrap();
+        // This machine's Codex login, good for ten days: handed over as it is.
+        let logins = root.path().join("home");
+        let codex = logins.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let claims = json!({"exp": chrono::Utc::now().timestamp() + 864_000});
+        let access = format!(
+            "eyJhbGciOiJub25lIn0.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+        );
+        let login = json!({"auth_mode": "chatgpt", "tokens": {"access_token": access,
+            "refresh_token": "refresh-never-leaves", "id_token": "id-never-leaves", "account_id": "acct-1"}});
+        fs::write(codex.join("auth.json"), login.to_string()).unwrap();
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                provider_env_file: Some(providers.clone()),
+                logins: Some(logins),
+                ..DockerSettings::default()
+            },
+        );
+        // A stack pinned to a commit, so its build runs too.
+        let mut parameters = ExecutionParameters {
+            provider: "openai-codex".into(),
+            ..docker_parameters("pr")
+        };
+        if let Some(stack) = parameters.stack.as_mut() {
+            stack.yaml =
+                "containers:\n  harness:\n    worker: package://harness\n    commit: 3f2a9c1\n"
+                    .into();
+        }
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        assert!(
+            done.warnings
+                .iter()
+                .all(|warning| !warning.contains("credential")),
+            "{:?}",
+            done.warnings
+        );
+        assert!(launcher
+            .calls("prepare")
+            .iter()
+            .any(|call| call.args[1] == "build"));
+        // The token alone is a credential; the account goes by name.
+        let with_token = format!("CODEX_ACCESS_TOKEN={access}\nZAI_API_KEY=sk-zai-0123456789\n");
+        let calls = launcher.calls.lock().unwrap().clone();
+        let groups = calls.iter().filter(|call| call.args[0] == "group").count();
+        assert_eq!(groups, 4);
+        for call in &calls {
+            // Each group and the packaging that checks its evidence; nothing
+            // else: not the stack's assembly, never a commit's build.
+            let group_package = call.args[0] == "package" && call.args[1].contains("group_id");
+            let expected = match call.args[0].as_str() {
+                "group" => Some(with_token.as_str()),
+                "package" if group_package => Some(with_token.as_str()),
+                "prepare" if call.args[1] == "assemble" => Some("ZAI_API_KEY=sk-zai-0123456789\n"),
+                _ => None,
+            };
+            assert_eq!(
+                call.credentials
+                    .as_ref()
+                    .map(|(content, mode)| (content.as_str(), *mode)),
+                expected.map(|content| (content, 0o600)),
+                "{:?}",
+                call.args
+            );
+            if let Some(file) = &call.env_file {
+                assert!(file.starts_with(data.join(".phase-credentials")));
+                assert!(!file.exists(), "{} outlived its phase", file.display());
+            }
+            assert_eq!(
+                call.env.get("CODEX_ACCOUNT_ID").map(String::as_str),
+                (call.args[0] == "group").then_some("acct-1"),
+                "{:?}",
+                call.args
+            );
+        }
+        // Held for no execution once its drive ended.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !store.docker.accesses.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the execution's access token outlived its drive");
+        // Neither the refresh nor the id token is anywhere in the data
+        // directory, nor any access token once the groups ended.
+        let mut folders = vec![data.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if let Ok(bytes) = fs::read(&path) {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    for secret in ["never-leaves", access.as_str()] {
+                        assert!(!text.contains(secret), "{} holds a token", path.display());
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subscription_login_that_cannot_be_had_is_a_warning_and_the_groups_still_run() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        // A home where no one signed in.
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                logins: Some(root.path().join("home")),
+                ..DockerSettings::default()
+            },
+        );
+        let parameters = ExecutionParameters {
+            provider: "claude-code".into(),
+            ..docker_parameters("pr")
+        };
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        // Said once, and not that no key is set: this one had a login to try.
+        assert_eq!(done.warnings.len(), 1, "{:?}", done.warnings);
+        assert!(
+            done.warnings[0].starts_with("provider-claude-code starts without credentials: ")
+                && done.warnings[0].ends_with("; run `claude`"),
+            "{}",
+            done.warnings[0]
+        );
+        let groups = launcher.calls("group");
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|group| group.env_file.is_none()));
+    }
+
+    #[tokio::test]
+    async fn an_executions_groups_share_its_token_while_it_lasts_a_group() {
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join(".codex")).unwrap();
+        let login = |hours: i64, tag: &str| {
+            let claims = json!({"exp": chrono::Utc::now().timestamp() + hours * 3600, "tag": tag});
+            let token = format!(
+                "eyJhbGciOiJub25lIn0.{}.signature",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+            );
+            fs::write(
+                home.join(".codex/auth.json"),
+                json!({"auth_mode": "chatgpt", "tokens": {"access_token": token, "account_id": "acct-1"}})
+                    .to_string(),
+            )
+            .unwrap();
+            token
+        };
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            Arc::new(FakeLauncher::default()),
+            DockerSettings {
+                logins: Some(home.clone()),
+                ..DockerSettings::default()
+            },
+        );
+        let mut execution = store
+            .start_execution(
+                ExecutionParameters {
+                    provider: "openai-codex".into(),
+                    ..docker_parameters("pr")
+                },
+                "",
+            )
+            .await
+            .unwrap();
+        // Read as another execution, whose drive this test is.
+        execution.id = "plan-shared".into();
+        execution.idempotency_key = "execution:shared".into();
+        store.write_execution(&execution).await.unwrap();
+        let first = login(5, "first");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, first);
+        // The CLI renews the login meanwhile: the groups keep the first.
+        login(240, "renewed");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, first);
+        // Once it would not last a group, the login's again.
+        store
+            .docker
+            .accesses
+            .lock()
+            .unwrap()
+            .get_mut("plan-shared")
+            .unwrap()
+            .expires_at = Some(chrono::Utc::now().timestamp() + 600);
+        let renewed = login(240, "renewed");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, renewed);
     }
 
     #[test]

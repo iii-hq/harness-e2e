@@ -378,6 +378,18 @@ fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
   project_args+=(--environment "harness-e2e.HARNESS_E2E_KANBAN_RUNTIME=$HARNESS_E2E_KANBAN_RUNTIME")
 fi
+# A subscription provider (openai-codex, claude-code) signs in with the
+# access token the group received and nothing else, never a refresh or id
+# token: its login is written from CODEX_ACCESS_TOKEN or
+# CLAUDE_CODE_ACCESS_TOKEN into the runtime tree, the provider alone is
+# pointed at it, and stack/credentials.json says when it expires, without it.
+# A token already dead fails the group here; a missing one is a warning.
+if [[ -z "$assemble_only" ]]; then
+  login=$(python3 "$contract_tool" subscription-login --contract "$contract_path" \
+    --root "$run_root/login" --evidence "$artifact_dir/stack/credentials.json") \
+    || { failure_phase=credentials; fail "${login#error: }"; }
+  [[ -z "$login" ]] || project_args+=(--environment "$login")
+fi
 python3 "$contract_tool" project "${project_args[@]}"
 
 failure_phase=engine_start

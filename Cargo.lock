@@ -661,6 +661,7 @@ dependencies = [
  "iii-sdk",
  "jsonschema",
  "mime_guess",
+ "reqwest",
  "rust-embed",
  "schemars",
  "serde",

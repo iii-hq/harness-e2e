@@ -154,6 +154,9 @@ for name in $(compgen -e); do
     # subject has a shell, and a build runs a commit's code.
     GITHUB_TOKEN) [[ "$phase" != prepare || ! "${1:-}" =~ ^(resolve|fixtures)$ ]] || args+=(--env "$name") ;;
     DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY) [[ "$building" == true ]] || args+=(--env "$name") ;;
+    # What a subscription login holds besides its access token (which comes
+    # in the env file): no secret, and for a group alone.
+    CODEX_ACCOUNT_ID | CLAUDE_CODE_EXPIRES_AT) [[ "$phase" != group ]] || args+=(--env "$name") ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | CI | EXECUTION_KEY | \
       RELEASE_CONTROL_OIDC_AUDIENCE)
       args+=(--env "$name") ;;

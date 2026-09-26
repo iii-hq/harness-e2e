@@ -11,12 +11,15 @@ unknown fields are ignored so either side can add one and ship alone.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
 import os
 import re
 import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +58,16 @@ REDACTION_MIN_LENGTH = 8
 #: other file is bound by a digest (the runner's references, the aggregator's
 #: campaign bundle, Release Control's checks) and is never rewritten.
 REWRITABLE_ROOT = "logs"
+#: The providers that sign in with a subscription login rather than a key:
+#: the variable a group receives its access token in (never a refresh or id
+#: token), the one that tells the provider where its login is, and the file
+#: it reads there.
+SUBSCRIPTION_LOGINS = {
+    "openai-codex": ("CODEX_ACCESS_TOKEN", "CODEX_HOME", "auth.json"),
+    "claude-code": ("CLAUDE_CODE_ACCESS_TOKEN", "CLAUDE_CONFIG_DIR", ".credentials.json"),
+}
+#: The ChatGPT account id claim of a Codex access token.
+CODEX_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
 def load_yaml(text: str) -> Any:
@@ -109,9 +122,11 @@ def declared_base() -> dict[str, Any]:
 
 
 def credential_catalog() -> tuple[dict[str, str], set[str]]:
-    """The key each provider reads, and every name the catalog knows."""
+    """The key each provider reads, and every name the catalog knows: a
+    subscription login's access token too, which a group job may carry."""
     catalog = json.loads(CREDENTIAL_CATALOG.read_text())
-    return catalog["providers"], set(catalog["providers"].values()) | set(catalog["others"])
+    subscriptions = set(catalog.get("subscriptions", {}).values())
+    return catalog["providers"], set(catalog["providers"].values()) | set(catalog["others"]) | subscriptions
 
 
 def usable_credential(name: Any, value: Any) -> bool:
@@ -829,6 +844,72 @@ def project_scaffold(
     return manifest
 
 
+def jwt_claims(token: str) -> dict[str, Any]:
+    """The claims of a JWT, unverified; empty for anything else."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def subscription_login(
+    contract: dict[str, Any], environ: dict[str, str], root: Path, now: float
+) -> tuple[str, dict[str, Any]] | None:
+    """The login a subscription provider starts with, written below `root`
+    (mode 700, the file 600) from the access token the group received and
+    nothing else: the provider's environment assignment pointing at it, and
+    evidence of it without the token. None when the subject's provider takes
+    an API key, or when its token was not given, which is said out loud: the
+    provider starts signed out. A token that is already dead is an error."""
+    provider = contract["suite"]["subject"]["provider"]
+    if provider not in SUBSCRIPTION_LOGINS:
+        return None
+    variable, home, name = SUBSCRIPTION_LOGINS[provider]
+    token = environ.get(variable, "")
+    if not token:
+        print(f"[WARN] {variable} is not set; provider-{provider} starts without a credential", file=sys.stderr)
+        return None
+    expires_at: float | None
+    if provider == "openai-codex":
+        claims = jwt_claims(token)
+        expires_at = claims["exp"] if isinstance(claims.get("exp"), (int, float)) else None
+        account = environ.get("CODEX_ACCOUNT_ID") or (claims.get(CODEX_AUTH_CLAIM) or {}).get("chatgpt_account_id")
+        login: dict[str, Any] = {
+            "auth_mode": "chatgpt",
+            "tokens": {"access_token": token, **({"account_id": account} if account else {})},
+        }
+    else:
+        milliseconds = environ.get("CLAUDE_CODE_EXPIRES_AT", "")
+        if milliseconds and not milliseconds.isdigit():
+            raise ValueError("CLAUDE_CODE_EXPIRES_AT must be epoch milliseconds")
+        expires_at = int(milliseconds) / 1000 if milliseconds else None
+        login = {"claudeAiOauth": {"accessToken": token, **({"expiresAt": int(milliseconds)} if milliseconds else {})}}
+    if expires_at is not None and expires_at <= now + 60:
+        raise ValueError(f"{variable} expired before the group started; provider-{provider} would start signed out")
+    # A pasted token (GitHub) is not refreshed: said when it may not last the
+    # group (its run timeout and fifteen minutes to start its stack).
+    budget = int(environ.get("HARNESS_E2E_RUN_TIMEOUT_SECONDS") or 10800) + 900
+    if expires_at is not None and expires_at < now + budget:
+        at = datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
+        print(f"[WARN] {variable} expires at {at}, before the group's deadline; "
+              f"provider-{provider} may be signed out before the group ends", file=sys.stderr)
+    folder = root / provider
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.chmod(0o700)
+    descriptor = os.open(folder / name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        json.dump(login, file)
+    evidence = {
+        "provider": provider,
+        "source": "env",
+        "expires_at": None if expires_at is None else datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+    }
+    return f"provider-{provider}.{home}={folder}", evidence
+
+
 def compose_evidence(
     contract: dict[str, Any],
     compose_path: Path,
@@ -1016,6 +1097,10 @@ def main() -> int:
     credentials_file = commands.add_parser(
         "credentials-file", help="a private env file of the catalog's credentials this environment sets")
     credentials_file.add_argument("--output", type=Path, required=True)
+    login = commands.add_parser("subscription-login")
+    login.add_argument("--contract", type=Path, required=True)
+    login.add_argument("--root", type=Path, required=True)
+    login.add_argument("--evidence", type=Path, required=True)
     layout = commands.add_parser("validate-layout")
     layout.add_argument("--artifact-root", type=Path, required=True)
     layout.add_argument("--runtime-root", type=Path, required=True)
@@ -1102,6 +1187,13 @@ def main() -> int:
                 (args.output.parent / "worker-compose.lock").write_text(yaml.safe_dump(lock, sort_keys=False))
             if args.engine_config:
                 args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
+        elif args.command == "subscription-login":
+            # The token comes from the environment, never the command line.
+            delivered = subscription_login(contract, dict(os.environ), args.root, time.time())
+            if delivered:
+                assignment, evidence = delivered
+                args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+                print(assignment)
         elif args.command == "group-template":
             print(group_template(contract, args.group_id))
         elif args.command == "credentials-env":

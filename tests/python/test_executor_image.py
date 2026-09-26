@@ -156,6 +156,22 @@ class WrapperTests(unittest.TestCase):
         run = next(call for call in invoked if call[0] == "run")
         self.assertFalse(any("HARNESS_E2E_CREDENTIALS" in value for value in run))
 
+    def test_a_subscription_logins_access_token_comes_by_file_and_the_rest_by_name_to_a_group_alone(self):
+        credentials = self.directory / "provider-credentials.env"
+        credentials.write_text("CODEX_ACCESS_TOKEN=eyJ-token-secret\n")
+        metadata = {"CODEX_ACCOUNT_ID": "acct-1", "CLAUDE_CODE_EXPIRES_AT": "1900000000000"}
+        for phase in (["group"], ["prepare", "build"], ["prepare", "assemble"], ["finalize"]):
+            with self.subTest(phase=phase):
+                if self.log.exists():
+                    self.log.unlink()
+                _, invoked = self.run_wrapper("--env-file", str(credentials), *phase, env=metadata)
+                run = next(call for call in invoked if call[0] == "run")
+                self.assertNotIn("secret", "\n".join(run))
+                for name in metadata:
+                    self.assertEqual(("--env", name) in pairs(run), phase == ["group"], name)
+                if phase == ["group"]:
+                    self.assertIn(("--env", "HARNESS_E2E_CREDENTIALS=CODEX_ACCESS_TOKEN"), pairs(run))
+
     def test_only_resolving_and_fixtures_get_the_github_token_and_only_a_group_privileges(self):
         root = self.root.resolve()
         for phase in (["prepare", "resolve"], ["prepare", "fixtures"], ["prepare", "build"],

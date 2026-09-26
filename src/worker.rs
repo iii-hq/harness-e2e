@@ -121,6 +121,7 @@ impl WorkerConfig {
             provider_env_file: path(&self.provider_env_file)?,
             scripts_dir: path(&self.scripts_dir)?,
             registry_mirrors: self.docker_registry_mirrors.clone(),
+            logins: None,
         })
     }
 }

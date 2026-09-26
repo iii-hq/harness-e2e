@@ -1,11 +1,15 @@
+import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -573,6 +577,128 @@ project_trigger() {
         self.assertNotIn("$artifact_dir/.env", runner)
         # The runner learns their names, to redact their values in what it writes.
         self.assertLess(runner.index("credentials-env"), runner.index("harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names"))
+
+    def test_a_subscription_provider_signs_in_with_the_access_token_alone(self):
+        now = 1_800_000_000
+        token = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(json.dumps(
+            {"exp": now + 864_000, MODULE.CODEX_AUTH_CLAIM: {"chatgpt_account_id": "acct-claim"}}
+        ).encode()).decode().rstrip("=") + ".signature"
+        contract = campaign_contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "login"
+            contract["suite"]["subject"]["provider"] = "openai-codex"
+            assignment, evidence = MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token}, root, now)
+            folder = root / "openai-codex"
+            self.assertEqual(assignment, f"provider-openai-codex.CODEX_HOME={folder}")
+            self.assertEqual(json.loads((folder / "auth.json").read_text()),
+                             {"auth_mode": "chatgpt", "tokens": {"access_token": token, "account_id": "acct-claim"}})
+            self.assertEqual((folder / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(evidence, {"provider": "openai-codex", "source": "env",
+                                        "expires_at": "2027-01-25T08:00:00+00:00"})
+            # The account the token was pasted with wins over its claim.
+            MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1"}, root, now)
+            self.assertEqual(json.loads((folder / "auth.json").read_text())["tokens"]["account_id"], "acct-1")
+
+            contract["suite"]["subject"]["provider"] = "claude-code"
+            environ = {"CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-access", "CLAUDE_CODE_EXPIRES_AT": str((now + 3600) * 1000)}
+            # An hour is less than the group may run: said, and it still runs.
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                assignment, evidence = MODULE.subscription_login(contract, environ, root, now)
+            self.assertEqual(said.getvalue(),
+                             "[WARN] CLAUDE_CODE_ACCESS_TOKEN expires at 2027-01-15T09:00:00+00:00, before the group's "
+                             "deadline; provider-claude-code may be signed out before the group ends\n")
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                MODULE.subscription_login(contract, {**environ, "HARNESS_E2E_RUN_TIMEOUT_SECONDS": "600"}, root, now)
+            self.assertEqual(said.getvalue(), "")
+            folder = root / "claude-code"
+            self.assertEqual(assignment, f"provider-claude-code.CLAUDE_CONFIG_DIR={folder}")
+            self.assertEqual(json.loads((folder / ".credentials.json").read_text()),
+                             {"claudeAiOauth": {"accessToken": "sk-ant-oat01-access", "expiresAt": (now + 3600) * 1000}})
+            self.assertEqual((folder / ".credentials.json").stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("sk-ant", json.dumps(evidence))
+
+            # A provider that takes a key has no login; a subscription one
+            # without its token starts signed out, said out loud.
+            contract["suite"]["subject"]["provider"] = "deepseek"
+            self.assertIsNone(MODULE.subscription_login(contract, {}, root, now))
+            # On GitHub the group job's secrets reach the credentials file by
+            # the catalog's names: the access token alone is a credential,
+            # its account no secret, and nothing else a login holds.
+            self.assertEqual(
+                MODULE.catalog_credentials({"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1",
+                                            "CODEX_REFRESH_TOKEN": "never", "CODEX_ID_TOKEN": "never"}),
+                {"CODEX_ACCESS_TOKEN": token})
+            contract["suite"]["subject"]["provider"] = "claude-code"
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                self.assertIsNone(MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token}, root, now))
+            self.assertEqual(said.getvalue(),
+                             "[WARN] CLAUDE_CODE_ACCESS_TOKEN is not set; provider-claude-code starts without a credential\n")
+
+    def test_the_launcher_fails_a_dead_login_and_keeps_every_token_out_of_the_evidence(self):
+        runner = RUNNER_SCRIPT.read_text()
+        env_block = ': >"$env_file"' + runner.split(': >"$env_file"', 1)[1].split("\n\n", 1)[0] + "\n"
+        marker = "# A subscription provider (openai-codex"
+        login_block = marker + runner.split(marker, 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+        shell = """set -Eeuo pipefail
+contract_tool=$1 contract_path=$2 run_root=$3 artifact_dir=$4 env_file=$3/.env
+assemble_only=""
+project_args=()
+failure_phase=earlier
+log() { printf '%s\\n' "$*" >&2; }
+fail() { printf '[FAIL] %s\\n' "$1" >&2; return 1; }
+trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
+""" + env_block + login_block + 'printf "%s\\n" "${project_args[@]}"\n'
+
+        def launch(directory: Path, provider: str, env: dict[str, str]):
+            contract = campaign_contract()
+            contract["suite"]["subject"]["provider"] = provider
+            (directory / "contract.json").write_text(json.dumps(contract))
+            (directory / "run").mkdir()
+            (directory / "artifacts/stack").mkdir(parents=True)
+            clean = {name: value for name, value in os.environ.items()
+                     if not name.startswith(("CODEX_", "CLAUDE_CODE_", "DEEPSEEK_", "ZAI_", "TYPESAFE_"))}
+            return subprocess.run(
+                ["bash", "-c", shell, "launcher", str(SCRIPT), str(directory / "contract.json"),
+                 str(directory / "run"), str(directory / "artifacts")],
+                env={**clean, **env}, capture_output=True, text=True, check=False,
+            )
+
+        expired = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(
+            json.dumps({"exp": 1_000}).encode()).decode().rstrip("=") + ".signature"
+        with tempfile.TemporaryDirectory() as directory:
+            result = launch(Path(directory), "openai-codex", {"CODEX_ACCESS_TOKEN": expired})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("[FAIL] CODEX_ACCESS_TOKEN expired before the group started", result.stderr)
+            self.assertTrue(result.stdout.endswith("phase=credentials\n"), result.stdout)
+            self.assertFalse((Path(directory) / "run/login").exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            expires_at = str(int((time.time() + 7200) * 1000))
+            result = launch(Path(directory), "claude-code", {
+                # As run_in_image.sh names the --env-file's variables; the
+                # expiry, no secret, comes by name.
+                "HARNESS_E2E_CREDENTIALS": "CLAUDE_CODE_ACCESS_TOKEN ZAI_API_KEY",
+                "CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-group-access",
+                "CLAUDE_CODE_EXPIRES_AT": expires_at,
+                "ZAI_API_KEY": "zai-key", "DEEPSEEK_API_KEY": "deepseek-key",
+            })
+            self.assertEqual(result.returncode, 0, result.stderr)
+            login = Path(directory) / "run/login/claude-code"
+            self.assertEqual(result.stdout.splitlines(),
+                             ["--environment", f"provider-claude-code.CLAUDE_CONFIG_DIR={login}", "phase=earlier"])
+            self.assertEqual(json.loads((login / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"],
+                             "sk-ant-oat01-group-access")
+            # The stack's env file carries it, as every credential the group
+            # received, for the runner to redact by value.
+            self.assertEqual((Path(directory) / "run/.env").read_text(),
+                             "CLAUDE_CODE_ACCESS_TOKEN=sk-ant-oat01-group-access\n"
+                             "DEEPSEEK_API_KEY=deepseek-key\nZAI_API_KEY=zai-key\n")
+            evidence = Path(directory) / "artifacts/stack/credentials.json"
+            self.assertEqual(json.loads(evidence.read_text())["source"], "env")
+            for path in (Path(directory) / "artifacts").rglob("*"):
+                if path.is_file():
+                    self.assertNotIn("group-access", path.read_text())
 
     def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
         runner = RUNNER_SCRIPT.read_text()
