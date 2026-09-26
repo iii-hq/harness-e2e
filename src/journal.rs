@@ -425,7 +425,8 @@ fn immutable_json_bytes(path: &Path, value: &impl Serialize) -> Result<Vec<u8>> 
     let mut bytes = serde_json::to_vec_pretty(value)
         .with_context(|| format!("serialize {}", path.display()))?;
     bytes.push(b'\n');
-    Ok(bytes)
+    // Before the chain hashes it.
+    Ok(crate::redaction::redact_credentials(bytes))
 }
 
 #[cfg(test)]
@@ -818,6 +819,34 @@ mod tests {
                 .unwrap(),
             progress
         );
+    }
+
+    #[test]
+    fn a_credential_in_an_event_is_redacted_before_the_chain_hashes_it() {
+        const KEY: &str = "sk-journal-0123456789";
+        crate::redaction::with_test_credentials(&[("ZAI_API_KEY", KEY)], || {
+            let output = tempfile::tempdir().unwrap();
+            let journal = ExecutionJournal::initialize(output.path(), &header()).unwrap();
+            admit_slot(&journal);
+            let progress = append(
+                &journal,
+                ExecutionJournalEventKind::PhaseChanged {
+                    phase: "running".into(),
+                    reason: format!("provider refused ZAI_API_KEY={KEY}"),
+                },
+            );
+            assert_eq!(
+                ExecutionJournal::open(output.path())
+                    .unwrap()
+                    .replay()
+                    .unwrap(),
+                progress
+            );
+            for entry in fs::read_dir(output.path().join("journal/events")).unwrap() {
+                let text = fs::read_to_string(entry.unwrap().path()).unwrap();
+                assert!(!text.contains(KEY));
+            }
+        });
     }
 
     #[test]

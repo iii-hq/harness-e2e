@@ -446,25 +446,42 @@ imported from the worker's own environment for the names
 They live in `credentials.env` of the worker's `data_dir`, mode 600, never in
 the database, an execution's folder or its evidence, and the worker never
 answers with a value (`e2e::dashboard::credentials-list` gives names and
-whether each is set). `prepare assemble`, each group and each packaging get
-them, merged with `provider_env_file`, in a private temporary file (mode 600)
-passed with `--env-file` and removed when the phase ends. An execution whose
-model's provider has no key says so and still runs.
+whether each is set). `credential-set` takes the value as `secret`: the iii
+SDKs record each invocation's input in its trace (`iii.invocation.input`)
+unless `III_DISABLE_TRACE_PAYLOADS=1`, and leave out the values of keys such
+as `secret`; a key named `value` would be kept there as sent.
+
+A Docker execution reads them once per group attempt, merged with
+`provider_env_file` (whose lines it cannot use it names, without their
+values, as warnings), and hands that one set to the group and to the packaging
+that checks its evidence, each in a file of `data_dir/.phase-credentials/`
+(mode 600, directory 700) passed with `--env-file` and removed when the phase
+ends; the worker removes what a stop left there when it starts. `prepare
+assemble` gets them the same way; the root bundle, as on GitHub, none. An
+execution whose model's provider has no key, or with a value under 8
+characters (the evidence is not checked for it), says so and still runs.
 
 Inside, `scripts/run_in_image.sh` tells the phase which variables are
 credentials (`HARNESS_E2E_CREDENTIALS`, the names of that file); the launcher
 writes exactly those, plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY` and
-`TYPESAFE_API_KEY` when its environment has them, into the stack's `.env`, and
-warns when the model's provider's key is missing. Before a bundle is hashed,
-`exact_stack_campaign.py package` replaces each of their values it finds in
-the evidence by `[redacted:NAME]` and records in `bundle-manifest.json`
-(`redaction`) how many it replaced per name and in which files; values under
-8 characters are not looked for (`too_short`). On GitHub the preparation and
-each group job write the credentials among the job's secrets, the names that
-catalog lists and no other secret, to such a file in `RUNNER_TEMP`, which the
-phase and its packaging read; a shard's runs are reported to Release Control
-after that packaging. The workflow names each of those secrets in
-that step: `toJSON(secrets)` would hold every run for approval.
+`TYPESAFE_API_KEY` when its environment has them, into the stack's `.env`,
+warns when the model's provider's key is missing, and gives the runner their
+names. The runner replaces each such value (and each the catalog names) by
+`[redacted:NAME]`, as written and as JSON escapes it, in every artifact and
+journal event before it hashes it, so a key the subject printed never reaches
+a digest. `exact_stack_campaign.py package` looks for them again, raw and
+escaped: in the launcher's `logs/`, which nothing hashes, it replaces them;
+anywhere else a file is bound by a digest (the runner's references, the
+campaign bundle, Release Control's checks), so it rewrites nothing and refuses
+the bundle, naming the files and credentials, never the values; the
+diagnostic is kept instead. `bundle-manifest.json` records what it found per
+name (`redaction`). On GitHub the preparation and each group job write the
+credentials among the job's secrets, the names that catalog lists and no
+other secret, to such a file in `RUNNER_TEMP`, which the phase and its
+packaging read; a shard's runs are reported to Release Control from the tree
+that is uploaded, after packaging, so a refused bundle reports its outcome
+and diagnostic and no run. The workflow names each of those secrets in that
+step: `toJSON(secrets)` would hold every run for approval.
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.

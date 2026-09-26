@@ -315,32 +315,6 @@ jobs:
             --credentials "$RUNNER_TEMP/provider-credentials.env" \
             --output target/harness-e2e-exact-stack/bundle-manifest.json
 
-      # Whatever the group did, its runs reach the ledger: from results.json
-      # (read after packaging, so as redacted as what is uploaded)
-      # when the group finished, from the journal checkpoints when it did not,
-      # and as an empty shard saying so when it produced neither.
-      - name: Report this shard's runs
-        if: always() && inputs.execution_id != ''
-        env:
-          EXECUTION_ID: ${{ inputs.execution_id }}
-          RUNNER_REVISION: ${{ needs.prepare.outputs.runner_revision }}
-          RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
-          RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
-        run: |
-          python3 scripts/report_execution.py shard \
-            --execution-id "$EXECUTION_ID" \
-            --artifact-name "e2e-observation-$EXECUTION_KEY-${{ matrix.campaign_id }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}" \
-            --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
-            --campaign-id '${{ matrix.campaign_id }}' \
-            --group-id '${{ matrix.group_id }}' \
-            --outcome '${{ steps.common.outcome }}' \
-            --artifacts target/harness-e2e-exact-stack \
-            --profile-snapshot target/harness-e2e-contract/profile.json \
-            --plan target/harness-e2e-contract/plan.json \
-            --resolution target/harness-e2e-contract/contracts/resolution.json \
-            --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
-            --runner-sha "$RUNNER_REVISION"
-
       - name: Preserve safe group packaging diagnostic
         id: group_package_failure
         if: always() && steps.group_package.outcome == 'failure'
@@ -349,6 +323,37 @@ jobs:
           diagnostic_dir=$(mktemp -d "${RUNNER_TEMP:?}/harness-e2e-package-failure.XXXXXX")
           printf '%s\n' '{"phase":"artifact_packaging","outcome":"infra_failed","error":"Group artifact validation failed; unsafe tree was not uploaded. See workflow logs."}' > "$diagnostic_dir/failure.json"
           printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
+
+      # Whatever the group did, its runs reach the ledger: from results.json
+      # when the group finished, from the journal checkpoints when it did not,
+      # and as an empty shard saying so when it produced neither. Read from
+      # the tree that is uploaded, after packaging: when packaging refused
+      # the group's (a credential in it, an unsafe file), the shard carries
+      # the outcome and the diagnostic, no run.
+      - name: Report this shard's runs
+        if: always() && inputs.execution_id != ''
+        env:
+          EXECUTION_ID: ${{ inputs.execution_id }}
+          RUNNER_REVISION: ${{ needs.prepare.outputs.runner_revision }}
+          RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
+          RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
+          UPLOADED: ${{ steps.group_package.outcome == 'success' && 'target/harness-e2e-exact-stack/' || steps.group_package_failure.outputs.path }}
+        run: |
+          artifacts=()
+          [[ -z "$UPLOADED" ]] || artifacts=(--artifacts "$UPLOADED")
+          python3 scripts/report_execution.py shard \
+            --execution-id "$EXECUTION_ID" \
+            --artifact-name "e2e-observation-$EXECUTION_KEY-${{ matrix.campaign_id }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}" \
+            --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
+            --campaign-id '${{ matrix.campaign_id }}' \
+            --group-id '${{ matrix.group_id }}' \
+            --outcome '${{ steps.common.outcome }}' \
+            "${artifacts[@]}" \
+            --profile-snapshot target/harness-e2e-contract/profile.json \
+            --plan target/harness-e2e-contract/plan.json \
+            --resolution target/harness-e2e-contract/contracts/resolution.json \
+            --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
+            --runner-sha "$RUNNER_REVISION"
 
       - name: Upload group observation bundle
         if: always() && (steps.group_package.outcome == 'success' || steps.group_package_failure.outcome == 'success')

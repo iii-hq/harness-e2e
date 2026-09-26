@@ -571,6 +571,8 @@ project_trigger() {
         # And written after a template scaffold, so it replaces the placeholder.
         self.assertLess(runner.index("project init"), runner.index(': >"$env_file"'))
         self.assertNotIn("$artifact_dir/.env", runner)
+        # The runner learns their names, to redact their values in what it writes.
+        self.assertLess(runner.index("credentials-env"), runner.index("harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names"))
 
     def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -1129,58 +1131,94 @@ fail() {
         self.assertTrue(all(MODULE.CREDENTIAL_NAME.fullmatch(name) for name in known))
         self.assertEqual(providers["openai"], "OPENAI_API_KEY")
 
-    def test_package_redacts_the_received_credentials_before_it_hashes(self):
-        credentials = {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": "sk-openai-0123456789",
+    def test_package_redacts_the_launchers_logs_and_hashes_what_is_kept(self):
+        credentials = {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": 'sk-"openai"-0123456789',
                        "SHORT_KEY": "abc"}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "logs").mkdir()
             (root / "logs/engine.log").write_text("key=sk-deepseek-0123456789 and again sk-deepseek-0123456789\n")
-            (root / "results.json").write_text(json.dumps({"transcript": "OPENAI_API_KEY=sk-openai-0123456789 abc"}))
-            (root / "clean.json").write_text("{}\n")
+            # As JSON escapes it, in a log the launcher captured.
+            (root / "logs/compose.log").write_text(json.dumps({"env": 'OPENAI_API_KEY=sk-"openai"-0123456789'}))
+            (root / "results.json").write_text('{"transcript": "abc"}\n')
             manifest = MODULE.package_bundle(root, campaign_contract(), {}, credentials)
             self.assertEqual(manifest["redaction"], {
                 "credentials": {"DEEPSEEK_API_KEY": 2, "OPENAI_API_KEY": 1},
-                "files": ["logs/engine.log", "results.json"],
+                "files": ["logs/compose.log", "logs/engine.log"],
                 "too_short": ["SHORT_KEY"],
             })
             self.assertEqual((root / "logs/engine.log").read_text(),
                              "key=[redacted:DEEPSEEK_API_KEY] and again [redacted:DEEPSEEK_API_KEY]\n")
-            # Still JSON, and the short value is left alone.
-            self.assertEqual(json.loads((root / "results.json").read_text()),
-                             {"transcript": "OPENAI_API_KEY=[redacted:OPENAI_API_KEY] abc"})
+            self.assertEqual(json.loads((root / "logs/compose.log").read_text()),
+                             {"env": "OPENAI_API_KEY=[redacted:OPENAI_API_KEY]"})
             # The digests are of the redacted bytes, the ones uploaded.
             for entry in manifest["files"]:
                 payload = (root / entry["path"]).read_bytes()
                 self.assertEqual(entry["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
-                self.assertEqual(entry["size_bytes"], len(payload))
                 self.assertNotIn(b"sk-", payload)
             self.assertNotIn("sk-", json.dumps(manifest))
-            # Without credentials nothing changes and the manifest says so.
-            (root / "clean.json").write_text("sk-deepseek-0123456789\n")
+
+    def test_package_refuses_a_credential_in_a_file_bound_by_digests_and_rewrites_nothing(self):
+        credentials = {"OPENAI_API_KEY": "sk-openai-0123456789"}
+        for relative in ["results.json", "native/0123/evidence/run/attempt/transcript.json", "stack/status.json",
+                         "groups/case-a/logs/engine.log"]:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "logs").mkdir()
+                (root / "logs/engine.log").write_text("sk-openai-0123456789\n")
+                bound = root / relative
+                bound.parent.mkdir(parents=True, exist_ok=True)
+                bound.write_text('{"output": "sk-openai-0123456789"}\n')
+                with self.assertRaises(ValueError) as refused:
+                    MODULE.package_bundle(root, campaign_contract(), {}, credentials)
+                self.assertIn(f"{relative} (OPENAI_API_KEY)", str(refused.exception))
+                self.assertNotIn("sk-openai", str(refused.exception))
+                # Nothing was rewritten: the tree is not uploaded at all.
+                self.assertEqual(bound.read_text(), '{"output": "sk-openai-0123456789"}\n')
+                self.assertEqual((root / "logs/engine.log").read_text(), "sk-openai-0123456789\n")
+        # Without credentials nothing changes and the manifest says so.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "results.json").write_text("sk-openai-0123456789\n")
             untouched = MODULE.package_bundle(root, campaign_contract(), {})
             self.assertEqual(untouched["redaction"], {"credentials": {}, "files": [], "too_short": []})
-            self.assertEqual((root / "clean.json").read_text(), "sk-deepseek-0123456789\n")
 
-    def test_the_package_command_redacts_what_its_file_and_environment_name(self):
+    def test_the_package_command_checks_what_its_file_and_environment_name(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "bundle"
-            root.mkdir()
+            (root / "logs").mkdir(parents=True)
             (root / "stack-lock.json").write_text(json.dumps(campaign_contract()))
-            (root / "log.txt").write_text("sk-file-0123456789 sk-env-0123456789 sk-unnamed-0123456789\n")
+            (root / "logs/engine.log").write_text("sk-file-0123456789 sk-env-0123456789 sk-unnamed-0123456789\n")
             credentials = Path(directory) / "provider-credentials.env"
-            credentials.write_text("OPENAI_API_KEY=sk-file-0123456789\n")
-            subprocess.run(
-                ["python3", str(SCRIPT), "package", "--root", str(root), "--contract", str(root / "stack-lock.json"),
-                 "--workflow", "{}", "--credentials", str(credentials), "--output", str(root / "bundle-manifest.json")],
-                env={"PATH": os.environ["PATH"], "HARNESS_E2E_CREDENTIALS": "XAI_API_KEY",
-                     "XAI_API_KEY": "sk-env-0123456789", "UNNAMED_API_KEY": "sk-unnamed-0123456789"},
-                check=True, capture_output=True, text=True,
-            )
-            self.assertEqual((root / "log.txt").read_text(),
+            credentials.write_text("OPENAI_API_KEY=sk-file-0123456789\nSHORT_KEY=abc\n")
+            command = ["python3", str(SCRIPT), "package", "--root", str(root), "--contract",
+                       str(root / "stack-lock.json"), "--workflow", "{}", "--credentials", str(credentials),
+                       "--output", str(root / "bundle-manifest.json")]
+            environment = {"PATH": os.environ["PATH"], "HARNESS_E2E_CREDENTIALS": "XAI_API_KEY",
+                           "XAI_API_KEY": "sk-env-0123456789", "UNNAMED_API_KEY": "sk-unnamed-0123456789"}
+            result = subprocess.run(command, env=environment, check=True, capture_output=True, text=True)
+            self.assertEqual((root / "logs/engine.log").read_text(),
                              "[redacted:OPENAI_API_KEY] [redacted:XAI_API_KEY] sk-unnamed-0123456789\n")
             manifest = json.loads((root / "bundle-manifest.json").read_text())
             self.assertEqual(manifest["redaction"]["credentials"], {"OPENAI_API_KEY": 1, "XAI_API_KEY": 1})
+            # A value too short to look for is said where the job shows it.
+            self.assertIn("::warning::SHORT_KEY is shorter than 8 characters", result.stdout)
+            # In a bound file it fails loudly, naming the file and the name.
+            (root / "results.json").write_text('{"x": "sk-env-0123456789"}\n')
+            refused = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("results.json (XAI_API_KEY)", refused.stdout)
+            self.assertNotIn("sk-env", refused.stdout + refused.stderr)
+            # An unreadable file is a refusal too, not a traceback.
+            (root / "results.json").chmod(0)
+            try:
+                if os.access(root / "results.json", os.R_OK):
+                    self.skipTest("running as a user who reads anything")
+                unreadable = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertEqual(unreadable.returncode, 2)
+                self.assertIn("error: [Errno 13]", unreadable.stdout)
+            finally:
+                (root / "results.json").chmod(0o644)
 
     def test_package_rejects_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:

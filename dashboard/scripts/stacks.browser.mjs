@@ -121,7 +121,7 @@ const trigger = (name, request = {}) => {
   if (id === 'credentials-list') return credentials()
   if (id === 'credential-set') {
     calls.credentials.push(['set', request])
-    stored.set(request.name, request.value)
+    stored.set(request.name, request.secret)
     return credentials()
   }
   if (id === 'credential-delete') {
@@ -327,7 +327,7 @@ try {
     .waitFor()
   assert.deepEqual(calls.credentials.at(-1), [
     'set',
-    { name: 'OPENAI_API_KEY', value: 'sk-typed-7c1b' },
+    { name: 'OPENAI_API_KEY', secret: 'sk-typed-7c1b' },
   ])
 
   // Add one by name: a name that is not an environment variable is refused

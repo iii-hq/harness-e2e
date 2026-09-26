@@ -50,6 +50,11 @@ ENVIRONMENT_CREDENTIALS = ("DEEPSEEK_API_KEY", "ZAI_API_KEY", "TYPESAFE_API_KEY"
 #: Shorter values are not looked for in evidence: they would match anywhere
 #: and break the JSON they sit in.
 REDACTION_MIN_LENGTH = 8
+#: What the launcher captures from the processes it starts, below a bundle's
+#: root: nothing hashes it, so a credential found there is replaced. Every
+#: other file is bound by a digest (the runner's references, the aggregator's
+#: campaign bundle, Release Control's checks) and is never rewritten.
+REWRITABLE_ROOT = "logs"
 
 
 def load_yaml(text: str) -> Any:
@@ -155,29 +160,50 @@ def write_private(path: Path, values: dict[str, str]) -> None:
         file.write("".join(f"{name}={value}\n" for name, value in sorted(values.items())))
 
 
+def credential_forms(value: str) -> list[str]:
+    """A value as written and as JSON escapes it, longest first."""
+    forms = {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}
+    return sorted(forms, key=len, reverse=True)
+
+
 def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> dict[str, Any]:
-    """Replace each credential's value in the files at `paths` by
-    `[redacted:NAME]`, and say how often per name; never the value."""
+    """Look for each credential's value in the files at `paths`. Found in the
+    launcher's logs, it is replaced by `[redacted:NAME]`; found anywhere else,
+    nothing is rewritten and the tree is refused. Says how often per name,
+    never the value."""
     scanned = {name: value for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH}
     # Longest first: a value that holds another is replaced whole.
     ordered = sorted(scanned.items(), key=lambda item: (-len(item[1]), item[0]))
     hits = dict.fromkeys(sorted(scanned), 0)
-    redacted = []
+    rewrites: dict[Path, bytes] = {}
+    bound = []
     for relative in paths:
         path = root / relative
         payload = original = path.read_bytes()
+        found = set()
         for name, value in ordered:
-            needle = value.encode()
-            count = payload.count(needle)
-            if count:
-                hits[name] += count
-                payload = payload.replace(needle, f"[redacted:{name}]".encode())
-        if payload != original:
-            path.write_bytes(payload)
-            redacted.append(relative)
+            for form in credential_forms(value):
+                count = payload.count(form.encode())
+                if count:
+                    hits[name] += count
+                    found.add(name)
+                    payload = payload.replace(form.encode(), f"[redacted:{name}]".encode())
+        if payload == original:
+            continue
+        if Path(relative).parts[0] == REWRITABLE_ROOT:
+            rewrites[path] = payload
+        else:
+            bound.append(f"{relative} ({', '.join(sorted(found))})")
+    if bound:
+        raise ValueError(
+            "provider credentials found in files bound by digests, which are never rewritten: "
+            + "; ".join(bound)
+        )
+    for path, payload in rewrites.items():
+        path.write_bytes(payload)
     return {
         "credentials": hits,
-        "files": redacted,
+        "files": sorted(path.relative_to(root).as_posix() for path in rewrites),
         "too_short": sorted(set(credentials) - set(scanned)),
     }
 
@@ -869,8 +895,8 @@ def package_bundle(
     workflow: dict[str, Any],
     credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Check the tree, redact the credentials the phase received out of it,
-    then hash it: the digests are of what is uploaded."""
+    """Check the tree and look for the credentials the phase received in it
+    (see `redact_tree`), then hash it: the digests are of what is uploaded."""
     files = _package_files(root)
     redaction = redact_tree(root, [entry["path"] for entry in files], credentials or {})
     if redaction["files"]:
@@ -1060,9 +1086,12 @@ def main() -> int:
                 raise ValueError("workflow must be a JSON object")
             credentials = received_credentials(os.environ, args.credentials)
             manifest = package_bundle(args.root, contract, workflow, credentials)
+            for name in manifest["redaction"]["too_short"]:
+                print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
+                      "the evidence is not checked for it")
             args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         return 0
-    except (ValueError, json.JSONDecodeError) as error:
+    except (ValueError, json.JSONDecodeError, OSError) as error:
         print(f"error: {error}")
         return 2
 

@@ -68,7 +68,7 @@ describe('live dashboard transport', () => {
     await live.setCredential('OPENAI_API_KEY', 'sk-value')
     expect(trigger).toHaveBeenCalledWith('credential-set', {
       name: 'OPENAI_API_KEY',
-      value: 'sk-value',
+      secret: 'sk-value',
     })
     await live.deleteCredential('OPENAI_API_KEY')
     expect(trigger).toHaveBeenCalledWith('credential-delete', {

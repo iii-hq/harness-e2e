@@ -805,8 +805,10 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         () => undefined,
       ),
     listCredentials: () => call(runtime.functions.credentials_list, {}),
+    // `secret`: a key the iii SDKs redact from the invocation payloads they
+    // record in traces.
     setCredential: (name, value) =>
-      call(runtime.functions.credential_set, { name, value }),
+      call(runtime.functions.credential_set, { name, secret: value }),
     deleteCredential: (name) =>
       call(runtime.functions.credential_delete, { name }),
     importCredentials: () => call(runtime.functions.credentials_import, {}),

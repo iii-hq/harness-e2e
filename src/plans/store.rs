@@ -382,6 +382,7 @@ impl PlanStore {
             fs::create_dir_all(root.join("plan-store/stacks"))?;
             fs::create_dir_all(root.join("plan-store/executions"))?;
         }
+        crate::plans::credentials::sweep(&root);
         let manager = Arc::new(Self {
             root,
             persistence: control.as_ref().map(ControlPlane::persistence),

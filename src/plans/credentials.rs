@@ -16,6 +16,9 @@ use serde::{Deserialize, Serialize};
 
 /// Where this Console keeps them, in its data directory.
 pub(crate) const FILE: &str = "credentials.env";
+/// Where a phase's copy lives while the phase runs, in the data directory:
+/// what a worker that stopped mid-phase left there goes at its next start.
+const PHASE_DIR: &str = ".phase-credentials";
 
 /// What every phase sets itself: a credential never takes its place.
 const RESERVED: &[&str] = &[
@@ -53,6 +56,16 @@ struct Catalog {
 fn catalog() -> Catalog {
     serde_json::from_str(include_str!("../../config/provider-credentials.json"))
         .expect("config/provider-credentials.json is the catalog")
+}
+
+/// Every name the catalog knows.
+pub(crate) fn known_names() -> Vec<String> {
+    let catalog = catalog();
+    catalog
+        .providers
+        .into_values()
+        .chain(catalog.others)
+        .collect()
 }
 
 /// The key `provider` reads, when the catalog knows it.
@@ -101,13 +114,34 @@ fn clean_value(value: &str) -> Option<&str> {
     (!value.is_empty() && !value.contains(['\n', '\r', '\0'])).then_some(value)
 }
 
-/// `NAME=value` lines, as `docker run --env-file` reads them.
-fn parse(text: &str) -> BTreeMap<String, String> {
-    text.lines()
-        .filter_map(|line| line.trim_start().split_once('='))
-        .filter(|(name, value)| validate_name(name).is_ok() && !value.is_empty())
-        .map(|(name, value)| (name.to_owned(), value.to_owned()))
-        .collect()
+/// `NAME=value` lines, as `docker run --env-file` reads them, and why
+/// each other line that is not blank or a comment was left out (never with
+/// its value).
+fn parse(text: &str) -> (BTreeMap<String, String>, Vec<String>) {
+    let (mut values, mut ignored) = (BTreeMap::new(), Vec::new());
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim_start();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            ignored.push(format!("line {} is not NAME=value", index + 1));
+            continue;
+        };
+        if let Err(error) = validate_name(name) {
+            let reason = error.to_string();
+            ignored.push(format!(
+                "line {}: {}",
+                index + 1,
+                reason.trim_end_matches('.')
+            ));
+        } else if value.is_empty() {
+            ignored.push(format!("line {}: {name} has no value", index + 1));
+        } else {
+            values.insert(name.to_owned(), value.to_owned());
+        }
+    }
+    (values, ignored)
 }
 
 fn render(values: &BTreeMap<String, String>) -> String {
@@ -132,22 +166,50 @@ impl Credentials {
         }
     }
 
-    fn read(path: &Path) -> Result<BTreeMap<String, String>> {
+    fn read(path: &Path) -> Result<(BTreeMap<String, String>, Vec<String>)> {
         match fs::read_to_string(path) {
             Ok(text) => Ok(parse(&text)),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok((BTreeMap::new(), Vec::new()))
+            }
             Err(error) => Err(error).with_context(|| format!("read {}", path.display())),
         }
     }
 
     fn stored(&self) -> Result<BTreeMap<String, String>> {
-        Self::read(&self.path)
+        Ok(Self::read(&self.path)?.0)
     }
 
     fn worker_file(&self) -> Result<BTreeMap<String, String>> {
+        Ok(self.worker_file_lines()?.0)
+    }
+
+    fn worker_file_lines(&self) -> Result<(BTreeMap<String, String>, Vec<String>)> {
         self.extra
             .as_deref()
-            .map_or_else(|| Ok(BTreeMap::new()), Self::read)
+            .map_or_else(|| Ok((BTreeMap::new(), Vec::new())), Self::read)
+    }
+
+    /// What an execution says about the credentials it starts with: the
+    /// worker file's lines it leaves out, and the values too short for the
+    /// evidence to be checked for them.
+    pub(crate) fn warnings(&self, values: &BTreeMap<String, String>) -> Result<Vec<String>> {
+        let minimum = crate::redaction::MIN_CREDENTIAL_LENGTH;
+        let mut warnings = self
+            .worker_file_lines()?
+            .1
+            .into_iter()
+            .map(|reason| format!("provider_env_file ignores {reason}."))
+            .collect::<Vec<_>>();
+        warnings.extend(
+            values
+                .iter()
+                .filter(|(_, value)| value.trim().len() < minimum)
+                .map(|(name, _)| {
+                    format!("{name} is shorter than {minimum} characters: the evidence is not checked for it.")
+                }),
+        );
+        Ok(warnings)
     }
 
     /// Replaced whole, through a file only its owner reads.
@@ -266,21 +328,40 @@ impl Credentials {
         Ok(values)
     }
 
-    /// The merged credentials in a private temporary file (mode 600) that
-    /// goes when it is dropped; none when there are none.
-    pub(crate) fn env_file(&self) -> Result<Option<tempfile::NamedTempFile>> {
-        let values = self.merged()?;
+    /// `values` in a file only the worker reads (mode 600, in a directory
+    /// only it enters) for one phase's `--env-file`; it goes when dropped.
+    /// None when there are none.
+    pub(crate) fn phase_file(
+        &self,
+        values: &BTreeMap<String, String>,
+    ) -> Result<Option<tempfile::NamedTempFile>> {
+        use std::os::unix::fs::DirBuilderExt;
         if values.is_empty() {
             return Ok(None);
         }
+        let directory = self.path.with_file_name(PHASE_DIR);
+        fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(&directory)
+            .with_context(|| format!("create {}", directory.display()))?;
         let mut file = tempfile::Builder::new()
-            .prefix("harness-e2e-credentials.")
             .suffix(".env")
-            .tempfile()
+            .tempfile_in(&directory)
             .context("create the credentials file for a phase")?;
-        file.write_all(render(&values).as_bytes())?;
+        file.write_all(render(values).as_bytes())?;
         file.flush()?;
         Ok(Some(file))
+    }
+}
+
+/// Remove the phase files a worker that stopped mid-phase left behind.
+pub(crate) fn sweep(data_dir: &Path) {
+    let directory = data_dir.join(PHASE_DIR);
+    if let Err(error) = fs::remove_dir_all(&directory) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(path = %directory.display(), %error, "cannot remove leftover phase credentials");
+        }
     }
 }
 
@@ -390,11 +471,11 @@ mod tests {
         let file = root.path().join("providers.env");
         fs::write(
             &file,
-            "# the worker's\nDEEPSEEK_API_KEY=from-file\nZAI_API_KEY=zai-from-file\nlower=x\n",
+            "# the worker's\nDEEPSEEK_API_KEY=from-file\nZAI_API_KEY=zai-from-file\nlower=x\nHARNESS_E2E_CREDENTIALS=x\nEMPTY_KEY=\nexport-without-equals\nSHORT_KEY=abc\n",
         )
         .unwrap();
-        let credentials = Credentials::new(&root.path().join("data"), Some(file));
-        assert!(credentials.env_file().unwrap().is_some());
+        let data = root.path().join("data");
+        let credentials = Credentials::new(&data, Some(file));
         credentials.set("DEEPSEEK_API_KEY", "from-console").unwrap();
         let listed = credentials.list().unwrap();
         let source = |name: &str| {
@@ -411,21 +492,42 @@ mod tests {
         let error = credentials.delete("ZAI_API_KEY").unwrap_err().to_string();
         assert!(error.contains("provider_env_file"), "{error}");
 
-        let phase = credentials.env_file().unwrap().unwrap();
+        // Every line it leaves out is said, never with its value; so is a
+        // value too short to look for.
+        let merged = credentials.merged().unwrap();
+        assert_eq!(
+            credentials.warnings(&merged).unwrap(),
+            [
+                "provider_env_file ignores line 4: Name a credential as an environment variable: capital letters, digits and _, starting with a letter (OPENAI_API_KEY).",
+                "provider_env_file ignores line 5: HARNESS_E2E_CREDENTIALS is set by the executor itself; name the credential otherwise.",
+                "provider_env_file ignores line 6: EMPTY_KEY has no value.",
+                "provider_env_file ignores line 7 is not NAME=value.",
+                "SHORT_KEY is shorter than 8 characters: the evidence is not checked for it.",
+            ]
+        );
+
+        let phase = credentials.phase_file(&merged).unwrap().unwrap();
         let path = phase.path().to_owned();
         assert_eq!(mode(&path), 0o600);
-        assert!(!path.starts_with(root.path()));
+        assert_eq!(mode(path.parent().unwrap()), 0o700);
+        assert_eq!(path.parent().unwrap(), data.join(PHASE_DIR));
         assert_eq!(
             fs::read_to_string(&path).unwrap(),
-            "DEEPSEEK_API_KEY=from-console\nZAI_API_KEY=zai-from-file\n"
+            "DEEPSEEK_API_KEY=from-console\nSHORT_KEY=abc\nZAI_API_KEY=zai-from-file\n"
         );
         drop(phase);
         assert!(!path.exists());
-        // None at all: no file.
-        assert!(Credentials::new(root.path(), None)
-            .env_file()
+        // One a stopped worker left goes at its next start.
+        let (_, left) = credentials
+            .phase_file(&merged)
             .unwrap()
-            .is_none());
+            .unwrap()
+            .keep()
+            .unwrap();
+        sweep(&data);
+        assert!(!left.exists() && !data.join(PHASE_DIR).exists());
+        // None at all: no file.
+        assert!(credentials.phase_file(&BTreeMap::new()).unwrap().is_none());
     }
 
     #[test]

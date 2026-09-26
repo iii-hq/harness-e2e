@@ -3846,6 +3846,45 @@ mod tests {
     }
 
     #[test]
+    fn a_credential_the_subject_echoed_is_redacted_before_anything_is_hashed() {
+        const KEY: &str = "sk-echoed-0123456789";
+        crate::redaction::with_test_credentials(&[("OPENAI_API_KEY", KEY)], || {
+            let output = tempfile::tempdir().unwrap();
+            let mut run = run(90, true);
+            run.prompt = format!("cat .env printed OPENAI_API_KEY={KEY}");
+            // Referenced by digest from results.json, as a transcript is.
+            let reference = artifact::write_json(
+                output.path(),
+                Path::new("evidence/run/attempt/transcript.json"),
+                "transcript",
+                "transcript",
+                &serde_json::json!({"tool_output": format!("OPENAI_API_KEY={KEY}\n")}),
+            )
+            .unwrap();
+            run.evidence.push(reference);
+            let mut report = report(vec![aggregate(vec![run])]);
+            report.write_to(output.path(), &manifest()).unwrap();
+            // Every digest still holds, as import and aggregation check them.
+            let (decoded, _) = E2eReport::read_from(output.path()).unwrap();
+            assert!(decoded.scenarios[0].runs[0]
+                .prompt
+                .starts_with("cat .env printed OPENAI_API_KEY=["));
+            let mut folders = vec![output.path().to_owned()];
+            while let Some(folder) = folders.pop() {
+                for entry in fs::read_dir(folder).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        folders.push(path);
+                    } else {
+                        let text = fs::read_to_string(&path).unwrap();
+                        assert!(!text.contains(KEY), "{} holds the key", path.display());
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
     fn assessment_status_is_derived_from_the_run() {
         let output = tempfile::tempdir().unwrap();
         let mut report = report(vec![aggregate(vec![run(0, false)])]);

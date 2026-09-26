@@ -190,7 +190,10 @@ struct StacksListResponse {
 struct CredentialSetRequest {
     /// An environment variable's name (OPENAI_API_KEY).
     name: String,
-    value: String,
+    /// The value, under a key the iii SDKs redact from the invocation
+    /// payloads they record in traces (`iii.invocation.input`): `value`
+    /// would be kept there as sent.
+    secret: String,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -755,7 +758,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                     controller
                         .plan_store
                         .credentials()
-                        .set(&request.name, &request.value)
+                        .set(&request.name, &request.secret)
                         .and_then(|()| credentials_list(&controller))
                         .map_err(handler_error)
                 }
@@ -1168,6 +1171,18 @@ mod response_contract_tests {
             serde_json::to_value(PlanControlResponse::new()).unwrap(),
             json!({})
         );
+        // A credential's value travels under `secret`, a key the SDKs'
+        // trace payload capture redacts; `value` would be recorded.
+        let set: CredentialSetRequest =
+            serde_json::from_value(json!({"name": "OPENAI_API_KEY", "secret": "sk-x"})).unwrap();
+        assert_eq!(
+            (set.name.as_str(), set.secret.as_str()),
+            ("OPENAI_API_KEY", "sk-x")
+        );
+        assert!(serde_json::from_value::<CredentialSetRequest>(
+            json!({"name": "OPENAI_API_KEY", "value": "sk-x"})
+        )
+        .is_err());
         for payload in [
             json!({"id": "plan-local", "snapshot": {"models": []}}),
             json!({"execution_id": "plan-imported", "state": "importing"}),

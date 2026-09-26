@@ -80,7 +80,7 @@ function CredentialDialog({
       size="sm"
       kicker="Provider credential"
       title={fixed ? 'Set credential' : 'Add a credential'}
-      description="Docker executions receive it as an environment variable. The value stays on this machine, readable only by the worker, and is never shown again."
+      description="Docker executions receive it as an environment variable. The value stays on this machine, readable only by the worker, and is never shown again; it is sent once, as a field the iii SDKs leave out of the traces they record."
       closeLabel="Close credential"
       className="ds-root"
       footer={

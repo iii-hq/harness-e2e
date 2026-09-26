@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 use anyhow::{bail, Context, Result};
 use schemars::JsonSchema;
@@ -34,33 +35,115 @@ impl RedactionReport {
     }
 }
 
+/// Shorter values are not looked for: they would match anywhere.
+pub const MIN_CREDENTIAL_LENGTH: usize = 8;
+
+/// The credentials this process received, by name, longest value first:
+/// the defaults above, the provider keys `config/provider-credentials.json`
+/// lists, and the names `HARNESS_E2E_SECRET_ENV_NAMES` and
+/// `HARNESS_E2E_CREDENTIALS` (what the launcher put in the stack's `.env`)
+/// give, each as its variable holds it.
+fn environment_credentials() -> Vec<(String, String)> {
+    credentials_from(|name| std::env::var(name).ok())
+}
+
+fn credentials_from(variable: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    let mut names = DEFAULT_SECRET_ENV_NAMES
+        .iter()
+        .map(|name| (*name).to_string())
+        .chain(crate::plans::credentials::known_names())
+        .collect::<BTreeSet<_>>();
+    for list in ["HARNESS_E2E_SECRET_ENV_NAMES", "HARNESS_E2E_CREDENTIALS"] {
+        if let Some(extra) = variable(list) {
+            names.extend(
+                extra
+                    .split(|c: char| c == ',' || c.is_whitespace())
+                    .filter(|name| !name.is_empty())
+                    .map(ToOwned::to_owned),
+            );
+        }
+    }
+    let mut credentials = names
+        .into_iter()
+        .filter_map(|name| {
+            let value = variable(&name)?.trim().to_string();
+            (value.len() >= MIN_CREDENTIAL_LENGTH).then_some((name, value))
+        })
+        .collect::<Vec<_>>();
+    credentials.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+    credentials
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_CREDENTIALS: std::cell::RefCell<Option<Vec<(String, String)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn with_credentials<T>(use_them: impl FnOnce(&[(String, String)]) -> T) -> T {
+    #[cfg(test)]
+    if let Some(credentials) = TEST_CREDENTIALS.with(|cell| cell.borrow().clone()) {
+        return use_them(&credentials);
+    }
+    static CREDENTIALS: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    use_them(CREDENTIALS.get_or_init(environment_credentials))
+}
+
+/// Run `body` as if this thread's process had received `credentials`.
+#[cfg(test)]
+pub(crate) fn with_test_credentials<T>(
+    credentials: &[(&str, &str)],
+    body: impl FnOnce() -> T,
+) -> T {
+    let mut owned = credentials
+        .iter()
+        .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
+        .collect::<Vec<_>>();
+    owned.sort_by_key(|credential| std::cmp::Reverse(credential.1.len()));
+    TEST_CREDENTIALS.with(|cell| *cell.borrow_mut() = Some(owned));
+    let result = body();
+    TEST_CREDENTIALS.with(|cell| *cell.borrow_mut() = None);
+    result
+}
+
+/// `bytes` with each credential this process received replaced by
+/// `[redacted:NAME]`, as written and as JSON escapes it. Every artifact the
+/// runner writes passes through here before it is hashed, so the digests
+/// that reference it are over what is kept. Bytes that are not UTF-8
+/// (images) are kept as they are.
+pub fn redact_credentials(bytes: Vec<u8>) -> Vec<u8> {
+    let mut text = match String::from_utf8(bytes) {
+        Ok(text) => text,
+        Err(binary) => return binary.into_bytes(),
+    };
+    with_credentials(|credentials| {
+        for (name, value) in credentials {
+            let escaped = serde_json::to_string(value).unwrap_or_default();
+            let escaped = escaped.trim_matches('"');
+            for form in [escaped, value.as_str()] {
+                if !form.is_empty() && text.contains(form) {
+                    text = text.replace(form, &format!("[redacted:{name}]"));
+                }
+            }
+        }
+    });
+    text.into_bytes()
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RedactionPolicy {
     known_values: Vec<String>,
 }
 
 impl RedactionPolicy {
+    /// The values `redact_credentials` replaces: what the runner redacts
+    /// from a deliverable before hashing it is what an artifact holds.
     pub fn from_environment() -> Self {
-        let mut names = DEFAULT_SECRET_ENV_NAMES
-            .iter()
-            .map(|name| (*name).to_string())
-            .collect::<BTreeSet<_>>();
-        if let Ok(extra) = std::env::var("HARNESS_E2E_SECRET_ENV_NAMES") {
-            names.extend(
-                extra
-                    .split(',')
-                    .map(str::trim)
-                    .filter(|name| !name.is_empty())
-                    .map(ToOwned::to_owned),
-            );
+        Self {
+            known_values: with_credentials(|credentials| {
+                credentials.iter().map(|(_, value)| value.clone()).collect()
+            }),
         }
-        let known_values = names
-            .into_iter()
-            .filter_map(|name| std::env::var(name).ok())
-            .map(|value| value.trim().to_string())
-            .filter(|value| value.len() >= 8)
-            .collect();
-        Self { known_values }
     }
 
     #[cfg(test)]
@@ -293,6 +376,62 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<Value>(&sanitized).unwrap()["ok"],
             "visible"
+        );
+    }
+
+    #[test]
+    fn a_received_credential_is_redacted_by_name_as_written_and_as_json_escapes_it() {
+        let quoted = r#"sk-"quoted\key"#;
+        with_test_credentials(
+            &[
+                ("OPENAI_API_KEY", "sk-openai-0123456789"),
+                ("ODD_KEY", quoted),
+            ],
+            || {
+                let json = serde_json::to_vec(&serde_json::json!({
+                    "output": "OPENAI_API_KEY=sk-openai-0123456789",
+                    "odd": quoted,
+                }))
+                .unwrap();
+                let redacted = redact_credentials(json);
+                let value: Value = serde_json::from_slice(&redacted).unwrap();
+                assert_eq!(value["output"], "OPENAI_API_KEY=[redacted:OPENAI_API_KEY]");
+                assert_eq!(value["odd"], "[redacted:ODD_KEY]");
+                // As written, in text; an image is kept as it is.
+                assert_eq!(
+                    redact_credentials(format!("x {quoted} y").into_bytes()),
+                    b"x [redacted:ODD_KEY] y"
+                );
+                let png = [0x89, b'P', b'N', b'G', 0xff, 0xfe];
+                assert_eq!(redact_credentials(png.to_vec()), png);
+                // What deliverables are redacted by before they are hashed.
+                assert!(RedactionPolicy::from_environment()
+                    .findings("sk-openai-0123456789")
+                    .contains("known_secret"));
+            },
+        );
+    }
+
+    #[test]
+    fn the_runner_redacts_the_defaults_the_catalog_and_the_names_it_is_given() {
+        let environment = std::collections::HashMap::from([
+            ("HARNESS_E2E_CREDENTIALS", "MY_GATEWAY_TOKEN, OTHER_KEY"),
+            ("MY_GATEWAY_TOKEN", " gw-0123456789 "),
+            ("OTHER_KEY", "short"),
+            ("DEEPSEEK_API_KEY", "sk-deepseek-0123456789"),
+            ("GITHUB_TOKEN", "ghs_0123456789"),
+            ("NOT_NAMED", "never-0123456789"),
+        ]);
+        assert_eq!(
+            credentials_from(|name| environment.get(name).map(|value| (*value).to_owned())),
+            [
+                (
+                    "DEEPSEEK_API_KEY".to_owned(),
+                    "sk-deepseek-0123456789".to_owned()
+                ),
+                ("GITHUB_TOKEN".to_owned(), "ghs_0123456789".to_owned()),
+                ("MY_GATEWAY_TOKEN".to_owned(), "gw-0123456789".to_owned()),
+            ]
         );
     }
 

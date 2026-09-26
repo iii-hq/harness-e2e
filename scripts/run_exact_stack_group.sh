@@ -352,6 +352,12 @@ project_args=(
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
+# The runner replaces their values in every artifact before it hashes it,
+# the names the catalog lists and these alike.
+credential_names=$(cut -d= -f1 "$env_file" | paste -sd' ' -)
+if [[ -n "$credential_names" ]]; then
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names")
+fi
 # Without a group the scaffold is the stack the whole suite shares.
 if [[ -n "$assemble_only" ]]; then
   project_args+=(--assemble)

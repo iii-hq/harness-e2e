@@ -440,10 +440,10 @@ impl PlanStore {
                 ));
             }
         }
-        warnings.extend(credential_warning(
-            &parameters.provider,
-            &self.credentials().merged()?,
-        ));
+        let credentials = self.credentials();
+        let values = credentials.merged()?;
+        warnings.extend(credentials.warnings(&values)?);
+        warnings.extend(credential_warning(&parameters.provider, &values));
         execution.warnings.extend(warnings);
         let groups = placeholder_groups(&execution.slots);
         execution.slots = group_slots(&groups);
@@ -580,7 +580,10 @@ impl PlanStore {
             let log = folder.join(format!("logs/prepare-{step}.log"));
             // Held until the phase ends, then removed.
             let credentials = match step {
-                "assemble" => self.credentials().env_file()?,
+                "assemble" => {
+                    let credentials = self.credentials();
+                    credentials.phase_file(&credentials.merged()?)?
+                }
                 _ => None,
             };
             let phase = Phase {
@@ -792,7 +795,10 @@ impl PlanStore {
             "logs/group-{}-{}-{}.log",
             group.campaign_id, group.group_id, group.attempt
         ));
-        let credentials = self.credentials().env_file()?;
+        // One set for the group and the packaging that checks its evidence:
+        // a credential changed meanwhile is still looked for.
+        let values = self.credentials().merged()?;
+        let credentials = self.credentials().phase_file(&values)?;
         let succeeded = self
             .docker
             .launcher
@@ -811,9 +817,25 @@ impl PlanStore {
         drop(credentials);
         let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
             "group_id": group.group_id, "attempt": group.attempt, "job": "group"});
-        self.package(id, checkout, &workflow, &[&artifacts], "Group", &name)
+        let packaged = self
+            .package(
+                id,
+                checkout,
+                &workflow,
+                &[&artifacts],
+                ("Group", &name),
+                Some(&values),
+            )
             .await?;
-        let (state, error) = if succeeded {
+        let (state, error) = if !packaged {
+            (
+                "failed",
+                Some(format!(
+                    "Its evidence did not pass the packaging checks and was not kept; see {}.",
+                    folder.join(format!("logs/package-{name}.log")).display()
+                )),
+            )
+        } else if succeeded {
             ("done", None)
         } else if *cancel.borrow() {
             ("cancelled", None)
@@ -840,40 +862,58 @@ impl PlanStore {
     }
 
     /// Hash each root into its bundle-manifest.json, as the workflow does
-    /// before it uploads one, with the credentials the groups receive
-    /// redacted out of it first. A root that holds something unsafe is
-    /// replaced by the diagnostic alone.
+    /// before it uploads one, checking it for `credentials` (the group's).
+    /// A root that holds something unsafe, or that could not be checked, is
+    /// replaced by the diagnostic alone: `false` then.
     async fn package(
         &self,
         id: &str,
         checkout: &Path,
         workflow: &Value,
         roots: &[&Path],
-        kind: &str,
-        name: &str,
-    ) -> Result<()> {
+        (kind, name): (&str, &str),
+        credentials: Option<&BTreeMap<String, String>>,
+    ) -> Result<bool> {
         let mut args = vec!["package".to_owned(), workflow.to_string()];
         args.extend(roots.iter().map(|root| root.to_string_lossy().into_owned()));
         let log = self
             .docker_folder(id)
             .join(format!("logs/package-{name}.log"));
-        let credentials = self.credentials().env_file()?;
-        let packaged = self
-            .docker
-            .launcher
-            .run(
-                checkout,
-                id,
-                Phase {
-                    args,
-                    env: vec![("EXECUTION_KEY".into(), id.into())],
-                    env_file: credentials.as_ref().map(|file| file.path().to_owned()),
-                    log: log.clone(),
-                },
-                uncancellable(),
-            )
-            .await?;
-        drop(credentials);
+        // Whatever stops the check, the tree is not kept unchecked.
+        let checked = async {
+            let file = match credentials {
+                Some(values) => self.credentials().phase_file(values)?,
+                None => None,
+            };
+            self.docker
+                .launcher
+                .run(
+                    checkout,
+                    id,
+                    Phase {
+                        args,
+                        env: vec![("EXECUTION_KEY".into(), id.into())],
+                        env_file: file.as_ref().map(|file| file.path().to_owned()),
+                        log: log.clone(),
+                    },
+                    uncancellable(),
+                )
+                .await
+        };
+        let packaged = match checked.await {
+            Ok(packaged) => packaged,
+            Err(error) => {
+                tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "cannot check {name}");
+                let _ = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log)
+                    .and_then(|mut file| {
+                        std::io::Write::write_all(&mut file, format!("\n{error:#}\n").as_bytes())
+                    });
+                false
+            }
+        };
         if !packaged {
             for root in roots {
                 if root.exists() {
@@ -888,7 +928,7 @@ impl PlanStore {
                 )?;
             }
         }
-        Ok(())
+        Ok(packaged)
     }
 
     /// Lay the groups' last attempts out and aggregate them, then package the
@@ -926,8 +966,17 @@ impl PlanStore {
                 if !bundle.join("bundle-manifest.json").is_file() {
                     let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
                         "group_id": group.group_id, "attempt": group.attempt, "job": "finalize"});
-                    self.package(id, checkout, &workflow, &[&bundle], "Group", name)
-                        .await?;
+                    // Its own set went with the stopped drive: the current one.
+                    let values = self.credentials().merged()?;
+                    self.package(
+                        id,
+                        checkout,
+                        &workflow,
+                        &[&bundle],
+                        ("Group", name),
+                        Some(&values),
+                    )
+                    .await?;
                 }
                 selected.insert(
                     format!("{} · {}", group.campaign_id, group.group_id),
@@ -982,13 +1031,15 @@ impl PlanStore {
         let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
             "attempt": attempt, "job": "finalize"});
         let roots_ref = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        // As on GitHub, the root holds no credential: each group was checked
+        // with its own when it was packaged.
         self.package(
             id,
             checkout,
             &workflow,
             &roots_ref,
-            "Root",
-            &format!("root-{attempt}"),
+            ("Root", &format!("root-{attempt}")),
+            None,
         )
         .await?;
         fs::rename(&campaigns, &root).context("keep the root bundle")?;
@@ -1448,6 +1499,8 @@ mod tests {
         credentials: Option<(String, u32)>,
     }
 
+    type DuringGroup = Box<dyn Fn(&str) + Send>;
+
     /// Stands in for Docker: each phase leaves what the real one leaves.
     #[derive(Default)]
     struct FakeLauncher {
@@ -1458,6 +1511,10 @@ mod tests {
         hold: std::sync::Mutex<BTreeSet<String>>,
         /// Groups whose run errs before it ends (the disk is full).
         broken: std::sync::Mutex<BTreeSet<String>>,
+        /// Groups whose packaging errs.
+        broken_package: std::sync::Mutex<BTreeSet<String>>,
+        /// Called while a group runs, with its group id.
+        during_group: std::sync::Mutex<Option<DuringGroup>>,
         removed: std::sync::Mutex<Vec<String>>,
     }
 
@@ -1537,6 +1594,9 @@ mod tests {
                     let running = self.running.fetch_add(1, Ordering::SeqCst) + 1;
                     self.most.fetch_max(running, Ordering::SeqCst);
                     let artifacts = PathBuf::from(&env["HARNESS_E2E_ARTIFACTS_DIR"]);
+                    if let Some(during) = self.during_group.lock().unwrap().as_ref() {
+                        during(&group);
+                    }
                     let held = self.hold.lock().unwrap().contains(&group);
                     if self.broken.lock().unwrap().contains(&group) {
                         self.running.fetch_sub(1, Ordering::SeqCst);
@@ -1560,6 +1620,15 @@ mod tests {
                     return Ok(succeeded);
                 }
                 [_, roots @ ..] if phase.args[0] == "package" => {
+                    if self
+                        .broken_package
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|group| roots.iter().any(|root| root.contains(group.as_str())))
+                    {
+                        bail!("create the credentials file for a phase: no space left on device");
+                    }
                     for root in roots {
                         fs::write(Path::new(root).join("bundle-manifest.json"), "{}")?;
                     }
@@ -1904,15 +1973,22 @@ mod tests {
             json!({"runner": "harness-e2e console", "execution_id": id, "attempt": 1, "job": "finalize"})
         );
         for call in launcher.calls.lock().unwrap().iter() {
-            // What the stack starts with and what packaging redacts; each in
-            // a private file of its own, outside the data directory, gone
-            // once the phase ended.
-            let credentials = matches!(call.args[0].as_str(), "group" | "package")
+            // What the stack starts with and what a group's packaging checks
+            // its evidence for; each in a private file of its own in the data
+            // directory, gone once the phase ended. The root holds none, as
+            // on GitHub.
+            let group_package = call.args[0] == "package" && call.args[1].contains("group_id");
+            let credentials = call.args[0] == "group"
+                || group_package
                 || call.args[..] == ["prepare", "assemble"];
             assert_eq!(call.env_file.is_some(), credentials, "{:?}", call.args);
             if let Some(file) = &call.env_file {
                 assert_eq!(call.credentials, Some((merged.to_owned(), 0o600)));
-                assert!(!file.starts_with(&data), "{}", file.display());
+                assert!(
+                    file.starts_with(data.join(".phase-credentials")),
+                    "{}",
+                    file.display()
+                );
                 assert!(!file.exists(), "{} outlived its phase", file.display());
             }
             assert_eq!(call.env["EXECUTION_KEY"], id);
@@ -2574,6 +2650,118 @@ mod tests {
             .unwrap()
             .contains("no space left on device"));
         // What the others finished was finalized and imported.
+        for index in [0, 2, 3] {
+            assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
+        }
+        assert_eq!(done.slots[1].state, "not_run");
+    }
+
+    #[tokio::test]
+    async fn a_group_and_its_packaging_get_one_set_even_if_it_changes_meanwhile() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                parallel_groups: 1,
+                ..DockerSettings::default()
+            },
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-before-0123456789")
+            .unwrap();
+        // Replaced while the first group runs.
+        let credentials = data.clone();
+        *launcher.during_group.lock().unwrap() = Some(Box::new(move |group| {
+            if group == "case-minimal-path" {
+                Credentials::new(&credentials, None)
+                    .set("OPENAI_API_KEY", "sk-after-0123456789")
+                    .unwrap();
+            }
+        }));
+        let id = store
+            .start_execution(docker_parameters("pr"), "")
+            .await
+            .unwrap()
+            .id;
+        until(&store, &id, settled).await;
+        let seen = |phase: &str, group: &str| {
+            launcher
+                .calls(phase)
+                .into_iter()
+                .find(|call| {
+                    call.env
+                        .get("HARNESS_E2E_CAMPAIGN_GROUP_ID")
+                        .map(String::as_str)
+                        == Some(group)
+                        || call
+                            .args
+                            .iter()
+                            .any(|arg| arg.ends_with(&format!("{group}-gh-1")))
+                })
+                .and_then(|call| call.credentials)
+                .map(|(values, _)| values)
+                .unwrap()
+        };
+        let before = "OPENAI_API_KEY=sk-before-0123456789\n";
+        assert_eq!(seen("group", "case-minimal-path"), before);
+        assert_eq!(seen("package", "case-minimal-path"), before);
+        // The next group starts with the new one.
+        let after = "OPENAI_API_KEY=sk-after-0123456789\n";
+        assert_eq!(seen("group", "case-persistent-state"), after);
+        assert_eq!(seen("package", "case-persistent-state"), after);
+    }
+
+    #[tokio::test]
+    async fn a_packaging_that_errs_fails_its_group_and_the_rest_is_imported() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        launcher
+            .broken_package
+            .lock()
+            .unwrap()
+            .insert("case-persistent-state".into());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher,
+            DockerSettings::default(),
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-openai-0123456789")
+            .unwrap();
+        let id = store
+            .start_execution(docker_parameters("pr"), "")
+            .await
+            .unwrap()
+            .id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        let ExecutionSource::Docker { groups, .. } = &done.source else {
+            panic!("{:?}", done.source);
+        };
+        let broken = &groups[1];
+        assert_eq!(broken.state, "failed");
+        assert!(broken
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("did not pass the packaging checks"));
+        // Its unchecked evidence was not kept; the others were imported.
+        let bundle = store.docker_artifacts(&id).join(format!(
+            "e2e-observation-{id}-pr-r01-case-persistent-state-gh-1"
+        ));
+        assert_eq!(
+            directories(&bundle).unwrap_or_default(),
+            Vec::<PathBuf>::new()
+        );
+        assert!(bundle.join("failure.json").is_file());
         for index in [0, 2, 3] {
             assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
         }

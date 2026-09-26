@@ -223,9 +223,17 @@ class WorkflowBoundaryTests(unittest.TestCase):
                     "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)
                 self.assertIn(f"scripts/run_in_image.sh --env-file {credentials}", steps[names.index(phase)]["run"])
                 self.assertIn(f"--credentials {credentials}", steps[names.index(package)]["run"])
-        # Release Control gets a shard's runs as redacted as its upload.
-        groups = [step.get("name") for step in jobs["groups"]["steps"]]
-        self.assertLess(groups.index("Package factual group evidence"), groups.index("Report this shard's runs"))
+        # Release Control gets a shard's runs from the tree that is uploaded,
+        # after packaging checked it: the diagnostic alone when it refused.
+        steps = jobs["groups"]["steps"]
+        groups = [step.get("name") for step in steps]
+        report = steps[groups.index("Report this shard's runs")]
+        upload = steps[groups.index("Upload group observation bundle")]
+        self.assertLess(groups.index("Preserve safe group packaging diagnostic"), groups.index("Report this shard's runs"))
+        self.assertLess(groups.index("Report this shard's runs"), groups.index("Upload group observation bundle"))
+        self.assertEqual(report["env"]["UPLOADED"], upload["with"]["path"])
+        self.assertIn('"${artifacts[@]}"', report["run"])
+        self.assertNotIn("--artifacts target/", report["run"])
         # The finalizer holds no credential: the bundles it lays out were
         # redacted when their group packaged them.
         self.assertNotIn("provider-credentials", json.dumps(jobs["finalize"]))
