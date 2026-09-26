@@ -63,6 +63,7 @@ import {
   suiteText,
   workerVersion,
 } from '@/lib/execution-view'
+import { formatStamp } from '@/lib/format'
 import { scenarioReruns } from '@/lib/plan-execution'
 import {
   buildPrimaryMetrics,
@@ -109,7 +110,7 @@ function summaryFromDetail(
  *  native run's are its own request), or when nothing was recorded, the
  *  scenarios and model it reports with the form's defaults. */
 export function rerunParameters(
-  detail: DashboardExecutionDetail,
+  detail: Pick<DashboardExecutionDetail, 'plan_execution' | 'parameters'>,
   scenarios: string[],
   subject: ExecutionModel | undefined,
 ): ExecutionParameters {
@@ -669,10 +670,8 @@ export function ExecutionPage({
       'subject',
       presentation.subjects.map(providerModel).join(', ') || 'not reported',
     ],
-    [
-      'started',
-      presentation.startedAt ? formatDate(presentation.startedAt) : '—',
-    ],
+    // The same stamp an untitled execution's title carries.
+    ['started', formatStamp(presentation.startedAt)],
     [
       'origin',
       detail.plan_execution ? (

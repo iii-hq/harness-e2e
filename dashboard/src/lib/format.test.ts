@@ -3,8 +3,11 @@ import {
   formatCost,
   formatCount,
   formatDateTime,
+  formatDay,
   formatDayLabel,
   formatDuration,
+  formatStamp,
+  formatTime,
   formatTokens,
   plural,
 } from './format'
@@ -136,6 +139,36 @@ describe('formatDateTime', () => {
     expect(formatDateTime('last Tuesday', now)).toBe('last Tuesday')
     expect(formatDateTime('', now)).toBe('—')
     expect(formatDateTime(null, now)).toBe('—')
+  })
+})
+
+describe('formatStamp', () => {
+  it('always names the year, so it reads the same next year', () => {
+    expect(formatStamp(new Date(2026, 8, 24, 6, 43))).toBe(
+      'Sep 24, 2026, 6:43 AM',
+    )
+    expect(formatStamp(new Date(2025, 11, 31, 23, 59).toISOString())).toBe(
+      'Dec 31, 2025, 11:59 PM',
+    )
+    expect(formatStamp('soon')).toBe('soon')
+  })
+})
+
+describe('formatTime', () => {
+  it('writes only the clock, and keeps what it cannot parse', () => {
+    expect(formatTime(new Date(2026, 8, 24, 22, 37).toISOString())).toBe(
+      '10:37 PM',
+    )
+    expect(formatTime(new Date(2026, 8, 24, 0, 18))).toBe('12:18 AM')
+    expect(formatTime('')).toBe('—')
+  })
+})
+
+describe('formatDay', () => {
+  it('writes the day, with the year only outside this one', () => {
+    expect(formatDay(new Date(2026, 8, 24, 23, 59), now)).toBe('Sep 24')
+    expect(formatDay(new Date(2025, 11, 31), now)).toBe('Dec 31, 2025')
+    expect(formatDay(undefined, now)).toBe('—')
   })
 })
 

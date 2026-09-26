@@ -537,35 +537,50 @@ try {
   assert.equal(await importDialog.getByText('0.11.28').count(), 2)
   await page.keyboard.press('Escape')
 
-  // One execution: nothing to compare it with, so no hint, button or column.
+  // One execution: ticked alone, there is nothing to compare it with.
   executions = [runningSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  const compareHint = page.getByText('tick two executions to compare')
-  assert.equal(await compareHint.count(), 0)
-  assert.equal(
-    await page.getByRole('button', { name: 'compare', exact: true }).count(),
-    0,
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
+  await page.getByRole('checkbox', { name: 'Select Nightly' }).check()
+  const selection = page.getByRole('toolbar', { name: 'Selected executions' })
+  await selection.getByText('Tick one more to compare.').waitFor()
+  assert.ok(
+    await selection
+      .getByRole('button', { name: 'Compare A and B', exact: true })
+      .isDisabled(),
   )
-  assert.equal(
-    await page.locator('[data-ledger] input[type=checkbox]').count(),
-    0,
-  )
+  await selection.getByRole('button', { name: 'Clear selection' }).click()
 
-  // The ledger: a running row reads its progress; a cancelled one reads as
-  // cancelled with how far it got, and its runtime rounds whole. Two rows:
-  // now they can be compared.
+  // The list: a running row reads its progress; a cancelled one reads as
+  // cancelled with how far it got, and its runtime rounds whole.
   executions = [runningSummary, cancelledSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  await compareHint.waitFor()
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
-  await stopped.getByText('cancelled', { exact: true }).waitFor()
-  await stopped.getByText('3 of 9 done', { exact: true }).waitFor()
+  await stopped.getByText('Cancelled', { exact: true }).waitFor()
+  await stopped.getByText('3 of 9 runs reported', { exact: true }).waitFor()
   await stopped.getByText('2m 00s', { exact: true }).waitFor()
   assert.equal(await page.getByText(/infrastructure event/).count(), 0)
   assert.equal(await page.getByText('1m 60s').count(), 0)
+  // A running row's menu cancels it, and says why it cannot be deleted yet.
+  await page
+    .locator(`[data-execution-id="${nightly}"]`)
+    .getByRole('button', { name: /^Actions for / })
+    .click()
+  const rowMenu = page.getByRole('menu')
+  await rowMenu.getByRole('menuitem', { name: 'Cancel execution' }).waitFor()
+  assert.equal(
+    await rowMenu
+      .getByRole('menuitem', { name: /^Delete…/ })
+      .getAttribute('aria-disabled'),
+    'true',
+  )
+  await rowMenu.getByText('Finish or cancel it first').waitFor()
+  await rowMenu.getByRole('menuitem', { name: 'Cancel execution' }).click()
+  for (let tries = 0; !cancelled.length && tries < 50; tries += 1)
+    await page.waitForTimeout(100)
+  assert.deepEqual(cancelled, [nightly])
 
   // Run tests: it starts from the last execution's model; this harness is
   // busy, which the footer says with a way to open what runs; a sequential
@@ -664,7 +679,7 @@ try {
   const cancel = page.getByRole('button', { name: 'cancel execution' })
   await cancel.click()
   await cancel.waitFor({ state: 'detached' })
-  assert.deepEqual(cancelled, [`plan-${'1'.padStart(32, 'f')}`])
+  assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
   await page.getByText('Execution · running').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
@@ -877,7 +892,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history and the button off with the reason, family blocks and sequences, suite custom and reset, filters and clear, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, busy harness named with a link before and after a submit, sequential group ticked whole, box/label/Space toggles, no seed, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite without a catalog, selected-first prefill, Run in Docker from the busy alert, stacks with warnings, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history and the button off with the reason, family blocks and sequences, suite custom and reset, filters and clear, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, busy harness named with a link before and after a submit, sequential group ticked whole, box/label/Space toggles, no seed, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite without a catalog, selected-first prefill, Run in Docker from the busy alert, stacks with warnings, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

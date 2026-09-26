@@ -3,7 +3,9 @@ import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
 import {
   attentionState,
   buildExecutionPresentation,
+  executionOrigin,
   executionProgress,
+  executionResult,
   executionTitle,
   failureBreakdown,
   formatDuration,
@@ -145,10 +147,18 @@ describe('an execution as it runs', () => {
         ).title,
     )
     expect(new Set(titles).size).toBe(1)
-    expect(titles[0]).toMatch(/^gpt-5\.6-terra · Sep 23, 2026/)
+    // Local time, so the day and hour hold in any time zone.
+    const created = new Date(2026, 8, 23, 7, 51)
+    expect(
+      executionTitle(
+        buildExecutionPresentation(
+          execution({ label: '', started_at: created.toISOString() }),
+        ),
+      ).title,
+    ).toBe('gpt-5.6-terra · Sep 23, 2026, 7:51 AM')
   })
 
-  it('reads its progress as slots done of those planned', () => {
+  it('reads its progress as runs reported of those planned', () => {
     expect(
       executionProgress(
         execution({
@@ -156,7 +166,7 @@ describe('an execution as it runs', () => {
           plan_execution: { planned: 9, finished: 1 },
         } as Partial<DashboardExecutionSummary>),
       ),
-    ).toBe('1 of 9 done')
+    ).toBe('1 of 9 runs reported')
     expect(
       executionProgress(
         execution({
@@ -164,7 +174,31 @@ describe('an execution as it runs', () => {
           live_progress: { runs_committed: 2, planned_slots: 4 },
         } as Partial<DashboardExecutionSummary>),
       ),
-    ).toBe('2 of 4 done')
+    ).toBe('2 of 4 runs reported')
+    // An import from GitHub, by its group jobs.
+    expect(
+      executionProgress(
+        execution({
+          status: 'importing',
+          plan_execution: { planned: 14, finished: 6 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBe('6 of 14 group jobs finished')
+    // In Docker, where its groups are.
+    const group = (state: string) => ({ state })
+    expect(
+      executionProgress(
+        execution({
+          status: 'running',
+          source: {
+            kind: 'docker',
+            phase: 'groups',
+            groups: [group('done'), group('running'), group('queued')],
+          },
+          plan_execution: { planned: 3, finished: 1 },
+        } as Partial<DashboardExecutionSummary>),
+      ),
+    ).toBe('1 of 3 groups finished · 1 running · 1 waiting')
     // Finished, or with nothing planned yet (an import), it says nothing.
     expect(
       executionProgress(
@@ -275,6 +309,45 @@ describe('list details', () => {
     expect(presentation.attention).toBe('cancelled')
     expect(presentation.primaryIssue).toBeNull()
     // How far it got before it was stopped.
-    expect(executionProgress(cancelled)).toBe('1 of 9 done')
+    expect(executionProgress(cancelled)).toBe('1 of 9 runs reported')
+  })
+})
+
+describe('an execution in the list', () => {
+  const result = (overrides: Partial<DashboardExecutionSummary>) =>
+    executionResult(buildExecutionPresentation(execution(overrides)))
+
+  it('reads its result in the one vocabulary of result states', () => {
+    expect(result({})).toEqual({ state: 'failed' })
+    expect(result({ status: 'importing' })).toEqual({
+      state: 'running',
+      label: 'Importing',
+    })
+    expect(result({ status: 'cancelling' })).toEqual({
+      state: 'running',
+      label: 'Cancelling',
+    })
+    expect(result({ status: 'cancelled' })).toEqual({ state: 'cancelled' })
+    expect(result({ status: 'unavailable' })).toEqual({
+      state: 'inconclusive',
+      label: 'No report',
+    })
+    expect(
+      result({
+        status: 'passed',
+        assessment_summary: undefined,
+        totals: { passed_scenarios: 1, missing_reports: 1 },
+      }),
+    ).toEqual({ state: 'inconclusive' })
+  })
+
+  it('names where it came from', () => {
+    expect(
+      executionOrigin(execution({ source: { kind: 'local' } })).label,
+    ).toBe('This harness')
+    expect(executionOrigin(execution()).label).toBe('This harness')
+    expect(
+      executionOrigin(execution({ source: { kind: 'docker', groups: [] } })),
+    ).toEqual({ label: 'Docker', href: null })
   })
 })

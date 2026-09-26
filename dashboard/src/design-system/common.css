@@ -16,7 +16,7 @@
 }
 
 .ds-status-label[data-tinted][data-tone="alert"] {
-  color: color-mix(in srgb, var(--color-alert) 80%, var(--color-ink));
+  color: var(--ds-danger-text);
 }
 
 .ds-status-label[data-tinted][data-tone="ghost"] {
@@ -107,7 +107,7 @@
 }
 
 .ds-row-menu-item[data-danger] {
-  color: color-mix(in srgb, var(--color-alert) 80%, var(--color-ink));
+  color: var(--ds-danger-text);
 }
 
 /* A disabled item dims its label and icon only: the reason under it keeps

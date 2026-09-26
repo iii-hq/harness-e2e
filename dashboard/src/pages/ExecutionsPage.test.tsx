@@ -1,295 +1,663 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import type { DashboardExecutionSummary } from '@/lib/dashboard-data-source'
+import type {
+  DashboardDataBridge,
+  ExecutionListInput,
+} from '@/lib/dashboard-data-source'
 import {
   buildLedgerRows,
-  dayLabel,
+  cancelLedgerExecution,
+  copyExecutionId,
+  deleteConfirmation,
+  deletedMessage,
+  deleteExecutions,
+  deleteFailure,
   filterLedgerRows,
-  groupHeading,
   groupLedgerRows,
+  importLedgerExecutionAgain,
   LEDGER_DEFAULT_FILTERS,
+  type LedgerActions,
+  type LedgerRow,
   LedgerTable,
   ledgerFiltersFromParams,
   ledgerFiltersToParams,
-  toggleComparisonSelection,
-  triggerLabel,
+  ledgerSummary,
+  listFirst,
+  resultSegments,
+  rowMenuItems,
+  selectionSummary,
+  shownSelection,
+  toggleSelection,
+  toggleShown,
 } from '@/pages/ExecutionsPage'
+import {
+  LEDGER_EXECUTIONS,
+  LEDGER_NOW,
+  LEDGER_TOTAL,
+  ledgerExecution,
+} from '@/test-fixtures/executions-ledger'
 
-const NOW = Date.parse('2026-08-26T21:00:00Z')
+const rows = buildLedgerRows(LEDGER_EXECUTIONS, LEDGER_NOW)
+const row = (id: string) => {
+  const found = rows.find((entry) => entry.id.startsWith(id))
+  if (!found) throw new Error(`no row ${id}`)
+  return found
+}
+const ids = (list: LedgerRow[]) => list.map((entry) => entry.id.slice(0, 13))
 
-function summary(
-  overrides: Partial<DashboardExecutionSummary> & { id: string },
-): DashboardExecutionSummary {
-  return {
-    label: 'e2e::* control-plane run',
-    status: 'passed',
-    availability: 'full',
-    event: 'local',
-    completed_at: '2026-08-26T20:11:31Z',
-    subjects: [
-      {
-        id: 'terra',
-        provider: 'openai-codex',
-        model: 'gpt-5.6-terra',
-        scenarios: [],
-      },
-    ],
-    assessment_summary: { system_statuses: { passed: 2 } } as never,
-    totals: {
-      expected_reports: 2,
-      received_reports: 2,
-      scenario_pass_rate: 1,
-      report_coverage: 1,
-      total_tokens: 7_918,
-      wall_time_seconds: 241,
-    },
-    ...overrides,
-  }
+const noop = () => undefined
+const actions: LedgerActions = {
+  open: noop,
+  rename: noop,
+  openOnGithub: noop,
+  importAgain: noop,
+  runAgain: noop,
+  copyId: noop,
+  cancel: noop,
+  delete: noop,
 }
 
-const executions = [
-  summary({ id: 'passed-1' }),
-  summary({
-    id: 'failed-1',
-    status: 'technical_failed',
-    completed_at: '2026-08-25T11:33:00Z',
-    assessment_summary: {
-      system_statuses: { infrastructure_error: 1, passed: 1 },
-    } as never,
-    totals: {
-      expected_reports: 2,
-      received_reports: 2,
-      scenario_pass_rate: 0.5,
-      report_coverage: 1,
-      wall_time_seconds: 939,
-      total_tokens: 251_616,
-    },
-  }),
-  summary({
-    id: 'cancelled-1',
-    label: 'context impact · baseline',
-    status: 'cancelled',
-    availability: 'unavailable',
-    event: 'workflow_dispatch',
-    completed_at: '2026-08-25T11:13:00Z',
-    subjects: [],
-    assessment_summary: undefined,
-    totals: undefined,
-  }),
-  summary({ id: 'running-1', status: 'running', completed_at: '' }),
-]
-
-describe('executions ledger', () => {
-  const rows = buildLedgerRows(executions)
-
+describe('executions list filters', () => {
   // Audit E-04: filters round-trip through the hash.
   it('reads and writes only the non-default filters', () => {
     const filters = ledgerFiltersFromParams(
-      new URLSearchParams('q=terra&status=failed&sort=tokens&event=local'),
+      new URLSearchParams('q=terra&status=failed&sort=tokens'),
     )
     expect(filters).toEqual({
       query: 'terra',
       status: 'failed',
-      event: 'local',
       sort: 'tokens',
     })
     expect(ledgerFiltersToParams(filters).toString()).toBe(
-      'q=terra&status=failed&event=local&sort=tokens',
+      'q=terra&status=failed&sort=tokens',
     )
     expect(ledgerFiltersToParams(LEDGER_DEFAULT_FILTERS).toString()).toBe('')
+    // What this list does not know falls back to the default.
+    expect(
+      ledgerFiltersFromParams(new URLSearchParams('status=cancelling&sort=x')),
+    ).toEqual(LEDGER_DEFAULT_FILTERS)
+    // Only a result the filter offers: no inherited names, no other states.
+    for (const status of ['toString', 'constructor', 'never_run', 'queued'])
+      expect(
+        ledgerFiltersFromParams(new URLSearchParams({ status })).status,
+      ).toBe('all')
+    expect(
+      ledgerFiltersFromParams(new URLSearchParams('status=cancelled')).status,
+    ).toBe('cancelled')
   })
 
-  it('filters by the result vocabulary the column shows and by trigger', () => {
-    expect(
-      filterLedgerRows(rows, {
-        ...LEDGER_DEFAULT_FILTERS,
-        status: 'failed',
-      }).map((row) => row.execution.id),
-    ).toEqual(['failed-1'])
-    expect(
-      filterLedgerRows(rows, {
-        ...LEDGER_DEFAULT_FILTERS,
-        event: 'workflow_dispatch',
-      }).map((row) => row.execution.id),
-    ).toEqual(['cancelled-1'])
-    expect(
-      filterLedgerRows(rows, {
-        ...LEDGER_DEFAULT_FILTERS,
-        query: 'context impact',
-      }).map((row) => row.execution.id),
-    ).toEqual(['cancelled-1'])
-    expect(triggerLabel('workflow_dispatch')).toBe('manual')
+  it('searches the title, id, model, profile, origin and date', () => {
+    const search = (query: string) =>
+      ids(filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, query }))
+    expect(search('template only')).toEqual(['plan-81960bf0'])
+    expect(search('plan-958b')).toEqual(['plan-958b1543'])
+    expect(search('meu-profile')).toEqual(['plan-7706993f'])
+    expect(search('docker')).toEqual(['plan-9c41d07b'])
+    expect(search('github #35925167026')).toEqual(['plan-958b1543'])
+    expect(search('sep 20')).toHaveLength(2)
+    expect(search('deepseek/deepseek-flash')).toHaveLength(8)
   })
 
-  // Audit E-05: sorting is explicit, newest first by default.
-  it('sorts by date, runtime, tokens and result', () => {
-    expect(
-      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS).map(
-        (row) => row.execution.id,
-      )[0],
-    ).toBe('passed-1')
-    expect(
-      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'runtime' })[0]
-        .execution.id,
-    ).toBe('failed-1')
-    expect(
-      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'tokens' })[0]
-        .execution.id,
-    ).toBe('failed-1')
-    expect(
-      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort: 'result' })[0]
-        .execution.id,
-    ).toBe('failed-1')
-  })
-
-  // Audit E-12: running is pinned, the rest is grouped by day.
-  it('pins running executions above the day groups', () => {
-    const grouped = groupLedgerRows(
-      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
-      NOW,
-    )
-    expect(grouped.running.map((row) => row.execution.id)).toEqual([
-      'running-1',
-    ])
-    expect(
-      grouped.groups.map((group) => [group.label, group.rows.length]),
-    ).toEqual([
-      ['today · Aug 26', 1],
-      ['yesterday · Aug 25', 2],
-    ])
-    expect(dayLabel('2026-08-25T11:13:00Z', NOW)).toBe('yesterday · Aug 25')
-  })
-
-  it('lists imported executions like local ones, with their origin and import state', () => {
-    const github = (run_id: number) => ({
-      kind: 'github',
-      repository: 'iii-hq/harness-e2e',
-      run_id,
-      run_attempt: 1,
-      url: `https://github.com/iii-hq/harness-e2e/actions/runs/${run_id}`,
-      release_control_execution_id: null,
-    })
-    const rows = buildLedgerRows([
-      summary({
-        id: 'plan-imported',
-        label: 'Software engineering',
-        // What an older worker still sends for every execution row.
-        workflow_name: 'Harness plan',
-        completed_at: '2026-08-26T20:30:00Z',
-        source: github(123),
-        parameters: {
-          scenarios: ['kanban_c1_foundation', 'kanban_c2_persistence'],
-          runs: 1,
-          technical_retries: 0,
-          model: 'gpt-5.6-terra',
-          provider: 'openai-codex',
-          agent: 'tech-lead',
-        },
-        subjects: [
-          {
-            id: 'terra',
-            provider: 'openai-codex',
-            model: 'gpt-5.6-terra',
-            scenarios: [
-              { id: 'kanban_c1_foundation', mean_score: 80 },
-              { id: 'kanban_c2_persistence', mean_score: 90 },
-            ],
+  it('also searches the tests, workflow, run id, commit and every model', () => {
+    const native = ledgerExecution('c3cdb199')
+    const paired = ledgerExecution('a1d33f69')
+    const [first, second] = buildLedgerRows(
+      [
+        {
+          ...native,
+          run_id: 'run-7781',
+          workflow_name: 'Harness E2E Local',
+          source: { kind: 'local', sha: '88aee14d0c' },
+          parameters: native.parameters && {
+            ...native.parameters,
+            scenarios: ['kanban_c2_persistence'],
           },
-        ],
-      }),
-      summary({
-        id: 'plan-importing',
-        status: 'importing',
-        state: 'importing',
-        source: github(124),
-      }),
-      summary({
-        id: 'local-run',
-        workflow_name: 'Harness E2E Local',
-        completed_at: '2026-08-26T20:10:00Z',
-      }),
-    ])
-    const grouped = groupLedgerRows(
-      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
-      NOW,
+        },
+        {
+          ...paired,
+          subjects: [
+            ...paired.subjects,
+            {
+              id: 'fable',
+              provider: 'claude-code',
+              model: 'fable-5',
+              scenarios: [],
+            },
+          ],
+        },
+      ],
+      LEDGER_NOW,
     )
-    expect(grouped.running.map((row) => row.execution.id)).toEqual([
-      'plan-importing',
-    ])
-    expect(grouped.running[0].status).toEqual({
-      label: 'importing',
-      status: 'running',
-    })
-    expect(
-      grouped.groups.map((group) => [
-        group.key,
-        group.rows.map((row) => row.execution.id),
-      ]),
-    ).toEqual([['2026-7-26', ['plan-imported', 'local-run']]])
-    expect(groupHeading(grouped.groups[0])).toBe('today · Aug 26 · 2')
-    expect(
-      filterLedgerRows(rows, {
+    const search = (query: string) =>
+      filterLedgerRows([first, second], {
         ...LEDGER_DEFAULT_FILTERS,
-        query: 'tech-lead',
-      }).map((row) => row.execution.id),
-    ).toEqual(['plan-imported'])
-    const html = renderToStaticMarkup(
-      <LedgerTable caption="Executions" groups={grouped.groups} />,
-    )
-    expect(html).toContain(
-      'href="https://github.com/iii-hq/harness-e2e/actions/runs/123"',
-    )
-    expect(html).toContain('GitHub #123')
-    expect(html).toContain('profile tech-lead')
-    expect(html).toContain('2 scenarios')
-    expect(html).toContain('>85<')
-    expect(html).toContain('>local<')
-    // Every row names its origin; none names a workflow.
-    expect(html).not.toContain('Harness plan')
-    expect(html).not.toContain('Harness E2E Local')
+        query,
+      }).map((entry) => entry.id)
+    for (const query of [
+      'kanban_c2',
+      'harness e2e local',
+      'run-7781',
+      '88aee14',
+    ])
+      expect(search(query)).toEqual([first.id])
+    expect(search('claude-code/fable-5')).toEqual([second.id])
   })
 
-  it('ticks two executions for comparison, the first one as A', () => {
-    let ids: string[] = []
-    for (const id of ['passed-1', 'failed-1', 'running-1'])
-      ids = toggleComparisonSelection(ids, id)
-    expect(ids).toEqual(['passed-1', 'failed-1'])
-    expect(toggleComparisonSelection(ids, 'passed-1')).toEqual(['failed-1'])
+  it('filters by result and sorts newest first, or as asked', () => {
+    expect(
+      ids(
+        filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, status: 'failed' }),
+      ),
+    ).toEqual([
+      'plan-00ec9877',
+      'plan-3ef1b6a7',
+      'plan-1d320744',
+      'plan-958b1543',
+    ])
+    expect(
+      ids(
+        filterLedgerRows(rows, {
+          ...LEDGER_DEFAULT_FILTERS,
+          status: 'running',
+        }),
+      ),
+    ).toEqual(['plan-e5b0a2c4', 'plan-9c41d07b', 'plan-2b7e41c0'])
+    const first = (sort: typeof LEDGER_DEFAULT_FILTERS.sort) =>
+      filterLedgerRows(rows, { ...LEDGER_DEFAULT_FILTERS, sort })[0].id
+    expect(first('newest')).toMatch(/^plan-e5b0/)
+    expect(first('oldest')).toMatch(/^c92c4cd4/)
+    expect(first('tokens')).toMatch(/^plan-958b/)
+    expect(first('runtime')).toMatch(/^plan-958b/)
+    expect(first('result')).toMatch(/^plan-00ec/)
+  })
 
-    const grouped = groupLedgerRows(rows, NOW)
-    const html = renderToStaticMarkup(
+  it('offers each result present, with its count, after All', () => {
+    expect(
+      resultSegments(rows).map(({ value, label, count }) => [
+        value,
+        label,
+        count,
+      ]),
+    ).toEqual([
+      ['all', 'All', 16],
+      ['passed', 'Passed', 8],
+      ['failed', 'Failed', 4],
+      ['incomplete', 'Incomplete', 1],
+      ['running', 'Running', 3],
+    ])
+    expect(ledgerSummary(rows, LEDGER_TOTAL)).toBe(
+      '58 retained · 16 loaded · 8 passed · 4 failed · 1 incomplete · 3 running',
+    )
+    // The active filter keeps its segment when nothing has that result.
+    expect(
+      resultSegments(rows, 'cancelled').map(({ value, count }) => [
+        value,
+        count,
+      ]),
+    ).toContainEqual(['cancelled', 0])
+    expect(
+      resultSegments(rows).some((segment) => segment.value === 'cancelled'),
+    ).toBe(false)
+  })
+})
+
+describe('executions list rows', () => {
+  it('writes each cell as the canvas does', () => {
+    expect(row('plan-cf6ab5f9')).toMatchObject({
+      title: 'Opus 5.5 · ade-worker-builder · wake fix',
+      meta: 'This harness · 10:10 AM · plan-cf6ab5f9',
+      result: { state: 'passed' },
+      issue: null,
+      model: 'claude-code/claude-opus-5-5',
+      profile: 'profile ade-solo-builder',
+      tests: '2/2',
+      score: '100',
+      passRate: '100%',
+      runtime: '17m 29s',
+      tokens: '85.4K',
+    })
+    expect(row('plan-958b1543')).toMatchObject({
+      meta: 'GitHub #35925167026 · 8:00 PM · plan-958b1543',
+      result: { state: 'failed' },
+      issue: '1 infrastructure event',
+      model: 'deepseek/deepseek-flash',
+      tests: '13/13',
+      score: '—',
+      passRate: '61.5%',
+      runtime: '3h 22m',
+      tokens: '11.9M',
+      github: {
+        runId: 35925167026,
+        url: 'https://github.com/iii-hq/harness-e2e/actions/runs/35925167026',
+      },
+    })
+    expect(row('plan-7706993f')).toMatchObject({
+      result: { state: 'incomplete' },
+      issue: '2 inconclusive events',
+      profile: 'profile meu-profile',
+      tests: '0/2',
+      runtime: '—',
+    })
+    expect(row('c3cdb199')).toMatchObject({
+      meta: 'This harness · 12:18 AM · c3cdb199cf8ec',
+      profile: 'no profile',
+      runtime: '8.8s',
+      tokens: '4.2K',
+    })
+  })
+
+  it('titles an untitled execution by its model and when it was created', () => {
+    expect(row('plan-3ef1b6a7').title).toBe(
+      'claude-code/claude-opus-5-5 · Sep 24, 2026, 6:43 AM',
+    )
+  })
+
+  it('reads what runs: Docker by its groups, an import, this harness by its tests', () => {
+    expect(row('plan-9c41d07b')).toMatchObject({
+      meta: 'Docker · 8:12 PM · plan-9c41d07b',
+      result: { state: 'running' },
+      live: true,
+      issue: '3 of 9 groups finished · 2 running · 4 waiting',
+      tests: '3/9',
+    })
+    expect(row('plan-e5b0a2c4')).toMatchObject({
+      meta: 'GitHub #36073359724 · 8:33 PM · plan-e5b0a2c4',
+      result: { state: 'running', label: 'Importing' },
+      live: true,
+      issue: '6 of 14 group jobs finished',
+    })
+    expect(row('plan-2b7e41c0')).toMatchObject({
+      result: { state: 'running' },
+      issue: '1 of 2 runs reported',
+    })
+  })
+
+  // Audit E-12: what runs comes first, then one group per day.
+  it('groups what runs first, then by day', () => {
+    const groups = groupLedgerRows(
+      filterLedgerRows(rows, LEDGER_DEFAULT_FILTERS),
+      LEDGER_NOW,
+    )
+    expect(groups.map((group) => [group.label, group.rows.length])).toEqual([
+      ['Running', 3],
+      ['Today · Sep 24', 8],
+      ['Yesterday · Sep 23', 1],
+      ['Sep 21', 2],
+      ['Sep 20', 2],
+    ])
+  })
+})
+
+describe('executions list selection', () => {
+  it('ticks one at a time or every row shown, as a tri-state box', () => {
+    const shown = ['a', 'b', 'c']
+    expect(shownSelection([], shown)).toBe('none')
+    expect(shownSelection(['b'], shown)).toBe('some')
+    expect(toggleShown(['b', 'z'], shown)).toEqual(['b', 'z', 'a', 'c'])
+    expect(shownSelection(['b', 'z', 'a', 'c'], shown)).toBe('all')
+    // Rows filtered out keep their tick.
+    expect(toggleShown(['b', 'z', 'a', 'c'], shown)).toEqual(['z'])
+    expect(toggleSelection(['a', 'b'], 'a')).toEqual(['b'])
+    expect(toggleSelection(['b'], 'a')).toEqual(['b', 'a'])
+  })
+
+  it('compares exactly two, A first, and keeps what runs out of a delete', () => {
+    const one = selectionSummary([row('plan-cf6ab5f9')])
+    expect(one).toMatchObject({
+      text: '1 selected',
+      hint: 'Tick one more to compare.',
+      compare: null,
+      deleteLabel: 'Delete',
+    })
+    const two = selectionSummary([row('plan-cf6ab5f9'), row('plan-81960bf0')])
+    expect(two.hint).toBe('A is the first you ticked.')
+    expect(two.compare).toEqual([
+      row('plan-cf6ab5f9').id,
+      row('plan-81960bf0').id,
+    ])
+    expect(two.deleteLabel).toBe('Delete 2')
+    const three = selectionSummary([
+      row('plan-2b7e41c0'),
+      row('plan-00ec9877'),
+      row('plan-3ef1b6a7'),
+    ])
+    expect(three).toMatchObject({
+      text: '3 selected',
+      hint: '1 running will be kept.',
+      compare: null,
+      deleteLabel: 'Delete 2',
+    })
+    expect(three.deletable).toEqual([
+      row('plan-00ec9877').id,
+      row('plan-3ef1b6a7').id,
+    ])
+    expect(selectionSummary([row('plan-2b7e41c0')]).deletable).toEqual([])
+  })
+})
+
+describe('the row menu', () => {
+  const menu = (id: string) =>
+    rowMenuItems(row(id), actions).map((item) =>
+      [
+        item.separator ? '—' : '',
+        item.label,
+        item.hint ? `(${item.hint})` : '',
+        item.disabledReason ? `[${item.disabledReason}]` : '',
+      ]
+        .join('')
+        .trim(),
+    )
+
+  it('runs again what ran here, and imports again what came from GitHub', () => {
+    expect(menu('plan-cf6ab5f9')).toEqual([
+      'Open',
+      'Rename',
+      'Run again',
+      'Copy execution id',
+      '—Delete…',
+    ])
+    expect(menu('plan-1d320744')).toEqual([
+      'Open',
+      'Rename',
+      'Open on GitHub',
+      'Import again(Replaces its evidence with the run’s)',
+      'Copy execution id',
+      '—Delete…',
+    ])
+    // A native run has no name of its own to change.
+    expect(menu('c3cdb199')).toEqual([
+      'Open',
+      'Run again',
+      'Copy execution id',
+      '—Delete…',
+    ])
+  })
+
+  it('cancels what runs, and says why it cannot be deleted yet', () => {
+    expect(menu('plan-2b7e41c0')).toEqual([
+      'Open',
+      'Rename',
+      'Copy execution id',
+      '—Cancel execution',
+      'Delete…[Finish or cancel it first]',
+    ])
+    expect(menu('plan-9c41d07b')).toContain('—Cancel execution')
+    expect(menu('plan-e5b0a2c4')).toEqual([
+      'Open',
+      'Rename',
+      'Open on GitHub',
+      'Copy execution id',
+      '—Delete…[Wait for the import to finish]',
+    ])
+  })
+})
+
+describe('deleting executions', () => {
+  it('says what one imported execution takes with it and what stays', () => {
+    const confirmation = deleteConfirmation(
+      [row('plan-1d320744')],
+      [],
+      LEDGER_NOW,
+    )
+    expect(confirmation).toMatchObject({
+      title: 'Delete “Software engineering”?',
+      body: 'This can’t be undone.',
+      items: [
+        {
+          title: 'Software engineering',
+          meta: 'GitHub #35965100994 · Sep 24, 4:25 AM · 13/15 tests · 3.34M tokens',
+        },
+      ],
+      more: null,
+      action: 'Delete execution',
+    })
+    expect(confirmation.facts).toEqual([
+      {
+        tone: 'gone',
+        text: '13 test runs with their transcripts, reports and screenshots leave this Console.',
+      },
+      {
+        tone: 'gone',
+        text: 'Links to it, comparisons included, stop working.',
+      },
+      {
+        tone: 'kept',
+        text: 'The run on GitHub is not touched. You can import #35965100994 again.',
+      },
+    ])
+  })
+
+  it('lists five, sums up the rest and names what keeps running', () => {
+    const finished = rows.filter((entry) => !entry.live).slice(2, 9)
+    const confirmation = deleteConfirmation(
+      finished,
+      [row('plan-2b7e41c0')],
+      LEDGER_NOW,
+    )
+    expect(confirmation.title).toBe('Delete 7 executions?')
+    expect(confirmation.items).toHaveLength(5)
+    expect(confirmation.more).toBe('and 2 more')
+    expect(confirmation.action).toBe('Delete 7 executions')
+    expect(confirmation.facts.map((fact) => fact.text)).toEqual([
+      '34 test runs with their transcripts, reports and screenshots leave this Console.',
+      'Links to them, comparisons included, stop working.',
+      'The runs on GitHub are not touched. You can import them again.',
+      '“Opus 5.5 · ade-worker-builder · retry” is still running and stays. Cancel it first to delete it.',
+    ])
+    expect(deletedMessage(['no profile'])).toBe(
+      'Deleted “no profile” with its runs and evidence.',
+    )
+    expect(deletedMessage(['a', 'b'])).toBe(
+      'Deleted 2 executions with their runs and evidence.',
+    )
+  })
+})
+
+describe('the executions table', () => {
+  const render = (selected: string[]) =>
+    renderToStaticMarkup(
       <LedgerTable
-        caption="Executions"
-        groups={grouped.groups}
-        selection={{ ids, onToggle: () => undefined }}
+        caption="Executions, 16 of 16 loaded"
+        groups={groupLedgerRows(rows, LEDGER_NOW)}
+        selected={selected}
+        onSelect={noop}
+        actions={actions}
       />,
     )
-    expect(html.match(/type="checkbox"/g)).toHaveLength(3)
-    expect(html.match(/checked=""/g)).toHaveLength(2)
-    expect(html.match(/text-ink-muted">(A|B)<\/span>/g)).toEqual([
-      'text-ink-muted">A</span>',
-      'text-ink-muted">B</span>',
+
+  it('renders each group under its heading with every column named', () => {
+    const html = render([])
+    for (const header of [
+      'Execution',
+      'Result',
+      'Model',
+      'Tests',
+      'Score',
+      'Pass rate',
+      'Runtime',
+      'Tokens',
+      'Actions',
     ])
+      expect(html).toContain(`>${header}<`)
     expect(html).toContain(
-      'aria-label="Compare context impact · baseline" disabled=""',
+      '<caption class="iii-ui-table__caption ds-visually-hidden">Executions, 16 of 16 loaded</caption>',
+    )
+    expect(html).toContain('aria-label="Select every execution shown"')
+    expect(html.match(/data-execution-id=/g)).toHaveLength(16)
+    expect(html).toContain('aria-label="Select no profile"')
+    expect(html).toContain('aria-label="Actions for no profile"')
+    expect(html).toContain('>Today · Sep 24<')
+    // A heading's count is spaced from it and named.
+    expect(html).toContain(
+      'Today · Sep 24</span> <span class="ex-group-count">8<span class="ds-visually-hidden"> executions</span>',
+    )
+    expect(html).toContain('title="3,339,305 tokens"')
+    expect(html).toContain('3 of 9 groups finished · 2 running · 4 waiting')
+    expect(html).toContain('>Importing<')
+    expect(html).not.toContain('Compared as')
+  })
+
+  it('keeps execution, result, tests and the menu in a narrow pane', () => {
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        caption="Executions, 16 of 16 loaded"
+        narrow
+        groups={groupLedgerRows(rows, LEDGER_NOW)}
+        selected={[]}
+        onSelect={noop}
+        actions={actions}
+      />,
+    )
+    for (const header of ['Execution', 'Result', 'Tests', 'Actions'])
+      expect(html).toContain(`>${header}<`)
+    for (const header of ['Model', 'Score', 'Pass rate', 'Runtime', 'Tokens'])
+      expect(html).not.toContain(`>${header}<`)
+    expect(html).toContain('colSpan="5"')
+  })
+
+  it('marks A and B when exactly two are ticked', () => {
+    const a = ledgerExecution('plan-81960bf0').id
+    const b = ledgerExecution('plan-cf6ab5f9').id
+    const html = render([a, b])
+    expect(html.match(/title="Compared as (A|B)"/g)).toEqual([
+      'title="Compared as B"',
+      'title="Compared as A"',
+    ])
+    expect(html.match(/checked=""/g)).toHaveLength(2)
+    expect(render([a, b, ledgerExecution('c3cdb199').id])).not.toContain(
+      'Compared as',
+    )
+  })
+})
+
+/** A bridge double: records what the page asked of it. */
+function bridgeDouble(overrides: Partial<DashboardDataBridge> = {}) {
+  const calls: Array<[string, unknown]> = []
+  const record =
+    (name: string) =>
+    async (input?: unknown): Promise<never> => {
+      calls.push([name, input])
+      return {} as never
+    }
+  const bridge = {
+    deleteExecution: record('delete'),
+    cancelExecution: record('cancel'),
+    cancelRun: record('cancelRun'),
+    importGithubRun: record('import'),
+    ...overrides,
+  } as unknown as DashboardDataBridge
+  return { bridge, calls }
+}
+
+describe('what the list does through the bridge', () => {
+  it('deletes what it can and titles each refusal in the worker’s words', async () => {
+    const targets = [
+      row('plan-00ec9877'),
+      row('plan-3ef1b6a7'),
+      row('c3cdb199'),
+    ]
+    const { bridge, calls } = bridgeDouble({
+      deleteExecution: async (id: string) => {
+        calls.push(['delete', id])
+        if (id.startsWith('plan-3ef1'))
+          throw new Error('Only a finished execution can be deleted.')
+      },
+    })
+    const { deleted, refused } = await deleteExecutions(bridge, targets)
+    expect(calls.map(([, id]) => id)).toEqual(targets.map((entry) => entry.id))
+    expect(deleted.map((entry) => entry.title)).toEqual([
+      'no profile',
+      'e2e::* control-plane run',
+    ])
+    expect(deleteFailure(refused)).toEqual({
+      title:
+        'Couldn’t delete “claude-code/claude-opus-5-5 · Sep 24, 2026, 6:43 AM”',
+      message: 'Only a finished execution can be deleted.',
+    })
+    expect(
+      deleteFailure([
+        ...refused,
+        { row: row('c3cdb199'), message: 'not found' },
+      ])?.title,
+    ).toBe('Couldn’t delete 2 executions')
+    expect(deleteFailure([])).toBeNull()
+  })
+
+  it('cancels an execution by its id and a native run through the runner', async () => {
+    const { bridge, calls } = bridgeDouble()
+    await cancelLedgerExecution(bridge, row('plan-2b7e41c0'))
+    await cancelLedgerExecution(bridge, {
+      ...row('c3cdb199'),
+      live: true,
+    })
+    expect(calls).toEqual([
+      ['cancel', row('plan-2b7e41c0').id],
+      ['cancelRun', undefined],
+    ])
+  })
+
+  it('imports a GitHub run again by its run id', async () => {
+    const { bridge, calls } = bridgeDouble()
+    await importLedgerExecutionAgain(bridge, row('plan-958b1543'))
+    expect(calls).toEqual([['import', 35925167026]])
+    await expect(
+      importLedgerExecutionAgain(bridge, row('plan-cf6ab5f9')),
+    ).rejects.toThrow('not imported from GitHub')
+  })
+
+  it('copies an id, or says why the page cannot', async () => {
+    const written: string[] = []
+    await expect(
+      copyExecutionId('plan-1', {
+        writeText: async (text) => {
+          written.push(text)
+        },
+      }),
+    ).resolves.toBe('Copied plan-1.')
+    expect(written).toEqual(['plan-1'])
+    await expect(copyExecutionId('plan-1', undefined)).rejects.toThrow(
+      'This page cannot reach the clipboard (it needs https or localhost). The id is plan-1.',
     )
   })
 
-  // Audit O-03 / E-11: the row carries every column with a label, and a
-  // cancelled row never invents numbers.
-  it('renders the collapsing table with honest placeholders', () => {
-    const html = renderToStaticMarkup(
-      <table>
-        <tbody>
-          <tr>{null}</tr>
-        </tbody>
-      </table>,
-    )
-    expect(html).toContain('<table>')
-    const grouped = groupLedgerRows(rows, NOW)
-    expect(grouped.groups[1].rows.map((row) => row.status.label)).toEqual([
-      'failed',
-      'cancelled',
-    ])
+  it('reloads as many as were loaded, a page of at most 100 at a time', async () => {
+    const asked: ExecutionListInput[] = []
+    const all = Array.from({ length: 240 }, (_, index) => ({
+      ...LEDGER_EXECUTIONS[0],
+      id: `plan-${index}`,
+    }))
+    const { bridge } = bridgeDouble({
+      listExecutions: async (input = {}) => {
+        asked.push(input)
+        const start = Number(input.cursor ?? 0)
+        const end = start + (input.limit ?? 50)
+        return {
+          executions: all.slice(start, end),
+          total: all.length,
+          next_cursor: end < all.length ? String(end) : null,
+        }
+      },
+    })
+    const listed = await listFirst(bridge, 150)
+    expect(asked).toEqual([{ limit: 100 }, { limit: 50, cursor: '100' }])
+    expect(listed.executions).toHaveLength(150)
+    expect(listed).toMatchObject({ cursor: '150', total: 240 })
+    // Load older goes on from where the reload stopped.
+    asked.length = 0
+    expect((await listFirst(bridge, 50)).cursor).toBe('50')
+    expect(asked).toEqual([{ limit: 50 }])
+    // A page shorter than asked ends it, whatever cursor it carries.
+    const short = bridgeDouble({
+      listExecutions: async () => ({
+        executions: all.slice(0, 16),
+        total: 58,
+        next_cursor: 'older',
+      }),
+    })
+    expect(await listFirst(short.bridge, 50)).toMatchObject({
+      cursor: 'older',
+      total: 58,
+      executions: all.slice(0, 16),
+    })
   })
 })
