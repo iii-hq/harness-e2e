@@ -250,6 +250,29 @@ mod tests {
     }
 
     #[test]
+    fn canonical_hash_survives_writing_and_rereading_a_computed_float() {
+        // A Linkly chapter's cost delta (end - start), as in run 36122990798:
+        // without correctly rounded parsing its shortest form reads back one
+        // ULP off, and the reread value no longer hashes like the written one.
+        let value = serde_json::json!({"cost_usd": 0.5328641639999999_f64 - 0.326257392});
+        let output = tempfile::tempdir().unwrap();
+        let reference = write_json(
+            output.path(),
+            Path::new("deliverable.json"),
+            "deliverable",
+            "test",
+            &value,
+        )
+        .unwrap();
+        let reread: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.path().join(reference.path)).unwrap()).unwrap();
+        assert_eq!(
+            sha256_value(&reread).unwrap(),
+            sha256_value(&value).unwrap()
+        );
+    }
+
+    #[test]
     fn artifact_paths_cannot_escape_the_output_directory() {
         let output = tempfile::tempdir().unwrap();
         let error = write_json(
