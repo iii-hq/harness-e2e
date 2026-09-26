@@ -300,7 +300,23 @@ jobs:
           echo "executor containers left: ${containers:-none}"
           [[ -z "$containers" ]] || docker rm -fv $containers
 
+      - name: Package factual group evidence
+        id: group_package
+        if: always()
+        env:
+          WORKFLOW_IDENTITY: >-
+            {"repository":"${{ github.repository }}","workflow":"exact-stack-e2e.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"group_id":"${{ matrix.group_id }}","job":"${{ github.job }}"}
+        run: |
+          set -euo pipefail
+          python3 scripts/exact_stack_campaign.py package \
+            --root target/harness-e2e-exact-stack \
+            --contract target/harness-e2e-exact-stack/stack-lock.json \
+            --workflow "$WORKFLOW_IDENTITY" \
+            --credentials "$RUNNER_TEMP/provider-credentials.env" \
+            --output target/harness-e2e-exact-stack/bundle-manifest.json
+
       # Whatever the group did, its runs reach the ledger: from results.json
+      # (read after packaging, so as redacted as what is uploaded)
       # when the group finished, from the journal checkpoints when it did not,
       # and as an empty shard saying so when it produced neither.
       - name: Report this shard's runs
@@ -324,21 +340,6 @@ jobs:
             --resolution target/harness-e2e-contract/contracts/resolution.json \
             --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
             --runner-sha "$RUNNER_REVISION"
-
-      - name: Package factual group evidence
-        id: group_package
-        if: always()
-        env:
-          WORKFLOW_IDENTITY: >-
-            {"repository":"${{ github.repository }}","workflow":"exact-stack-e2e.yml","workflow_sha":"${{ github.sha }}","run_id":${{ github.run_id }},"run_attempt":${{ github.run_attempt }},"group_id":"${{ matrix.group_id }}","job":"${{ github.job }}"}
-        run: |
-          set -euo pipefail
-          python3 scripts/exact_stack_campaign.py package \
-            --root target/harness-e2e-exact-stack \
-            --contract target/harness-e2e-exact-stack/stack-lock.json \
-            --workflow "$WORKFLOW_IDENTITY" \
-            --credentials "$RUNNER_TEMP/provider-credentials.env" \
-            --output target/harness-e2e-exact-stack/bundle-manifest.json
 
       - name: Preserve safe group packaging diagnostic
         id: group_package_failure

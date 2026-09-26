@@ -223,6 +223,9 @@ class WorkflowBoundaryTests(unittest.TestCase):
                     "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)
                 self.assertIn(f"scripts/run_in_image.sh --env-file {credentials}", steps[names.index(phase)]["run"])
                 self.assertIn(f"--credentials {credentials}", steps[names.index(package)]["run"])
+        # Release Control gets a shard's runs as redacted as its upload.
+        groups = [step.get("name") for step in jobs["groups"]["steps"]]
+        self.assertLess(groups.index("Package factual group evidence"), groups.index("Report this shard's runs"))
         # The finalizer holds no credential: the bundles it lays out were
         # redacted when their group packaged them.
         self.assertNotIn("provider-credentials", json.dumps(jobs["finalize"]))
