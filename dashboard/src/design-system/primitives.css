@@ -6,7 +6,9 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-height: 2.25rem;
+  /* Default 32 (headers, dialog footers); compact 28 inside rows and cards;
+     44 for content controls below 720 px of pane; 48 on a phone. */
+  min-height: 2rem;
   gap: var(--ds-space-2);
   padding: 0 var(--ds-space-4);
   border: 0;
@@ -225,6 +227,60 @@
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: var(--ds-space-2);
+}
+
+/* List: the section tab is the title; the summary is the one visible line,
+   12 px faint. */
+.ds-page-header-list .ds-page-summary {
+  color: var(--text-soft);
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+/* Detail: back button, one 20/600 title (mono for machine ids), actions
+   beside it, capped at the host's content width and left-aligned. */
+.ds-page-header-detail {
+  max-width: 76rem;
+}
+
+.ds-page-header-detail h1,
+.ds-page-header-detail h2 {
+  font-family: var(--font-sans);
+  font-size: 1.25rem;
+  line-height: 1.75rem;
+  text-transform: none;
+}
+
+.ds-page-header-detail .ds-page-title-mono {
+  font-family: var(--font-mono);
+  letter-spacing: 0;
+}
+
+.ds-page-header-detail .ds-page-summary {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
+  line-height: 1.125rem;
+}
+
+.ds-page-back {
+  display: inline-flex;
+  width: fit-content;
+  height: 1.75rem;
+  align-items: center;
+  gap: 0.375rem;
+  margin: 0 0 0.25rem -0.5rem;
+  padding: 0 0.5rem;
+  border-radius: var(--ds-radius-md);
+  color: var(--text-soft);
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-decoration: none;
+}
+
+.ds-page-back:hover {
+  background: var(--surface-soft);
+  color: var(--text);
 }
 
 .ds-metric-card {
@@ -541,14 +597,16 @@
   color: var(--text-muted);
 }
 
-/* Callout: one tinted fill per tone, icon and title in the tone colour. */
+/* Notices: Info is neutral (the accent is kept for live state), Warn needs a
+   decision, Alert failed or blocks. The headline is ink; the icon carries
+   the tone. */
 .ds-callout {
-  --ds-callout-color: var(--info);
+  --ds-callout-color: var(--text-soft);
   display: flex;
   gap: var(--ds-space-3);
   padding: var(--ds-space-3) var(--ds-space-4);
   border-radius: var(--ds-radius-md);
-  background: color-mix(in srgb, var(--ds-callout-color) 8%, transparent);
+  background: var(--surface-fill);
   color: var(--text);
   font-size: 0.8125rem;
   line-height: 1.5;
@@ -567,23 +625,26 @@
 }
 
 .ds-callout-title {
-  color: var(--ds-callout-color);
-  font-family: var(--font-mono);
+  color: var(--text);
+  font-family: var(--font-sans);
   font-size: 0.8125rem;
   font-weight: 600;
-  text-transform: lowercase;
-}
-
-.ds-callout-success {
-  --ds-callout-color: var(--success);
 }
 
 .ds-callout-warning {
-  --ds-callout-color: var(--warning);
+  --ds-callout-color: var(--color-warn, var(--warning));
+  background: var(
+    --color-warn-muted,
+    color-mix(in srgb, var(--warning) 12%, transparent)
+  );
 }
 
 .ds-callout-danger {
-  --ds-callout-color: var(--danger);
+  --ds-callout-color: var(--color-alert, var(--danger));
+  background: var(
+    --color-alert-muted,
+    color-mix(in srgb, var(--danger) 10%, transparent)
+  );
 }
 
 /* Field: label row, control, hint and error wired by id. Controls are fills
@@ -687,6 +748,22 @@
 }
 
 .ds-dialog::backdrop {
+  background: var(--backdrop);
+  backdrop-filter: blur(4px);
+}
+
+/* A dialog that lets the host's portaled overlays (z-50) open above it:
+   outside the top layer, fixed and centred, over our own scrim. */
+.ds-dialog-host-overlays[open] {
+  position: fixed;
+  inset: 0;
+  z-index: 41;
+}
+
+.ds-dialog-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
   background: var(--backdrop);
   backdrop-filter: blur(4px);
 }
@@ -927,6 +1004,10 @@
 }
 
 @container harness (max-width: 720px) {
+  .ds-button:not(.ds-button-compact) {
+    min-height: 2.75rem;
+  }
+
   .ds-page-header {
     grid-template-columns: minmax(0, 1fr);
     align-items: start;
@@ -935,5 +1016,12 @@
 
   .ds-page-actions {
     justify-content: flex-start;
+  }
+}
+
+@media (max-width: 639px) {
+  .ds-button:not(.ds-button-compact) {
+    min-height: 3rem;
+    font-size: 1rem;
   }
 }

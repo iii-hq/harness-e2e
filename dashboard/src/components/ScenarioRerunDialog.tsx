@@ -35,42 +35,6 @@ export function ScenarioRerunDialog({
     onClose()
   }
   const source = execution.source
-  if (source.kind === 'github')
-    return (
-      <Dialog
-        open={scenarioId !== null}
-        onClose={close}
-        size="sm"
-        title={`Run ${scenarioId} again on GitHub`}
-        description="This execution was imported from GitHub. Running a scenario here would mix this stack with the one it ran on."
-        bodyPadding
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              onClick={close}
-            >
-              close
-            </button>
-          </div>
-        }
-      >
-        <p className="m-0 text-sm text-ink">
-          Re-run its job on GitHub, then import the run again: the import takes
-          the run's highest attempt and replaces this execution's runs.
-        </p>
-        <a
-          className="mt-3 inline-flex items-center gap-1 text-sm text-ink"
-          href={source.url}
-          target="_blank"
-          rel="noreferrer"
-        >
-          open GitHub run #{source.run_id}
-          <ExternalLink size={12} aria-hidden="true" />
-        </a>
-      </Dialog>
-    )
   const group = scenarioId ? rerunGroup(execution, scenarioId) : []
   const rounds = execution.slots.filter(
     (slot) => slot.scenario_id === scenarioId,
@@ -96,12 +60,19 @@ export function ScenarioRerunDialog({
       open={scenarioId !== null}
       onClose={close}
       size="sm"
-      title={`Run ${scenarioId} again`}
+      title={
+        source.kind === 'docker'
+          ? `Run ${scenarioId} again in Docker`
+          : source.kind === 'github'
+            ? `Run ${scenarioId} again on GitHub`
+            : `Run ${scenarioId} again`
+      }
       description={
         source.kind === 'docker'
-          ? "Its group runs again in a new container with this execution's contract, stack lock and executor image, as attempt " +
-            `${source.attempt + 1}; then the execution is aggregated and imported again.`
-          : "It runs on this stack with this execution's model, profile, runs and technical retries."
+          ? `Its group runs again in a new container with this execution’s contract, stack lock and executor image, as attempt ${source.attempt + 1}. Then the execution is aggregated and imported again. The last attempt counts.`
+          : source.kind === 'github'
+            ? 'Re-runs its group’s job on GitHub, which redoes the aggregate job. The Console imports the run again when it ends. The last attempt counts.'
+            : 'It runs on this harness with this execution’s model, profile, runs and technical retries. Its new result replaces this one; the last attempt counts.'
       }
       bodyPadding
       footer={
@@ -138,6 +109,22 @@ export function ScenarioRerunDialog({
       }
     >
       <div className="grid gap-2 text-sm text-ink" data-scenario-rerun>
+        {source.kind === 'github' ? (
+          <p className="m-0">
+            <a
+              className="inline-flex items-center gap-1 text-ink"
+              href={source.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub · run #{source.run_id}
+              <ExternalLink size={12} aria-hidden="true" />
+            </a>
+            {source.release_control_execution_id
+              ? ` · This run reports to Release Control execution ${source.release_control_execution_id.slice(0, 8)}, so the new attempt reports there too.`
+              : ''}
+          </p>
+        ) : null}
         <p className="m-0">
           The last attempt counts, even when it does worse. The current one
           stays under previous attempts, out of the score, the totals and the

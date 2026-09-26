@@ -377,24 +377,30 @@
   font-size: 12px;
 }
 
+/* Entity title: 20/600, -0.01em (Layout · titles). */
 .harness-e2e-shell .pm-page-header h1,
 .harness-e2e-shell .pm-page-header h2 {
   font-family: var(--font-sans);
   font-size: 20px;
-  font-weight: 500;
-  line-height: 1.4;
-  letter-spacing: -0.02em;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.01em;
   text-transform: none;
 }
 
 .harness-e2e-shell .pm-page-header .ds-page-summary,
 .harness-e2e-shell .pm-page-header .ds-page-context,
-.harness-e2e-shell .pm-page-header .ds-breadcrumb ol,
+.harness-e2e-shell .pm-page-header .ds-breadcrumb ol {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  text-transform: none;
+}
+
 .harness-e2e-shell .pm-page-header .ds-page-actions,
 .harness-e2e-shell .pm-page-header .ds-page-actions .ds-button,
 .harness-e2e-shell .pm-page-header .ds-page-actions .ds-status-badge {
   font-family: var(--font-sans);
-  font-size: 14px;
+  font-size: 13px;
   text-transform: none;
 }
 
@@ -426,7 +432,6 @@
 }
 .harness-e2e-shell .execution-header h1 {
   overflow-wrap: anywhere;
-  font-size: 24px;
 }
 .harness-e2e-shell .execution-header .ds-page-summary {
   display: flex;
@@ -436,9 +441,6 @@
 }
 .harness-e2e-shell .execution-header .ds-page-actions {
   padding-block: 4px;
-}
-.harness-e2e-shell .execution-header .ds-button {
-  min-height: 36px;
 }
 .harness-e2e-shell .execution-identity {
   display: grid;

@@ -379,7 +379,9 @@ try {
   await empty.getByRole('button', { name: 'run tests', exact: true }).click()
   const fresh = page.getByRole('dialog', { name: 'Run tests' })
   await fresh.getByText('catalog ready').waitFor()
-  await fresh.getByText('0 tests · 0 runs · no model').waitFor()
+  await fresh
+    .getByText('Before running, choose a model and tick at least one test.')
+    .waitFor()
   assert.equal(
     await fresh.getByText('The model of your last execution.').count(),
     0,
@@ -452,18 +454,22 @@ try {
   await runTests.getByText('catalog ready').waitFor()
   assert.equal(await runTests.getByText('Harness endpoint').count(), 0)
   await runTests.getByText('The model of your last execution.').waitFor()
+  assert.equal(
+    await runTests.getByLabel('Model').inputValue(),
+    'deepseek::deepseek-v4-flash',
+  )
   await runTests
-    .getByText('0 tests · 0 runs · deepseek/deepseek-v4-flash')
+    .getByText('0 tests · 0 runs', { exact: false })
+    .first()
     .waitFor()
   const box = (name) => runTests.getByRole('checkbox', { name, exact: true })
   await box('registry_verification').click()
   assert.ok(await box('registry_implementation').isChecked())
-  await runTests.getByText('2 tests · 2 runs', { exact: false }).waitFor()
   await runTests
-    .getByText(
-      'registry_implementation then registry_verification run only together, in this order.',
-    )
+    .getByText('2 tests · 2 runs', { exact: false })
+    .first()
     .waitFor()
+  await runTests.getByText('2 of 2 · in order', { exact: true }).waitFor()
   await box('registry_verification').click()
   assert.ok(!(await box('registry_implementation').isChecked()))
   await runTests
@@ -477,24 +483,21 @@ try {
   await page.keyboard.press('Space')
   assert.ok(await box('context_pressure').isChecked())
   // Every execution runs the canonical cases, so runs pair up in comparisons.
-  await runTests.getByText('Advanced · sampling and retries').click()
   assert.doesNotMatch(await runTests.textContent(), /seed/i)
   const submit = runTests.getByRole('button', {
-    name: 'run 1 test',
+    name: 'Run 1 test',
     exact: true,
   })
   await submit.click()
   // A busy runner names what runs, by its title, and offers to open it.
   await runTests
-    .getByText(
-      '"Nightly" is still running. Wait for it to finish or cancel it.',
-    )
+    .getByText('“Nightly” is still running on this harness.', { exact: false })
     .waitFor()
   assert.equal(await runTests.getByText(/handler error/).count(), 0)
   assert.ok(
     (
       await runTests
-        .getByRole('link', { name: 'open Nightly', exact: true })
+        .getByRole('link', { name: 'Open', exact: true })
         .getAttribute('href')
     ).includes(nightly),
   )
@@ -517,10 +520,22 @@ try {
   })
   // No plan, no role: just an execution.
   await page.getByText('Execution · running', { exact: true }).waitFor()
-  // Cancel stops it: no next scenario is admitted.
-  const cancel = page.getByRole('button', { name: 'cancel execution' })
-  await cancel.click()
-  await cancel.waitFor({ state: 'detached' })
+  // Cancel asks first, says what stops, then stops it: no next scenario.
+  await page
+    .locator('[data-where-line]')
+    .getByText('Running · on this harness', { exact: false })
+    .waitFor()
+  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  const confirmCancel = page.getByRole('dialog', {
+    name: 'Cancel this execution?',
+  })
+  await confirmCancel
+    .getByText('The test running now stops. What already reported stays.')
+    .waitFor()
+  await confirmCancel
+    .getByRole('button', { name: 'Cancel execution', exact: true })
+    .click()
+  await confirmCancel.waitFor({ state: 'hidden' })
   assert.deepEqual(cancelled, [`plan-${'1'.padStart(32, 'f')}`])
   await page.getByText('Execution · running').waitFor({ state: 'detached' })
 
@@ -539,36 +554,49 @@ try {
   await band.getByText('default', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
-  await again.getByText('catalog unavailable: harness restarting').waitFor()
+  await again
+    .getByRole('status')
+    .filter({ hasText: 'Catalog unavailable' })
+    .waitFor()
   assert.equal(
-    await again.locator('#quick-execution-label').inputValue(),
+    await again.locator('#run-dialog-label').inputValue(),
     'Software engineering',
   )
   // Its suite, as recorded, even though this runner does not list it.
   assert.equal(
-    await again.locator('#quick-execution-suite').inputValue(),
+    await again.locator('#run-dialog-suite').getAttribute('data-value'),
     'recorded:software-engineering-2025',
   )
   await again
-    .getByRole('option', { name: 'Software engineering 2025 · as recorded' })
-    .waitFor({ state: 'attached' })
+    .locator('#run-dialog-suite')
+    .getByText('Software engineering 2025 · as recorded')
+    .waitFor()
+  assert.equal(await again.locator('#run-dialog-runs-value').innerText(), '2')
+  assert.equal(
+    await again.locator('#run-dialog-technicalRetries-value').innerText(),
+    '0',
+  )
+  assert.equal(
+    await again.locator('#run-dialog-agent').inputValue(),
+    'tech-lead',
+  )
+  // The catalog has to load before running: Run waits for it, then sends the
+  // execution's parameters unchanged.
+  const runAgain = again.getByRole('button', {
+    name: 'Run 2 tests',
+    exact: true,
+  })
+  assert.ok(await runAgain.isDisabled())
+  catalogDown = false
+  await again.getByRole('button', { name: 'Refresh catalog' }).click()
+  await again.getByText('catalog ready').waitFor()
   for (const scenario of ['minimal_path', 'retired_scenario'])
     assert.ok(
       await again
         .getByRole('checkbox', { name: scenario, exact: true })
         .isChecked(),
     )
-  await again.getByText('Advanced · sampling and retries').click()
-  assert.equal(await again.locator('#quick-execution-runs').inputValue(), '2')
-  assert.equal(
-    await again.locator('#quick-execution-retries').inputValue(),
-    '0',
-  )
-  assert.equal(
-    await again.locator('#quick-execution-agent').inputValue(),
-    'tech-lead',
-  )
-  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await runAgain.click()
   await page.waitForFunction(() => !location.hash.includes('0123456789abcdef'))
   // Its parameters unchanged, under its suite; the runner records the digest.
   assert.deepEqual(started[1], {
@@ -589,7 +617,7 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
-  await again.getByText('2 of 6 shown', { exact: false }).waitFor()
+  await again.getByText('2 of 6', { exact: true }).waitFor()
   assert.equal(
     await again.getByRole('checkbox', { name: 'trend_blog' }).count(),
     0,
@@ -604,18 +632,18 @@ try {
     .first()
     .click()
   await runTests.getByText('catalog ready').waitFor()
-  assert.equal(await runTests.locator('#quick-execution-stack').count(), 0)
-  await runTests.locator('#quick-execution-where').selectOption('docker')
+  assert.equal(await runTests.locator('#run-dialog-stack').count(), 0)
+  await runTests.getByRole('radio', { name: 'Docker' }).click()
   assert.equal(
-    await runTests.locator('#quick-execution-stack').inputValue(),
+    await runTests.locator('#run-dialog-stack').getAttribute('data-value'),
     'default',
   )
-  await runTests
-    .getByRole('option', { name: 'Pinned harness' })
-    .waitFor({ state: 'attached' })
+  await runTests.locator('#run-dialog-stack').click()
+  await runTests.getByRole('option', { name: /^Pinned harness/ }).waitFor()
+  await page.keyboard.press('Escape')
   await box('minimal_path').click()
   await runTests
-    .getByRole('button', { name: 'run 1 test', exact: true })
+    .getByRole('button', { name: 'Run 1 test in Docker', exact: true })
     .click()
   await page.waitForFunction(() => /\/execution\/plan-f+3$/.test(location.hash))
   assert.equal(started[2].parameters.where, 'docker')
@@ -629,7 +657,11 @@ try {
     `${server.url}#/ext/harness-e2e/execution/${dockerRunning.id}`,
   )
   const groups = page.locator('[data-docker-groups]')
-  await groups.getByText('Running the groups…').waitFor()
+  await groups.locator('[data-docker-group]').first().waitFor()
+  await page
+    .locator('[data-step-state="current"]')
+    .getByText('Groups', { exact: true })
+    .waitFor()
   await groups
     .locator('[data-docker-group="case-persistent-state"] [data-group-state]')
     .getByText('running', { exact: true })
@@ -643,20 +675,25 @@ try {
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
   assert.equal(
-    await again.locator('#quick-execution-where').inputValue(),
-    'docker',
+    await again
+      .getByRole('radio', { name: 'Docker' })
+      .getAttribute('aria-checked'),
+    'true',
   )
   assert.equal(
-    await again.locator('#quick-execution-stack').inputValue(),
+    await again.locator('#run-dialog-stack').getAttribute('data-value'),
     'recorded',
   )
   await again
-    .getByRole('option', { name: 'default · as recorded' })
-    .waitFor({ state: 'attached' })
-  await again
-    .getByText('As this execution recorded it · feedfacefeed')
+    .locator('#run-dialog-stack')
+    .getByText('default · as recorded')
     .waitFor()
-  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await again
+    .getByText('As this execution recorded it · feedfacefeed', { exact: false })
+    .waitFor()
+  await again
+    .getByRole('button', { name: 'Run 2 tests in Docker', exact: true })
+    .click()
   await page.waitForFunction(() => !location.hash.includes('44444444'))
   assert.deepEqual(started[3].parameters.stack, {
     name: 'default',

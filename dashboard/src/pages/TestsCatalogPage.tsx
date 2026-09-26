@@ -716,11 +716,18 @@ export function TestsCatalogPage() {
       <DashboardPageActions
         active="tests"
         actionsLabel="Test catalog actions"
-        actions={<TestsCatalogActions />}
+        actions={[
+          {
+            id: 'compare',
+            label: 'Compare system versions',
+            href: hashForVersionComparison(),
+          },
+        ]}
       />
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="tests"
+          variant="list"
+          title="Tests"
           summary={loading ? 'loading the catalog…' : countLabels.summary}
           headingId="tests-catalog-title"
           actions={

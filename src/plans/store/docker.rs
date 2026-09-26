@@ -1206,7 +1206,7 @@ fn docker_phase(execution: &PlanExecution) -> &str {
 /// What `prepare` sends as `DISPATCH_SUITE`: a suite of the master plan by
 /// its id when it runs as reviewed, so its digest is the workflow's for that
 /// suite; any other suite whole, as JSON, with every scenario given.
-fn dispatch_suite(parameters: &ExecutionParameters, master: &MasterPlan) -> Result<String> {
+pub(super) fn dispatch_suite(parameters: &ExecutionParameters, master: &MasterPlan) -> Result<String> {
     let suite = parameters.suite.as_ref();
     let scenarios = &parameters.scenarios;
     if let Some(id) = suite.and_then(|suite| suite.id.as_ref()) {

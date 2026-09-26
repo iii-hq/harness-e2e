@@ -280,7 +280,8 @@ export function StacksPage() {
       <DashboardPageActions active="stacks" />
       <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
-          title="stacks"
+          variant="list"
+          title="Stacks"
           summary="Where a suite runs: an iii Compose project, the iii release and an optional template. The repository's stacks are read-only; copy one to edit it here."
         />
         {error ? (

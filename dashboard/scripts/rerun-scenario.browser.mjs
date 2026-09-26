@@ -298,7 +298,9 @@ try {
     name: 'Run timer_wake again',
     exact: true,
   })
-  await dialog.getByText('The last attempt counts', { exact: false }).waitFor()
+  await dialog
+    .getByText('The last attempt counts, even when', { exact: false })
+    .waitFor()
   const confirm = dialog.getByRole('button', { name: 'run again', exact: true })
   await confirm.click()
   await dialog
@@ -360,7 +362,8 @@ try {
   )
   await page.getByText('previous attempts · not counted').waitFor()
 
-  // An imported execution runs again on GitHub, never here.
+  // An imported execution runs again on GitHub: its group's job re-runs
+  // there and the Console imports the run again when it ends.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${importedId}`)
   await page
     .getByRole('button', { name: 'Run Timer Wake again', exact: true })
@@ -369,23 +372,22 @@ try {
     name: 'Run timer_wake again on GitHub',
     exact: true,
   })
-  await github.getByText('import the run again', { exact: false }).waitFor()
+  await github
+    .getByText('Re-runs its group’s job on GitHub', { exact: false })
+    .waitFor()
   assert.equal(
     await github
-      .getByRole('link', { name: 'open GitHub run #42' })
+      .getByRole('link', { name: /GitHub · run #42/ })
       .getAttribute('href'),
     importedSource.url,
   )
-  assert.equal(
-    await github
-      .getByRole('button', { name: 'run again', exact: true })
-      .count(),
-    0,
-  )
-  assert.equal(reruns.length, 1)
+  await github.getByRole('button', { name: 'run again', exact: true }).click()
+  await github.waitFor({ state: 'hidden' })
+  assert.equal(reruns.length, 2)
+  assert.equal(reruns[1].execution_id, importedId)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, imported execution sent to GitHub.',
+    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, the job of an imported execution re-run on GitHub.',
   )
 } finally {
   await browser.close()

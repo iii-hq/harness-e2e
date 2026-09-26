@@ -270,16 +270,16 @@ try {
   await page.getByRole('button', { name: 'rerun selected (3)' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.waitFor()
-  await again.getByText('Advanced · sampling and retries').click()
-  assert.equal(await again.locator('#quick-execution-runs').inputValue(), '3')
+  await again.getByText('catalog ready').waitFor()
+  assert.equal(await again.locator('#run-dialog-runs-value').innerText(), '3')
   assert.equal(
-    await again.locator('#quick-execution-retries').inputValue(),
+    await again.locator('#run-dialog-technicalRetries-value').innerText(),
     '2',
   )
   // No seed: the Console always runs the canonical case.
-  assert.equal(await again.locator('#quick-execution-seed').count(), 0)
+  assert.doesNotMatch(await again.textContent(), /seed/i)
   assert.equal(
-    await again.locator('#quick-execution-agent').inputValue(),
+    await again.locator('#run-dialog-agent').inputValue(),
     'tech-lead',
   )
   // It opens on what will run: the ticked tests and their group, only those.
@@ -295,12 +295,8 @@ try {
       .count(),
     0,
   )
-  await again
-    .getByText(
-      'registry_implementation then registry_verification run only together, in this order.',
-    )
-    .waitFor()
-  await again.getByRole('button', { name: 'run 4 tests', exact: true }).click()
+  await again.getByText('2 of 2 · in order', { exact: true }).waitFor()
+  await again.getByRole('button', { name: 'Run 4 tests', exact: true }).click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-c'))
   assert.deepEqual(started, [
     {

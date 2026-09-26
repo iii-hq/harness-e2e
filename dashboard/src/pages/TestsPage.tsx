@@ -12,7 +12,6 @@ import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
 } from '@/components/DashboardPageActions'
-import { requestQuickExecution } from '@/components/ExecutionSetup'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -44,6 +43,7 @@ import {
 } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
 import { providerModel } from '@/lib/execution-view'
+import { requestQuickExecution } from '@/lib/quick-execution'
 import type {
   CohortDescriptor,
   EvaluatedVersion,
@@ -1330,51 +1330,43 @@ export function TestsPage({
 
   return (
     <>
-      <DashboardPageActions
-        active="tests"
-        context="Compare"
-        actionsLabel="Comparison actions"
-        actions={
-          <>
-            <button
-              className={dashboardHeaderActionClassName()}
-              type="button"
-              onClick={shareLink}
-              disabled={!fromVersionId || !toVersionId}
-            >
-              <Link2 size={13} aria-hidden="true" />
-              {copied ? 'Link copied' : 'Share link'}
-            </button>
-            <a
-              className={dashboardHeaderActionClassName({ primary: true })}
-              href={hashForWorkspace()}
-              onClick={() => requestQuickExecution()}
-            >
-              New run on B
-            </a>
-          </>
-        }
-      />
+      <DashboardPageActions active="tests" context="Compare" />
 
       <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
         <PageHeader
+          variant="detail"
+          back={{ label: 'Back to Tests', href: hashForTests() }}
           title="Compare system versions"
           summary={headline}
           context="Retained cohorts · per-test mean score and run medians"
           headingId="compare-title"
-          breadcrumb={[
-            { label: 'tests', href: hashForTests() },
-            { label: 'compare' },
-          ]}
           actions={
-            evaluated?.revision ? (
-              <span
-                className="font-mono text-label text-ink-muted"
-                title={evaluated.revision}
+            <>
+              <button
+                className={dashboardHeaderActionClassName()}
+                type="button"
+                onClick={shareLink}
+                disabled={!fromVersionId || !toVersionId}
               >
-                catalog {evaluated.revision.slice(-12)}
-              </span>
-            ) : null
+                <Link2 size={13} aria-hidden="true" />
+                {copied ? 'Link copied' : 'Share link'}
+              </button>
+              <a
+                className={dashboardHeaderActionClassName({ primary: true })}
+                href={hashForWorkspace()}
+                onClick={() => requestQuickExecution()}
+              >
+                New run on B
+              </a>
+              {evaluated?.revision ? (
+                <span
+                  className="font-mono text-label text-ink-muted"
+                  title={evaluated.revision}
+                >
+                  catalog {evaluated.revision.slice(-12)}
+                </span>
+              ) : null}
+            </>
           }
         />
 
