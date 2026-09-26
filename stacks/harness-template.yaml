@@ -4,7 +4,7 @@
 # harness project ships, among them the ade-worker-builder agent profile.
 # Keep the containers in step with default.yaml.
 
-iii: latest
+iii: 0.24.2-rc.2   # pinned: 0.24.3-rc.1 breaks frozen compose::up (container config not applied); back to latest once fixed
 template: harness
 
 containers:

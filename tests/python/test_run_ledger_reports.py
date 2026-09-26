@@ -299,7 +299,7 @@ class DispatchTests(unittest.TestCase):
             "execution_id": None, "suite": "pr", "stack": "default",
             "model": "zai/glm-5.1", "profile": "tech-lead",
         })
-        self.assertEqual(dispatch["stack"]["iii"], "latest")
+        self.assertEqual(dispatch["stack"]["iii"], prepare_execution.load_stack("default")[1]["iii"])
         self.assertEqual(dispatch["stack"]["containers"]["harness"]["worker"], "package://harness")
         # The plan shape older Console imports and the ledger reports read.
         self.assertEqual(dispatch["plan"], {

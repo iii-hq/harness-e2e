@@ -270,7 +270,7 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(execution["suite"], "regression")
         self.assertEqual(execution["stack"], "default")
         self.assertEqual(execution["execution_id"], "b0607faa-096a-4efe-a4a2-a2a9bc06de83")
-        self.assertEqual(stack["iii"], "latest")
+        self.assertEqual(stack["iii"], yaml.safe_load((ROOT / "stacks/default.yaml").read_text())["iii"])
 
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
