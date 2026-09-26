@@ -284,7 +284,7 @@ try {
   for (const scenario of ['minimal_path', 'timer_wake', ...group])
     assert.ok(
       await again
-        .getByRole('checkbox', { name: scenario, exact: true })
+        .getByRole('checkbox', { name: new RegExp(`^${scenario}(\\s|$)`) })
         .isChecked(),
     )
   assert.equal(

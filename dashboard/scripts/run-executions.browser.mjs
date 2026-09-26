@@ -595,7 +595,9 @@ try {
         .getAttribute('href')
     ).includes(nightly),
   )
-  const box = (name) => runTests.getByRole('checkbox', { name, exact: true })
+  // A test in a sequence also says where it runs in it ("2 of 2 · in order").
+  const box = (name) =>
+    runTests.getByRole('checkbox', { name: new RegExp(`^${name}(\\s|$)`) })
   await box('registry_verification').click()
   assert.ok(await box('registry_implementation').isChecked())
   await runTests
@@ -699,7 +701,7 @@ try {
   for (const scenario of ['minimal_path', 'retired_scenario'])
     assert.ok(
       await again
-        .getByRole('checkbox', { name: scenario, exact: true })
+        .getByRole('checkbox', { name: new RegExp(`^${scenario}(\\s|$)`) })
         .isChecked(),
     )
   const output = (name) =>
