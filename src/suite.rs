@@ -73,7 +73,14 @@ pub(crate) fn e2e_function_policy(
     spec: &ScenarioSpec,
     allowed: Option<Vec<String>>,
 ) -> FunctionPolicy {
-    let mut deny = vec!["e2e::*".to_string()];
+    // The verification plane, and the providers' logins: the credential
+    // vault (`auth::*`) and each provider's own sign-in, status and logout
+    // (`provider::<id>::auth::*`).
+    let mut deny = vec![
+        "e2e::*".to_string(),
+        "auth::*".to_string(),
+        "provider::*::auth::*".to_string(),
+    ];
     deny.extend(
         spec.denied_functions
             .iter()
@@ -4483,7 +4490,7 @@ mod tests {
     fn e2e_policy_denies_the_control_plane_without_scenario_overrides() {
         let policy = e2e_function_policy(&spec(), None);
         assert_eq!(policy.allow, ["*"]);
-        assert_eq!(policy.deny, ["e2e::*"]);
+        assert_eq!(policy.deny, ["auth::*", "e2e::*", "provider::*::auth::*"]);
         assert_eq!(policy.expose, Default::default());
     }
 
@@ -4494,7 +4501,10 @@ mod tests {
         let policy = e2e_function_policy(&scenario, None);
 
         assert_eq!(policy.allow, ["*"]);
-        assert_eq!(policy.deny, ["e2e::*", "state::*"]);
+        assert_eq!(
+            policy.deny,
+            ["auth::*", "e2e::*", "provider::*::auth::*", "state::*"]
+        );
     }
 
     #[test]

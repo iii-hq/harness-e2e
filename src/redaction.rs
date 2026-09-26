@@ -319,6 +319,8 @@ fn first_shape_finding(text: &str) -> Option<(usize, usize, &'static str)> {
         ("xoxp-", 20, "slack_token"),
         ("sk-", 20, "api_token"),
         ("AKIA", 16, "aws_access_key"),
+        // A JWT: base64url of `{"`, as OAuth access tokens are.
+        ("eyJ", 40, "jwt"),
     ];
     shapes
         .into_iter()
@@ -365,6 +367,17 @@ mod tests {
         assert!(!rendered.contains("github_pat_"));
         assert!(!rendered.contains("abcdefghijklmnop"));
         policy.assert_clean(rendered.as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn redacts_a_jwt_whole_and_leaves_short_lookalikes() {
+        let policy = RedactionPolicy::default();
+        let token = "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjE5MDAwMDAwMDB9.c2lnbmF0dXJlLWJ5dGVz";
+        let (text, report) = policy.redact_text(&format!("token={token} ok"));
+        assert_eq!(text, "token=[REDACTED] ok");
+        assert!(report.rules.contains("jwt"));
+        assert!(policy.assert_clean(token.as_bytes()).is_err());
+        assert_eq!(policy.redact_text("eyJhbGciOi").0, "eyJhbGciOi");
     }
 
     #[test]
@@ -421,10 +434,16 @@ mod tests {
             ("DEEPSEEK_API_KEY", "sk-deepseek-0123456789"),
             ("GITHUB_TOKEN", "ghs_0123456789"),
             ("NOT_NAMED", "never-0123456789"),
+            // A subscription login's access token, named by the catalog.
+            ("CLAUDE_CODE_ACCESS_TOKEN", "sk-ant-oat01-0123456789"),
         ]);
         assert_eq!(
             credentials_from(|name| environment.get(name).map(|value| (*value).to_owned())),
             [
+                (
+                    "CLAUDE_CODE_ACCESS_TOKEN".to_owned(),
+                    "sk-ant-oat01-0123456789".to_owned()
+                ),
                 (
                     "DEEPSEEK_API_KEY".to_owned(),
                     "sk-deepseek-0123456789".to_owned()

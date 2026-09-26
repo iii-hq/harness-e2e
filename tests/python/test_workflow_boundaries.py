@@ -202,6 +202,12 @@ class WorkflowBoundaryTests(unittest.TestCase):
         credentials = '"$RUNNER_TEMP/provider-credentials.env"'
         catalog = json.loads((ROOT / "config/provider-credentials.json").read_text())
         secrets = sorted(set(catalog["providers"].values()) | set(catalog["others"]))
+        # A subscription login's access token reaches a group alone, never
+        # the stack's assembly, and never as a refresh token.
+        subscriptions = sorted(name for names in catalog["subscriptions"].values() for name in names)
+        self.assertNotIn("REFRESH_TOKEN", workflow)
+        for name in subscriptions:
+            self.assertEqual(workflow.count(f"secrets.{name} "), 1)
         # Never every secret: toJSON(secrets) holds the run for approval
         # (action_required, no job starts) and hands a step all the others.
         self.assertNotIn("toJSON(secrets)", workflow)
@@ -217,7 +223,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 write = names.index("Write the provider credentials")
                 self.assertLess(write, names.index(phase))
                 self.assertLess(names.index(phase), names.index(package))
-                self.assertEqual(steps[write]["env"], {name: "${{ secrets." + name + " }}" for name in secrets})
+                named = secrets + (subscriptions if job == "groups" else [])
+                self.assertEqual(steps[write]["env"], {name: "${{ secrets." + name + " }}" for name in named})
                 self.assertEqual(
                     steps[write]["run"],
                     "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)

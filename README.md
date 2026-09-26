@@ -568,6 +568,54 @@ The phases get none of the worker's environment but where Docker and
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
 for the private Registry and trending topics sources.
 
+#### Subscription providers
+
+`openai-codex` and `claude-code` sign in with this machine's CLI login, not an
+API key: `${CODEX_HOME:-~/.codex}/auth.json` (`codex login`) and
+`${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json` (`claude`). A group gets
+the login's access token and nothing else: no refresh or id token ever enters
+a container or GitHub. Before each group starts, the worker reads the login;
+when its access token would expire before the group's deadline (10800 s and
+15 minutes), it refreshes the login first and writes the rotated tokens back
+into that file (atomically, mode 600, every other field kept), so the CLI
+goes on working with them. Refresh tokens rotate on every use and only one
+holder may refresh: the worker's groups take turns, and two workers on one
+machine take `<login>.harness-e2e.lock`; the CLI does not, so one refreshing
+at the same moment can cost one side its rotation (the worker retries once
+with the token the CLI wrote). A Codex access token lasts 10 days, so it is
+rarely refreshed; Claude's lasts hours. A login that is signed out or refused
+is a warning on the execution ("provider-claude-code starts without
+credentials: the Claude login on this machine expired; run `claude`"), and
+the group runs without it.
+
+The group gets `CODEX_ACCESS_TOKEN` and `CODEX_ACCOUNT_ID`, or
+`CLAUDE_CODE_ACCESS_TOKEN` and `CLAUDE_CODE_EXPIRES_AT` (epoch milliseconds),
+with the provider credentials above: in the same file of
+`data_dir/.phase-credentials/`, handed to the group and to the packaging that
+checks its evidence, removed when each ends; `prepare assemble` gets no token.
+[`config/provider-credentials.json`](config/provider-credentials.json) names
+them under `subscriptions`: never set on the Stacks page, but redacted like
+any other credential, by the runner and again by packaging. The launcher
+writes the login the provider reads from them, into the group's runtime tree
+and not its evidence, and points only the provider at it (`CODEX_HOME`,
+`CLAUDE_CONFIG_DIR`); `stack/credentials.json` says where the token came from
+and when it expires, without it. A token already expired fails the group in
+its `credentials` phase. The subject is denied the credential vault
+(`auth::*`) and each provider's own sign-in, status and logout
+(`provider::*::auth::*`), and the audit flags a call to either. It can still
+read the access token (from its workers' environment or the login file), as
+it can an API key; the runner redacts it by value from what it records, and
+any JWT by its shape. As the [Executor image](#executor-image) section says,
+a subject is also root-equivalent on this host, where the login itself is.
+
+On GitHub the group job's credentials step also reads the optional secrets
+`CODEX_ACCESS_TOKEN` (and `CODEX_ACCOUNT_ID`) and `CLAUDE_CODE_ACCESS_TOKEN`
+(and `CLAUDE_CODE_EXPIRES_AT`) of the `harness-e2e-trusted` environment into
+its file; the preparation's does not. Without one, the provider starts signed
+out. Paste the access token from the login file, never the refresh token. A
+Codex token pasted there lasts 10 days; Claude's lasts hours, which makes it
+impractical on GitHub.
+
 ## Worker
 
 Release Control names the exact project roots. This repository writes only the
