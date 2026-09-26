@@ -275,7 +275,7 @@ class KanbanRunnerTest(unittest.TestCase):
     def test_private_control_rejects_unknown_operations_and_processes_each_id_once(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = Path(directory)
-            poll = runner.control_callback(evidence, 'candidate', 'evaluator', [mock.Mock(), 0])
+            poll = runner.control_callback(evidence, 'candidate', 'evaluator', [mock.Mock(), 0], 'default')
             runner.atomic_json(evidence / 'control-request.json',
                                {'id': 'unknown', 'operation': 'shell', 'payload': {'command': 'id'}})
             poll()
@@ -351,7 +351,7 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
                     mock.patch.object(runner, 'bounded', side_effect=logs), \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
-                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
+                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], 'default')
             self.assertEqual(result, {'observed': True, 'source_restored': True})
             self.assertEqual(len(calls), 2)
             self.assertTrue(any('shutil.rmtree' in part for part in calls[1]))
@@ -366,7 +366,7 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner, 'bounded', side_effect=empty_logs), \
                     mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]), \
                     mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
-                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
+                result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], 'default')
             self.assertEqual(result, {'observed': False, 'source_restored': True})
 
             with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
@@ -374,7 +374,56 @@ class KanbanRunnerTest(unittest.TestCase):
                     mock.patch.object(runner, 'bounded', return_value=1), \
                     mock.patch.object(runner.time, 'monotonic', side_effect=[0, 1, 56]):
                 with self.assertRaisesRegex(runner.InfrastructureError, 'logs were unavailable'):
-                    runner.hot_reload('candidate', 'evaluator', evidence, [process, 0])
+                    runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], 'default')
+
+    def test_compose_namespace_resolves_like_compose(self):
+        for text, expected in [
+            ('containers:\n  kanban:\n    worker: path://./kanban\n', 'default'),
+            ('namespace: kanban\ncontainers: {}\n', 'kanban'),
+            ('# comment\nnamespace: "kanban-1"  # chosen by the subject\n', 'kanban-1'),
+            ("'namespace': 'shop_2'\n", 'shop_2'),
+            ('namespace: ""\n', 'default'),
+            ('namespace:\ncontainers: {}\n', 'default'),
+            ('namespace: ~\n', 'default'),
+            ('namespace: # none\n', 'default'),
+            ('containers:\n  kanban:\n    namespace: nested\n', 'default'),
+        ]:
+            with self.subTest(text=text):
+                self.assertEqual(runner.compose_namespace(text), expected)
+        with self.assertRaisesRegex(runner.EvaluationError, 'Compose namespace'):
+            runner.compose_namespace('namespace: Kanban\n')
+
+    def test_hot_reload_reads_compose_logs_in_the_project_namespace(self):
+        # The engine resolves compose::logs only in the namespace Compose registered
+        # it in, which is the compose file's `namespace:` (run 36122990798).
+        for compose_file, namespace in (('namespace: kanban\ncontainers: {}\n', 'kanban'),
+                                        ('containers: {}\n', 'default')):
+            with self.subTest(namespace=namespace), tempfile.TemporaryDirectory() as directory:
+                evidence = Path(directory)
+                marker = 'KANBAN_HOT_RELOAD_' + ('01' * 16)
+
+                def docker(command, **_kwargs):
+                    if '/workspace/worker-compose.yaml' in command:
+                        return subprocess.CompletedProcess(command, 0, stdout=compose_file.encode(), stderr=b'')
+                    if marker in command:
+                        return subprocess.CompletedProcess(command, 0, stdout=b'{"count":1}', stderr=b'')
+                    return subprocess.CompletedProcess(command, 0, stdout=b'', stderr=b'')
+
+                def engine(command, path, *_args, **_kwargs):
+                    registered = command[command.index('--namespace') + 1] == namespace
+                    path.write_text(marker if registered else 'function_not_found')
+                    return 0 if registered else 1
+
+                process = mock.Mock()
+                process.poll.return_value = None
+                with mock.patch.object(runner.os, 'urandom', return_value=b'\x01' * 16), \
+                        mock.patch.object(runner.subprocess, 'run', side_effect=docker), \
+                        mock.patch.object(runner, 'bounded', side_effect=engine), \
+                        mock.patch.object(runner, 'wait_runtime_ready', return_value=True):
+                    resolved = runner.project_namespace('candidate')
+                    result = runner.hot_reload('candidate', 'evaluator', evidence, [process, 0], resolved)
+                self.assertEqual(resolved, namespace)
+                self.assertEqual(result, {'observed': True, 'source_restored': True})
 
     def test_hot_reload_instruments_non_index_sources_and_excludes_generated_or_linked_trees(self):
         with tempfile.TemporaryDirectory() as directory:

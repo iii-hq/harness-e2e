@@ -24,7 +24,9 @@ const RUBRIC = JSON.parse(await readFile(new URL('./rubric.json', import.meta.ur
 // check, so on a loaded runner its waits need more than the 8s the rest use.
 const STORE_SWITCH_TIMEOUT_MS = 20_000
 
-const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
+const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> [--namespace <ns>] --output <directory>
+
+  --namespace          Namespace the subject's Compose project registers in (default: default)
 
 Environment:
   III_SDK_MODULE       Absolute path to the trusted iii-sdk module
@@ -218,9 +220,11 @@ async function main() {
         ...init,
         signal: AbortSignal.timeout(5_000),
       }),
+      // compose::* and the subject's functions live in its Compose project
+      // namespace; configuration::* is the engine's own, always in default.
       trigger: (functionId, payload = {}) => iii.trigger({
         function_id: functionId,
-        namespace: 'default',
+        namespace: functionId.startsWith('configuration::') ? 'default' : args.namespace ?? 'default',
         payload,
         timeoutMs: 5_000,
       }),
