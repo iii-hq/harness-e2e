@@ -5,6 +5,7 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
+  Input as HostInput,
   SegmentedControl,
   Table,
   TableBody,
@@ -977,12 +978,14 @@ function RenameDialog({
           An empty name gives it back its default one.
         </DialogDescription>
         <form className="ex-rename" onSubmit={(event) => void submit(event)}>
-          <Input
+          {/* The host's field: it renders in the dialog's portal, outside
+              the shell where the extension's field gets its size. */}
+          <HostInput
             aria-label="Execution name"
             maxLength={80}
             placeholder={row?.title}
             value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={setDraft}
           />
           {error ? (
             <p className="ex-error" role="alert">
