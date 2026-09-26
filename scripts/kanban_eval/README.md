@@ -125,6 +125,11 @@ lock is recorded as generated output; changes to an existing lock or a lock with
 dependencies are still rejected. Git tree IDs compare source contents and modes,
 including binary files. Build output and data remain excluded from source capture.
 
+The subject chooses its Compose namespace. The controller resolves it from
+`worker-compose.yaml` the way Compose does (top-level `namespace:`, else
+`default`) and uses it for `compose::*` and the subject's functions;
+`configuration::*` belongs to the engine and is always called in `default`.
+
 The evaluator records `source-integrity.json` with both tree IDs, changed paths,
 generated paths and whether the delivered diff was empty. It preserves
 `subject.diff` and `evaluated.diff`. If evaluation is invalidated after functional
