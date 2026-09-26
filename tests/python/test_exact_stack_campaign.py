@@ -398,6 +398,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "directory": {"worker": "package://api.workers.iii.dev/iii-directory", "version": "0.3.1"},
             "state": {"worker": "package://state", "version": "0.22.8", "env_file": ["/prepare/.env"]},
             "llm-router": {"worker": "package://llm-router"},
+            "db": {"worker": "package://api.workers.iii.dev/database", "version": "0.5.20"},
         }}
         contract = campaign_contract()
         contract["runtime"].update(compose=assembled, lock=lock_of({"harness": "1.9.3", "state": "0.22.8"}))
@@ -429,7 +430,25 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr", "III_TELEMETRY_ENABLED": "false"})
         self.assertEqual(project["containers"]["directory"]["config_override"]["agents_folder"],
                          str(root / "project/agents"))
+        # iii 0.24.3+ serves the package's empty default as the live value:
+        # the runner's `primary` database is declared, not left to the worker.
+        self.assertEqual(project["containers"]["db"]["config_override"],
+                         {"databases": {"primary": {"url": "sqlite:./data/iii.db"}}})
         self.assertEqual({tuple(c["env_file"]) for c in project["containers"].values()}, {(str(root / ".env"),)})
+
+    def test_a_template_database_keeps_its_databases_and_gains_primary(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "database": {"worker": "package://database", "config_override": {
+                "databases": {"app": {"url": "sqlite:./app.db"}, "primary": {"url": "sqlite:./mine.db"}},
+            }},
+            "other-db": {"worker": "package://database"},
+        }}
+        project = MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template)
+        self.assertEqual(project["containers"]["database"]["config_override"]["databases"],
+                         {"app": {"url": "sqlite:./app.db"}, "primary": {"url": "sqlite:./mine.db"}})
+        self.assertEqual(project["containers"]["other-db"]["config_override"]["databases"],
+                         {"primary": {"url": "sqlite:./data/iii.db"}})
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()

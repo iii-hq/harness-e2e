@@ -479,8 +479,10 @@ daemon, then runs `compose::add`, `compose::up`, `compose::status`, and
 `compose::down`. Each execution uses one isolated namespace for Compose and
 for the project functions it starts.
 
-Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and
-`III_CONFIG`. All four are mandatory. The configuration holds the
+Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and the
+configuration: `III_CONFIG`, a file, before iii 0.24.3; `III_CONFIG_NAME`, the
+configuration-service entry read with `configuration::get`, from 0.24.3 on.
+The first three and one of those two are mandatory. The configuration holds the
 execution-specific evidence directory and the separate control-plane database
 namespace. Start `worker-compose.control.yaml` before `worker-compose.yaml`.
 The control file provisions the single-connection `harness_e2e` SQLite pool
