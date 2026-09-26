@@ -442,7 +442,7 @@ const FORM_ID = 'run-tests-form'
 const WHERE_HINTS: Record<RunnerForm['where'], string> = {
   harness: 'On the stack this Console runs on, one execution at a time.',
   docker:
-    'In the executor image, one container per group, 2 groups at a time. Its page follows the groups; the results arrive once every group has finished.',
+    'In the executor image, one container per group, as many at a time as the worker allows. Its page follows the groups; the results arrive once every group has finished.',
 }
 
 /** The skeleton's line widths, as the canvas draws them. */
@@ -777,7 +777,6 @@ function TestPicker({
                   <Checkbox
                     key={id}
                     className="flex min-h-11 w-full gap-2.5 rounded-[6px] px-2.5 hover:bg-(--color-surface-hover) md:min-h-[30px] [&>span:last-child]:flex [&>span:last-child]:min-w-0 [&>span:last-child]:flex-1 [&>span:last-child]:items-center [&>span:last-child]:gap-2.5"
-                    aria-label={id}
                     checked={on}
                     disabled={disabled}
                     onChange={() =>
