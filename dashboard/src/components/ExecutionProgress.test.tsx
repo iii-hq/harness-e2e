@@ -113,4 +113,50 @@ describe('execution progress', () => {
     ])
       expect(html).toContain(text)
   })
+  it('links the GitHub run of an execution started there and lists its jobs', () => {
+    const job = (
+      id: number,
+      name: string,
+      status: string,
+      conclusion = '',
+    ) => ({
+      id,
+      name,
+      status,
+      conclusion,
+      url: `https://github.com/o/r/actions/runs/77/job/${id}`,
+    })
+    const html = renderToStaticMarkup(
+      <ExecutionProgress
+        execution={
+          {
+            state: 'running',
+            slots: [],
+            source: {
+              kind: 'github',
+              repository: 'o/r',
+              run_id: 77,
+              run_attempt: 1,
+              url: 'https://github.com/o/r/actions/runs/77',
+              release_control_execution_id: null,
+              status: 'in_progress',
+              jobs: [
+                job(1, 'pr-r01 · case-minimal-path', 'completed', 'success'),
+                job(2, 'pr-r01 · case-persistent-state', 'in_progress'),
+              ],
+            },
+          } as unknown as PlanExecution
+        }
+      />,
+    )
+    expect(html).toContain('href="https://github.com/o/r/actions/runs/77"')
+    expect(html).toContain('GitHub run #77')
+    expect(html).toContain('Running on GitHub… Checked every minute.')
+    expect(html).toContain('data-github-job="pr-r01 · case-minimal-path"')
+    expect(html).toContain('>success<')
+    expect(html).toContain('>in progress<')
+    expect(html).toContain(
+      'href="https://github.com/o/r/actions/runs/77/job/2"',
+    )
+  })
 })

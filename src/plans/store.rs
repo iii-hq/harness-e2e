@@ -26,10 +26,12 @@ use crate::test_plan::{self, ProfileSnapshot};
 
 mod docker;
 mod github;
+mod github_start;
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
 pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
+use github_start::GithubJob;
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Slot {
@@ -143,7 +145,7 @@ pub(crate) struct ExecutionParameters {
 }
 
 /// Where an execution runs: on this harness, in Docker from this worker, or
-/// on GitHub (imported runs; starting one there is not offered yet).
+/// on GitHub (started from here with `gh`, or imported).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Where {
@@ -231,6 +233,13 @@ pub(crate) enum ExecutionSource {
         /// before contracts stated their execution.
         #[serde(default)]
         stack: Option<String>,
+        /// While this worker follows the run: GitHub's status of it
+        /// (`queued`, `in_progress`, `completed`, …) as last seen.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        /// While this worker follows the run: the jobs of its latest attempt.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        jobs: Vec<GithubJob>,
     },
     /// Run in Docker by this worker, from `docker-executions/<id>/`.
     Docker {
@@ -375,6 +384,7 @@ impl PlanStore {
         root: PathBuf,
         control: Option<ControlPlane>,
         docker: DockerSettings,
+        github_repository: String,
     ) -> Result<Arc<Self>> {
         #[cfg(test)]
         if control.is_none() {
@@ -386,7 +396,10 @@ impl PlanStore {
             root,
             persistence: control.as_ref().map(ControlPlane::persistence),
             runner: control.map(|c| Arc::new(c) as Arc<dyn Runner>),
-            github: github::GithubCli::default(),
+            github: github::GithubCli {
+                repository: github_repository,
+                ..github::GithubCli::default()
+            },
             docker: docker::Docker::new(docker),
             changes: tokio::sync::broadcast::channel(64).0,
             lock: Mutex::new(()),
@@ -531,7 +544,7 @@ impl PlanStore {
     }
     async fn write_execution(&self, execution: &PlanExecution) -> Result<()> {
         self.save_execution(execution).await?;
-        if matches!(execution.source, ExecutionSource::Docker { .. }) {
+        if !matches!(execution.source, ExecutionSource::Local) {
             // No one listening is fine.
             let _ = self.changes.send(execution.id.clone());
         }
@@ -546,7 +559,7 @@ impl PlanStore {
         #[cfg(test)]
         write_json(&self.execution_path(&execution.id)?, execution)
     }
-    /// The ids of Docker executions as they change in the background.
+    /// The ids of Docker and GitHub executions as they change in the background.
     pub(crate) fn changes(&self) -> tokio::sync::broadcast::Receiver<String> {
         self.changes.subscribe()
     }
@@ -793,8 +806,9 @@ impl PlanStore {
                 parameters.stack.is_some(),
                 "Pick the stack the execution runs on in Docker."
             ),
-            Where::Github => anyhow::bail!(
-                "Executions on GitHub are imported here, not started; run it on this harness or in Docker."
+            Where::Github => ensure!(
+                parameters.stack.is_some(),
+                "Pick the stack to run on GitHub."
             ),
         }
         let suite = parameters.suite.as_ref();
@@ -866,8 +880,10 @@ impl PlanStore {
             system_under_test: None,
             rerun: None,
         };
-        if parameters_where(&execution) == Where::Docker {
-            return self.start_docker(execution, &master).await;
+        match parameters_where(&execution) {
+            Where::Docker => return self.start_docker(execution, &master).await,
+            Where::Github => return self.start_github(execution, &master).await,
+            Where::Harness => {}
         }
         let _guard = self.lock.lock().await;
         let runner = self.runner()?;
@@ -893,11 +909,10 @@ impl PlanStore {
         id: &str,
         scenario_id: &str,
     ) -> Result<PlanExecution> {
-        if matches!(
-            self.read_execution(id).await?.source,
-            ExecutionSource::Docker { .. }
-        ) {
-            return self.rerun_docker(id, scenario_id).await;
+        match self.read_execution(id).await?.source {
+            ExecutionSource::Docker { .. } => return self.rerun_docker(id, scenario_id).await,
+            ExecutionSource::Github { .. } => return self.rerun_github(id, scenario_id).await,
+            ExecutionSource::Local => {}
         }
         let runner = self.runner()?;
         // The stack is read before the lock; the checks run again under it.
@@ -1194,6 +1209,12 @@ impl PlanStore {
                 self.docker.cancel(id);
                 return Ok(serde_json::to_value(execution)?);
             }
+            if matches!(execution.source, ExecutionSource::Github { .. }) {
+                drop(_guard);
+                // GitHub stops the run; its follower imports what finished.
+                self.cancel_github(&execution).await?;
+                return Ok(serde_json::to_value(execution)?);
+            }
             for slot in &execution.slots {
                 if matches!(slot.state.as_str(), "admitting" | "running") {
                     if let Some(record) = self.runner()?.record(&slot.execution_id).await {
@@ -1271,6 +1292,11 @@ impl PlanStore {
             let was_active = execution.active();
             if was_active && matches!(execution.source, ExecutionSource::Docker { .. }) {
                 self.restart_docker(execution).await?;
+                continue;
+            }
+            // GitHub kept running it: follow it again.
+            if was_active && matches!(execution.source, ExecutionSource::Github { .. }) {
+                self.spawn_github(&execution.id);
                 continue;
             }
             if !was_active
@@ -1756,11 +1782,6 @@ async fn same_identity(runner: &Arc<dyn Runner>, pinned: &Value) -> Result<()> {
 /// The native runs running a scenario of this execution again replaces,
 /// after every check that needs nothing but the execution.
 fn rerun_runs(execution: &PlanExecution, scenario_id: &str) -> Result<BTreeSet<String>> {
-    if let ExecutionSource::Github { url, .. } = &execution.source {
-        anyhow::bail!(
-            "This execution was imported from GitHub; running a scenario here would mix this stack with the one it ran on. Re-run its job on GitHub ({url}) and import the run again: the import takes the highest attempt."
-        );
-    }
     ensure!(
         !execution.active() && execution.state != "importing",
         "Only a finished execution can run a scenario again."
@@ -2317,7 +2338,7 @@ pub(super) mod tests {
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
         manager_with_gh(root, runner, github::GithubCli::default())
     }
-    fn manager_with_gh(
+    pub(super) fn manager_with_gh(
         root: &Path,
         runner: Arc<FakeRunner>,
         github: github::GithubCli,
@@ -2337,7 +2358,7 @@ pub(super) mod tests {
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
-    fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
+    pub(super) fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
         use std::os::unix::fs::PermissionsExt;
         let program = directory.join("gh");
         fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
@@ -2346,6 +2367,7 @@ pub(super) mod tests {
             program,
             api_timeout: Duration::from_millis(500),
             download_timeout: Duration::from_millis(500),
+            ..github::GithubCli::default()
         }
     }
     pub(super) async fn terminal(manager: &PlanStore, id: &str) -> PlanExecution {
@@ -3038,6 +3060,8 @@ pub(super) mod tests {
                 url: "https://github.com/iii-hq/harness-e2e/actions/runs/42".into(),
                 release_control_execution_id: Some("rc-execution".into()),
                 stack: None,
+                status: None,
+                jobs: Vec::new(),
             },
             stack: Vec::new(),
             warnings: Vec::new(),
@@ -3230,6 +3254,8 @@ pub(super) mod tests {
             url: String::new(),
             release_control_execution_id: None,
             stack: None,
+            status: None,
+            jobs: Vec::new(),
         };
         let slow = manager_with_gh(&data, runner, fake_gh(root.path(), "sleep 5"));
         slow.write_execution(&execution).await.unwrap();
@@ -4222,8 +4248,10 @@ pub(super) mod tests {
             run_id: 42,
             run_attempt: 1,
             url: "https://github.com/o/r/actions/runs/42".into(),
-            release_control_execution_id: None,
+            release_control_execution_id: Some("rc-1".into()),
             stack: None,
+            status: None,
+            jobs: Vec::new(),
         };
         imported.slots = vec![github::slot(1, "case-minimal", "minimal_path")];
         imported.slots[0].execution_id = "0123456789abcdef0123456789abcdef".into();
@@ -4233,7 +4261,8 @@ pub(super) mod tests {
             .await
             .unwrap_err()
             .to_string();
-        assert!(error.contains("imported from GitHub"), "{error}");
+        // Release Control dispatched it and reads its reports.
+        assert!(error.contains("from Release Control"), "{error}");
         assert!(
             error.contains("https://github.com/o/r/actions/runs/42"),
             "{error}"

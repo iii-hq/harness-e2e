@@ -73,7 +73,7 @@ export type ExecutionSuite = {
 }
 
 /** Where an execution runs: on this harness, in Docker from this worker,
- *  or on GitHub (imported runs). */
+ *  or on GitHub (started from here or imported). */
 export type ExecutionWhere = 'harness' | 'docker' | 'github'
 
 /** The stack an execution ran on in Docker or on GitHub: once imported, the
@@ -113,6 +113,18 @@ export type DockerGroup = {
   error?: string | null
 }
 
+/** One job of a GitHub run's latest attempt, as the worker last saw it. */
+export type GithubJob = {
+  id: number
+  /** `<campaign> · <group>` for a group's job. */
+  name: string
+  /** GitHub's: `queued`, `waiting`, `in_progress`, `completed`, … */
+  status: string
+  /** Empty until it completed. */
+  conclusion: string
+  url: string
+}
+
 /** Where an execution came from; data only, every execution reads alike. */
 export type ExecutionSource =
   | { kind: 'local' }
@@ -125,6 +137,10 @@ export type ExecutionSource =
       release_control_execution_id: string | null
       /** The stack its contract names. */
       stack?: string | null
+      /** While the worker follows the run: GitHub's status of it. */
+      status?: string | null
+      /** While the worker follows the run: its latest attempt's jobs. */
+      jobs?: GithubJob[]
     }
   | {
       kind: 'docker'

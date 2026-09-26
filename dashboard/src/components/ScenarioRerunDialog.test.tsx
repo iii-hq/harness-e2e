@@ -51,21 +51,34 @@ describe('run this scenario again', () => {
     expect(render(execution, 'minimal_path')).not.toContain('whole group')
   })
 
-  it('sends an imported execution to its GitHub run instead of running here', () => {
-    const imported = {
-      ...execution,
-      source: {
-        kind: 'github',
-        repository: 'iii-hq/harness-e2e',
-        run_id: 42,
-        run_attempt: 1,
-        url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
-        release_control_execution_id: null,
-      },
-    } as PlanExecution
-    const html = render(imported, 'minimal_path')
-    expect(html).toContain('Run minimal_path again on GitHub')
-    expect(html).toContain('would mix this stack with the one it ran on')
+  const github = {
+    kind: 'github',
+    repository: 'iii-hq/harness-e2e',
+    run_id: 42,
+    run_attempt: 1,
+    url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
+    release_control_execution_id: null,
+  } as const
+
+  it("re-runs a GitHub execution's job on GitHub", () => {
+    const html = render(
+      { ...execution, source: github } as PlanExecution,
+      'minimal_path',
+    )
+    expect(html).toContain('Run minimal_path again')
+    expect(html).toContain('job in run #42, then the finalizer')
+    expect(html).toContain('>run again<')
+  })
+
+  it('sends a run Release Control dispatched back to Release Control', () => {
+    const html = render(
+      {
+        ...execution,
+        source: { ...github, release_control_execution_id: 'rc-1' },
+      } as PlanExecution,
+      'minimal_path',
+    )
+    expect(html).toContain('Run minimal_path again from Release Control')
     expect(html).toContain('import the run again')
     expect(html).toContain(
       'href="https://github.com/iii-hq/harness-e2e/actions/runs/42"',

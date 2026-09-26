@@ -195,7 +195,7 @@ const importedSource = {
   run_id: 42,
   run_attempt: 1,
   url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
-  release_control_execution_id: null,
+  release_control_execution_id: 'rc-1',
 }
 const imported = {
   ...localExecution('before'),
@@ -360,13 +360,13 @@ try {
   )
   await page.getByText('previous attempts · not counted').waitFor()
 
-  // An imported execution runs again on GitHub, never here.
+  // One Release Control dispatched runs again from there, never here.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${importedId}`)
   await page
     .getByRole('button', { name: 'Run Timer Wake again', exact: true })
     .click()
   const github = page.getByRole('dialog', {
-    name: 'Run timer_wake again on GitHub',
+    name: 'Run timer_wake again from Release Control',
     exact: true,
   })
   await github.getByText('import the run again', { exact: false }).waitFor()
@@ -385,7 +385,7 @@ try {
   assert.equal(reruns.length, 1)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, imported execution sent to GitHub.',
+    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, Release Control run sent back to Release Control.',
   )
 } finally {
   await browser.close()

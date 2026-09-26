@@ -392,6 +392,33 @@ that error. Importing a run again replaces the runs of the earlier import; the
 execution keeps its name. Imported and local executions are the same record:
 lists, reports, evidence and renaming treat them alike.
 
+### Run on GitHub
+
+**Run tests** with **Where: GitHub** dispatches `exact-stack-e2e.yml` on
+`github_repository` at `main` with the `gh` the worker's user signed in (as
+the import does): the suite (a master-plan suite run as it is by its id, any
+other whole as JSON), the stack's YAML, `provider/model` and the agent
+profile go on `gh workflow run --json`'s standard input, and no
+`execution_id`, so nothing is reported to Release Control. `gh` prints the run
+it created; the execution is that run's, the one importing it would be, and
+appears at once with its link. A signed-out `gh` or a refused dispatch is the
+error the dialog shows, and nothing is kept.
+
+The worker then looks at the run every minute (`gh run view --json
+status,conclusion,attempt,jobs`): the execution shows its jobs, and until the
+import each slot follows its group's job (`<suite>-rNN · <group>`). When the
+run completes, the worker imports it as **Import** does, with no button.
+Cancel is `gh run cancel`; the finalizer still runs and what finished is
+imported. Running a scenario again is `gh run rerun <run> --job <its group's
+job>`: GitHub re-runs the job and the finalizer as the run's next attempt,
+which the worker waits for, then imports the run again; the last attempt
+counts. A re-run cancelled before it ended imports nothing, so the attempt
+before it still counts. A scenario that ran in several rounds has a job per
+round, and GitHub re-runs one job at a time: re-run those on GitHub and import
+the run again. A run Release Control dispatched reports to it and is re-run
+from Release Control. A worker that restarts follows its running GitHub
+executions again.
+
 ### Run in Docker
 
 **Run tests** with **Where: Docker** runs the execution as the exact-stack

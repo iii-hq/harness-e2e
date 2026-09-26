@@ -24,7 +24,7 @@ use crate::artifact;
 use crate::control::{ExecutionPhase, ExecutionRecord, LaneBudget, RunRequest};
 use crate::report::{E2eManifest, E2eReport};
 
-const WORKFLOW: &str = "exact-stack-e2e.yml";
+pub(super) const WORKFLOW: &str = "exact-stack-e2e.yml";
 const PAGE_SIZE: usize = 20;
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
@@ -60,18 +60,24 @@ pub(crate) struct GithubRunImportRequest {
 #[derive(Debug, Clone)]
 pub(crate) struct GithubCli {
     pub program: PathBuf,
+    /// Where executions start on GitHub: `github_repository` (worker config).
+    pub repository: String,
     /// For `gh api` calls and the small contract artifact.
     pub api_timeout: Duration,
     /// For the run's evidence bundle (hundreds of MB).
     pub download_timeout: Duration,
+    /// How often a run this worker follows is looked at.
+    pub poll_interval: Duration,
 }
 
 impl Default for GithubCli {
     fn default() -> Self {
         Self {
             program: "gh".into(),
+            repository: "iii-hq/harness-e2e".into(),
             api_timeout: Duration::from_secs(60),
             download_timeout: Duration::from_secs(30 * 60),
+            poll_interval: Duration::from_secs(60),
         }
     }
 }
@@ -356,7 +362,11 @@ impl PlanStore {
         let id = import_id(repository, run_id);
         let _guard = self.lock.lock().await;
         let previous = self.read_execution(&id).await.ok();
-        if let Some(previous) = previous.as_ref().filter(|e| e.state == "importing") {
+        // Nor one this worker follows while it runs: it imports it when it ends.
+        if let Some(previous) = previous
+            .as_ref()
+            .filter(|e| e.state == "importing" || e.active())
+        {
             return Ok((previous.clone(), false));
         }
         let title = run["display_title"].as_str().unwrap_or_default();
@@ -388,6 +398,8 @@ impl PlanStore {
             url: run["html_url"].as_str().unwrap_or_default().to_owned(),
             release_control_execution_id: title.strip_prefix("E2E · ").map(str::to_owned),
             stack: None,
+            status: None,
+            jobs: Vec::new(),
         };
         execution.state = "importing".into();
         execution.error = None;
@@ -844,13 +856,39 @@ impl PlanStore {
     /// downloads there) and a deadline; a missing binary, a failed call or a
     /// call past its deadline becomes the step the user has to take.
     pub(super) async fn gh(&self, timeout: Duration, args: &[&str]) -> Result<Vec<u8>> {
-        let command = Command::new(&self.github.program)
+        Ok(self.gh_with(timeout, args, None).await?.stdout)
+    }
+
+    /// `gh` with `input` on its standard input, answering with all it printed.
+    pub(super) async fn gh_with(
+        &self,
+        timeout: Duration,
+        args: &[&str],
+        input: Option<&[u8]>,
+    ) -> Result<std::process::Output> {
+        use std::process::Stdio;
+        use tokio::io::AsyncWriteExt;
+        let mut command = Command::new(&self.github.program);
+        command
             .args(args)
             .env("GH_PROMPT_DISABLED", "1")
             .env("TMPDIR", self.imports_dir()?)
-            .kill_on_drop(true)
-            .output();
-        let output = match tokio::time::timeout(timeout, command).await {
+            .stdin(if input.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let run = async {
+            let mut child = command.spawn()?;
+            if let (Some(input), Some(mut stdin)) = (input, child.stdin.take()) {
+                stdin.write_all(input).await?;
+            }
+            child.wait_with_output().await
+        };
+        let output = match tokio::time::timeout(timeout, run).await {
             Err(_) => bail!(
                 "`gh {}` did not finish within {timeout:?} and was stopped; try again.",
                 args.join(" ")
@@ -867,7 +905,7 @@ impl PlanStore {
             args.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
         );
-        Ok(output.stdout)
+        Ok(output)
     }
 }
 

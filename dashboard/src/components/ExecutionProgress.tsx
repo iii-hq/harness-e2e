@@ -11,8 +11,17 @@ const dockerPhases: Record<string, string> = {
   done: 'Done',
 }
 
+/** GitHub's status of a run the worker follows. */
+const githubStatuses: Record<string, string> = {
+  queued: 'Queued on GitHub…',
+  waiting: 'Waiting on GitHub…',
+  in_progress: 'Running on GitHub…',
+  completed: 'Importing the results…',
+}
+
 /** A running execution: how many of its slots finished, and which runs now.
- *  One in Docker lists its groups; its results arrive with the import. */
+ *  One in Docker lists its groups, one on GitHub its run's jobs; their
+ *  results arrive with the import. */
 export function ExecutionProgress({
   execution,
   actions,
@@ -98,6 +107,42 @@ export function ExecutionProgress({
                     {group.error}
                   </span>
                 ) : null}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {execution.source?.kind === 'github' ? (
+        <div className="grid gap-2 text-xs" data-github-jobs>
+          <p className="m-0 text-ink-soft">
+            <a
+              className="text-ink"
+              href={execution.source.url}
+              target="_blank"
+              rel="noreferrer"
+            >
+              GitHub run #{execution.source.run_id}
+            </a>
+            {` · ${githubStatuses[execution.source.status ?? ''] ?? execution.source.status ?? 'Starting…'} Checked every minute.`}
+          </p>
+          <ul className="m-0 grid list-none gap-1 p-0">
+            {(execution.source.jobs ?? []).map((job) => (
+              <li
+                key={job.id}
+                className="flex min-w-0 flex-wrap items-baseline gap-x-3 font-mono"
+                data-github-job={job.name}
+              >
+                <a
+                  className="text-ink"
+                  href={job.url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  {job.name}
+                </a>
+                <span className="text-ink-soft" data-job-state>
+                  {job.conclusion || job.status.replace('_', ' ')}
+                </span>
               </li>
             ))}
           </ul>

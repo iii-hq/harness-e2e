@@ -198,6 +198,34 @@ const dockerRunning = {
     },
   },
 }
+/** Started on GitHub: its run's jobs, and where each is. */
+const githubJob = (id, name, status, conclusion = '') => ({
+  id,
+  name,
+  status,
+  conclusion,
+  url: `https://github.com/iii-hq/harness-e2e/actions/runs/77/job/${id}`,
+})
+const githubRunning = {
+  ...running('plan-66666666666666666666666666666666'),
+  plan_execution: {
+    ...running('plan-66666666666666666666666666666666').plan_execution,
+    source: {
+      kind: 'github',
+      repository: 'iii-hq/harness-e2e',
+      run_id: 77,
+      run_attempt: 1,
+      url: 'https://github.com/iii-hq/harness-e2e/actions/runs/77',
+      release_control_execution_id: null,
+      stack: 'default',
+      status: 'in_progress',
+      jobs: [
+        githubJob(1, 'pr-r01 · case-minimal-path', 'completed', 'success'),
+        githubJob(2, 'pr-r01 · case-persistent-state', 'in_progress'),
+      ],
+    },
+  },
+}
 const stacks = [
   {
     id: 'default',
@@ -267,6 +295,8 @@ const startedExecution = (id) => {
 }
 let executions = []
 let busy = true
+// The first start on GitHub is refused, as a signed-out gh refuses it.
+let githubRefused = true
 let catalogDown = false
 let releaseContracts
 const contractsRead = new Promise((resolve) => {
@@ -290,9 +320,11 @@ const trigger = async (name, request = {}) => {
             ? dockered
             : request.execution_id === dockerRunning.id
               ? dockerRunning
-              : request.execution_id === nightly
-                ? { ...running(nightly), label: 'Nightly' }
-                : startedExecution(request.execution_id),
+              : request.execution_id === githubRunning.id
+                ? githubRunning
+                : request.execution_id === nightly
+                  ? { ...running(nightly), label: 'Nightly' }
+                  : startedExecution(request.execution_id),
     }
   if (id === 'execution-cancel') {
     cancelled.push(request.execution_id)
@@ -321,6 +353,12 @@ const trigger = async (name, request = {}) => {
       busy = false
       throw new Error(
         `handler error: "Nightly" (${nightly}) is still running; wait for it to finish or cancel it.`,
+      )
+    }
+    if (request.parameters.where === 'github' && githubRefused) {
+      githubRefused = false
+      throw new Error(
+        'handler error: GitHub did not start the run: `gh workflow run exact-stack-e2e.yml -R iii-hq/harness-e2e --ref main --json` failed: To get started with GitHub CLI, please run:  gh auth login. Check access with `gh auth status`; sign in with `gh auth login`.',
       )
     }
     started.push(request)
@@ -664,6 +702,62 @@ try {
   })
   assert.equal(started[3].parameters.where, 'docker')
 
+  // On GitHub: a stack too, sent as YAML; a refused dispatch says why in
+  // the dialog, and the next try starts it.
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await runTests.getByText('catalog ready').waitFor()
+  await runTests.locator('#quick-execution-where').selectOption('github')
+  assert.equal(
+    await runTests.locator('#quick-execution-stack').inputValue(),
+    'default',
+  )
+  await runTests
+    .getByText('dispatched with the gh signed in on this worker', {
+      exact: false,
+    })
+    .waitFor()
+  await box('minimal_path').click()
+  const runOne = runTests.getByRole('button', {
+    name: 'run 1 test',
+    exact: true,
+  })
+  await runOne.click()
+  await runTests
+    .getByText('GitHub did not start the run', { exact: false })
+    .waitFor()
+  await runTests.getByText('gh auth login', { exact: false }).first().waitFor()
+  assert.equal(started.length, 4)
+  await runOne.click()
+  await page.waitForFunction(() => /\/execution\/plan-f+5$/.test(location.hash))
+  assert.equal(started[4].parameters.where, 'github')
+  assert.deepEqual(started[4].parameters.stack, {
+    name: 'default',
+    yaml: stacks[0].yaml,
+  })
+
+  // One running on GitHub: its run, and its jobs and where each is.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/execution/${githubRunning.id}`,
+  )
+  const jobs = page.locator('[data-github-jobs]')
+  await jobs.getByText('Running on GitHub…', { exact: false }).waitFor()
+  await jobs
+    .locator(
+      '[data-github-job="pr-r01 · case-persistent-state"] [data-job-state]',
+    )
+    .getByText('in progress', { exact: true })
+    .waitFor()
+  assert.equal(
+    await jobs
+      .getByRole('link', { name: 'GitHub run #77' })
+      .getAttribute('href'),
+    'https://github.com/iii-hq/harness-e2e/actions/runs/77',
+  )
+
   // A finished execution can be deleted.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page
@@ -676,7 +770,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, GitHub with a stack and a refused dispatch said, GitHub jobs while running, delete.',
   )
 } finally {
   await browser.close()

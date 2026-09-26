@@ -68,8 +68,13 @@ impl Controller {
                 );
             }
         }
-        let plan_store =
-            crate::plans::store::PlanStore::new(runs_dir.clone(), control.clone(), docker).await?;
+        let plan_store = crate::plans::store::PlanStore::new(
+            runs_dir.clone(),
+            control.clone(),
+            docker,
+            github_repository.clone(),
+        )
+        .await?;
         let controller = Arc::new(Self {
             plan_store,
             github_repository,
@@ -99,9 +104,9 @@ impl Controller {
         Ok(controller)
     }
 
-    /// A Docker execution changes in the background: its groups move, then
-    /// its import installs native runs. Each change refreshes the summaries
-    /// and tells the Console.
+    /// A Docker or GitHub execution changes in the background: its groups or
+    /// jobs move, then its import installs native runs. Each change refreshes
+    /// the summaries and tells the Console.
     fn observe_docker_executions(self: &Arc<Self>) {
         let mut changes = self.plan_store.changes();
         let controller = Arc::downgrade(self);

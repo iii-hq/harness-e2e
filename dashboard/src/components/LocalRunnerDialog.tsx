@@ -11,6 +11,7 @@ import type {
   DashboardDataBridge,
   DashboardExecutionSummary,
   ExecutionParameters,
+  ExecutionWhere,
   JsonObject,
   Stack,
   Suite,
@@ -38,9 +39,10 @@ export type RunnerForm = {
   runs: string
   technicalRetries: string
   agent: string
-  /** On this harness, or in Docker on a stack. */
-  where: 'harness' | 'docker'
-  /** The stack picked for Docker, by id, or the execution's as recorded. */
+  /** On this harness, or on a stack in Docker or on GitHub. */
+  where: ExecutionWhere
+  /** The stack picked for Docker or GitHub, by id, or the execution's as
+   *  recorded. */
   stack: string
 }
 
@@ -59,8 +61,8 @@ const initialForm: RunnerForm = {
 /** The stack select's value for the stack an execution ran on, as recorded. */
 const RECORDED_STACK = 'recorded'
 
-/** A stack Docker can run on: one of this Console's list, or the one an
- *  execution recorded. Its YAML is what the executor receives. */
+/** A stack Docker or GitHub can run on: one of this Console's list, or the
+ *  one an execution recorded. Its YAML is what the executor receives. */
 export type StackChoice = {
   value: string
   label: string
@@ -71,7 +73,7 @@ export type StackChoice = {
   sha256?: string
 }
 
-/** The stacks the form offers for Docker: the listed ones, and the one the
+/** The stacks the form offers for Docker and GitHub: the listed ones, and the one the
  *  execution ran on as it recorded it, unless a listed stack holds that very
  *  YAML. */
 export function stackChoices(
@@ -145,13 +147,8 @@ export function runnerForm(
     runs: String(parameters.runs),
     technicalRetries: String(parameters.technical_retries),
     agent: parameters.agent ?? '',
-    // Where it ran, on the stack it recorded; a GitHub run runs in Docker
-    // here.
-    where:
-      parameters.where === 'docker' ||
-      (parameters.where === 'github' && parameters.stack)
-        ? 'docker'
-        : 'harness',
+    // Where it ran, on the stack it recorded.
+    where: parameters.where ?? 'harness',
     stack: parameters.stack ? RECORDED_STACK : '',
   }
 }
@@ -289,8 +286,8 @@ export function namedSuite(
     : null
 }
 
-/** What `execution-start` receives for the form. Docker gets the stack's
- *  YAML: the executor knows nothing of this Console's stacks. */
+/** What `execution-start` receives for the form. Docker and GitHub get the
+ *  stack's YAML: the executor knows nothing of this Console's stacks. */
 export function executionStartRequest(
   form: RunnerForm,
   suite: SuiteContent | null = null,
@@ -311,7 +308,7 @@ export function executionStartRequest(
       provider,
       agent: form.agent.trim() || null,
       where: form.where,
-      ...(form.where === 'docker' && stack
+      ...(form.where !== 'harness' && stack
         ? { stack: { name: stack.name, yaml: stack.yaml } }
         : {}),
     },
@@ -382,7 +379,7 @@ export async function describeStartError(
 }
 
 /** Run tests and Run again: one form that starts an execution on this
- *  harness or in Docker and then follows it on its page. */
+ *  harness, in Docker or on GitHub and then follows it on its page. */
 export function LocalRunnerDialog({
   bridge,
   open,
@@ -518,7 +515,7 @@ export function LocalRunnerDialog({
     setForm((current) => ({
       ...current,
       where: value,
-      // Docker starts on the repository's default stack.
+      // Docker and GitHub start on the repository's default stack.
       stack:
         current.stack ||
         (
@@ -533,8 +530,8 @@ export function LocalRunnerDialog({
     ['This execution', stackOptions.filter((c) => c.source === 'recorded')],
   ]
   const stackError =
-    attempted && form.where === 'docker' && !stack
-      ? 'Pick the stack it runs on in Docker.'
+    attempted && form.where !== 'harness' && !stack
+      ? `Pick the stack it runs on ${form.where === 'docker' ? 'in Docker' : 'on GitHub'}.`
       : undefined
   const pickSuite = (value: string) => {
     const chosen = pickedSuite(value, choices)
@@ -594,7 +591,7 @@ export function LocalRunnerDialog({
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const nextErrors = validation()
-    const noStack = form.where === 'docker' && !stack
+    const noStack = form.where !== 'harness' && !stack
     if (Object.keys(nextErrors).length > 0 || noStack || !bridge) {
       setAttempted(true)
       focusFirstInvalid('quick-execution', nextErrors)
@@ -646,7 +643,7 @@ export function LocalRunnerDialog({
       description={
         parameters
           ? 'Starts a new execution with the suite and parameters of this one, where it ran. Change anything before running.'
-          : 'Runs a suite, or the tests ticked, as a new execution on this harness or in Docker on a stack. To compare, tick two executions in the list.'
+          : 'Runs a suite, or the tests ticked, as a new execution on this harness, or on a stack in Docker or on GitHub. To compare, tick two executions in the list.'
       }
       closeLabel="Close execution form"
       className="ds-root"
@@ -732,7 +729,9 @@ export function LocalRunnerDialog({
             hint={
               form.where === 'docker'
                 ? 'In the executor image, one container per group, from this worker; results arrive once every group finished.'
-                : 'On the stack this Console runs on.'
+                : form.where === 'github'
+                  ? 'The exact-stack workflow on GitHub Actions, dispatched with the gh signed in on this worker; results are imported once the run ends.'
+                  : 'On the stack this Console runs on.'
             }
           >
             <Select
@@ -745,9 +744,10 @@ export function LocalRunnerDialog({
             >
               <option value="harness">This harness</option>
               <option value="docker">Docker</option>
+              <option value="github">GitHub</option>
             </Select>
           </Field>
-          {form.where === 'docker' ? (
+          {form.where !== 'harness' ? (
             <Field
               label="Stack"
               htmlFor="quick-execution-stack"

@@ -7,8 +7,9 @@ import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { type PlanExecution, rerunGroup } from '@/lib/plan-execution'
 
 /** Run one scenario of a finished execution again. A local execution runs it
- *  here, a Docker one in a new container as its next attempt; an imported
- *  one says how to run it again on GitHub instead. */
+ *  here, a Docker one in a new container as its next attempt, a GitHub one
+ *  as its job's next attempt; one Release Control dispatched says how to run
+ *  it again from there instead. */
 export function ScenarioRerunDialog({
   bridge,
   execution,
@@ -35,14 +36,14 @@ export function ScenarioRerunDialog({
     onClose()
   }
   const source = execution.source
-  if (source.kind === 'github')
+  if (source.kind === 'github' && source.release_control_execution_id)
     return (
       <Dialog
         open={scenarioId !== null}
         onClose={close}
         size="sm"
-        title={`Run ${scenarioId} again on GitHub`}
-        description="This execution was imported from GitHub. Running a scenario here would mix this stack with the one it ran on."
+        title={`Run ${scenarioId} again from Release Control`}
+        description="Release Control dispatched this run on GitHub and reads its reports."
         bodyPadding
         footer={
           <div className="flex justify-end gap-2">
@@ -57,8 +58,9 @@ export function ScenarioRerunDialog({
         }
       >
         <p className="m-0 text-sm text-ink">
-          Re-run its job on GitHub, then import the run again: the import takes
-          the run's highest attempt and replaces this execution's runs.
+          Run it again from Release Control, which re-runs its job on GitHub,
+          then import the run again: the import takes the run's highest attempt
+          and replaces this execution's runs.
         </p>
         <a
           className="mt-3 inline-flex items-center gap-1 text-sm text-ink"
@@ -101,7 +103,9 @@ export function ScenarioRerunDialog({
         source.kind === 'docker'
           ? "Its group runs again in a new container with this execution's contract, stack lock and executor image, as attempt " +
             `${source.attempt + 1}; then the execution is aggregated and imported again.`
-          : "It runs on this stack with this execution's model, profile, runs and technical retries."
+          : source.kind === 'github'
+            ? `GitHub re-runs its group's job in run #${source.run_id}, then the finalizer, as the run's next attempt; the run is imported again when it ends.`
+            : "It runs on this stack with this execution's model, profile, runs and technical retries."
       }
       bodyPadding
       footer={

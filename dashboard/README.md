@@ -73,8 +73,9 @@ the execution to its finished state with a warning; an execution with slots
 that never ran stays cancelled or interrupted until they do. The scenario
 reads `rerun ×N` on its execution and in a comparison and its summary. A
 rerun keeps the stack the execution recorded and warns, once, when workers
-differ. An imported execution is not run here, which would mix stacks:
-re-run its job on GitHub and import the run again (the import takes the
+differ. An execution on GitHub is not run here, which would mix stacks: its
+group's job re-runs on GitHub (below); one Release Control dispatched is
+re-run from Release Control and imported again (the import takes the
 highest attempt).
 
 **Where** picks this harness (the above) or **Docker**, which asks for a
@@ -86,8 +87,19 @@ in; its results arrive when every group ended and the worker imported them.
 Cancel stops its containers and keeps what finished. Running a scenario of it
 again runs its groups in new containers as the execution's next attempt,
 finalizes and imports again: the last attempt counts. See [Run in
-Docker](../README.md#run-in-docker). Run again of a GitHub run that recorded
-its stack starts in Docker on it; one that recorded none runs on this harness.
+Docker](../README.md#run-in-docker).
+
+**GitHub** asks for a stack too and dispatches the exact-stack workflow on the
+worker's `github_repository` at `main` with the `gh` signed in on the worker,
+without a Release Control execution. The execution is the run's, appears at
+once with its link, and shows the run's jobs and where each is, read every
+minute; when the run ends the worker imports it, with no button. A `gh` that
+is signed out, or a dispatch GitHub refuses, is the dialog's error. Cancel
+cancels the run and imports what finished. Running a scenario again re-runs
+its group's job (GitHub runs the finalizer after it) and imports the run
+again: the last attempt counts, and a re-run cancelled before it ended leaves
+the one before counted. See [Run on GitHub](../README.md#run-on-github). Run
+again runs where the execution ran, on the stack it recorded.
 
 Before its first slot every local execution records its stack: the containers
 of the compose project that runs this worker (`package://` or `path://`, the
@@ -243,8 +255,8 @@ on this machine), a `commit:` pin (it takes effect once the executor runs commit
 pins), a top-level key neither the executor nor Compose reads, a tag the
 executor's loader refuses (`!env`, `!!python/…`), and an `iii`, `template`,
 `version` or `commit` that is not text to the executor (`1.10`, `0123456`:
-quote it). Run tests in Docker runs on one of them; on this harness an
-execution runs on this worker's own stack.
+quote it). Run tests in Docker or on GitHub runs on one of them; on this
+harness an execution runs on this worker's own stack.
 
 The shared Rust coordinator persists every child identity before dispatch and
 reserves admission across the whole execution. It cancels active work before
