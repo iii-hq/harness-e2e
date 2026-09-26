@@ -23,6 +23,10 @@ describe('live dashboard transport', () => {
         stack_create: 'stack-create',
         stack_update: 'stack-update',
         stack_delete: 'stack-delete',
+        credentials_list: 'credentials-list',
+        credential_set: 'credential-set',
+        credential_delete: 'credential-delete',
+        credentials_import: 'credentials-import',
         execution_cancel: 'execution-cancel',
       },
     } as RuntimeConfig)
@@ -59,6 +63,19 @@ describe('live dashboard transport', () => {
     expect(trigger).toHaveBeenCalledWith('stack-delete', {
       stack_id: 'stack-1',
     })
+    await live.listCredentials()
+    expect(trigger).toHaveBeenCalledWith('credentials-list', {})
+    await live.setCredential('OPENAI_API_KEY', 'sk-value')
+    expect(trigger).toHaveBeenCalledWith('credential-set', {
+      name: 'OPENAI_API_KEY',
+      value: 'sk-value',
+    })
+    await live.deleteCredential('OPENAI_API_KEY')
+    expect(trigger).toHaveBeenCalledWith('credential-delete', {
+      name: 'OPENAI_API_KEY',
+    })
+    await live.importCredentials()
+    expect(trigger).toHaveBeenCalledWith('credentials-import', {})
     await live.cancelExecution('plan-1')
     expect(trigger).toHaveBeenCalledWith('execution-cancel', {
       execution_id: 'plan-1',

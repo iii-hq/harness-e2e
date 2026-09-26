@@ -1,5 +1,7 @@
 // Deterministic browser coverage for stacks: list them, copy one, edit its
-// YAML (a warning shown, a parse error refused), save and delete it. The
+// YAML (a warning shown, a parse error refused), save and delete it; then the
+// provider credentials below them: import, set, add and delete one, by name
+// only. The
 // repository's stacks are the files of stacks/; the runner's answers (what a
 // stack declares, its warnings and the parse error) are stood in for here and
 // covered by the Rust tests.
@@ -55,7 +57,34 @@ const repository = readdirSync(path.join(root, 'stacks'))
     )
   })
 const local = []
-const calls = { create: [], update: [], remove: [] }
+const calls = { create: [], update: [], remove: [], credentials: [] }
+
+// The worker's credentials: names only ever leave it.
+const known = {
+  ANTHROPIC_API_KEY: ['anthropic'],
+  DEEPSEEK_API_KEY: ['deepseek'],
+  OPENAI_API_KEY: ['openai'],
+  ZAI_API_KEY: ['zai'],
+}
+const stored = new Map()
+const fromFile = new Set(['ZAI_API_KEY'])
+const credentials = () => ({
+  credentials: [...new Set([...Object.keys(known), ...stored.keys()])]
+    .sort()
+    .map((name) => {
+      const source = stored.has(name)
+        ? 'console'
+        : fromFile.has(name)
+          ? 'provider_env_file'
+          : undefined
+      return {
+        name,
+        set: source !== undefined,
+        ...(source ? { source } : {}),
+        providers: known[name] ?? [],
+      }
+    }),
+})
 
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
@@ -88,6 +117,26 @@ const trigger = (name, request = {}) => {
       request.yaml ?? local[index].yaml,
     )
     return local[index]
+  }
+  if (id === 'credentials-list') return credentials()
+  if (id === 'credential-set') {
+    calls.credentials.push(['set', request])
+    stored.set(request.name, request.value)
+    return credentials()
+  }
+  if (id === 'credential-delete') {
+    calls.credentials.push(['delete', request])
+    stored.delete(request.name)
+    return credentials()
+  }
+  if (id === 'credentials-import') {
+    calls.credentials.push(['import', request])
+    stored.set('DEEPSEEK_API_KEY', 'sk-imported-4d2e')
+    return {
+      found: ['DEEPSEEK_API_KEY'],
+      not_found: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ZAI_API_KEY'],
+      ...credentials(),
+    }
   }
   if (id === 'stack-delete') {
     calls.remove.push(request)
@@ -226,7 +275,109 @@ try {
   await copy.waitFor({ state: 'detached' })
   assert.deepEqual(calls.remove, [{ stack_id: 'stack-1' }])
 
-  // Narrow: the stacks table fits.
+  // Provider credentials, below the stacks: each by name, set or not.
+  const section = page.locator('[data-credentials]')
+  const status = (name) =>
+    section.locator(`[data-credential="${name}"] td[data-label="Status"]`)
+  await status('OPENAI_API_KEY').getByText('not set', { exact: true }).waitFor()
+  await status('ZAI_API_KEY')
+    .getByText('set by the worker’s provider_env_file', { exact: true })
+    .waitFor()
+  assert.equal(
+    await section
+      .locator('[data-credential="ZAI_API_KEY"]')
+      .getByRole('button', { name: 'Delete ZAI_API_KEY' })
+      .count(),
+    0,
+  )
+
+  // Imported from the worker's environment: it says what it found.
+  await section
+    .getByRole('button', { name: 'import from this machine', exact: true })
+    .click()
+  await section
+    .getByText(
+      "Set from the worker's environment: DEEPSEEK_API_KEY. Not found there: ANTHROPIC_API_KEY, OPENAI_API_KEY, ZAI_API_KEY.",
+      { exact: true },
+    )
+    .waitFor()
+  await status('DEEPSEEK_API_KEY')
+    .getByText('set here', { exact: true })
+    .waitFor()
+
+  // Set one: the value goes once, masked, and is never shown.
+  await section
+    .getByRole('button', { name: 'Set OPENAI_API_KEY', exact: true })
+    .click()
+  const set = page.getByRole('dialog', { name: 'Set credential' })
+  assert.equal(
+    await set.locator('#credential-name').inputValue(),
+    'OPENAI_API_KEY',
+  )
+  assert.equal(await set.locator('#credential-name').isEditable(), false)
+  const value = set.locator('#credential-value')
+  assert.equal(await value.getAttribute('type'), 'password')
+  await value.fill('sk-typed-7c1b')
+  await set
+    .getByRole('button', { name: 'save credential', exact: true })
+    .click()
+  await set.waitFor({ state: 'hidden' })
+  await status('OPENAI_API_KEY')
+    .getByText('set here', { exact: true })
+    .waitFor()
+  assert.deepEqual(calls.credentials.at(-1), [
+    'set',
+    { name: 'OPENAI_API_KEY', value: 'sk-typed-7c1b' },
+  ])
+
+  // Add one by name: a name that is not an environment variable is refused
+  // before anything is sent.
+  await section
+    .getByRole('button', { name: 'add credential', exact: true })
+    .click()
+  const add = page.getByRole('dialog', { name: 'Add a credential' })
+  await add.locator('#credential-name').fill('my-token')
+  await add.locator('#credential-value').fill('gw-secret-5a9f')
+  await add
+    .getByText('Capital letters, digits and _, starting with a letter.', {
+      exact: true,
+    })
+    .waitFor()
+  assert.equal(
+    await add
+      .getByRole('button', { name: 'save credential', exact: true })
+      .isDisabled(),
+    true,
+  )
+  await add.locator('#credential-name').fill('MY_GATEWAY_TOKEN')
+  await add
+    .getByRole('button', { name: 'save credential', exact: true })
+    .click()
+  await add.waitFor({ state: 'hidden' })
+  await status('MY_GATEWAY_TOKEN')
+    .getByText('set here', { exact: true })
+    .waitFor()
+
+  // Deleted after a confirmation.
+  await section
+    .getByRole('button', { name: 'Delete MY_GATEWAY_TOKEN', exact: true })
+    .click()
+  await page
+    .getByRole('dialog', { name: 'Delete MY_GATEWAY_TOKEN?' })
+    .getByRole('button', { name: 'delete credential', exact: true })
+    .click()
+  await section
+    .locator('[data-credential="MY_GATEWAY_TOKEN"]')
+    .waitFor({ state: 'detached' })
+  assert.deepEqual(calls.credentials.at(-1), [
+    'delete',
+    { name: 'MY_GATEWAY_TOKEN' },
+  ])
+  const visible = await page.locator('body').innerText()
+  for (const secret of ['sk-imported-4d2e', 'sk-typed-7c1b', 'gw-secret-5a9f'])
+    assert.equal(visible.includes(secret), false, `${secret} is shown`)
+
+  // Narrow: the stacks and credentials tables fit.
   await page.setViewportSize({ width: 390, height: 844 })
   assert.equal(
     await page.evaluate(
@@ -236,7 +387,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: repository stacks listed and viewed read-only, copy one with its YAML as written, a path worker saved with a warning next to the editor and on the stack, YAML that does not parse refused next to the editor, edit again, delete, narrow viewport.',
+    'Stacks browser flow passed: repository stacks listed and viewed read-only, copy one with its YAML as written, a path worker saved with a warning next to the editor and on the stack, YAML that does not parse refused next to the editor, edit again, delete; provider credentials listed by name, imported from the worker, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
   )
 } catch (error) {
   console.error(

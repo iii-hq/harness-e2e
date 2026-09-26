@@ -30,10 +30,10 @@ pub struct WorkerConfig {
     /// Docker executions: groups running at once, across executions.
     #[serde(default = "default_docker_parallel_groups")]
     pub docker_parallel_groups: usize,
-    /// Docker executions: an env file with the provider credentials the
-    /// GitHub groups receive (DEEPSEEK_API_KEY, ZAI_API_KEY,
-    /// TYPESAFE_API_KEY), passed to the executor with `--env-file`. Resolved
-    /// as `data_dir` is.
+    /// Docker executions: an env file of provider credentials under the
+    /// Console's own (`credentials.env` in `data_dir`, set from the Stacks
+    /// page): where both name one, the Console's wins. Resolved as
+    /// `data_dir` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_env_file: Option<String>,
     /// Docker executions: a checkout's `scripts/` to run instead of the

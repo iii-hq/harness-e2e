@@ -1054,6 +1054,130 @@ fail() {
             manifest = MODULE.package_bundle(artifacts, campaign_contract(), {})
             self.assertEqual([entry["path"] for entry in manifest["files"]], ["failure.json"])
 
+    def test_a_group_forwards_exactly_the_credentials_it_received_into_the_stack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = campaign_contract()
+            contract["suite"]["subject"]["provider"] = "anthropic"
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract))
+            env_file = root / ".env"
+            environment = {
+                "PATH": os.environ["PATH"],
+                # What run_in_image.sh names from its --env-file.
+                "HARNESS_E2E_CREDENTIALS": "OPENAI_API_KEY ANTHROPIC_API_KEY lower_case",
+                "OPENAI_API_KEY": "sk-openai-0123456789",
+                "ANTHROPIC_API_KEY": "",
+                # Always taken from the environment when set.
+                "DEEPSEEK_API_KEY": "sk-deepseek-0123456789",
+                # Never a credential: not named, whatever it looks like.
+                "GITHUB_TOKEN": "ghs_token_never_forwarded",
+                "XAI_API_KEY": "sk-xai-not-received",
+                "lower_case": "not-a-name",
+            }
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-env", "--contract", str(contract_path), "--output", str(env_file)],
+                env=environment, capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(env_file.read_text(),
+                             "DEEPSEEK_API_KEY=sk-deepseek-0123456789\nOPENAI_API_KEY=sk-openai-0123456789\n")
+            self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+            # The model's provider without its key: said, and the group runs.
+            self.assertIn("[WARN] ANTHROPIC_API_KEY is not set; provider-anthropic starts without a credential",
+                          result.stderr)
+            self.assertNotIn("sk-", result.stdout + result.stderr)
+            contract["suite"]["subject"]["provider"] = "openai"
+            contract_path.write_text(json.dumps(contract))
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-env", "--contract", str(contract_path), "--output", str(env_file)],
+                env=environment, capture_output=True, text=True, check=True,
+            )
+            self.assertNotIn("[WARN]", result.stderr)
+
+    def test_github_forwards_only_the_catalogs_credentials_among_its_secrets(self):
+        secrets = {
+            "DEEPSEEK_API_KEY": "sk-deepseek-0123456789",
+            "OPENAI_API_KEY": "sk-openai-0123456789",
+            "ZAI_API_KEY": "",
+            # Other secrets the job can read: never forwarded, even one that
+            # looks like a provider key.
+            "CHOCOLATEY_API_KEY": "choco-never-forwarded",
+            "III_CI_APP_PRIVATE_KEY": "-----BEGIN KEY-----\nnever\n-----END KEY-----",
+            "NPM_TOKEN": "npm-never-forwarded",
+            "github_token": "ghs-never-forwarded",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "provider-credentials.env"
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-from-secrets", "--output", str(output)],
+                env={"PATH": os.environ["PATH"], "SECRETS_JSON": json.dumps(secrets)},
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(output.read_text(),
+                             "DEEPSEEK_API_KEY=sk-deepseek-0123456789\nOPENAI_API_KEY=sk-openai-0123456789\n")
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(result.stdout, "provider credentials: DEEPSEEK_API_KEY, OPENAI_API_KEY\n")
+            # The same file is what packaging redacts.
+            self.assertEqual(MODULE.received_credentials({}, output),
+                             {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": "sk-openai-0123456789"})
+        # Every name the catalog knows is an environment variable.
+        providers, known = MODULE.credential_catalog()
+        self.assertTrue(all(MODULE.CREDENTIAL_NAME.fullmatch(name) for name in known))
+        self.assertEqual(providers["openai"], "OPENAI_API_KEY")
+
+    def test_package_redacts_the_received_credentials_before_it_hashes(self):
+        credentials = {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": "sk-openai-0123456789",
+                       "SHORT_KEY": "abc"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs/engine.log").write_text("key=sk-deepseek-0123456789 and again sk-deepseek-0123456789\n")
+            (root / "results.json").write_text(json.dumps({"transcript": "OPENAI_API_KEY=sk-openai-0123456789 abc"}))
+            (root / "clean.json").write_text("{}\n")
+            manifest = MODULE.package_bundle(root, campaign_contract(), {}, credentials)
+            self.assertEqual(manifest["redaction"], {
+                "credentials": {"DEEPSEEK_API_KEY": 2, "OPENAI_API_KEY": 1},
+                "files": ["logs/engine.log", "results.json"],
+                "too_short": ["SHORT_KEY"],
+            })
+            self.assertEqual((root / "logs/engine.log").read_text(),
+                             "key=[redacted:DEEPSEEK_API_KEY] and again [redacted:DEEPSEEK_API_KEY]\n")
+            # Still JSON, and the short value is left alone.
+            self.assertEqual(json.loads((root / "results.json").read_text()),
+                             {"transcript": "OPENAI_API_KEY=[redacted:OPENAI_API_KEY] abc"})
+            # The digests are of the redacted bytes, the ones uploaded.
+            for entry in manifest["files"]:
+                payload = (root / entry["path"]).read_bytes()
+                self.assertEqual(entry["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
+                self.assertEqual(entry["size_bytes"], len(payload))
+                self.assertNotIn(b"sk-", payload)
+            self.assertNotIn("sk-", json.dumps(manifest))
+            # Without credentials nothing changes and the manifest says so.
+            (root / "clean.json").write_text("sk-deepseek-0123456789\n")
+            untouched = MODULE.package_bundle(root, campaign_contract(), {})
+            self.assertEqual(untouched["redaction"], {"credentials": {}, "files": [], "too_short": []})
+            self.assertEqual((root / "clean.json").read_text(), "sk-deepseek-0123456789\n")
+
+    def test_the_package_command_redacts_what_its_file_and_environment_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundle"
+            root.mkdir()
+            (root / "stack-lock.json").write_text(json.dumps(campaign_contract()))
+            (root / "log.txt").write_text("sk-file-0123456789 sk-env-0123456789 sk-unnamed-0123456789\n")
+            credentials = Path(directory) / "provider-credentials.env"
+            credentials.write_text("OPENAI_API_KEY=sk-file-0123456789\n")
+            subprocess.run(
+                ["python3", str(SCRIPT), "package", "--root", str(root), "--contract", str(root / "stack-lock.json"),
+                 "--workflow", "{}", "--credentials", str(credentials), "--output", str(root / "bundle-manifest.json")],
+                env={"PATH": os.environ["PATH"], "HARNESS_E2E_CREDENTIALS": "XAI_API_KEY",
+                     "XAI_API_KEY": "sk-env-0123456789", "UNNAMED_API_KEY": "sk-unnamed-0123456789"},
+                check=True, capture_output=True, text=True,
+            )
+            self.assertEqual((root / "log.txt").read_text(),
+                             "[redacted:OPENAI_API_KEY] [redacted:XAI_API_KEY] sk-unnamed-0123456789\n")
+            manifest = json.loads((root / "bundle-manifest.json").read_text())
+            self.assertEqual(manifest["redaction"]["credentials"], {"OPENAI_API_KEY": 1, "XAI_API_KEY": 1})
+
     def test_package_rejects_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

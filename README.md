@@ -287,8 +287,9 @@ reaches root in its container through the daemon's socket, and the container
 is privileged, so that root is root-equivalent on the host, as the host's
 socket was: a subject can start a privileged container with the host's
 devices, mount the host's disk and read what is there (the host daemon's
-container configurations, with a concurrent `prepare`'s `GITHUB_TOKEN`, a
-worker's `provider_env_file`, `gh`'s credentials). From the default bridge it
+container configurations, with a concurrent `prepare`'s `GITHUB_TOKEN`, the
+Console's provider credentials and a worker's `provider_env_file`, `gh`'s
+credentials). From the default bridge it
 also reaches the host's ports on the bridge's gateway (a local Console on
 3113, iii on 49134) and other groups' containers.
 
@@ -435,11 +436,33 @@ section says.
 
 Worker configuration:
 
-- `provider_env_file`: an env file with the provider credentials the GitHub
-  groups receive (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `TYPESAFE_API_KEY`),
-  passed to `prepare assemble` and every group with `--env-file`; never logged
-  or copied into the execution's folder. Without one, the execution says its
-  providers start without credentials.
+- `provider_env_file`: an env file of provider credentials under the Console's
+  own (below): where both name a variable, the Console's value wins.
+
+Provider credentials are the Console's, on the Stacks page: environment
+variables by name (`OPENAI_API_KEY`), set, replaced or deleted there, or
+imported from the worker's own environment for the names
+[`config/provider-credentials.json`](config/provider-credentials.json) lists.
+They live in `credentials.env` of the worker's `data_dir`, mode 600, never in
+the database, an execution's folder or its evidence, and the worker never
+answers with a value (`e2e::dashboard::credentials-list` gives names and
+whether each is set). `prepare assemble`, each group and each packaging get
+them, merged with `provider_env_file`, in a private temporary file (mode 600)
+passed with `--env-file` and removed when the phase ends. An execution whose
+model's provider has no key says so and still runs.
+
+Inside, `scripts/run_in_image.sh` tells the phase which variables are
+credentials (`HARNESS_E2E_CREDENTIALS`, the names of that file); the launcher
+writes exactly those, plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY` and
+`TYPESAFE_API_KEY` when its environment has them, into the stack's `.env`, and
+warns when the model's provider's key is missing. Before a bundle is hashed,
+`exact_stack_campaign.py package` replaces each of their values it finds in
+the evidence by `[redacted:NAME]` and records in `bundle-manifest.json`
+(`redaction`) how many it replaced per name and in which files; values under
+8 characters are not looked for (`too_short`). On GitHub the preparation and
+each group job write the credentials among the job's secrets, the names that
+catalog lists and no other secret, to such a file in `RUNNER_TEMP`, which the
+phase and its packaging read.
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.

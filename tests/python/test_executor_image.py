@@ -138,6 +138,24 @@ class WrapperTests(unittest.TestCase):
         self.assertNotIn("secret-value", "\n".join(run))
         self.assertNotIn("not published", result.stderr)
 
+    def test_the_env_files_names_tell_the_phase_which_variables_are_credentials(self):
+        credentials = self.directory / "provider-credentials.env"
+        credentials.write_text("# the Console's\nOPENAI_API_KEY=sk-openai-secret\n  ZAI_API_KEY=sk-zai-secret\n"
+                               "lower=x\nNOT A NAME=x\n\nANTHROPIC_API_KEY=sk-anthropic-secret")
+        _, invoked = self.run_wrapper("--env-file", str(credentials), "group",
+                                      env={"HARNESS_E2E_CREDENTIALS": "GITHUB_TOKEN PATH"})
+        run = next(call for call in invoked if call[0] == "run")
+        options = pairs(run)
+        self.assertIn(("--env-file", str(credentials)), options)
+        self.assertEqual([value for flag, value in options if value.startswith("HARNESS_E2E_CREDENTIALS")],
+                         ["HARNESS_E2E_CREDENTIALS=OPENAI_API_KEY ZAI_API_KEY ANTHROPIC_API_KEY"])
+        self.assertNotIn("secret", "\n".join(run))
+        # Without a file, no phase is told of any.
+        self.log.unlink()
+        _, invoked = self.run_wrapper("group", env={"HARNESS_E2E_CREDENTIALS": "GITHUB_TOKEN"})
+        run = next(call for call in invoked if call[0] == "run")
+        self.assertFalse(any("HARNESS_E2E_CREDENTIALS" in value for value in run))
+
     def test_only_prepare_gets_the_github_token_and_only_a_group_privileges(self):
         for phase in (["prepare", "materialize"], ["finalize"]):
             with self.subTest(phase=phase[0]):

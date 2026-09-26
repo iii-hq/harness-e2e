@@ -6,7 +6,9 @@
 //!
 //! - `inputs.json`: what `prepare` reads as `DISPATCH_*`: the suite (an id of
 //!   the master plan, or the whole suite as JSON), the stack's YAML, the
-//!   model and the agent profile. Credentials never go here.
+//!   model and the agent profile. Credentials never go here: `prepare
+//!   assemble`, each group and each packaging get this Console's (see
+//!   `credentials`) in a private temporary file that goes after the phase.
 //! - `checkout/`: what the wrapper mounts, at the same path: the Dockerfile
 //!   this worker embeds (it names the image), the scripts it embeds or a copy
 //!   of `scripts_dir`, both frozen for the execution, and `target/`, every
@@ -42,6 +44,7 @@ use super::{
     PlanStore, Rerun, Slot,
 };
 use crate::artifact;
+use crate::plans::credentials::{self, Credentials};
 use crate::plans::stacks;
 use crate::test_plan::{self, MasterPlan};
 
@@ -72,6 +75,10 @@ const SUPPORT: &[(&str, &str)] = &[
         "src/scenarios/kanban/catalog.json",
         include_str!("../../../src/scenarios/kanban/catalog.json"),
     ),
+    (
+        "config/provider-credentials.json",
+        include_str!("../../../config/provider-credentials.json"),
+    ),
 ];
 
 /// What the workflow gives a group job: ten minutes for polling, capture and
@@ -86,8 +93,8 @@ const GROUP_DEADLINES: [(&str, &str); 2] = [
 pub(crate) struct DockerSettings {
     /// Groups running at once, across executions.
     pub parallel_groups: usize,
-    /// An env file with the provider credentials the GitHub groups receive,
-    /// passed to `prepare assemble` and every group with `--env-file`.
+    /// An env file of provider credentials under this Console's own (see
+    /// `credentials`): where both name one, the Console's wins.
     pub provider_env_file: Option<PathBuf>,
     /// A checkout's `scripts/` to run instead of the embedded scripts, copied
     /// into each new execution.
@@ -379,6 +386,12 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 }
 
 impl PlanStore {
+    /// This Console's provider credentials, the worker's `provider_env_file`
+    /// under them.
+    pub(crate) fn credentials(&self) -> Credentials {
+        Credentials::new(&self.root, self.docker.settings.provider_env_file.clone())
+    }
+
     fn docker_folder(&self, id: &str) -> PathBuf {
         self.root.join("docker-executions").join(id)
     }
@@ -419,17 +432,18 @@ impl PlanStore {
             .iter()
             .map(|warning| format!("Stack {}: {warning}", stack.name))
             .collect::<Vec<_>>();
-        match &self.docker.settings.provider_env_file {
-            None => warnings.push(
-                "No provider_env_file is configured: the providers start without credentials."
-                    .into(),
-            ),
-            Some(file) if !file.is_file() => warnings.push(format!(
-                "provider_env_file {} does not exist: the providers start without credentials.",
-                file.display()
-            )),
-            Some(_) => {}
+        if let Some(file) = &self.docker.settings.provider_env_file {
+            if !file.is_file() {
+                warnings.push(format!(
+                    "provider_env_file {} does not exist; only this Console's credentials reach the providers.",
+                    file.display()
+                ));
+            }
         }
+        warnings.extend(credential_warning(
+            &parameters.provider,
+            &self.credentials().merged()?,
+        ));
         execution.warnings.extend(warnings);
         let groups = placeholder_groups(&execution.slots);
         execution.slots = group_slots(&groups);
@@ -562,19 +576,17 @@ impl PlanStore {
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
             dispatch.push(("GITHUB_TOKEN".into(), token));
         }
-        for (step, env, env_file) in [
-            ("materialize", dispatch, None),
-            (
-                "assemble",
-                key(),
-                self.docker.settings.provider_env_file.clone(),
-            ),
-        ] {
+        for (step, env) in [("materialize", dispatch), ("assemble", key())] {
             let log = folder.join(format!("logs/prepare-{step}.log"));
+            // Held until the phase ends, then removed.
+            let credentials = match step {
+                "assemble" => self.credentials().env_file()?,
+                _ => None,
+            };
             let phase = Phase {
                 args: vec!["prepare".into(), step.into()],
                 env,
-                env_file: env_file.filter(|file| file.is_file()),
+                env_file: credentials.as_ref().map(|file| file.path().to_owned()),
                 log: log.clone(),
             };
             if !self
@@ -780,6 +792,7 @@ impl PlanStore {
             "logs/group-{}-{}-{}.log",
             group.campaign_id, group.group_id, group.attempt
         ));
+        let credentials = self.credentials().env_file()?;
         let succeeded = self
             .docker
             .launcher
@@ -789,17 +802,13 @@ impl PlanStore {
                 Phase {
                     args: vec!["group".into()],
                     env,
-                    env_file: self
-                        .docker
-                        .settings
-                        .provider_env_file
-                        .clone()
-                        .filter(|file| file.is_file()),
+                    env_file: credentials.as_ref().map(|file| file.path().to_owned()),
                     log: log.clone(),
                 },
                 cancel.clone(),
             )
             .await?;
+        drop(credentials);
         let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
             "group_id": group.group_id, "attempt": group.attempt, "job": "group"});
         self.package(id, checkout, &workflow, &[&artifacts], "Group", &name)
@@ -831,8 +840,9 @@ impl PlanStore {
     }
 
     /// Hash each root into its bundle-manifest.json, as the workflow does
-    /// before it uploads one. A root that holds something unsafe is replaced
-    /// by the diagnostic alone.
+    /// before it uploads one, with the credentials the groups receive
+    /// redacted out of it first. A root that holds something unsafe is
+    /// replaced by the diagnostic alone.
     async fn package(
         &self,
         id: &str,
@@ -847,6 +857,7 @@ impl PlanStore {
         let log = self
             .docker_folder(id)
             .join(format!("logs/package-{name}.log"));
+        let credentials = self.credentials().env_file()?;
         let packaged = self
             .docker
             .launcher
@@ -856,12 +867,13 @@ impl PlanStore {
                 Phase {
                     args,
                     env: vec![("EXECUTION_KEY".into(), id.into())],
-                    env_file: None,
+                    env_file: credentials.as_ref().map(|file| file.path().to_owned()),
                     log: log.clone(),
                 },
                 uncancellable(),
             )
             .await?;
+        drop(credentials);
         if !packaged {
             for root in roots {
                 if root.exists() {
@@ -1196,6 +1208,21 @@ impl PlanStore {
     }
 }
 
+/// What an execution says when its model's provider starts without a key:
+/// it still runs.
+fn credential_warning(provider: &str, credentials: &BTreeMap<String, String>) -> Option<String> {
+    match credentials::provider_key(provider) {
+        Some(key) if !credentials.contains_key(&key) => Some(format!(
+            "{key} is not set (Stacks, provider credentials): provider-{provider} starts without a credential."
+        )),
+        None if credentials.is_empty() => Some(
+            "No provider credential is set (Stacks, provider credentials): the providers start without one."
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
 fn docker_phase(execution: &PlanExecution) -> &str {
     match &execution.source {
         ExecutionSource::Docker { phase, .. } => phase,
@@ -1417,6 +1444,8 @@ mod tests {
         args: Vec<String>,
         env: HashMap<String, String>,
         env_file: Option<PathBuf>,
+        /// The env file's content and mode while the phase ran.
+        credentials: Option<(String, u32)>,
     }
 
     /// Stands in for Docker: each phase leaves what the real one leaves.
@@ -1453,11 +1482,20 @@ mod tests {
             phase: Phase,
             mut cancel: watch::Receiver<bool>,
         ) -> Result<bool> {
+            use std::os::unix::fs::PermissionsExt;
             let env = phase.env.iter().cloned().collect::<HashMap<_, _>>();
+            let credentials = match &phase.env_file {
+                Some(file) => Some((
+                    fs::read_to_string(file)?,
+                    fs::metadata(file)?.permissions().mode() & 0o777,
+                )),
+                None => None,
+            };
             self.calls.lock().unwrap().push(Call {
                 args: phase.args.clone(),
                 env: env.clone(),
                 env_file: phase.env_file.clone(),
+                credentials,
             });
             fs::write(&phase.log, phase.args.join(" "))?;
             let contracts = checkout.join("target/harness-e2e-contract");
@@ -1717,7 +1755,11 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(data.clone()));
         let launcher = Arc::new(FakeLauncher::default());
         let providers = root.path().join("providers.env");
-        fs::write(&providers, "DEEPSEEK_API_KEY=secret\n").unwrap();
+        fs::write(
+            &providers,
+            "DEEPSEEK_API_KEY=sk-file-9f1c\nZAI_API_KEY=sk-zai-9f1c\n",
+        )
+        .unwrap();
         let store = docker_store(
             &data,
             runner.clone(),
@@ -1731,6 +1773,12 @@ mod tests {
                 ..DockerSettings::default()
             },
         );
+        // The Console's credentials over the worker's file.
+        let credentials = store.credentials();
+        credentials
+            .set("DEEPSEEK_API_KEY", "sk-console-9f1c")
+            .unwrap();
+        credentials.set("OPENAI_API_KEY", "sk-openai-9f1c").unwrap();
         let started = store
             .start_execution(docker_parameters("pr"), "In Docker")
             .await
@@ -1751,7 +1799,7 @@ mod tests {
         assert_eq!(inputs["stack"], stacks::REPOSITORY[0].1);
         assert!(!fs::read_to_string(folder.join("inputs.json"))
             .unwrap()
-            .contains("secret"));
+            .contains("9f1c"));
         assert_eq!(
             fs::read_to_string(folder.join("checkout/Dockerfile")).unwrap(),
             DOCKERFILE
@@ -1828,6 +1876,7 @@ mod tests {
 
         // Two groups at a time, each with the provider credentials by file.
         assert_eq!(launcher.most.load(Ordering::SeqCst), 2);
+        let merged = "DEEPSEEK_API_KEY=sk-console-9f1c\nOPENAI_API_KEY=sk-openai-9f1c\nZAI_API_KEY=sk-zai-9f1c\n";
         let phases = launcher
             .calls
             .lock()
@@ -1855,9 +1904,17 @@ mod tests {
             json!({"runner": "harness-e2e console", "execution_id": id, "attempt": 1, "job": "finalize"})
         );
         for call in launcher.calls.lock().unwrap().iter() {
-            let credentials = matches!(call.args[0].as_str(), "group")
+            // What the stack starts with and what packaging redacts; each in
+            // a private file of its own, outside the data directory, gone
+            // once the phase ended.
+            let credentials = matches!(call.args[0].as_str(), "group" | "package")
                 || call.args[..] == ["prepare", "assemble"];
             assert_eq!(call.env_file.is_some(), credentials, "{:?}", call.args);
+            if let Some(file) = &call.env_file {
+                assert_eq!(call.credentials, Some((merged.to_owned(), 0o600)));
+                assert!(!file.starts_with(&data), "{}", file.display());
+                assert!(!file.exists(), "{} outlived its phase", file.display());
+            }
             assert_eq!(call.env["EXECUTION_KEY"], id);
             // Only a group runs a Docker daemon to pull through them.
             assert_eq!(
@@ -1876,6 +1933,23 @@ mod tests {
             "target/harness-e2e-contract/contracts/pr-r01.json"
         );
         assert_eq!(group.env["HARNESS_E2E_SUITE_DEADLINE_SECONDS"], "10200");
+        // No value is anywhere in the data directory but the store's file.
+        let mut folders = vec![data.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path != data.join(credentials::FILE) {
+                    let bytes = fs::read(&path).unwrap();
+                    assert!(
+                        !bytes.windows(4).any(|window| window == b"9f1c"),
+                        "{} holds a credential",
+                        path.display()
+                    );
+                }
+            }
+        }
         // Every artifact under the name the workflow gives it.
         let mut names = directories(&store.docker_artifacts(&id))
             .unwrap()
@@ -2298,6 +2372,21 @@ mod tests {
             (stack.name.as_str(), stack.yaml.as_str()),
             ("default", "iii: 0.24.1\n")
         );
+    }
+
+    #[test]
+    fn an_execution_warns_when_its_models_provider_has_no_key_and_still_runs() {
+        let set = BTreeMap::from([("ZAI_API_KEY".to_owned(), "k".to_owned())]);
+        assert_eq!(credential_warning("zai", &set), None);
+        assert_eq!(
+            credential_warning("openai", &set).as_deref(),
+            Some("OPENAI_API_KEY is not set (Stacks, provider credentials): provider-openai starts without a credential.")
+        );
+        // A provider the catalog does not know: only none at all is said.
+        assert_eq!(credential_warning("openai-codex", &set), None);
+        assert!(credential_warning("openai-codex", &BTreeMap::new())
+            .unwrap()
+            .starts_with("No provider credential is set"));
     }
 
     #[test]

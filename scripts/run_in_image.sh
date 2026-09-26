@@ -23,6 +23,9 @@
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
 # GIT_CONFIG_COUNT states, CI, the execution key, the provider credentials
 # and, to `prepare` alone, GITHUB_TOKEN; --env-file adds a file of them.
+# The phase learns which variables are credentials from
+# HARNESS_E2E_CREDENTIALS, the names of that file: the launcher writes those
+# into the stack's .env and packaging redacts their values out of evidence.
 #
 # The container is labelled harness-e2e.execution=$EXECUTION_KEY,
 # harness-e2e.phase and harness-e2e.group. Interrupted, the wrapper stops it.
@@ -97,10 +100,23 @@ if [[ "$phase" == group ]]; then
 else
   args+=(--user "$(id -u):$(id -g)")
 fi
-[[ -z "$env_file" ]] || args+=(--env-file "$env_file")
+credentials=()
+if [[ -n "$env_file" ]]; then
+  args+=(--env-file "$env_file")
+  # Names only, as Docker reads the file; Docker refuses a file it cannot.
+  if [[ -r "$env_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line=${line#"${line%%[![:space:]]*}"}
+      if [[ "$line" == *=* && "${line%%=*}" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+        credentials+=("${line%%=*}")
+      fi
+    done <"$env_file"
+  fi
+fi
+((${#credentials[@]} == 0)) || args+=(--env "HARNESS_E2E_CREDENTIALS=${credentials[*]}")
 for name in $(compgen -e); do
   case "$name" in
-    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER) ;;
+    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER | HARNESS_E2E_CREDENTIALS) ;;
     # Only prepare calls GitHub; a group's subject has a shell.
     GITHUB_TOKEN) [[ "$phase" != prepare ]] || args+=(--env "$name") ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | CI | EXECUTION_KEY | \

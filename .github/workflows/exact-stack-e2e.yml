@@ -116,6 +116,16 @@ jobs:
             --cli-version "$(jq -r '.iii' target/harness-e2e-contract/execution.json)"
           echo "posted=true" >>"$GITHUB_OUTPUT"
 
+      # The provider credentials among this job's secrets, the names
+      # config/provider-credentials.json lists and no other secret, in a file
+      # only this job reads (mode 600, emptied with RUNNER_TEMP): the phase
+      # gets it with --env-file and packaging redacts its values out of the
+      # evidence.
+      - name: Write the provider credentials
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: python3 scripts/exact_stack_campaign.py credentials-from-secrets --output "$RUNNER_TEMP/provider-credentials.env"
+
       # The other half writes one contract per campaign and assembles the
       # stack once, with the credentials the groups get and one more try:
       # compose::add expands every declared worker into its graph and writes
@@ -125,12 +135,9 @@ jobs:
         id: contracts
         env:
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           set -euo pipefail
-          scripts/run_in_image.sh prepare assemble
+          scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare assemble
           summary=target/harness-e2e-contract/contracts/resolution.json
           printf 'matrix=%s\n' "$(jq -c '.matrix' "$summary")" >>"$GITHUB_OUTPUT"
 
@@ -153,7 +160,8 @@ jobs:
           if-no-files-found: error
 
       # The assembly ran with provider credentials: its evidence goes through
-      # the same checks a group's does before it is uploaded.
+      # the same checks a group's does, their values redacted, before it is
+      # uploaded.
       - name: Package the stack assembly evidence
         id: assembly_package
         if: always() && steps.contracts.outcome != 'skipped'
@@ -166,6 +174,7 @@ jobs:
               --root "$root" \
               --contract "$root/stack-lock.json" \
               --workflow '{"workflow":"exact-stack-e2e.yml","job":"prepare","step":"assemble"}' \
+              --credentials "$RUNNER_TEMP/provider-credentials.env" \
               --output "$root/bundle-manifest.json"
           done
 
@@ -243,6 +252,13 @@ jobs:
           GITHUB_TOKEN: ${{ steps.fixture_token.outputs.token }}
         run: scripts/run_in_image.sh prepare fixtures
 
+      # As in preparation: the provider credentials among this job's secrets,
+      # in a private file the group gets and its packaging redacts.
+      - name: Write the provider credentials
+        env:
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+        run: python3 scripts/exact_stack_campaign.py credentials-from-secrets --output "$RUNNER_TEMP/provider-credentials.env"
+
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for
       # alertmanager_route_match, Chromium for the browser worker, and a
@@ -252,11 +268,8 @@ jobs:
         id: common
         continue-on-error: true
         env:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           HARNESS_E2E_CONTRACT: target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
-        run: scripts/run_in_image.sh group
+        run: scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group
 
       # Cancelled or timed out, the group's executor container may still be
       # running: it goes before anything is reported or packaged, so what is
@@ -307,6 +320,7 @@ jobs:
             --root target/harness-e2e-exact-stack \
             --contract target/harness-e2e-exact-stack/stack-lock.json \
             --workflow "$WORKFLOW_IDENTITY" \
+            --credentials "$RUNNER_TEMP/provider-credentials.env" \
             --output target/harness-e2e-exact-stack/bundle-manifest.json
 
       - name: Preserve safe group packaging diagnostic
