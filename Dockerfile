@@ -5,6 +5,7 @@
 # .github/workflows/executor-image.yml; until then the wrapper builds it.
 # Everything it installs is pinned, so the same Dockerfile is the same tools.
 FROM docker:29.1.3-cli@sha256:4fa0ee1f3a7e4354c4ea34558b6d4ee32859baf4973d4c8ccc8e7fe3dd730c04 AS docker-cli
+FROM docker:29.1.3-dind@sha256:173f284a4299164772a90f52b373e73e087583c0963f1334c9995f190ef6f3f5 AS docker-engine
 
 # The Actions runner's distribution: the workers the stacks install are built
 # for its glibc. This build (2026-09-11) predates the apt snapshot below.
@@ -21,7 +22,7 @@ COPY --from=docker-cli /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-cert
 RUN printf 'APT::Snapshot "20260924T000000Z";\nAcquire::Retries "3";\n' >/etc/apt/apt.conf.d/50snapshot \
  && apt-get update \
  && apt-get install -y --no-install-recommends \
-      build-essential ca-certificates curl git jq procps python3 python3-pip python3-yaml unzip xz-utils \
+      build-essential ca-certificates curl git iptables jq procps python3 python3-pip python3-yaml unzip xz-utils \
  && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSLo /tmp/node.tar.xz https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.xz \
@@ -66,16 +67,21 @@ RUN curl -fsSLo /tmp/gh.tar.gz https://github.com/cli/cli/releases/download/v2.1
  && rm /tmp/gh.tar.gz
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
 
-# trending_topics_build and Kanban start their fixtures through the host's
-# Docker socket; compose is the runner's plugin.
+# A group runs a Docker daemon of its own (scripts/executor.sh starts it), in
+# which Registry, trending_topics_build and Kanban start their fixtures: the
+# engine's static binaries, of the CLI's release, and iptables above for its
+# networks. compose is the runner's plugin.
 COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-buildx /usr/local/libexec/docker/cli-plugins/docker-compose \
      /usr/local/libexec/docker/cli-plugins/
+COPY --from=docker-engine /usr/local/bin/dockerd /usr/local/bin/containerd /usr/local/bin/containerd-shim-runc-v2 \
+     /usr/local/bin/runc /usr/local/bin/docker-init /usr/local/bin/docker-proxy /usr/local/bin/
 
 ENV PATH=/home/executor/.local/bin:/usr/local/cargo/bin:/usr/local/go/bin:$PATH
 # Never root (Kanban refuses it), and any --user works: HOME is writable by
 # every uid, and scripts/executor.sh names a uid /etc/passwd does not know
 # (run_in_image.sh adds no-new-privileges, so that entry cannot reach root).
+# A group alone starts as root, for its Docker daemon, and runs as the user.
 ENV HOME=/home/executor
 # iii's anonymous product-usage telemetry stays off in every phase and in
 # every engine and worker a group starts.

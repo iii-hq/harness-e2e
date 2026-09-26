@@ -8,15 +8,16 @@
 #
 # The image holds only tools (the Dockerfile beside scripts/). The scripts are
 # this checkout's: its root is mounted at the same path, with the target/
-# directory every phase reads and writes, and so is a fresh TMPDIR, so a path
-# a scenario hands the host's Docker daemon through the socket names the same
-# files on both sides. Only `group` gets that socket. The container runs as
-# the calling user, can never gain privileges, and by default, without the
-# host's network, starts its engine on 49134 in a namespace of its own.
-# HARNESS_E2E_DOCKER_NETWORK=host puts it on the host's network instead, for a
-# host that runs one phase at a time: fixtures that publish a port on the
-# host's loopback (Registry, for its screenshots) are only reachable from the
-# phase there.
+# directory every phase reads and writes. No container can gain privileges,
+# each has a network of its own (a group starts its engine on 49134 there),
+# and every phase runs as the calling user. Nothing reaches the host's
+# Docker: a `group` container is privileged and starts as root, with a volume
+# at /var/lib/docker, for the Docker daemon scripts/executor.sh starts in it
+# before it runs the group as the calling user. The containers its scenarios
+# start are that daemon's and go with the group's container and its volume.
+# Its user reaches root in that container through the daemon's socket, and
+# a privileged container is root on the host: what the host's socket gave a
+# group before, and no more.
 #
 # The environment the phases read passes through by name, never by value on
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
@@ -74,30 +75,32 @@ else
   }
 fi
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX")
-cidfile="$tmp.cid"
-# Fixtures a scenario ran as root through the socket may leave files behind.
-trap 'rm -rf "$tmp" "$cidfile" 2>/dev/null || warn "could not remove all of $tmp"' EXIT
-# Chromium opens a socket under TMPDIR, and a socket path holds 107 bytes.
-((${#tmp} <= 60)) || warn "TMPDIR $tmp is too long for Chromium's socket: the browser worker will not start"
+cidfile=$(mktemp -u "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX.cid")
+trap 'rm -f "$cidfile"' EXIT
 
-args=(run --rm --init --cidfile "$cidfile"
-  --label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
-  --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}"
-  --user "$(id -u):$(id -g)" --security-opt no-new-privileges
+labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
+  --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")
+args=(run --rm --init --cidfile "$cidfile" "${labels[@]}"
+  --security-opt no-new-privileges
   --volume "$root:$root" --workdir "$root"
-  --volume "$tmp:$tmp" --env "TMPDIR=$tmp"
   --env "HARNESS_E2E_EXECUTOR_IMAGE=$reference")
 if [[ "$phase" == group ]]; then
-  socket=${DOCKER_HOST:-unix:///var/run/docker.sock}
-  socket=${socket#unix://}
-  args+=(--group-add "$(stat -c %g "$socket")" --volume "$socket:/var/run/docker.sock")
+  # Anonymous, so --rm removes it; labelled like the container.
+  volume=type=volume,dst=/var/lib/docker
+  for label in "${labels[@]}"; do
+    [[ "$label" == --label ]] || volume+=",volume-label=$label"
+  done
+  # A cgroup namespace of its own whatever the host's default: the daemon
+  # rearranges the cgroups it sees.
+  args+=(--privileged --cgroupns private --user 0:0 --mount "$volume"
+    --env "HARNESS_E2E_EXECUTOR_USER=$(id -u):$(id -g)")
+else
+  args+=(--user "$(id -u):$(id -g)")
 fi
-[[ -z "${HARNESS_E2E_DOCKER_NETWORK:-}" ]] || args+=(--network "$HARNESS_E2E_DOCKER_NETWORK")
 [[ -z "$env_file" ]] || args+=(--env-file "$env_file")
 for name in $(compgen -e); do
   case "$name" in
-    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_DOCKER_NETWORK) ;;
+    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER) ;;
     # Only prepare calls GitHub; a group's subject has a shell.
     GITHUB_TOKEN) [[ "$phase" != prepare ]] || args+=(--env "$name") ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | CI | EXECUTION_KEY | \
@@ -123,5 +126,9 @@ status=0
 wait "$container" || status=$?
 if ((status != 0)) && [[ ! -s "$cidfile" ]]; then
   record_failure executor_start "$status" "the executor container did not start"
+elif ((status != 0)) && [[ "$phase" == group ]]; then
+  # Before the launcher ran (its Docker daemon did not start, say) or
+  # without it writing one.
+  record_failure executor "$status" "the group's executor container exited $status before the group recorded a failure"
 fi
 exit "$status"

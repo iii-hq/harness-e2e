@@ -22,7 +22,7 @@
 //! Running a scenario again runs its groups as the next attempt, finalizes
 //! again and imports again: the last attempt counts, as a re-run job's does
 //! on GitHub.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -92,6 +92,9 @@ pub(crate) struct DockerSettings {
     /// A checkout's `scripts/` to run instead of the embedded scripts, copied
     /// into each new execution.
     pub scripts_dir: Option<PathBuf>,
+    /// A pull-through cache per registry for each group's Docker daemon,
+    /// handed to the group as `HARNESS_E2E_REGISTRY_MIRRORS`.
+    pub registry_mirrors: BTreeMap<String, String>,
 }
 
 impl Default for DockerSettings {
@@ -100,6 +103,7 @@ impl Default for DockerSettings {
             parallel_groups: 2,
             provider_env_file: None,
             scripts_dir: None,
+            registry_mirrors: BTreeMap::new(),
         }
     }
 }
@@ -237,9 +241,10 @@ impl Launcher for ImageLauncher {
         let filters = [format!("label=harness-e2e.execution={execution}")];
         let containers = self.containers("-aq", &filters).await;
         if !containers.is_empty() {
+            // With the volume a group's Docker daemon keeps its images in.
             let _ = Command::new(&self.docker)
                 .arg("rm")
-                .arg("-f")
+                .arg("-fv")
                 .args(&containers)
                 .output()
                 .await;
@@ -622,7 +627,6 @@ impl PlanStore {
                 log.display()
             ));
         }
-        execution.warnings.extend(network_note(&groups));
         execution.slots = group_slots(&groups);
         if let ExecutionSource::Docker {
             phase,
@@ -760,6 +764,17 @@ impl PlanStore {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
         );
+        let mirrors = &self.docker.settings.registry_mirrors;
+        if !mirrors.is_empty() {
+            env.push((
+                "HARNESS_E2E_REGISTRY_MIRRORS".into(),
+                mirrors
+                    .iter()
+                    .map(|(registry, mirror)| format!("{registry}={mirror}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
         let folder = self.docker_folder(id);
         let log = folder.join(format!(
             "logs/group-{}-{}-{}.log",
@@ -1339,32 +1354,9 @@ fn placeholders(slots: &[Slot]) -> bool {
     slots.iter().all(|slot| slot.execution_id.is_empty())
 }
 
-fn registry(group_id: &str) -> bool {
-    group_id.starts_with("case-registry-")
-}
-
-/// Every group runs on a network of its own. The Registry fixture serves the
-/// application it screenshots on the host's loopback, which only a phase on
-/// the host's network reaches; there a group's stack would take this host's
-/// ports (its Console binds 3113 on every address, as this host's iii does),
-/// so the Registry groups run isolated too, and without those screenshots.
-fn network_note(groups: &[DockerGroup]) -> Option<String> {
-    let registry = groups
-        .iter()
-        .filter(|group| registry(&group.group_id))
-        .map(|group| group.group_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    (!registry.is_empty()).then(|| {
-        format!(
-            "{} ran on an isolated network: the application the Registry fixture serves on the host's loopback cannot be reached for its screenshots, so they are missing. On the host's network the group's stack would take this host's ports (its Console binds 3113).",
-            registry.into_iter().collect::<Vec<_>>().join(", ")
-        )
-    })
-}
-
 /// Groups whose fixtures are private repositories.
 fn private_fixtures(group_id: &str) -> bool {
-    registry(group_id) || group_id == "case-trending-topics-build"
+    group_id.starts_with("case-registry-") || group_id == "case-trending-topics-build"
 }
 
 /// Copy a directory tree, as `cp -a` does, to `destination`, which must not
@@ -1732,6 +1724,10 @@ mod tests {
             launcher.clone(),
             DockerSettings {
                 provider_env_file: Some(providers.clone()),
+                registry_mirrors: BTreeMap::from([
+                    ("mcr.microsoft.com".into(), "http://mirror:5001".into()),
+                    ("docker.io".into(), "http://mirror:5000".into()),
+                ]),
                 ..DockerSettings::default()
             },
         );
@@ -1863,6 +1859,16 @@ mod tests {
                 || call.args[..] == ["prepare", "assemble"];
             assert_eq!(call.env_file.is_some(), credentials, "{:?}", call.args);
             assert_eq!(call.env["EXECUTION_KEY"], id);
+            // Only a group runs a Docker daemon to pull through them.
+            assert_eq!(
+                call.env
+                    .get("HARNESS_E2E_REGISTRY_MIRRORS")
+                    .map(String::as_str),
+                (call.args[0] == "group")
+                    .then_some("docker.io=http://mirror:5000 mcr.microsoft.com=http://mirror:5001"),
+                "{:?}",
+                call.args
+            );
         }
         let group = &launcher.calls("group")[0];
         assert_eq!(
@@ -1870,7 +1876,6 @@ mod tests {
             "target/harness-e2e-contract/contracts/pr-r01.json"
         );
         assert_eq!(group.env["HARNESS_E2E_SUITE_DEADLINE_SECONDS"], "10200");
-        assert!(!group.env.contains_key("HARNESS_E2E_DOCKER_NETWORK"));
         // Every artifact under the name the workflow gives it.
         let mut names = directories(&store.docker_artifacts(&id))
             .unwrap()
@@ -2405,6 +2410,28 @@ mod tests {
         drop(sender);
     }
 
+    #[tokio::test]
+    async fn removing_an_execution_takes_its_containers_volumes_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let calls = root.path().join("docker.log");
+        let docker = root.path().join("docker");
+        fs::write(
+            &docker,
+            format!(
+                "#!/bin/sh\necho \"$*\" >>{}\n[ \"$1\" != ps ] || echo cid-1\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        ImageLauncher { docker }.remove("plan-1").await;
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "ps -aq --filter label=harness-e2e.execution=plan-1\nrm -fv cid-1\n"
+        );
+    }
+
     #[test]
     fn each_drive_has_its_own_cancel() {
         let docker =
@@ -2462,28 +2489,6 @@ mod tests {
             assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
         }
         assert_eq!(done.slots[1].state, "not_run");
-    }
-
-    #[test]
-    fn registry_groups_run_isolated_and_say_their_screenshots_are_missing() {
-        let group = |id: &str| DockerGroup {
-            round: 1,
-            campaign_id: "software-engineering-r01".into(),
-            group_id: id.into(),
-            scenarios: Vec::new(),
-            state: "queued".into(),
-            attempt: 1,
-            counted: 0,
-            error: None,
-        };
-        assert_eq!(network_note(&[group("case-minimal-path")]), None);
-        let note = network_note(&[
-            group("case-registry-implementation"),
-            group("case-minimal-path"),
-        ])
-        .unwrap();
-        assert!(note.starts_with("case-registry-implementation ran on an isolated network"));
-        assert!(note.contains("screenshots"));
     }
 
     #[tokio::test]

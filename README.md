@@ -247,13 +247,14 @@ campaigns.
 Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first
 12 hex of the Dockerfile's sha256>` ([`Dockerfile`](Dockerfile)): git, curl, jq,
 gh, Python 3 with pip and PyYAML, Node 24 with pnpm, Go 1.25, Rust 1.98.1,
-Playwright's Chromium at `/usr/bin/chromium` and the Docker CLI with buildx and
-compose, much of what the `ubuntu-latest` runner gave the groups before.
-Bases, the Ubuntu archive snapshot and every download are pinned, so one
-Dockerfile is one set of tools. It holds no scripts:
+Playwright's Chromium at `/usr/bin/chromium`, the Docker CLI with buildx and
+compose, and the Docker Engine (`dockerd`, containerd, runc, iptables), much
+of what the `ubuntu-latest` runner gave the groups before. Bases, the Ubuntu
+archive snapshot and every download are pinned, so one Dockerfile is one set
+of tools. It holds no scripts:
 [`scripts/run_in_image.sh`](scripts/run_in_image.sh) `<phase>` mounts the
-checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
-with `no-new-privileges`, passes the phase's environment through by name, and
+checkout at the same path, runs as the caller's uid with
+`no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
 [materialize|assemble|fixtures]`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
@@ -262,18 +263,37 @@ the stack's template, the Registry sources and the trending topics fixture)
 below `target/`, three tries each, and `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
-aggregating them. Only `group` gets the host's Docker socket, and only
-`prepare` a `GITHUB_TOKEN`: a group's subject has a shell. Interrupted, the
-wrapper stops its container; a group whose image or container never started
-still writes its `failure.json`.
+aggregating them. Only `prepare` gets a `GITHUB_TOKEN`: a group's subject has
+a shell. Interrupted, the wrapper stops its container; a group whose image or
+container never started still writes its `failure.json`.
 
-Each group's engine listens on 49134 in its own container, off the host's
-network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
-host networking for their screenshots: the fixture publishes the application
-on the host's loopback, where only a phase on the host's network reaches it.
-The workflow runs every group on its runner's network, since each job owns
-its runner, and keeps on the runner what needs it: the GitHub App token for
-the private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
+No phase mounts the host's Docker socket or joins the host's network. Each
+container has a network of its own on Docker's default bridge, where a group's
+engine listens on 49134 without taking a host port. A `group` container runs
+a Docker daemon of its own: privileged, in a cgroup namespace of its own, it
+starts as root with
+an anonymous volume, labelled like the container, at `/var/lib/docker`;
+`executor.sh group` starts `dockerd` there, runs the group as the caller's uid
+(whose group owns the daemon's socket) and stops the daemon after it, which
+stops its containers. Every container a scenario starts (Registry's runner,
+Kanban's, trending topics') is that daemon's, in the group's network, so the
+application the Registry fixture publishes on `127.0.0.1` is where its
+screenshots look, and it goes with the group's container and its volume
+(`docker rm -fv` for one left behind). Each group starts with no image and
+pulls what its scenarios run.
+
+This keeps groups from colliding, not from the host. The group's user
+reaches root in its container through the daemon's socket, and the container
+is privileged, so that root is root-equivalent on the host, as the host's
+socket was: a subject can start a privileged container with the host's
+devices, mount the host's disk and read what is there (the host daemon's
+container configurations, with a concurrent `prepare`'s `GITHUB_TOKEN`, a
+worker's `provider_env_file`, `gh`'s credentials). From the default bridge it
+also reaches the host's ports on the bridge's gateway (a local Console on
+3113, iii on 49134) and other groups' containers.
+
+The workflow keeps on the runner what needs it: the GitHub App token for the
+private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
 removing a cancelled phase's container before anything is reported or
 packaged.
 
@@ -407,11 +427,11 @@ finish and imports what did. A worker older than this release cannot read a
 Docker execution and drops it from its database, as it drops any row it cannot
 read.
 
-Every group runs on a network of its own. The Registry fixture serves the
-application it screenshots on the host's loopback, which only a phase on the
-host's network reaches; there a group's stack takes host ports this machine's
-iii already holds (its Console binds 3113), so the Registry groups run isolated
-as well, and their executions say their screenshots are missing.
+Every group runs on a network of its own with a Docker daemon of its own
+(see [Executor image](#executor-image)): it publishes no port on this host, so
+its stack never collides with this machine's iii (its Console binds 3113) or
+another group's. It can still reach them, and root on this host, as that
+section says.
 
 Worker configuration:
 
@@ -423,9 +443,29 @@ Worker configuration:
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.
+- `docker_registry_mirrors`: a pull-through cache per registry for the Docker
+  daemon each group runs, which starts with no image, as
+  `{mcr.microsoft.com: http://172.17.0.1:5001}`: the daemon pulls from the
+  mirror first and from the registry when the mirror fails. It reaches the
+  groups as `HARNESS_E2E_REGISTRY_MIRRORS` (`REGISTRY=URL ...`), which
+  `scripts/run_in_image.sh group` also takes from its caller.
+
+Kanban's and trending topics' images come from `mcr.microsoft.com`, which
+`dockerd --registry-mirror` does not cover (it mirrors Docker Hub alone); a
+group's daemon writes each mirror into `/etc/docker/certs.d/<registry>/hosts.toml`
+instead. One `registry:2` per upstream serves as the cache, listening on the
+Docker bridge's gateway (`docker network inspect bridge --format '{{(index
+.IPAM.Config 0).Gateway}}'`), where every group container reaches this host:
+
+```sh
+docker run -d --name mcr-cache --restart unless-stopped -p 172.17.0.1:5001:5000 \
+  -v mcr-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://mcr.microsoft.com registry:2
+docker run -d --name hub-cache --restart unless-stopped -p 172.17.0.1:5000:5000 \
+  -v hub-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io registry:2
+```
 
 The phases get none of the worker's environment but where Docker and
-`TMPDIR` are (keep `TMPDIR` short: Chromium's socket path holds 107 bytes).
+`TMPDIR` are.
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
 for the private Registry and trending topics sources.
 

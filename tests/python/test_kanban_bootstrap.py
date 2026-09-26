@@ -42,10 +42,9 @@ class KanbanBootstrapTest(unittest.TestCase):
             if 'uses: actions/checkout@' in step:
                 self.assertIn('persist-credentials: false', step)
         self.assertIn('if [[ "$campaign_group_id" == case-kanban-* ]]', group)
-        # Its containers mount node through the host's Docker daemon: a copy
-        # under the run root, the one path the executor image shares with it.
-        self.assertIn('kanban_node="$run_root/kanban-node"', group)
-        self.assertIn('--node "$kanban_node"', group)
+        # Its containers are the group's own Docker daemon's: they mount the
+        # executor image's node where it is.
+        self.assertIn('--node "$(realpath "$(command -v node)")"', group)
         self.assertIn('HARNESS_E2E_KANBAN_RUNTIME', group)
         self.assertIn('Kanban fixture checkout is unavailable', group)
 
