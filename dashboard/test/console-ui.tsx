@@ -3,6 +3,7 @@ import {
   cloneElement,
   createContext,
   type HTMLAttributes,
+  type InputHTMLAttributes,
   isValidElement,
   type ReactElement,
   type ReactNode,
@@ -13,6 +14,7 @@ import {
   type ThHTMLAttributes,
   useContext,
   useEffect,
+  useId,
   useRef,
   useState,
 } from 'react'
@@ -269,9 +271,12 @@ export function EmptyState({
   )
 }
 
+// Radix names the content by its title and description.
 const DialogContext = createContext<{
   open: boolean
   setOpen(open: boolean): void
+  titleId?: string
+  descriptionId?: string
 }>({ open: false, setOpen() {} })
 
 export function Dialog({
@@ -287,6 +292,7 @@ export function Dialog({
   children?: ReactNode
 }) {
   const [internal, setInternal] = useState(defaultOpen)
+  const id = useId()
   return (
     <DialogContext.Provider
       value={{
@@ -295,6 +301,8 @@ export function Dialog({
           setInternal(next)
           onOpenChange?.(next)
         },
+        titleId: `${id}-title`,
+        descriptionId: `${id}-description`,
       }}
     >
       {children}
@@ -329,13 +337,24 @@ export function DialogContent({
   onEscapeKeyDown?(event: KeyboardEvent): void
 }) {
   const dialog = useContext(DialogContext)
+  const content = useRef<HTMLDivElement>(null)
+  // Radix moves focus into the content as it opens.
+  useEffect(() => {
+    if (dialog.open)
+      content.current
+        ?.querySelector<HTMLElement>('button, [href], input, select, textarea')
+        ?.focus()
+  }, [dialog.open])
   if (!dialog.open) return null
   return (
     <>
       {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: the host overlay closes on a pointer; Escape is on the content */}
       <div data-overlay="" onClick={() => dialog.setOpen(false)} />
       <div
+        ref={content}
         role="dialog"
+        aria-labelledby={dialog.titleId}
+        aria-describedby={dialog.descriptionId}
         {...props}
         onKeyDown={compose(onKeyDown, (key) => {
           if (key.key !== 'Escape') return
@@ -348,11 +367,11 @@ export function DialogContent({
 }
 
 export function DialogTitle(props: HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 {...props} />
+  return <h2 id={useContext(DialogContext).titleId} {...props} />
 }
 
 export function DialogDescription(props: HTMLAttributes<HTMLParagraphElement>) {
-  return <p {...props} />
+  return <p id={useContext(DialogContext).descriptionId} {...props} />
 }
 
 /** The host settles through onOpenChange(false) first, then the callback. */
@@ -662,4 +681,413 @@ export function TableCell(props: TdHTMLAttributes<HTMLTableCellElement>) {
 }
 export function TableCaption(props: HTMLAttributes<HTMLTableCaptionElement>) {
   return <caption className="iii-ui-table__caption" {...props} />
+}
+
+/* ---- controls: the host's markup and roles, none of its styling ---- */
+
+export function Button({
+  variant = 'primary',
+  size = 'md',
+  asChild: _asChild,
+  ...props
+}: ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: string
+  size?: string
+  asChild?: boolean
+}) {
+  // Like the host's, no default type: inside a form it submits.
+  return <button data-variant={variant} data-size={size} {...props} />
+}
+
+type InputAttributes = Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  'onChange' | 'value'
+>
+
+export function Input({
+  value,
+  onChange,
+  preserveCase: _preserveCase,
+  ...props
+}: InputAttributes & {
+  value: string
+  onChange(next: string): void
+  preserveCase?: boolean
+}) {
+  return (
+    <input
+      value={value}
+      onChange={(event) => onChange(event.currentTarget.value)}
+      {...props}
+    />
+  )
+}
+
+export function SearchField({
+  value,
+  onChange,
+  label,
+  className,
+  id,
+  'aria-label': ariaLabel,
+  placeholder,
+  onKeyDown,
+  ...props
+}: Omit<InputAttributes, 'type' | 'className'> & {
+  value: string
+  onChange(next: string): void
+  label?: ReactNode
+  className?: string
+}) {
+  const generated = useId()
+  const inputId = id ?? generated
+  return (
+    <div className={className}>
+      {label ? <label htmlFor={inputId}>{label}</label> : null}
+      <input
+        {...props}
+        id={inputId}
+        type="search"
+        value={value}
+        placeholder={placeholder}
+        aria-label={label ? undefined : (ariaLabel ?? placeholder)}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        onKeyDown={(event) => {
+          onKeyDown?.(event)
+          if (event.defaultPrevented) return
+          if (event.key === 'Escape' && value) {
+            event.stopPropagation()
+            onChange('')
+          }
+        }}
+      />
+      {value ? (
+        <button type="button" aria-label="Clear" onClick={() => onChange('')} />
+      ) : null}
+    </div>
+  )
+}
+
+export function Skeleton(props: HTMLAttributes<HTMLSpanElement>) {
+  return <span aria-hidden="true" {...props} />
+}
+
+export function Checkbox({
+  className,
+  label,
+  indeterminate,
+  ...props
+}: Omit<InputAttributes, 'type' | 'className'> & {
+  className?: string
+  label?: ReactNode
+  indeterminate?: boolean
+  checked?: boolean
+  onChange?: InputHTMLAttributes<HTMLInputElement>['onChange']
+}) {
+  const box = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (box.current) box.current.indeterminate = Boolean(indeterminate)
+  }, [indeterminate])
+  return (
+    <label className={['iii-ui-checkbox', className].filter(Boolean).join(' ')}>
+      <span className="iii-ui-checkbox__control">
+        <input
+          ref={box}
+          type="checkbox"
+          className="iii-ui-checkbox__input"
+          {...props}
+        />
+      </span>
+      {label != null ? (
+        <span className="iii-ui-checkbox__label">{label}</span>
+      ) : null}
+    </label>
+  )
+}
+
+export function SegmentedControl<T extends string>({
+  value,
+  onChange,
+  options,
+  className,
+  itemClassName,
+  variant = 'tabs',
+  'aria-label': ariaLabel,
+}: {
+  value: T
+  onChange(next: T): void
+  options: { value: T; label: ReactNode; title?: string }[]
+  className?: string
+  itemClassName?: string
+  variant?: 'tabs' | 'radio'
+  'aria-label'?: string
+}) {
+  const radio = variant === 'radio'
+  return (
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: the role is radiogroup or tablist, both named by aria-label
+    <div
+      role={radio ? 'radiogroup' : 'tablist'}
+      aria-label={ariaLabel}
+      className={['iii-ui-segmented', className].filter(Boolean).join(' ')}
+    >
+      {options.map((option) => {
+        const active = option.value === value
+        return (
+          // biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-checked only on a radio, aria-selected only on a tab
+          <button
+            key={option.value}
+            type="button"
+            role={radio ? 'radio' : 'tab'}
+            aria-checked={radio ? active : undefined}
+            aria-selected={radio ? undefined : active}
+            data-selected={active || undefined}
+            title={option.title}
+            className={['iii-ui-segmented__item', itemClassName]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => onChange(option.value)}
+          >
+            <span>{option.label}</span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+type Choice = {
+  value: string
+  label: string
+  title?: string
+  description?: string
+  keywords?: readonly string[]
+  disabled?: boolean
+}
+type ChoiceGroup = { label: string; options: readonly Choice[] }
+
+/** The open list of Select and Selector: groups of options, each named by
+ *  its label as Radix names an item by its text. */
+function ChoiceList({
+  sections,
+  value,
+  empty,
+  onPick,
+  listRef,
+}: {
+  sections: readonly ChoiceGroup[]
+  value: string | undefined
+  empty?: { label: string; onPick(): void }
+  onPick(value: string): void
+  listRef: RefObject<HTMLDivElement | null>
+}) {
+  const option = (choice: Choice, selected: boolean, pick: () => void) => (
+    <div
+      key={choice.value}
+      role="option"
+      aria-selected={selected}
+      aria-label={choice.label}
+      aria-disabled={choice.disabled || undefined}
+      tabIndex={-1}
+      title={choice.title}
+      onClick={() => !choice.disabled && pick()}
+      onKeyDown={(key) => {
+        if (key.key === 'Enter' && !choice.disabled) pick()
+      }}
+    >
+      <span>{choice.label}</span>
+      {choice.description ? <span>{choice.description}</span> : null}
+    </div>
+  )
+  return (
+    <div role="listbox" ref={listRef}>
+      {empty
+        ? option({ value: '', label: empty.label }, !value, empty.onPick)
+        : null}
+      {sections.map((section) => (
+        // biome-ignore lint/a11y/useSemanticElements: Radix's group markup
+        <div key={section.label} role="group" aria-label={section.label}>
+          {section.label ? <div>{section.label}</div> : null}
+          {section.options.map((choice) =>
+            option(choice, choice.value === value, () => onPick(choice.value)),
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function Select<T extends string>({
+  value,
+  options,
+  groups,
+  onChange,
+  disabled,
+  className,
+  id,
+  placeholder,
+  allowEmpty,
+  emptyLabel,
+  onClear,
+  'aria-label': ariaLabel,
+  'aria-describedby': describedBy,
+}: {
+  value: T | undefined
+  options?: Choice[]
+  groups?: ChoiceGroup[]
+  onChange(next: T): void
+  disabled?: boolean
+  className?: string
+  id?: string
+  placeholder?: string
+  allowEmpty?: boolean
+  emptyLabel?: string
+  onClear?(): void
+  'aria-label'?: string
+  'aria-describedby'?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const trigger = useRef<HTMLButtonElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  useOutsidePointer(open, [trigger, list], () => setOpen(false))
+  const sections = groups ?? [{ label: '', options: options ?? [] }]
+  const selected = sections
+    .flatMap((section) => section.options)
+    .find((choice) => choice.value === value)
+  return (
+    <>
+      <button
+        ref={trigger}
+        id={id}
+        type="button"
+        role="combobox"
+        aria-controls={open ? `${id}-list` : undefined}
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-describedby={describedBy}
+        data-placeholder={selected ? undefined : ''}
+        disabled={disabled}
+        className={className}
+        onClick={() => setOpen(!open)}
+      >
+        <span>{selected?.label ?? placeholder}</span>
+      </button>
+      {open ? (
+        <ChoiceList
+          listRef={list}
+          sections={sections}
+          value={selected?.value}
+          empty={
+            allowEmpty
+              ? {
+                  label: emptyLabel ?? 'None',
+                  onPick() {
+                    setOpen(false)
+                    onClear?.()
+                  },
+                }
+              : undefined
+          }
+          onPick={(next) => {
+            setOpen(false)
+            onChange(next as T)
+          }}
+        />
+      ) : null}
+    </>
+  )
+}
+
+export function Selector<T extends string>({
+  value,
+  options,
+  groups,
+  onChange,
+  disabled,
+  className,
+  id,
+  placeholder,
+  searchPlaceholder = 'Search',
+  emptyMessage = 'No matches',
+  'aria-label': ariaLabel,
+  'aria-describedby': describedBy,
+}: {
+  value: T | undefined
+  options?: readonly Choice[]
+  groups?: readonly ChoiceGroup[]
+  onChange(next: T): void
+  disabled?: boolean
+  className?: string
+  id?: string
+  placeholder?: string
+  searchPlaceholder?: string
+  emptyMessage?: ReactNode
+  'aria-label': string
+  'aria-describedby'?: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const trigger = useRef<HTMLButtonElement>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const popover = useRef<HTMLDivElement>(null)
+  useOutsidePointer(open, [trigger, popover], () => setOpen(false))
+  const sections = groups ?? [{ label: '', options: options ?? [] }]
+  const selected = sections
+    .flatMap((section) => section.options)
+    .find((choice) => choice.value === value)
+  const needle = query.trim().toLocaleLowerCase()
+  const shown = sections
+    .map((section) => ({
+      ...section,
+      options: section.options.filter((choice) =>
+        [choice.label, choice.description, ...(choice.keywords ?? [])]
+          .join(' ')
+          .toLocaleLowerCase()
+          .includes(needle),
+      ),
+    }))
+    .filter((section) => section.options.length > 0)
+  return (
+    <div className={className}>
+      <button
+        ref={trigger}
+        id={id}
+        type="button"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-describedby={describedBy}
+        disabled={disabled}
+        onClick={() => setOpen(!open)}
+      >
+        <span>{selected?.label ?? placeholder}</span>
+      </button>
+      {open ? (
+        <div ref={popover}>
+          <input
+            type="text"
+            role="combobox"
+            aria-expanded="true"
+            aria-label={searchPlaceholder}
+            placeholder={searchPlaceholder}
+            value={query}
+            onChange={(event) => setQuery(event.currentTarget.value)}
+          />
+          {shown.length > 0 ? (
+            <ChoiceList
+              listRef={list}
+              sections={shown}
+              value={selected?.value}
+              onPick={(next) => {
+                setOpen(false)
+                setQuery('')
+                onChange(next as T)
+              }}
+            />
+          ) : (
+            <div role="status">{emptyMessage}</div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  )
 }

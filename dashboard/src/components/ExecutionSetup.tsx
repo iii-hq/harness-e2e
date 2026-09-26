@@ -1,6 +1,5 @@
-import { ChevronDown, RefreshCw, Search, X } from 'lucide-react'
+import { RefreshCw, Search, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
-import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
 import {
   buttonClassName,
   Field,
@@ -10,9 +9,6 @@ import {
   Input,
 } from '@/design-system'
 import '@/design-system/styles.css'
-
-/** `quick` runs tests with a model; `suite` edits what a suite tests. */
-export type ExecutionSetupMode = 'quick' | 'suite'
 
 export const QUICK_EXECUTION_INTENT_KEY = 'harness-e2e:quick-execution'
 
@@ -39,31 +35,20 @@ export function consumeQuickExecutionRequest(): string[] | null {
   }
 }
 
-export type ExecutionModelGroup = {
-  provider: string
-  models: { label: string; value: string }[]
-}
-
-export type ExecutionSetupField = 'label' | 'subject' | 'scenarios'
+export type ExecutionSetupField = 'label' | 'scenarios'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
 /** Audit PN-05: validation runs on submit and names each pending item. A
- *  run needs a model; a suite needs a name and holds no model. */
+ *  suite needs a name and a test. */
 export function validateExecutionSetup({
-  mode,
   label,
-  subject = '',
   selectedScenarios,
 }: {
-  mode: ExecutionSetupMode
   label: string
-  subject?: string
   selectedScenarios: string[]
 }): ExecutionSetupErrors {
   const errors: ExecutionSetupErrors = {}
-  if (mode === 'suite' && label.trim() === '') errors.label = 'Name the suite.'
-  if (mode === 'quick' && !subject)
-    errors.subject = 'Choose an execution model.'
+  if (label.trim() === '') errors.label = 'Name the suite.'
   if (selectedScenarios.length === 0)
     errors.scenarios = 'Select at least one test.'
   return errors
@@ -76,7 +61,6 @@ export function focusFirstInvalid(
 ) {
   const order: [ExecutionSetupField, string][] = [
     ['label', `${idPrefix}-label`],
-    ['subject', `${idPrefix}-subject`],
     ['scenarios', `${idPrefix}-scenario-search`],
   ]
   for (const [field, id] of order) {
@@ -126,21 +110,13 @@ export function groupScenarios(ids: string[]): ScenarioGroup[] {
 
 type ExecutionSetupProps = {
   idPrefix: string
-  mode: ExecutionSetupMode
   label: string
-  /** Runs only: a suite holds no model. */
-  subject?: string
-  /** Where the preselected model came from. */
-  subjectHint?: string
-  modelGroups?: ExecutionModelGroup[]
   availableScenarios: string[]
   selectedScenarios: string[]
   query: string
   runs: string
   technicalRetries: string
-  /** Agent profile; the field shows only where the host can send it. */
-  agent?: string
-  /** Open on the "selected" filter (running again: what will run). */
+  /** Open on the "selected" filter: what the suite runs. */
   initialOnlySelected?: boolean
   disabled?: boolean
   catalogLoading?: boolean
@@ -150,12 +126,10 @@ type ExecutionSetupProps = {
   stickyOffset?: 'page' | 'dialog'
   onRefreshCatalog?: () => void
   onLabelChange: (value: string) => void
-  onSubjectChange?: (value: string) => void
   onSelectedScenariosChange: (value: string[]) => void
   onQueryChange: (value: string) => void
   onRunsChange: (value: string) => void
   onTechnicalRetriesChange: (value: string) => void
-  onAgentChange?: (value: string) => void
 }
 
 function SetupSection({
@@ -196,19 +170,16 @@ function clampNumber(value: string, min: number, max: number) {
   return String(Math.min(max, Math.max(min, Math.round(number))))
 }
 
+/** What a suite tests: its name, runs, retries and tests (the suite
+ *  editor). */
 export function ExecutionSetup({
   idPrefix,
-  mode,
   label,
-  subject = '',
-  subjectHint,
-  modelGroups = [],
   availableScenarios,
   selectedScenarios,
   query,
   runs,
   technicalRetries,
-  agent = '',
   initialOnlySelected = false,
   disabled = false,
   catalogLoading = false,
@@ -217,12 +188,10 @@ export function ExecutionSetup({
   stickyOffset = 'page',
   onRefreshCatalog,
   onLabelChange,
-  onSubjectChange,
   onSelectedScenariosChange,
   onQueryChange,
   onRunsChange,
   onTechnicalRetriesChange,
-  onAgentChange,
 }: ExecutionSetupProps) {
   const [onlySelected, setOnlySelected] = useState(initialOnlySelected)
   const normalizedQuery = query.trim().toLocaleLowerCase()
@@ -235,7 +204,6 @@ export function ExecutionSetup({
   const visibleScenarios = availableScenarios.filter(matches)
   const groups = groupScenarios(visibleScenarios)
   const runsPerScenario = Math.max(1, Number(runs) || 1)
-  const retries = Math.max(0, Number(technicalRetries) || 0)
   const plannedRuns = selectedScenarios.length * runsPerScenario
 
   const toggleScenario = (scenario: string, checked: boolean) => {
@@ -259,7 +227,6 @@ export function ExecutionSetup({
     )
   }
 
-  // Part of a suite; tucked under "Advanced" when running tests.
   const sampling = (
     <>
       <Field
@@ -321,7 +288,7 @@ export function ExecutionSetup({
     // what they would be configuring, and the callout above says why.
     <div
       className={`grid min-w-0 gap-8 ${disabled ? 'opacity-55' : ''}`}
-      data-execution-setup={mode}
+      data-execution-setup="suite"
       data-parked={disabled || undefined}
     >
       {/* Audit PN-26 / RS-06: catalog status in the status vocabulary. */}
@@ -356,29 +323,21 @@ export function ExecutionSetup({
 
       <SetupSection
         id={`${idPrefix}-details`}
-        title={mode === 'suite' ? 'Name the suite' : 'Name this run'}
-        description={
-          mode === 'suite'
-            ? 'The name the suite is listed and run by.'
-            : 'An optional label makes the result easier to find later.'
-        }
+        title="Name the suite"
+        description="The name the suite is listed and run by."
       >
         <div className="grid items-start gap-4 sm:grid-cols-2">
           <Field
-            label={mode === 'suite' ? 'Suite name' : 'Execution label'}
+            label="Suite name"
             htmlFor={`${idPrefix}-label`}
-            meta={mode === 'suite' ? 'required' : 'optional'}
+            meta="required"
             error={errors.label}
           >
             <Input
               id={`${idPrefix}-label`}
               value={label}
-              maxLength={mode === 'suite' ? 160 : 80}
-              placeholder={
-                mode === 'suite'
-                  ? 'Regression without the slow tests'
-                  : 'Before system prompt change'
-              }
+              maxLength={160}
+              placeholder="Regression without the slow tests"
               aria-invalid={errors.label ? true : undefined}
               aria-describedby={fieldDescribedBy(`${idPrefix}-label`, {
                 error: Boolean(errors.label),
@@ -390,93 +349,18 @@ export function ExecutionSetup({
         </div>
       </SetupSection>
 
-      {mode === 'suite' ? (
-        <SetupSection
-          id={`${idPrefix}-sampling`}
-          title="Runs and retries"
-          description="How many times each test runs, and how many times a crash is retried."
-        >
-          <div className="grid gap-4 sm:grid-cols-2">{sampling}</div>
-        </SetupSection>
-      ) : (
-        <SetupSection
-          id={`${idPrefix}-models`}
-          title="Choose the model"
-          description="The execution model is saved with the result."
-        >
-          {/* One field keeps the two-column rhythm of the label section, where
-              quick executions also leave the second cell empty. */}
-          <div className="grid items-start gap-4 sm:grid-cols-2">
-            <Field
-              label="Execution model"
-              htmlFor={`${idPrefix}-subject`}
-              meta="required"
-              hint={subjectHint}
-              error={errors.subject}
-            >
-              <ProviderModelDropdown
-                id={`${idPrefix}-subject`}
-                ariaLabel="Execution model"
-                required
-                value={subject}
-                onChange={(value) => onSubjectChange?.(value)}
-                disabled={disabled || modelGroups.length === 0}
-                groups={modelGroups}
-                placeholder={
-                  modelGroups.length === 0
-                    ? 'No models in the catalog'
-                    : 'Choose a model'
-                }
-              />
-            </Field>
-          </div>
-          {/* Audit PN-13 / PN-21: advanced controls with a real chevron. */}
-          <details className="group min-w-0 rounded-[6px] bg-[var(--surface-fill)]">
-            <summary className="flex min-h-9 min-w-0 cursor-pointer list-none items-center gap-3 px-3 text-xs marker:hidden">
-              <ChevronDown
-                className="size-4 shrink-0 -rotate-90 text-ink-muted transition-transform duration-[var(--ds-duration-fast)] group-open:rotate-0 motion-reduce:transition-none"
-                aria-hidden="true"
-              />
-              <span className="font-semibold text-ink">
-                Advanced · sampling and retries
-              </span>
-              <span className="ml-auto hidden min-w-0 truncate font-mono text-label text-ink-muted @[560px]:block">
-                {runsPerScenario} per test · {retries} retr
-                {retries === 1 ? 'y' : 'ies'}
-              </span>
-            </summary>
-            <div className="grid gap-4 px-3 pt-1 pb-4 sm:grid-cols-2">
-              {sampling}
-              {onAgentChange ? (
-                <Field
-                  label="Agent profile"
-                  htmlFor={`${idPrefix}-agent`}
-                  className="sm:col-span-2"
-                  hint="Leave blank for the Harness default profile."
-                >
-                  <Input
-                    id={`${idPrefix}-agent`}
-                    className="font-mono"
-                    value={agent}
-                    placeholder="default"
-                    onChange={(event) => onAgentChange(event.target.value)}
-                    disabled={disabled}
-                  />
-                </Field>
-              ) : null}
-            </div>
-          </details>
-        </SetupSection>
-      )}
+      <SetupSection
+        id={`${idPrefix}-sampling`}
+        title="Runs and retries"
+        description="How many times each test runs, and how many times a crash is retried."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">{sampling}</div>
+      </SetupSection>
 
       <SetupSection
         id={`${idPrefix}-scope`}
         title="Pick the tests"
-        description={
-          mode === 'suite'
-            ? 'The tests the suite runs.'
-            : 'Only the tests selected here run.'
-        }
+        description="The tests the suite runs."
       >
         <div
           className={`sticky z-10 grid min-w-0 gap-3 bg-panel py-2 ${
@@ -727,27 +611,21 @@ function CatalogEmptyState({
 /* ---------------------------------------------------------------- footer */
 
 export type ExecutionSetupSummaryInput = {
-  mode: ExecutionSetupMode
   selectedScenarios: number
   runsPerScenario: number
   technicalRetries: number
-  /** Runs only. */
-  subject?: string
 }
 
 /** Audit RS-07 / PN-20: the review is one sentence, not four tiles. */
 export function executionSetupSummary({
-  mode,
   selectedScenarios,
   runsPerScenario,
   technicalRetries,
-  subject = '',
 }: ExecutionSetupSummaryInput) {
   const runs = selectedScenarios * runsPerScenario
   const headline = [
     `${selectedScenarios} test${selectedScenarios === 1 ? '' : 's'}`,
     `${runs} run${runs === 1 ? '' : 's'}`,
-    ...(mode === 'quick' ? [subject || 'no model'] : []),
   ].join(' · ')
   const detail = [
     `${runsPerScenario} run${runsPerScenario === 1 ? '' : 's'} per test`,
@@ -799,7 +677,7 @@ export function ExecutionSetupFooter({
           {error
             ? error
             : pending.length > 0
-              ? `Before ${summary.mode === 'suite' ? 'saving' : 'running'}: ${pending.join(' ')}`
+              ? `Before saving: ${pending.join(' ')}`
               : (status ?? '')}
         </p>
       </div>

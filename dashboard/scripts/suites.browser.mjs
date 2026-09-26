@@ -209,37 +209,38 @@ try {
     .first()
     .click()
   const run = page.getByRole('dialog', { name: 'Run tests' })
-  await run.getByText('catalog ready').waitFor()
-  const suiteField = run.locator('#quick-execution-suite')
-  await suiteField.selectOption('pr')
+  await run.getByText('Catalog ready', { exact: false }).waitFor()
+  /** Picks a suite in the dialog's Suite field. */
+  const pickSuite = async (dialog, name) => {
+    await dialog.locator('#run-tests-suite').click()
+    await dialog.getByRole('option', { name, exact: true }).click()
+  }
+  const repositorySuite = `Repository suite · ${pr.repetitions} run${pr.repetitions === 1 ? '' : 's'} per test`
+  await pickSuite(run, 'PR')
   for (const scenario of pr.scenarios)
     assert.ok(
       await run
         .getByRole('checkbox', { name: scenario, exact: true })
         .isChecked(),
     )
-  await run
-    .getByText(`${pr.scenarios.length} tests · 1 run each`, { exact: false })
-    .waitFor()
+  await run.getByText(repositorySuite, { exact: false }).waitFor()
   await run
     .getByRole('checkbox', { name: pr.scenarios[0], exact: true })
     .click()
-  await run.getByText('Changed from PR: runs as an unnamed suite.').waitFor()
-  await suiteField.selectOption('')
-  await suiteField.selectOption('pr')
+  await run.getByText('Changed from PR. Runs as a custom selection.').waitFor()
+  await pickSuite(run, 'Custom')
+  await pickSuite(run, 'PR')
+  await run.getByText(repositorySuite, { exact: false }).waitFor()
+  await run.locator('#run-tests-model').click()
   await run
-    .getByText(`${pr.scenarios.length} tests · 1 run each`, { exact: false })
-    .waitFor()
+    .getByRole('combobox', { name: 'Find a model' })
+    .fill('deepseek-v4-flash')
   await run
-    .getByRole('button', { name: 'Execution model', exact: true })
+    .getByRole('option', { name: 'deepseek / deepseek-v4-flash', exact: true })
     .click()
-  const search = run.getByRole('searchbox', { name: 'Search Execution model' })
-  await search.fill('deepseek-v4-flash')
-  await search.press('ArrowDown')
-  await page.keyboard.press('Enter')
   await run
     .getByRole('button', {
-      name: `run ${pr.scenarios.length} tests`,
+      name: `Run ${pr.scenarios.length} tests`,
       exact: true,
     })
     .click()
@@ -269,11 +270,11 @@ try {
   // Run again keeps the suite.
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
-  await again.getByText('catalog ready').waitFor()
-  assert.equal(await again.locator('#quick-execution-suite').inputValue(), 'pr')
+  await again.getByText('Catalog ready', { exact: false }).waitFor()
+  assert.equal(await again.locator('#run-tests-suite').textContent(), 'PR')
   await again
     .getByRole('button', {
-      name: `run ${pr.scenarios.length} tests`,
+      name: `Run ${pr.scenarios.length} tests`,
       exact: true,
     })
     .click()
@@ -290,10 +291,13 @@ try {
     .first()
     .click()
   const fromLocal = page.getByRole('dialog', { name: 'Run tests' })
-  await fromLocal.getByText('catalog ready').waitFor()
-  await fromLocal.locator('#quick-execution-suite').selectOption('suite-1')
+  await fromLocal.getByText('Catalog ready', { exact: false }).waitFor()
+  await pickSuite(fromLocal, 'Regression, fast')
   await fromLocal
-    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .getByText('Saved in this Console · 2 runs per test', { exact: false })
+    .waitFor()
+  await fromLocal
+    .getByRole('button', { name: `Run ${fast} tests`, exact: true })
     .click()
   await page.waitForFunction(() => location.hash.endsWith('0003'))
   const ranLocal = calls.start[2].parameters
@@ -311,16 +315,16 @@ try {
   await edit.waitFor({ state: 'hidden' })
   await page.goto(`${server.url}${localExecution}`)
   await page.getByRole('button', { name: 'run again', exact: true }).click()
-  await again.getByText('catalog ready').waitFor()
+  await again.getByText('Catalog ready', { exact: false }).waitFor()
   assert.equal(
-    await again.locator('#quick-execution-suite').inputValue(),
-    'recorded:suite-1',
+    await again.locator('#run-tests-suite').textContent(),
+    'Regression, fast · as recorded',
   )
   await again
-    .getByRole('option', { name: 'Regression, fast · as recorded' })
-    .waitFor({ state: 'attached' })
+    .getByText('As this execution ran · 2 runs per test', { exact: false })
+    .waitFor()
   await again
-    .getByRole('button', { name: `run ${fast} tests`, exact: true })
+    .getByRole('button', { name: `Run ${fast} tests`, exact: true })
     .click()
   await page.waitForFunction(() => location.hash.endsWith('0004'))
   assert.deepEqual(calls.start[3].parameters, ranLocal)

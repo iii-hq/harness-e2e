@@ -113,6 +113,7 @@ const running = (id) => ({
 const nightly = 'plan-22222222222222222222222222222222'
 const runningSummary = {
   ...running(nightly),
+  label: 'Nightly',
   // The last execution: Run tests starts from its model.
   parameters: {
     ...imported.plan_execution.parameters,
@@ -198,6 +199,75 @@ const dockerRunning = {
     },
   },
 }
+// The canvas fixtures (Main.dc.html): its TESTS, SEQUENCES, SUITES and STACKS.
+const TESTS =
+  'registry_planning registry_implementation registry_environment registry_verification kanban_c1_foundation kanban_c2_persistence kanban_c3_board kanban_c4_ticket_flow kanban_c5_edit_move kanban_c6_discussion kanban_c7_live linkly_tutorial context_pressure minimal_path persistent_state insert_record sequential_pipeline database_migration_recovery shell_coder_sandbox research_pipeline fanout_ladder incident_response todo_worker_simple todo_worker_planned engineering_endurance_ladder git_regression_forensics alertmanager_route_match mechanical_reaction timer_wake receiving_operation validation_loop subagent_validation subagent_validation_failure validation_self_repair validation_scope_enforcement validation_chain secret_hygiene prompt_injection_resilience moving_target poison_message cleanup_under_failure depth_ladder quorum_fan_in contention_ledger wake_chain_soak chess_engine_build form_flow_build state_machine_canvas_build chess_play_ladder trend_blog trending_topics_build typescript_chat_service tool_contract_recovery policy_bound_action cross_app_transaction performance_regression browser_cross_site release_train_recovery cross_repo_contract_migration'.split(
+    ' ',
+  )
+const SEQUENCES = [['registry_implementation', 'registry_verification']]
+const suite = (
+  id,
+  label,
+  source,
+  repetitions,
+  technical_retries,
+  scenarios,
+) => ({
+  id,
+  label,
+  source,
+  purpose: '',
+  scenarios,
+  repetitions,
+  technical_retries,
+  sha256: `sha256:${id}`,
+  updated_at: null,
+})
+const regressionTests = [
+  'persistent_state',
+  'tool_contract_recovery',
+  'timer_wake',
+  'shell_coder_sandbox',
+  'database_migration_recovery',
+  'contention_ledger',
+  'validation_self_repair',
+  'context_pressure',
+  'prompt_injection_resilience',
+]
+const suites = [
+  suite('regression', 'Regression', 'repository', 1, 1, regressionTests),
+  suite('software-engineering', 'Software engineering', 'repository', 1, 0, [
+    'registry_implementation',
+    'registry_verification',
+    'trending_topics_build',
+    'linkly_tutorial',
+    'alertmanager_route_match',
+    'chess_engine_build',
+    'form_flow_build',
+    'state_machine_canvas_build',
+  ]),
+  suite('pr', 'PR', 'repository', 1, 0, [
+    'minimal_path',
+    'persistent_state',
+    'tool_contract_recovery',
+    'shell_coder_sandbox',
+  ]),
+  suite('kanban-chain', 'Kanban chain', 'local', 1, 0, [
+    'kanban_c1_foundation',
+    'kanban_c2_persistence',
+    'kanban_c3_board',
+    'kanban_c4_ticket_flow',
+    'kanban_c5_edit_move',
+    'kanban_c6_discussion',
+    'kanban_c7_live',
+  ]),
+]
+const workers = (commit = null) =>
+  ['harness', 'harness-e2e', 'shell', 'storage', 'llm-router'].map((name) => ({
+    name,
+    version: null,
+    commit: name === 'harness' ? commit : null,
+  }))
 const stacks = [
   {
     id: 'default',
@@ -206,19 +276,33 @@ const stacks = [
     yaml: 'iii: latest\ncontainers:\n  harness:\n    worker: package://harness\n',
     iii: 'latest',
     template: null,
-    containers: [{ name: 'harness', version: null, commit: null }],
+    containers: workers(),
     warnings: [],
     updated_at: null,
   },
   {
-    id: 'stack-0123456789ab',
-    label: 'Pinned harness',
-    source: 'local',
-    yaml: 'iii: 0.24.1\ncontainers: {}\n',
-    iii: '0.24.1',
-    template: null,
-    containers: [],
+    id: 'harness-template',
+    label: 'harness-template',
+    source: 'repository',
+    yaml: 'iii: latest\ntemplate: harness\ncontainers: {}\n',
+    iii: 'latest',
+    template: 'harness',
+    containers: workers(),
     warnings: [],
+    updated_at: null,
+  },
+  {
+    id: 'stack-3f9a1c2e7b40',
+    label: 'default · harness pinned',
+    source: 'local',
+    yaml: 'iii: latest\ncontainers:\n  harness:\n    commit: 3f9a1c2e7b40\n',
+    iii: 'latest',
+    template: null,
+    containers: workers('3f9a1c2e7b40'),
+    warnings: [
+      'harness pins a commit; it takes effect once the executor runs commit pins.',
+      'harness-e2e runs path://../harness-e2e, a path on this machine; the stack runs it only here.',
+    ],
     updated_at: '2026-09-24T10:00:00Z',
   },
 ]
@@ -301,19 +385,13 @@ const trigger = async (name, request = {}) => {
   if (id === 'catalog-get') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return {
-      scenarios: [
-        'minimal_path',
-        'context_pressure',
-        'trend_blog',
-        'registry_implementation',
-        'registry_verification',
-      ],
+      scenarios: TESTS,
       // Alphabetically first, never picked for the user.
       models: [
         { provider: 'claude-code', model: 'claude-code/claude-fable-5' },
         { provider: 'deepseek', model: 'deepseek-v4-flash' },
       ],
-      scenario_groups: [['registry_implementation', 'registry_verification']],
+      scenario_groups: SEQUENCES,
     }
   }
   if (id === 'execution-start') {
@@ -328,7 +406,7 @@ const trigger = async (name, request = {}) => {
   }
   if (id === 'suites-list') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
-    return { suites: [] }
+    return { suites }
   }
   if (id === 'stacks-list') return { stacks }
   if (id === 'execution-delete') {
@@ -378,12 +456,61 @@ try {
   // Without an earlier execution Run tests picks no model for the user.
   await empty.getByRole('button', { name: 'run tests', exact: true }).click()
   const fresh = page.getByRole('dialog', { name: 'Run tests' })
-  await fresh.getByText('catalog ready').waitFor()
-  await fresh.getByText('0 tests · 0 runs · no model').waitFor()
+  await fresh
+    .getByText(`Catalog ready · ${TESTS.length} tests · 2 models`)
+    .waitFor()
+  await fresh.getByText('0 tests · 0 runs', { exact: true }).waitFor()
   assert.equal(
     await fresh.getByText('The model of your last execution.').count(),
     0,
   )
+  // The button stays off and says what is missing.
+  await fresh
+    .getByText('Before running, choose a model and tick at least one test.')
+    .waitFor()
+  assert.ok(
+    await fresh
+      .getByRole('button', { name: 'Run tests', exact: true })
+      .isDisabled(),
+  )
+  // Families are blocks with a box and a count; sequences say their order.
+  const registry = fresh.getByRole('group', { name: 'registry' })
+  await registry.getByText('4', { exact: true }).waitFor()
+  await registry.getByText('1 of 2 · in order').waitFor()
+  await fresh.getByRole('group', { name: 'Standalone' }).waitFor()
+  // A suite ticks its tests and names itself; a change makes it custom, and
+  // Reset puts it back.
+  await fresh.locator('#run-tests-suite').click()
+  await fresh.getByRole('option', { name: 'Regression', exact: true }).click()
+  await fresh
+    .getByText('Repository suite · 1 run per test · 1 retry', { exact: true })
+    .waitFor()
+  await fresh.getByText('9 selected', { exact: true }).waitFor()
+  await fresh.getByRole('checkbox', { name: 'timer_wake', exact: true }).click()
+  await fresh
+    .getByText('Changed from Regression. Runs as a custom selection.')
+    .waitFor()
+  assert.equal(await fresh.locator('#run-tests-suite').textContent(), 'Custom')
+  await fresh.getByRole('button', { name: 'Reset', exact: true }).click()
+  await fresh.getByText('9 selected', { exact: true }).waitFor()
+  assert.equal(
+    await fresh.locator('#run-tests-suite').textContent(),
+    'Regression',
+  )
+  // Filtered to what is ticked; the family box ticks what it shows.
+  await fresh.getByRole('radio', { name: /^Selected/ }).click()
+  await fresh.getByText(`9 of ${TESTS.length}`, { exact: true }).waitFor()
+  await fresh.getByRole('button', { name: 'Clear', exact: true }).click()
+  await fresh.getByText('No tests ticked yet.').waitFor()
+  await fresh.getByRole('button', { name: 'Show all tests' }).click()
+  await fresh
+    .getByRole('checkbox', { name: 'Select every test in kanban' })
+    .click()
+  await fresh.getByText('7 selected', { exact: true }).waitFor()
+  await fresh.getByRole('searchbox', { name: 'Filter tests' }).fill('zzz')
+  await fresh.getByText('No tests match “zzz”.').waitFor()
+  await fresh.getByRole('button', { name: 'Clear filter' }).click()
+  await fresh.getByRole('button', { name: 'Clear', exact: true }).click()
   await page.keyboard.press('Escape')
 
   // Import from GitHub: the runs show at once, oldest creation last, and
@@ -440,29 +567,41 @@ try {
   assert.equal(await page.getByText(/infrastructure event/).count(), 0)
   assert.equal(await page.getByText('1m 60s').count(), 0)
 
-  // Run tests: it starts from the last execution's model; a sequential group
-  // ticks whole before running; the box, its name and Space all toggle a
-  // test; the form has no seed; a busy runner is named in the footer; the
-  // next submit starts an execution and follows it on its page.
+  // Run tests: it starts from the last execution's model; this harness is
+  // busy, which the footer says with a way to open what runs; a sequential
+  // group ticks whole; the box, its name and Space all toggle a test; the
+  // form has no seed; the next submit starts an execution and follows it on
+  // its page.
   await page
     .getByRole('button', { name: 'Run tests', exact: true })
     .first()
     .click()
   const runTests = page.getByRole('dialog', { name: 'Run tests' })
-  await runTests.getByText('catalog ready').waitFor()
+  await runTests.getByText('Catalog ready', { exact: false }).waitFor()
   assert.equal(await runTests.getByText('Harness endpoint').count(), 0)
   await runTests.getByText('The model of your last execution.').waitFor()
-  await runTests
-    .getByText('0 tests · 0 runs · deepseek/deepseek-v4-flash')
-    .waitFor()
-  const box = (name) => runTests.getByRole('checkbox', { name, exact: true })
+  assert.equal(
+    await runTests.locator('#run-tests-model').textContent(),
+    'deepseek / deepseek-v4-flash',
+  )
+  const busyAlert = runTests.getByRole('alert').filter({
+    hasText: '“Nightly” is still running on this harness.',
+  })
+  await busyAlert.waitFor()
+  assert.ok(
+    (
+      await busyAlert
+        .getByRole('link', { name: 'Open Nightly', exact: true })
+        .getAttribute('href')
+    ).includes(nightly),
+  )
+  // A test in a sequence also says where it runs in it ("2 of 2 · in order").
+  const box = (name) =>
+    runTests.getByRole('checkbox', { name: new RegExp(`^${name}(\\s|$)`) })
   await box('registry_verification').click()
   assert.ok(await box('registry_implementation').isChecked())
-  await runTests.getByText('2 tests · 2 runs', { exact: false }).waitFor()
   await runTests
-    .getByText(
-      'registry_implementation then registry_verification run only together, in this order.',
-    )
+    .getByRole('button', { name: 'Run 2 tests', exact: true })
     .waitFor()
   await box('registry_verification').click()
   assert.ok(!(await box('registry_implementation').isChecked()))
@@ -477,28 +616,32 @@ try {
   await page.keyboard.press('Space')
   assert.ok(await box('context_pressure').isChecked())
   // Every execution runs the canonical cases, so runs pair up in comparisons.
-  await runTests.getByText('Advanced · sampling and retries').click()
   assert.doesNotMatch(await runTests.textContent(), /seed/i)
+  // The steppers keep runs and retries within their range.
+  const runsStepper = runTests.getByRole('group', { name: 'Runs per test' })
+  assert.ok(
+    await runsStepper.getByRole('button', { name: 'Fewer runs' }).isDisabled(),
+  )
   const submit = runTests.getByRole('button', {
-    name: 'run 1 test',
+    name: 'Run 1 test',
     exact: true,
   })
   await submit.click()
-  // A busy runner names what runs, by its title, and offers to open it.
+  // The runner said it is busy: the footer still names what runs, by its
+  // title, never the raw handler error.
+  await busyAlert.waitFor()
+  assert.equal(await runTests.getByText(/handler error/).count(), 0)
+  assert.equal(started.length, 0)
+  // Run in Docker drops the refusal: the footer sums up Docker.
+  await busyAlert.getByRole('button', { name: 'Run in Docker' }).click()
   await runTests
     .getByText(
-      '"Nightly" is still running. Wait for it to finish or cancel it.',
+      '1 run per test · 1 retry · custom selection · in Docker on default',
     )
     .waitFor()
-  assert.equal(await runTests.getByText(/handler error/).count(), 0)
-  assert.ok(
-    (
-      await runTests
-        .getByRole('link', { name: 'open Nightly', exact: true })
-        .getAttribute('href')
-    ).includes(nightly),
-  )
-  assert.equal(started.length, 0)
+  assert.equal(await runTests.getByText(/still running/).count(), 0)
+  await runTests.getByRole('radio', { name: 'This harness' }).click()
+  await busyAlert.waitFor()
   await submit.click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-f'))
   assert.deepEqual(started[0], {
@@ -539,36 +682,37 @@ try {
   await band.getByText('default', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
+  await again.getByText('Couldn’t load the test catalog').waitFor()
   await again.getByText('catalog unavailable: harness restarting').waitFor()
+  await again.getByText('Catalog unavailable', { exact: true }).waitFor()
   assert.equal(
-    await again.locator('#quick-execution-label').inputValue(),
+    await again.locator('#run-tests-label').inputValue(),
     'Software engineering',
   )
   // Its suite, as recorded, even though this runner does not list it.
   assert.equal(
-    await again.locator('#quick-execution-suite').inputValue(),
-    'recorded:software-engineering-2025',
+    await again.locator('#run-tests-suite').textContent(),
+    'Software engineering 2025 · as recorded',
   )
   await again
-    .getByRole('option', { name: 'Software engineering 2025 · as recorded' })
-    .waitFor({ state: 'attached' })
+    .getByText('As this execution ran · 2 runs per test · 0 retries')
+    .waitFor()
+  await again.getByText('The model this execution ran with.').waitFor()
   for (const scenario of ['minimal_path', 'retired_scenario'])
     assert.ok(
       await again
-        .getByRole('checkbox', { name: scenario, exact: true })
+        .getByRole('checkbox', { name: new RegExp(`^${scenario}(\\s|$)`) })
         .isChecked(),
     )
-  await again.getByText('Advanced · sampling and retries').click()
-  assert.equal(await again.locator('#quick-execution-runs').inputValue(), '2')
+  const output = (name) =>
+    again.getByRole('group', { name }).locator('output').textContent()
+  assert.equal(await output('Runs per test'), '2')
+  assert.equal(await output('Retries on crash'), '0')
   assert.equal(
-    await again.locator('#quick-execution-retries').inputValue(),
-    '0',
-  )
-  assert.equal(
-    await again.locator('#quick-execution-agent').inputValue(),
+    await again.locator('#run-tests-agent').inputValue(),
     'tech-lead',
   )
-  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await again.getByRole('button', { name: 'Run 2 tests', exact: true }).click()
   await page.waitForFunction(() => !location.hash.includes('0123456789abcdef'))
   // Its parameters unchanged, under its suite; the runner records the digest.
   assert.deepEqual(started[1], {
@@ -588,8 +732,8 @@ try {
   catalogDown = false
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page.getByRole('button', { name: 'run again', exact: true }).click()
-  await again.getByText('catalog ready').waitFor()
-  await again.getByText('2 of 6 shown', { exact: false }).waitFor()
+  await again.getByText('Catalog ready', { exact: false }).waitFor()
+  await again.getByText(`2 of ${TESTS.length + 1}`, { exact: true }).waitFor()
   assert.equal(
     await again.getByRole('checkbox', { name: 'trend_blog' }).count(),
     0,
@@ -597,25 +741,54 @@ try {
   await page.keyboard.press('Escape')
 
   // In Docker: Where asks for a stack, the repository's default first, and
-  // the executor receives its YAML.
+  // the executor receives its YAML. Docker does not wait for this harness.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page
     .getByRole('button', { name: 'Run tests', exact: true })
     .first()
     .click()
-  await runTests.getByText('catalog ready').waitFor()
-  assert.equal(await runTests.locator('#quick-execution-stack').count(), 0)
-  await runTests.locator('#quick-execution-where').selectOption('docker')
+  await runTests.getByText('Catalog ready', { exact: false }).waitFor()
+  assert.equal(await runTests.locator('#run-tests-stack').count(), 0)
+  await busyAlert.getByRole('button', { name: 'Run in Docker' }).click()
   assert.equal(
-    await runTests.locator('#quick-execution-stack').inputValue(),
+    await runTests
+      .getByRole('radio', { name: 'Docker', exact: true })
+      .getAttribute('aria-checked'),
+    'true',
+  )
+  assert.equal(await busyAlert.count(), 0)
+  assert.equal(
+    await runTests.locator('#run-tests-stack').textContent(),
     'default',
   )
   await runTests
-    .getByRole('option', { name: 'Pinned harness' })
-    .waitFor({ state: 'attached' })
+    .getByText(
+      'iii latest · 5 workers. Its YAML is what the executor assembles.',
+    )
+    .waitFor()
+  // Its warnings show under the field once picked.
+  await runTests.locator('#run-tests-stack').click()
+  await runTests
+    .getByRole('group', { name: 'This Console' })
+    .getByRole('option', { name: 'default · harness pinned' })
+    .click()
+  await runTests
+    .getByText('harness pins a commit; it takes effect', { exact: false })
+    .waitFor()
+  await runTests.locator('#run-tests-stack').click()
+  await runTests.getByRole('option', { name: 'default', exact: true }).click()
+  assert.equal(
+    await runTests.getByText('harness pins a commit', { exact: false }).count(),
+    0,
+  )
   await box('minimal_path').click()
   await runTests
-    .getByRole('button', { name: 'run 1 test', exact: true })
+    .getByText(
+      '1 run per test · 1 retry · custom selection · in Docker on default',
+    )
+    .waitFor()
+  await runTests
+    .getByRole('button', { name: 'Run 1 test in Docker', exact: true })
     .click()
   await page.waitForFunction(() => /\/execution\/plan-f+3$/.test(location.hash))
   assert.equal(started[2].parameters.where, 'docker')
@@ -641,28 +814,56 @@ try {
   await band.getByText('Docker · attempt 2', { exact: true }).waitFor()
   await band.getByText('default', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'run again', exact: true }).click()
-  await again.getByText('catalog ready').waitFor()
+  await again.getByText('Catalog ready', { exact: false }).waitFor()
   assert.equal(
-    await again.locator('#quick-execution-where').inputValue(),
-    'docker',
+    await again
+      .getByRole('radio', { name: 'Docker', exact: true })
+      .getAttribute('aria-checked'),
+    'true',
   )
   assert.equal(
-    await again.locator('#quick-execution-stack').inputValue(),
-    'recorded',
+    await again.locator('#run-tests-stack').textContent(),
+    'default · as recorded',
   )
-  await again
-    .getByRole('option', { name: 'default · as recorded' })
-    .waitFor({ state: 'attached' })
   await again
     .getByText('As this execution recorded it · feedfacefeed')
     .waitFor()
-  await again.getByRole('button', { name: 'run 2 tests', exact: true }).click()
+  await again
+    .getByRole('button', { name: 'Run 2 tests in Docker', exact: true })
+    .click()
   await page.waitForFunction(() => !location.hash.includes('44444444'))
   assert.deepEqual(started[3].parameters.stack, {
     name: 'default',
     yaml: recordedStack,
   })
   assert.equal(started[3].parameters.where, 'docker')
+
+  // On a phone the dialog is one column: the tests follow the fields, at
+  // the height of their content, and can be ticked.
+  await page.goto(`${server.url}#/ext/harness-e2e/executions`)
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await runTests.getByText('Catalog ready', { exact: false }).waitFor()
+  await page.setViewportSize({ width: 390, height: 844 })
+  // The host fixes the dialog to the viewport (a bottom sheet here); the
+  // double renders it in the flow, so pin it as the host does.
+  await runTests.evaluate((dialog) => {
+    dialog.style.position = 'fixed'
+  })
+  const phoneList = runTests.getByRole('region', { name: 'Tests' })
+  assert.ok((await phoneList.boundingBox()).height > 300)
+  const phoneBox = box('timer_wake')
+  await phoneBox.scrollIntoViewIfNeeded()
+  assert.ok(await phoneBox.isVisible())
+  await phoneBox.click()
+  assert.ok(await phoneBox.isChecked())
+  await runTests
+    .getByRole('button', { name: 'Run 1 test', exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await page.setViewportSize({ width: 1280, height: 720 })
 
   // A finished execution can be deleted.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
@@ -676,7 +877,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history and the button off with the reason, family blocks and sequences, suite custom and reset, filters and clear, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, busy harness named with a link before and after a submit, sequential group ticked whole, box/label/Space toggles, no seed, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite without a catalog, selected-first prefill, Run in Docker from the busy alert, stacks with warnings, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

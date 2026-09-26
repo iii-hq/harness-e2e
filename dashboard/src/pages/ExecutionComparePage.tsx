@@ -820,6 +820,9 @@ export function ExecutionComparePage({
     parameters: ExecutionParameters
     scenarios: string[]
   } | null>(null)
+  // Open apart from the parameters, so Run again keeps its title while the
+  // dialog animates closed.
+  const [rerunOpen, setRerunOpen] = useState(false)
 
   useEffect(() => {
     if (!left || !right) return
@@ -925,7 +928,8 @@ export function ExecutionComparePage({
         onToggleCounted={(scenario) =>
           setChoice((current) => toggleCounted(current, scenario))
         }
-        onRunAgain={(scenarios) =>
+        onRunAgain={(scenarios) => {
+          setRerunOpen(true)
           setRerun({
             parameters: rerunParameters(
               sides.b,
@@ -934,16 +938,16 @@ export function ExecutionComparePage({
             ),
             scenarios,
           })
-        }
+        }}
         onTranscript={(run, title) => setTranscript({ run, title })}
       />
       <LocalRunnerDialog
         bridge={bridge}
-        open={rerun !== null}
+        open={rerunOpen}
         parameters={rerun?.parameters ?? null}
         initialScenarios={rerun?.scenarios}
         label={sides.b.plan_execution?.label ?? sides.b.label ?? ''}
-        onClose={() => setRerun(null)}
+        onClose={() => setRerunOpen(false)}
       />
       {transcript ? (
         <TranscriptDialog

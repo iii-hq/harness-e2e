@@ -85,19 +85,112 @@ declare module '@iii-dev/console-ui' {
     value: T
     label: string
     title?: string
+    /** A second line under the label, in the list only. */
+    description?: string
+    disabled?: boolean
   }
+  export interface SelectGroup<T extends string = string> {
+    label: string
+    options: SelectOption<T>[]
+  }
+  /** A Radix select; a bottom sheet under 768px. */
   export interface SelectProps<T extends string = string> {
     value: T | undefined
     options?: SelectOption<T>[]
+    groups?: SelectGroup<T>[]
     onChange: (next: T) => void
     disabled?: boolean
     className?: string
+    /** On the trigger, for a `<label htmlFor>`. */
+    id?: string
     'aria-label'?: string
+    'aria-describedby'?: string
     placeholder?: string
+    /** A first option that calls `onClear` instead of `onChange`. */
+    allowEmpty?: boolean
+    emptyLabel?: string
+    onClear?: () => void
   }
   export const Select: <T extends string = string>(
     props: SelectProps<T>,
   ) => React.ReactNode
+
+  export interface SelectorOption<T extends string = string> {
+    value: T
+    label: string
+    description?: string
+    keywords?: readonly string[]
+    disabled?: boolean
+  }
+  /** A searchable select: a popover with a search box over the list. */
+  export interface SelectorProps<T extends string = string> {
+    value: T | undefined
+    options?: readonly SelectorOption<T>[]
+    groups?: readonly {
+      label: string
+      options: readonly SelectorOption<T>[]
+    }[]
+    onChange: (next: T) => void
+    disabled?: boolean
+    /** Applies to the wrapper. */
+    className?: string
+    id?: string
+    placeholder?: string
+    searchPlaceholder?: string
+    emptyMessage?: React.ReactNode
+    'aria-label': string
+    'aria-describedby'?: string
+  }
+  export const Selector: <T extends string = string>(
+    props: SelectorProps<T>,
+  ) => React.ReactNode
+
+  export interface SegmentedControlOption<T extends string = string> {
+    value: T
+    label: React.ReactNode
+    title?: string
+    icon?: React.ReactNode | false
+  }
+  /** `radio` is a radiogroup of one persistent choice; `tabs` a tablist. */
+  export interface SegmentedControlProps<T extends string = string> {
+    value: T
+    onChange: (next: T) => void
+    options: SegmentedControlOption<T>[]
+    className?: string
+    itemClassName?: string
+    variant?: 'tabs' | 'radio'
+    'aria-label'?: string
+  }
+  export const SegmentedControl: <T extends string = string>(
+    props: SegmentedControlProps<T>,
+  ) => React.ReactNode
+
+  /** A native checkbox in the host's 18px box; the label wraps it. */
+  export interface CheckboxProps
+    extends Omit<
+      React.InputHTMLAttributes<HTMLInputElement>,
+      'children' | 'className' | 'type'
+    > {
+    /** Applies to the label wrapper. */
+    className?: string
+    label?: React.ReactNode
+    indeterminate?: boolean
+  }
+  export const Checkbox: React.ComponentType<CheckboxProps>
+
+  /** A search box: magnifier, clear button while non-empty, Escape clears. */
+  export interface SearchFieldProps
+    extends Omit<
+      React.InputHTMLAttributes<HTMLInputElement>,
+      'value' | 'onChange' | 'type' | 'className'
+    > {
+    value: string
+    onChange: (next: string) => void
+    label?: React.ReactNode
+    /** Applies to the wrapper. */
+    className?: string
+  }
+  export const SearchField: React.ComponentType<SearchFieldProps>
 
   export interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
     value?: string
