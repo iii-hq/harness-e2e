@@ -462,7 +462,8 @@ the evidence by `[redacted:NAME]` and records in `bundle-manifest.json`
 8 characters are not looked for (`too_short`). On GitHub the preparation and
 each group job write the credentials among the job's secrets, the names that
 catalog lists and no other secret, to such a file in `RUNNER_TEMP`, which the
-phase and its packaging read.
+phase and its packaging read. The workflow names each of those secrets in
+that step: `toJSON(secrets)` would hold every run for approval.
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.

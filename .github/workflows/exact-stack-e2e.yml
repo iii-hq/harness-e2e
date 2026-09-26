@@ -116,15 +116,24 @@ jobs:
             --cli-version "$(jq -r '.iii' target/harness-e2e-contract/execution.json)"
           echo "posted=true" >>"$GITHUB_OUTPUT"
 
-      # The provider credentials among this job's secrets, the names
-      # config/provider-credentials.json lists and no other secret, in a file
-      # only this job reads (mode 600, emptied with RUNNER_TEMP): the phase
-      # gets it with --env-file and packaging redacts its values out of the
-      # evidence.
+      # The provider credentials among this job's secrets: the names
+      # config/provider-credentials.json lists, each named here (never every
+      # secret as JSON, which holds the run for approval and would hand this
+      # step all the others), in a file only this job reads (mode 600,
+      # emptied with RUNNER_TEMP). The phase gets it with --env-file and
+      # packaging redacts its values out of the evidence.
       - name: Write the provider credentials
         env:
-          SECRETS_JSON: ${{ toJSON(secrets) }}
-        run: python3 scripts/exact_stack_campaign.py credentials-from-secrets --output "$RUNNER_TEMP/provider-credentials.env"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLAMACPP_API_KEY: ${{ secrets.LLAMACPP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: python3 scripts/exact_stack_campaign.py credentials-file --output "$RUNNER_TEMP/provider-credentials.env"
 
       # The other half writes one contract per campaign and assembles the
       # stack once, with the credentials the groups get and one more try:
@@ -256,8 +265,16 @@ jobs:
       # in a private file the group gets and its packaging redacts.
       - name: Write the provider credentials
         env:
-          SECRETS_JSON: ${{ toJSON(secrets) }}
-        run: python3 scripts/exact_stack_campaign.py credentials-from-secrets --output "$RUNNER_TEMP/provider-credentials.env"
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLAMACPP_API_KEY: ${{ secrets.LLAMACPP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: python3 scripts/exact_stack_campaign.py credentials-file --output "$RUNNER_TEMP/provider-credentials.env"
 
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for

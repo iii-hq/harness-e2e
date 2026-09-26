@@ -139,14 +139,12 @@ def received_credentials(environ: Any, env_file: Path | None = None) -> dict[str
     return values
 
 
-def secret_credentials(secrets: Any) -> dict[str, str]:
-    """The catalog's credentials among a workflow's secrets (`toJSON(secrets)`),
-    never another secret: the org's publishing keys and the GitHub token stay
-    out of every stack."""
-    if not isinstance(secrets, dict):
-        raise ValueError("secrets must be a JSON object")
+def catalog_credentials(environ: Any) -> dict[str, str]:
+    """The catalog's names that `environ` sets, and nothing else of it: a
+    workflow step names exactly those secrets, never `toJSON(secrets)`,
+    which holds a run for approval and hands the step every other secret."""
     _, known = credential_catalog()
-    return {name: value for name, value in sorted(secrets.items()) if name in known and usable_credential(name, value)}
+    return {name: environ[name] for name in sorted(known) if usable_credential(name, environ.get(name))}
 
 
 def write_private(path: Path, values: dict[str, str]) -> None:
@@ -943,9 +941,9 @@ def main() -> int:
     stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
     stack_env.add_argument("--contract", type=Path, required=True)
     stack_env.add_argument("--output", type=Path, required=True)
-    from_secrets = commands.add_parser(
-        "credentials-from-secrets", help="the catalog's credentials among SECRETS_JSON (toJSON(secrets))")
-    from_secrets.add_argument("--output", type=Path, required=True)
+    credentials_file = commands.add_parser(
+        "credentials-file", help="a private env file of the catalog's credentials this environment sets")
+    credentials_file.add_argument("--output", type=Path, required=True)
     layout = commands.add_parser("validate-layout")
     layout.add_argument("--artifact-root", type=Path, required=True)
     layout.add_argument("--runtime-root", type=Path, required=True)
@@ -961,8 +959,8 @@ def main() -> int:
             for root in project_roots(args.compose):
                 print(root)
             return 0
-        if args.command == "credentials-from-secrets":
-            values = secret_credentials(json.loads(os.environ.get("SECRETS_JSON") or "{}"))
+        if args.command == "credentials-file":
+            values = catalog_credentials(os.environ)
             write_private(args.output, values)
             print("provider credentials: " + (", ".join(values) or "none"))
             return 0

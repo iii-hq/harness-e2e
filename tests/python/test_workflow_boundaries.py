@@ -200,9 +200,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
         jobs = yaml.safe_load(workflow)["jobs"]
         credentials = '"$RUNNER_TEMP/provider-credentials.env"'
-        # Only the step that filters them sees the secrets whole.
-        self.assertNotRegex(workflow, r"secrets\.[A-Z_]*API_KEY")
-        self.assertEqual(workflow.count("toJSON(secrets)"), 2)
+        catalog = json.loads((ROOT / "config/provider-credentials.json").read_text())
+        secrets = sorted(set(catalog["providers"].values()) | set(catalog["others"]))
+        # Never every secret: toJSON(secrets) holds the run for approval
+        # (action_required, no job starts) and hands a step all the others.
+        self.assertNotIn("toJSON(secrets)", workflow)
+        # Each catalog secret is named by the steps that write the file, and
+        # by no other step.
+        self.assertEqual(len(re.findall(r"secrets\.[A-Z_]*API_KEY", workflow)), 2 * len(secrets))
         for job, phase, package in (("prepare", "Assemble the stack and lock every contract to it",
                                      "Package the stack assembly evidence"),
                                     ("groups", "Execute common campaign group", "Package factual group evidence")):
@@ -212,10 +217,10 @@ class WorkflowBoundaryTests(unittest.TestCase):
                 write = names.index("Write the provider credentials")
                 self.assertLess(write, names.index(phase))
                 self.assertLess(names.index(phase), names.index(package))
-                self.assertEqual(steps[write]["env"], {"SECRETS_JSON": "${{ toJSON(secrets) }}"})
+                self.assertEqual(steps[write]["env"], {name: "${{ secrets." + name + " }}" for name in secrets})
                 self.assertEqual(
                     steps[write]["run"],
-                    "python3 scripts/exact_stack_campaign.py credentials-from-secrets --output " + credentials)
+                    "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)
                 self.assertIn(f"scripts/run_in_image.sh --env-file {credentials}", steps[names.index(phase)]["run"])
                 self.assertIn(f"--credentials {credentials}", steps[names.index(package)]["run"])
         # The finalizer holds no credential: the bundles it lays out were

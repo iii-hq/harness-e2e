@@ -1095,22 +1095,26 @@ fail() {
             self.assertNotIn("[WARN]", result.stderr)
 
     def test_github_forwards_only_the_catalogs_credentials_among_its_secrets(self):
+        # The step's environment: the catalog's secrets it names, and
+        # whatever else a runner sets.
         secrets = {
             "DEEPSEEK_API_KEY": "sk-deepseek-0123456789",
             "OPENAI_API_KEY": "sk-openai-0123456789",
             "ZAI_API_KEY": "",
-            # Other secrets the job can read: never forwarded, even one that
+            # Other secrets and variables: never forwarded, even one that
             # looks like a provider key.
             "CHOCOLATEY_API_KEY": "choco-never-forwarded",
             "III_CI_APP_PRIVATE_KEY": "-----BEGIN KEY-----\nnever\n-----END KEY-----",
             "NPM_TOKEN": "npm-never-forwarded",
-            "github_token": "ghs-never-forwarded",
+            "GITHUB_TOKEN": "ghs-never-forwarded",
         }
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "provider-credentials.env"
+            output.write_text("STALE=never\n")
+            output.chmod(0o644)
             result = subprocess.run(
-                ["python3", str(SCRIPT), "credentials-from-secrets", "--output", str(output)],
-                env={"PATH": os.environ["PATH"], "SECRETS_JSON": json.dumps(secrets)},
+                ["python3", str(SCRIPT), "credentials-file", "--output", str(output)],
+                env={"PATH": os.environ["PATH"], **secrets},
                 capture_output=True, text=True, check=True,
             )
             self.assertEqual(output.read_text(),
