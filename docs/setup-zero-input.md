@@ -37,7 +37,7 @@ Evidências: [fixture compartilhada](../src/scenarios/shell_coder_sandbox.rs), [
 
 ### Inicialização e persistência têm duas fontes de configuração
 
-O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e `III_CONFIG`, fornecidos pelo Compose. Seu YAML define `data_dir`, `control_database` e `control_namespace`; `github_repository` (padrão `iii-hq/harness-e2e`) escolhe o repositório cujas execuções o Console importa do GitHub com o `gh` autenticado. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
+O worker só exige `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME` e a configuração, fornecidos pelo Compose: `III_CONFIG` (arquivo, iii antes de 0.24.3) ou `III_CONFIG_NAME` (entrada do serviço de configuração lida com `configuration::get`, iii 0.24.3 em diante); caminhos relativos saem do diretório do arquivo ou, sem arquivo, do diretório de trabalho. Seu YAML define `data_dir`, `control_database` e `control_namespace`; `github_repository` (padrão `iii-hq/harness-e2e`) escolhe o repositório cujas execuções o Console importa do GitHub com o `gh` autenticado. Modelo e caminhos de fixtures não são necessários para subir a interface. [Fonte](../src/worker.rs).
 
 O setup documentado exige iniciar dois arquivos Compose em ordem. [worker-compose.control.yaml](../worker-compose.control.yaml) depende de `path://../workers/database` e contém um caminho absoluto da máquina do autor; [worker-compose.yaml](../worker-compose.yaml) aponta para o banco desse namespace. O pacote declara dependências, mas isso não comprova que a instalação inicial configure automaticamente o banco nomeado e a ligação entre namespaces.
 
@@ -162,7 +162,7 @@ Fontes principais por grupo: [CLI](../src/main.rs), [defaults da execução ráp
 
 | Grupo | Avaliação |
 | --- | --- |
-| `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, `III_CONFIG` | Contrato de inicialização injetado pelo Compose. Manter; não são perguntas do onboarding. |
+| `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, `III_CONFIG`/`III_CONFIG_NAME` | Contrato de inicialização injetado pelo Compose. Manter; não são perguntas do onboarding. |
 | `OPENAI_API_KEY`, `GITHUB_TOKEN`, `GH_TOKEN`, `AWS_SECRET_ACCESS_KEY`, `CLOUDFLARE_API_TOKEN` em `redaction.rs` | Leitura para ocultar valores sensíveis. Essa ocorrência não os torna credenciais obrigatórias do E2E. Credenciais dos workers e do CI seguem seus próprios contratos. |
 | `TARGET`, `CARGO_MANIFEST_DIR`, `SKIP_CONSOLE_UI_BUILD`, `PNPM` | Build a partir do código. O binário publicado incorpora os assets da Console; essas opções não devem aparecer na instalação de usuário. |
 | `UPDATE_PROFILE_SNAPSHOT_SCHEMA`, `CSS_DEBT_UPDATE` | Desenvolvimento e validação do próprio projeto. Manter fora do onboarding. |

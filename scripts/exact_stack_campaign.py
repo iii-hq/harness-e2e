@@ -33,6 +33,8 @@ APPLICATION = "harness"
 RUNNER = "harness-e2e"
 #: What a declaration means when it does not name a version.
 DEFAULT_SELECTOR = "latest"
+# The `database` package's own default for its `primary` database.
+DATABASE_PRIMARY_URL = "sqlite:./data/iii.db"
 #: The stack an execution runs on when it names none.
 DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
@@ -613,6 +615,12 @@ def project_scaffold(
         elif worker == APPLICATION and harness_override:
             container["config_name"] = scoped_config_name(namespace, "harness")
             container.setdefault("config_override", {}).update(harness_override)
+        elif worker == "database":
+            # The runner's `primary` database, the package's built-in default,
+            # declared: iii 0.24.3+ injects the package's published default
+            # (`{}`) as the live value, which hides the one the worker seeds.
+            databases = container.setdefault("config_override", {}).setdefault("databases", {})
+            databases.setdefault("primary", {"url": DATABASE_PRIMARY_URL})
         # Compose 0.24.2 derives `<namespace>-<container>` for the rest and
         # refuses to start when that exceeds 64 characters, which a long group
         # id reaches: only then name the container ourselves.
