@@ -42,6 +42,11 @@
 #       Without an argument, both.
 set -Eeuo pipefail
 
+# iii telemetry stays off in every phase and in all it starts, whatever an
+# --env-file (a provider_env_file overrides the image's ENV) says; the workers
+# Compose adds to the graph inherit it from the engine and daemon.
+export III_TELEMETRY_ENABLED=false
+
 usage() {
   echo "usage: executor.sh prepare [materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2

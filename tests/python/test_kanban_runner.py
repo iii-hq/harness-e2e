@@ -35,6 +35,7 @@ class KanbanRunnerTest(unittest.TestCase):
             environment = dict(command[index + 1].split('=', 1)
                                for index, value in enumerate(command) if value == '--env')
             self.assertEqual(environment.get('III_COMPOSE_STATE_DIR'), '/runtime-state/compose')
+            self.assertEqual(environment.get('III_TELEMETRY_ENABLED'), 'false')
 
     def test_integrity_ignores_relocated_state_but_detects_binary_source_changes(self):
         with tempfile.TemporaryDirectory() as directory:

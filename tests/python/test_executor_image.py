@@ -311,6 +311,14 @@ class ExecutorTests(unittest.TestCase):
         suite = (self.root / "target/harness-e2e-contract/suite.json").read_text()
         self.assertEqual((self.root / "target/harness-e2e-contract/profile.json").read_text(), suite)
 
+    def test_every_phase_forces_iii_telemetry_off_over_an_env_file(self):
+        # --env-file (a provider_env_file) overrides the image's ENV.
+        self.runner.write_text('#!/usr/bin/env bash\necho "telemetry=$III_TELEMETRY_ENABLED" >>"$FAKE_LOG"\n'
+                               'echo \'{"campaigns":[{"campaign_id":"pr-r01"}]}\'\n')
+        result = self.executor("prepare", env={"III_TELEMETRY_ENABLED": "true"})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("telemetry=false", self.log.read_text().splitlines())
+
     def test_finalize_aggregates_every_campaign_into_one_summary(self):
         # Nothing to aggregate is a failed finalizer, not an empty summary.
         self.assertNotEqual(self.executor("finalize", "aggregate").returncode, 0)

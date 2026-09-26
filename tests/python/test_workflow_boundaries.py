@@ -431,6 +431,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertNotIn("cherry-pick", cut)
         self.assertIn("git push origin HEAD:main", cut)
 
+    def test_workflows_that_run_iii_outside_the_image_turn_its_telemetry_off(self):
+        for name in ("release.yml", "canonical-gate.yml"):
+            workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))
+            self.assertEqual(workflow.get("env", {}).get("III_TELEMETRY_ENABLED"), "false", name)
+
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (
             "daily.yml",

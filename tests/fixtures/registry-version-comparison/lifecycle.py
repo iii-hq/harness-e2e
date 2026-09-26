@@ -145,7 +145,11 @@ def prepare(args):
             "-e", "DOCKER_TLS_CERTDIR=", "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
             "-e", f"WEB_PORT={args.web_port}", "-e", f"API_PORT={args.api_port}",
             "-e", "REGISTRY_SOURCE=/workspace/registry", "-e", "FIXTURE_DIR=/fixture",
-            "-e", f"COMPOSE_PROJECT_NAME={state['container']}"]
+            "-e", f"COMPOSE_PROJECT_NAME={state['container']}",
+            # iii telemetry off for the runner's own processes, which a
+            # container does not inherit from here. The fixture's compose does
+            # not pass it on: its app image sets it (e2e-fixture's Dockerfile).
+            "-e", "III_TELEMETRY_ENABLED=false"]
     if args.test != 1:
         argv += ["--privileged", "-p", f"127.0.0.1:{args.web_port}:8080",
                  "-p", f"127.0.0.1:{args.api_port}:8081"]

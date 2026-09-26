@@ -1,5 +1,6 @@
 """Compose and .env patching for the Linkly stack helper."""
 import importlib.util
+import os
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
@@ -143,6 +144,13 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(seen["args"][:3], ["iii", "trigger", "compose::status"])
         with self.assertRaises(SystemExit):
             module.project_dir(temp)  # removed with the TemporaryDirectory
+
+    def test_every_command_runs_iii_with_telemetry_off(self):
+        seen = []
+        with patch.dict(os.environ, {"III_TELEMETRY_ENABLED": "true"}), \
+                patch.object(module, "cmd_status", lambda args: seen.append(os.environ["III_TELEMETRY_ENABLED"])):
+            module.main(["status", "--dir", "/nowhere"])
+        self.assertEqual(seen, ["false"])
 
     def test_scaffold_rejects_an_empty_provider_list_before_touching_the_disk(self):
         with tempfile.TemporaryDirectory() as temp:

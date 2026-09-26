@@ -646,6 +646,10 @@ def project_scaffold(
     if env_file:
         for container in containers.values():
             container["env_file"] = [env_file]
+    # iii telemetry stays off in every worker, whatever the Compose daemon
+    # that starts it inherited (a developer's own daemon, say).
+    for container in containers.values():
+        container.setdefault("environment", {})["III_TELEMETRY_ENABLED"] = "false"
     manifest.update({
         "namespace": namespace,
         "startup_timeout": "5m",
