@@ -968,6 +968,19 @@ fail() {
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
         self.assertEqual(project["containers"]["llm-router"]["version"], "1.4.27")
 
+    def test_a_held_database_gets_the_runners_database_merged_once(self):
+        contract, _ = self.pinned_contract()
+        contract["runtime"]["compose"]["containers"]["database"] = {
+            "worker": "package://database", "version": "0.5.20",
+            "config_override": {"databases": {"other": {"url": "sqlite:./other.db"}}}}
+        contract["runtime"]["commits"]["app"]["dependencies"].append("database")
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
+        databases = [container for container in project["containers"].values()
+                     if container["worker"] == "package://database"]
+        self.assertEqual(len(databases), 1)
+        self.assertEqual(databases[0]["config_override"]["databases"], {
+            "other": {"url": "sqlite:./other.db"}, "primary": {"url": MODULE.DATABASE_PRIMARY_URL}})
+
     def test_the_run_names_a_worker_built_from_a_commit_by_its_commit(self):
         contract, _ = self.pinned_contract()
         contract["suite"]["groups"][0]["scenarios"] = ["direct_answer"]
