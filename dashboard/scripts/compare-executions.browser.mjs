@@ -406,8 +406,13 @@ try {
     .click()
   await page.getByRole('menuitem', { name: 'Run again' }).click()
   const rerun = page.getByRole('dialog', { name: 'Run again' })
-  await rerun.getByText('Advanced · sampling and retries').click()
-  assert.equal(await rerun.locator('#quick-execution-runs').inputValue(), '3')
+  assert.equal(
+    await rerun
+      .getByRole('group', { name: 'Runs per test' })
+      .locator('output')
+      .textContent(),
+    '3',
+  )
   await page.keyboard.press('Escape')
   await rerun.waitFor({ state: 'detached' })
 

@@ -541,9 +541,7 @@ try {
   executions = [runningSummary]
   await page.reload()
   await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
-  await page
-    .getByRole('checkbox', { name: /^Select gpt-5\.6-terra · / })
-    .check()
+  await page.getByRole('checkbox', { name: 'Select Nightly' }).check()
   const selection = page.getByRole('toolbar', { name: 'Selected executions' })
   await selection.getByText('Tick one more to compare.').waitFor()
   assert.ok(
