@@ -172,8 +172,12 @@ export type StackComparison = {
    *  ran a different build: version, commit (`commit:` pins too) or a
    *  checkout's uncommitted changes. */
   changed: ComparisonChange[]
-  /** Workers on both sides that ran the same build. */
+  /** Workers on both sides that ran the same, known build. */
   same: string[]
+  /** Workers on both sides whose builds cannot be told the same or not:
+   *  uncommitted changes on the same commit, a checkout whose commit was not
+   *  recorded, a version not observed. */
+  notComparable: Array<ComparisonChange & { reason: string }>
 }
 
 /** The runner that measured each side, and the scenarios whose definition moved with it. */
@@ -813,6 +817,7 @@ function stackComparison(
     onlyB: [],
     changed: [],
     same: [],
+    notComparable: [],
   }
   if (!recorded.a || !recorded.b) return empty
   const yourCode: StackComparison['yourCode'] = []
@@ -885,9 +890,45 @@ function stackComparison(
     )
       .sort()
       .join(' | ')
+  // What keeps a side's build from being vouched for, if anything.
+  const unknown = (side: 'a' | 'b', name: string) =>
+    distinct(
+      stacks[side]
+        .filter((worker) => worker.name === name)
+        .map((worker) =>
+          worker.commit
+            ? null
+            : worker.source === 'path'
+              ? 'commit not recorded'
+              : worker.observed
+                ? null
+                : 'version not observed',
+        ),
+    )
+  const dirty = (side: 'a' | 'b', name: string) =>
+    stacks[side].some(
+      (worker) =>
+        worker.name === name && worker.source === 'path' && worker.dirty,
+    )
   const both = names('a')
     .filter((name) => names('b').includes(name))
     .sort()
+  // Known and different is a change; unknown on either side, or the same
+  // commit with uncommitted changes, cannot be compared; else the same.
+  const judged = both.map((name) => {
+    const a = builds('a', name)
+    const b = builds('b', name)
+    const unknownWhy = distinct([...unknown('a', name), ...unknown('b', name)])
+    const verdict =
+      unknownWhy.length > 0
+        ? unknownWhy.join(', ')
+        : a !== b
+          ? 'changed'
+          : dirty('a', name) || dirty('b', name)
+            ? 'uncommitted changes'
+            : 'same'
+    return { field: name, a, b, verdict }
+  })
   const fromCheckout = (name: string) =>
     [...stacks.a, ...stacks.b].some(
       (worker) => worker.name === name && worker.source === 'path',
@@ -908,17 +949,23 @@ function stackComparison(
       }),
     onlyA: only('a').filter((name) => !ownCode('a').includes(name)),
     onlyB: only('b').filter((name) => !ownCode('b').includes(name)),
-    changed: both.flatMap((name) => {
-      const a = builds('a', name)
-      const b = builds('b', name)
-      return a === b ? [] : [{ field: name, a, b }]
-    }),
-    same: both.filter((name) => builds('a', name) === builds('b', name)),
+    changed: judged.flatMap(({ field, a, b, verdict }) =>
+      verdict === 'changed' ? [{ field, a, b }] : [],
+    ),
+    same: judged.flatMap(({ field, verdict }) =>
+      verdict === 'same' ? [field] : [],
+    ),
+    notComparable: judged.flatMap(({ field, a, b, verdict }) =>
+      verdict === 'changed' || verdict === 'same'
+        ? []
+        : [{ field, a, b, reason: verdict }],
+    ),
   }
 }
 
-/** What differs in the stack, in one line: "1 worker changed · 2 only in A";
- *  null when both sides ran the same stack. */
+/** What differs in the stack, in one line: "1 worker changed · 2 not
+ *  comparable · 2 only in A"; null only when both sides ran the same, known
+ *  stack. */
 export function stackChanges(stack: StackComparison): string | null {
   const unrecorded = SIDES.filter((side) => !stack.recorded[side])
   if (unrecorded.length > 0)
@@ -927,6 +974,11 @@ export function stackChanges(stack: StackComparison): string | null {
     ...(stack.changed.length > 0
       ? [
           `${stack.changed.length} worker${stack.changed.length === 1 ? '' : 's'} changed`,
+        ]
+      : []),
+    ...(stack.notComparable.length > 0
+      ? [
+          `${stack.notComparable.length} worker${stack.notComparable.length === 1 ? '' : 's'} not comparable`,
         ]
       : []),
     ...SIDES.flatMap((side) => {

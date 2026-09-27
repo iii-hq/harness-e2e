@@ -1272,11 +1272,39 @@ function StackDetail({ stack }: { stack: StackComparison }) {
             ))}
           </tbody>
         </table>
-      ) : (
+      ) : stack.notComparable.length === 0 ? (
         <p className="cmp-faint cmp-empty-line">
           Every worker on both sides ran the same build.
         </p>
-      )}
+      ) : null}
+      {stack.notComparable.length > 0 ? (
+        <>
+          <h4 className="cmp-h4">
+            Not comparable: the build on one side or both cannot be vouched for
+          </h4>
+          <table className="cmp-metrics cmp-stack-table">
+            <caption className="ep-sr">Workers that cannot be compared</caption>
+            <thead>
+              <tr>
+                <th scope="col">Worker</th>
+                <th scope="col">A</th>
+                <th scope="col">B</th>
+                <th scope="col">Why</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stack.notComparable.map((entry) => (
+                <tr key={entry.field} data-stack-unverified={entry.field}>
+                  <th scope="row">{entry.field}</th>
+                  <td className="cmp-faint-num">{entry.a}</td>
+                  <td>{entry.b}</td>
+                  <td className="cmp-delta">{entry.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </>
+      ) : null}
       <dl className="cmp-stack-facts">
         {(['a', 'b'] as const).map((which) =>
           onlyHere(which).length > 0 ? (

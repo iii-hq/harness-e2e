@@ -123,6 +123,17 @@ describe('execution comparison page', () => {
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
   })
 
+  it('never calls uncommitted builds the same stack', () => {
+    // The same executions twice: the only workers from a checkout carry
+    // uncommitted changes, so nothing vouches that they match.
+    const html = view(local(), local())
+    expect(html).toContain('2 workers not comparable')
+    expect(html).not.toContain('Nothing recorded differs')
+    expect(html).not.toContain('Every worker on both sides ran the same build')
+    expect(html).toContain('data-stack-unverified="llm-router"')
+    expect(html).toContain('uncommitted changes')
+  })
+
   it('says each side’s result as the executions list does', () => {
     const a = imported()
     const b = local()

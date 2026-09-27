@@ -435,6 +435,7 @@ describe('comparing two executions', () => {
       // A checkout is a different build from the package it replaces.
       changed: [{ field: 'llm-router', a: '1.2.0', b: '@a1b2c3d + changes' }],
       same: ['harness-e2e'],
+      notComparable: [],
     })
     expect(stackChanges(comparison.stack)).toBe(
       '1 worker changed · 1 only in B',
@@ -810,7 +811,60 @@ describe('comparing two executions', () => {
     expect(
       compareExecutions(a, same).stack.changed.map((change) => change.field),
     ).toEqual(['llm-router'])
-    expect(stackChanges(compareExecutions(local(), local()).stack)).toBeNull()
+    // The same commit with uncommitted changes on both sides is not the same
+    // build, nor a known change: it cannot be compared.
+    const dirty = compareExecutions(local(), local()).stack
+    expect(dirty.same).toEqual(['harness-e2e'])
+    expect(dirty.changed).toEqual([])
+    expect(dirty.notComparable).toEqual([
+      {
+        field: 'llm-router',
+        a: '@a1b2c3d + changes',
+        b: '@a1b2c3d + changes',
+        reason: 'uncommitted changes',
+      },
+      {
+        field: 'session-manager',
+        a: '@a1b2c3d + changes',
+        b: '@a1b2c3d + changes',
+        reason: 'uncommitted changes',
+      },
+    ])
+    expect(stackChanges(dirty)).toBe('2 workers not comparable')
+    // A version nobody observed, or a checkout whose commit was not
+    // recorded, cannot vouch for sameness either.
+    const unknown = (detail: DashboardExecutionDetail) => {
+      detail.plan_execution?.stack.push(
+        {
+          name: 'queue',
+          source: 'package',
+          requested: '^1',
+          observed: null,
+          commit: null,
+          dirty: null,
+        },
+        {
+          name: 'state',
+          source: 'path',
+          requested: null,
+          observed: '0.22.3',
+          commit: null,
+          dirty: null,
+        },
+      )
+      return detail
+    }
+    const blind = compareExecutions(
+      unknown(imported()),
+      unknown(imported()),
+    ).stack
+    expect(blind.same).toEqual(['harness-e2e', 'llm-router'])
+    expect(
+      blind.notComparable.map((entry) => [entry.field, entry.reason]),
+    ).toEqual([
+      ['queue', 'version not observed'],
+      ['state', 'commit not recorded'],
+    ])
   })
 })
 
