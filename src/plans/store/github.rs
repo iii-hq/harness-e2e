@@ -205,7 +205,10 @@ impl PlanStore {
             rows.push(self.run_row(repository, run).await);
         }
         let total = response["total_count"].as_u64();
-        let more = total.is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
+        // An empty page ends the list even when the count says more: GitHub
+        // counts runs its pages no longer reach.
+        let more = !runs.is_empty()
+            && total.is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
         Ok(json!({
             "repository": repository,
             "page": page,

@@ -4930,6 +4930,27 @@ esac"#,
         );
     }
 
+    #[tokio::test]
+    async fn runs_pages_end_at_the_count_or_at_an_empty_page() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // 45 counted; page 1 holds a run, page 3 none.
+        let gh = fake_gh(
+            root.path(),
+            r#"case "$*" in
+  *page=1*) printf '%s' '{"total_count":45,"workflow_runs":[{"id":41,"run_attempt":1,"display_title":"E2E","created_at":"2026-09-20T10:00:00Z","conclusion":"success","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  *) printf '%s' '{"total_count":45,"workflow_runs":[]}' ;;
+esac"#,
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let first = manager.github_runs("o/r", 1).await.unwrap();
+        assert_eq!(first["next_page"], 2);
+        assert_eq!(first["total_count"], 45);
+        let empty = manager.github_runs("o/r", 3).await.unwrap();
+        assert_eq!(empty["runs"], json!([]));
+        assert_eq!(empty["next_page"], Value::Null);
+    }
+
     /// A stand-in `gh` for a GitHub start: signed in as octo, dispatches run
     /// 77 on o/r, answers the run with `run_status` and its jobs with one
     /// group job; every call is logged.
