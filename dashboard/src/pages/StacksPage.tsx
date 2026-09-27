@@ -409,7 +409,7 @@ export function StackSheet({
                           {part.key ? (
                             <span className="sk-key">{part.key}</span>
                           ) : null}
-                          {part.rest || ' '}
+                          {part.rest}
                         </span>
                       </div>
                     )
