@@ -4,6 +4,7 @@ import {
   byScoreChange,
   ComparisonView,
   deltaText,
+  outsideText,
   pairByCaption,
   RowDetail,
   ScreenshotFigure,
@@ -137,6 +138,11 @@ describe('execution comparison page', () => {
     )
     const score = sandbox?.metrics.find((entry) => entry.id === 'score')
     expect(score && deltaText(score)).toBe('not comparable')
+    // Invalid runs count over every run; the ones out of the totals are said.
+    const invalid = compareExecutions(imported(), local()).totals.find(
+      (entry) => entry.id === 'technical_failures',
+    )
+    expect(invalid && outsideText(invalid)).toBe('1 run in A out of the totals')
   })
 
   it('opens a test on the criteria that moved, those lost on both sides, its metrics and runs', () => {
@@ -220,7 +226,7 @@ describe('execution comparison page', () => {
     const html = view(local(), b)
     expect(html).toContain('data-comparison-live')
     expect(html).toContain('B is still running')
-    expect(html).toContain('(partial)')
+    expect(html).toContain('B partial')
   })
 
   it('pairs both sides’ screenshots by caption and shows each', () => {

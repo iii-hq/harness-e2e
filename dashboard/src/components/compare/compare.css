@@ -1448,3 +1448,10 @@ button.cmp-highlight:hover {
     max-height: calc(var(--spacing) * 75);
   }
 }
+
+/* Empty and error states in the redesign's type: sentence case, sans. */
+.cmp-empty .ds-empty-title,
+.cmp-empty .ds-button {
+  font-family: var(--font-sans);
+  text-transform: none;
+}

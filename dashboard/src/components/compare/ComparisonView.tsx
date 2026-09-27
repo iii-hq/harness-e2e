@@ -65,26 +65,42 @@ const LIVE = ['running', 'importing', 'cancelling']
 
 type Side = 'baseline' | 'candidate'
 
-/** One side's figure; a partial one, or one with runs out of the totals,
- *  says so. */
+/** One side's figure, or a dash where it reported none. */
 export function valueText(metric: ComparedMetric, side: Side): string {
   const value = metric[side]
-  if (value === null) return '—'
-  const text = metricFigure(metric.format, value)
-  const outside = metric.outside?.[side] ?? 0
-  if (metric.partial[side]) return `${text} (partial)`
-  return outside > 0
-    ? `${text} (${plural(outside, 'run')} out of the totals)`
-    : text
+  return value === null ? '—' : metricFigure(metric.format, value)
+}
+
+function sidesText(flags: Record<Side, boolean | number>) {
+  return [flags.baseline ? 'A' : null, flags.candidate ? 'B' : null]
+    .filter(Boolean)
+    .join(' and ')
+}
+
+/** For figures over every run: how many of them are out of the totals. */
+export function outsideText(metric: ComparedMetric): string | null {
+  const outside = metric.outside
+  if (!outside || (!outside.baseline && !outside.candidate)) return null
+  const parts = (['baseline', 'candidate'] as const).flatMap((side) =>
+    outside[side]
+      ? [
+          `${plural(outside[side], 'run')} in ${side === 'baseline' ? 'A' : 'B'}`,
+        ]
+      : [],
+  )
+  return `${parts.join(', ')} out of the totals`
 }
 
 /** B minus A, with the relative change where it means something. Only the
- *  difference: no side is called better. */
+ *  difference: no side is called better. A side short of runs is partial,
+ *  and no difference is taken from it. */
 export function deltaText(metric: ComparedMetric): string {
   if (metric.delta === null)
-    return metric.baseline === null && metric.candidate === null
-      ? ''
-      : 'not comparable'
+    return metric.partial.baseline || metric.partial.candidate
+      ? `${sidesText(metric.partial)} partial`
+      : metric.baseline === null && metric.candidate === null
+        ? ''
+        : 'not comparable'
   if (Math.abs(metric.delta) < 1e-9) return 'no change'
   const sign = metric.delta > 0 ? '+' : '−'
   const size = Math.abs(metric.delta)
@@ -553,7 +569,12 @@ function MetricTable({
       <tbody>
         {metrics.map((metric) => (
           <tr key={metric.id} data-metric-id={metric.id}>
-            <th scope="row">{metric.label}</th>
+            <th scope="row">
+              {metric.label}
+              {outsideText(metric) ? (
+                <span className="cmp-faint-num"> · {outsideText(metric)}</span>
+              ) : null}
+            </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
             <td className="cmp-delta">{deltaText(metric) || '—'}</td>
