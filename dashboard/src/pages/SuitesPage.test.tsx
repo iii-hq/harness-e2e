@@ -311,4 +311,11 @@ describe('the Suites header', () => {
     })
     expect(run).toMatchObject({ label: 'Run tests', primary: true })
   })
+
+  it('asks before New suite leaves unsaved changes', () => {
+    const ask = () => {}
+    const [create] = suitesHeaderActions(undefined, ask)
+    expect(create.href).toBeUndefined()
+    expect(create.onSelect).toBe(ask)
+  })
 })

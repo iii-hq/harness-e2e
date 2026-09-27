@@ -1,13 +1,21 @@
 import {
   Button,
   Checkbox,
+  ConfirmDialog,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from '@iii-dev/console-ui'
 import { ChevronLeft, Copy, Info, Minus, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
@@ -69,6 +77,22 @@ function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
+/** Drafts by suite id. They outlive the page: a navigation it cannot hold
+ *  back (the browser's Back, a pasted hash, another section) keeps an edit,
+ *  and the suite reopens in it with its unsaved changes. */
+const openDrafts = new Map<string, SuiteDraft>()
+
+/** Forgets a draft that holds nothing unsaved (or whose suite is gone). */
+function dropCleanDraft(suiteId: string, suites: Suite[] | null) {
+  const draft = openDrafts.get(suiteId)
+  const suite = suites?.find((entry) => entry.id === suiteId)
+  if (draft && (!suite || !draftDirty(draft, suite))) openDrafts.delete(suiteId)
+}
+
+/** A link click the page may hold back: `onLeave` calls preventDefault on
+ *  it to ask first. */
+export type LeaveHandler = (event: MouseEvent, target: string) => void
+
 /** The suite the hash opens: `#/suites?suite=<id>`. */
 function suiteParam() {
   return typeof window === 'undefined'
@@ -78,13 +102,17 @@ function suiteParam() {
 
 /** The section's actions in the Console header: New suite, which is made
  *  by ticking tests in the catalog and saving them, and, once the worker
- *  answers, Run tests. */
-export function suitesHeaderActions(onRun?: () => void): HeaderAction[] {
+ *  answers, Run tests. With unsaved changes open, New suite asks first
+ *  (`onNew`) instead of leaving. */
+export function suitesHeaderActions(
+  onRun?: () => void,
+  onNew?: () => void,
+): HeaderAction[] {
   return [
     {
       id: 'new',
       label: 'New suite',
-      href: hashForTests(),
+      ...(onNew ? { onSelect: onNew } : { href: hashForTests() }),
       title: 'Tick tests in the catalog, then save them as a suite',
     },
     ...(onRun
@@ -99,10 +127,12 @@ export function SuiteList({
   suites,
   items,
   selectedId,
+  onLeave,
 }: {
   suites: Suite[]
   items: ReadonlyMap<string, SuiteListItem>
   selectedId: string | null
+  onLeave?: LeaveHandler
 }) {
   const local = suites.filter((suite) => suite.source === 'local')
   const groups = [
@@ -148,6 +178,11 @@ export function SuiteList({
                 href={hashForSuites(suite.id)}
                 aria-current={suite.id === selectedId ? 'true' : undefined}
                 data-suite={suite.id}
+                onClick={(event) =>
+                  suite.id === selectedId
+                    ? undefined
+                    : onLeave?.(event, hashForSuites(suite.id))
+                }
               >
                 <span className="st-item-head">
                   <span className="st-item-label">{item.label}</span>
@@ -456,6 +491,7 @@ export type SuiteDetailProps = {
   error: string | null
   /** Set while the suite (one of this Console) is being edited. */
   editing?: SuiteEditing | null
+  onLeave?: LeaveHandler
   onCopy: () => void
   onEdit: () => void
   onRun: () => void
@@ -474,6 +510,7 @@ export function SuiteDetail({
   busy,
   error,
   editing = null,
+  onLeave,
   onCopy,
   onEdit,
   onRun,
@@ -508,7 +545,11 @@ export function SuiteDetail({
       data-editing={editing ? true : undefined}
     >
       {narrow ? (
-        <a className="st-back" href={hashForSuites()}>
+        <a
+          className="st-back"
+          href={hashForSuites()}
+          onClick={(event) => onLeave?.(event, hashForSuites())}
+        >
           <ChevronLeft size={16} aria-hidden="true" />
           Suites
         </a>
@@ -770,13 +811,18 @@ export function SuitesPage() {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Suite | null>(null)
-  // The suite of this Console being edited, and its draft until it is saved
-  // or discarded; opening another suite drops it.
-  const [editing, setEditing] = useState<{
-    suiteId: string
-    draft: SuiteDraft
-  } | null>(null)
+  // The drafts of suites being edited, mirrored from openDrafts.
+  const [drafts, setDrafts] = useState<ReadonlyMap<string, SuiteDraft>>(
+    () => new Map(openDrafts),
+  )
+  const putDraft = useCallback((suiteId: string, draft: SuiteDraft | null) => {
+    if (draft) openDrafts.set(suiteId, draft)
+    else openDrafts.delete(suiteId)
+    setDrafts(new Map(openDrafts))
+  }, [])
   const [saving, setSaving] = useState(false)
+  // Where a click would have gone while it asks to discard the changes.
+  const [leaving, setLeaving] = useState<string | null>(null)
   // The suite Run tests opens on ('' for none) while it is open, and which
   // opening it is: each one mounts the dialog afresh.
   const [runner, setRunner] = useState<string | null>(null)
@@ -859,10 +905,8 @@ export function SuitesPage() {
   // The open suite lives in the hash, so Back leaves a suite for the list.
   useEffect(() => {
     const sync = () => {
-      const next = suiteParam()
-      setParam(next)
+      setParam(suiteParam())
       setActionError(null)
-      setEditing((current) => (current?.suiteId === next ? current : null))
     }
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
@@ -902,10 +946,44 @@ export function SuitesPage() {
   // shows until one is picked.
   const selected = named ?? (narrow ? null : (suites?.[0] ?? null))
   const failedFirstLoad = Boolean(error) && suites === null
+  const draft = selected ? (drafts.get(selected.id) ?? null) : null
+  const dirty = Boolean(selected && draft && draftDirty(draft, selected))
+
+  // Leaving a suite drops its draft when nothing in it is unsaved; so does
+  // leaving the page. Unsaved changes stay until the suite opens again.
+  const suitesNow = useRef(suites)
+  suitesNow.current = suites
+  const shownId = selected?.id ?? null
+  const lastShown = useRef<string | null>(null)
+  useEffect(() => {
+    const left = lastShown.current
+    lastShown.current = shownId
+    if (!left || left === shownId) return
+    dropCleanDraft(left, suitesNow.current)
+    setDrafts(new Map(openDrafts))
+  }, [shownId])
+  useEffect(
+    () => () => {
+      for (const id of [...openDrafts.keys()])
+        dropCleanDraft(id, suitesNow.current)
+    },
+    [],
+  )
+
+  /** A click that would leave unsaved changes asks first. */
+  const onLeave: LeaveHandler = (event, target) => {
+    if (!dirty) return
+    event.preventDefault()
+    setLeaving(target)
+  }
 
   const headerActions = useMemo(
-    () => suitesHeaderActions(bridge ? () => openRunner('') : undefined),
-    [bridge, openRunner],
+    () =>
+      suitesHeaderActions(
+        bridge ? () => openRunner('') : undefined,
+        dirty ? () => setLeaving(hashForTests()) : undefined,
+      ),
+    [bridge, openRunner, dirty],
   )
 
   const copy = async (suite: Suite) => {
@@ -916,7 +994,7 @@ export function SuitesPage() {
       const created = await bridge.createSuite(suite.id)
       await load()
       // Opened to edit: the copy is saved, its changes are not yet.
-      setEditing({ suiteId: created.id, draft: suiteDraft(created) })
+      putDraft(created.id, suiteDraft(created))
       window.location.hash = hashForSuites(created.id)
     } catch (cause) {
       setActionError(errorText(cause))
@@ -931,7 +1009,7 @@ export function SuitesPage() {
     try {
       await bridge.deleteSuite(suite.id)
       setDeleting(null)
-      setEditing(null)
+      putDraft(suite.id, null)
       await load()
       window.location.hash = hashForSuites()
     } catch (cause) {
@@ -943,8 +1021,8 @@ export function SuitesPage() {
   }
 
   const save = async () => {
-    if (!bridge || !editing) return
-    const { suiteId, draft } = editing
+    if (!bridge || !selected || !draft) return
+    const suiteId = selected.id
     const problem = draftProblem(draft)
     if (problem) {
       setActionError(problem)
@@ -961,7 +1039,7 @@ export function SuitesPage() {
         technical_retries: draft.retries,
       })
       await load()
-      setEditing(null)
+      putDraft(suiteId, null)
     } catch (cause) {
       setActionError(errorText(cause))
     } finally {
@@ -1034,6 +1112,7 @@ export function SuitesPage() {
               suites={suites}
               items={items}
               selectedId={selected?.id ?? null}
+              onLeave={onLeave}
             />
           )}
           {selected ? (
@@ -1048,28 +1127,23 @@ export function SuitesPage() {
               busy={busy}
               error={actionError}
               editing={
-                editing?.suiteId === selected.id
+                draft
                   ? {
-                      draft: editing.draft,
+                      draft,
                       catalog,
                       saving,
-                      onChange: (draft) =>
-                        setEditing({ suiteId: selected.id, draft }),
+                      onChange: (next) => putDraft(selected.id, next),
                       onSave: () => void save(),
                       onDiscard: () => {
-                        setEditing(null)
+                        putDraft(selected.id, null)
                         setActionError(null)
                       },
                     }
                   : null
               }
+              onLeave={onLeave}
               onCopy={() => void copy(selected)}
-              onEdit={() =>
-                setEditing({
-                  suiteId: selected.id,
-                  draft: suiteDraft(selected),
-                })
-              }
+              onEdit={() => putDraft(selected.id, suiteDraft(selected))}
               onRun={() => openRunner(selected.id)}
               onDelete={() => setDeleting(selected)}
             />
@@ -1077,6 +1151,21 @@ export function SuitesPage() {
         </div>
       )}
 
+      <ConfirmDialog
+        open={leaving !== null}
+        onOpenChange={(open) => {
+          if (!open) setLeaving(null)
+        }}
+        title={`Discard changes to ${selected?.label ?? 'this suite'}?`}
+        description="What you changed in it is not saved. Discarding keeps the suite as it was last saved."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        tone="danger"
+        onConfirm={() => {
+          if (selected) putDraft(selected.id, null)
+          if (leaving) window.location.hash = leaving
+        }}
+      />
       <DeleteSuiteDialog
         suite={deleting}
         deleting={busy}
