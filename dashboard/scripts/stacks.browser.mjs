@@ -18,10 +18,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 function view(id, label, source, yaml) {
   const containers = [
     ...yaml.matchAll(
-      /^ {2}([\w-]+):\n {4}worker: .*\n(?: {4}version: (\S+))?/gm,
+      /^ {2}([\w-]+):\n {4}worker: (\S+).*\n(?: {4}version: (\S+))?/gm,
     ),
-  ].map(([, name, version]) => ({
+  ].map(([, name, worker, version]) => ({
     name,
+    worker,
     version: version ?? null,
     commit: null,
   }))

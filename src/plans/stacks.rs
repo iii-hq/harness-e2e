@@ -59,10 +59,13 @@ pub(crate) struct StackUpdateRequest {
     pub yaml: Option<String>,
 }
 
-/// A container a stack declares, with the version or commit it pins.
+/// A container a stack declares: its worker as written and the version or
+/// commit it pins.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct StackContainer {
     pub name: String,
+    /// The worker reference as written: `package://…`, `path://…` or other.
+    pub worker: Option<String>,
     pub version: Option<String>,
     pub commit: Option<String>,
 }
@@ -265,6 +268,7 @@ pub(crate) fn summarize(yaml: &str) -> Result<StackSummary> {
         }
         listed.push(StackContainer {
             name,
+            worker: container.get("worker").and_then(text),
             version: container.get("version").and_then(text),
             commit: commit.and_then(text),
         });
@@ -550,14 +554,48 @@ mod tests {
             [
                 StackContainer {
                     name: "pinned".into(),
+                    worker: Some("package://harness".into()),
                     version: None,
                     commit: Some("0123456789abcdef".into()),
                 },
                 StackContainer {
                     name: "unpinned".into(),
+                    worker: Some("package://harness".into()),
                     version: None,
                     commit: None,
                 }
+            ]
+        );
+    }
+
+    #[test]
+    fn a_container_lists_its_worker_as_written() {
+        let summary = summarize(
+            "containers:\n  harness:\n    worker: package://harness\n    commit: 8c02f93a1d4e\n  harness-e2e:\n    worker: path://../harness-e2e\n    commit: 8c02f93a1d4e\n",
+        )
+        .unwrap();
+        assert_eq!(
+            summary.containers,
+            vec![
+                StackContainer {
+                    name: "harness".into(),
+                    worker: Some("package://harness".into()),
+                    version: None,
+                    commit: Some("8c02f93a1d4e".into()),
+                },
+                StackContainer {
+                    name: "harness-e2e".into(),
+                    worker: Some("path://../harness-e2e".into()),
+                    version: None,
+                    commit: Some("8c02f93a1d4e".into()),
+                },
+            ]
+        );
+        assert_eq!(
+            summary.warnings,
+            vec![
+                "harness-e2e runs path://../harness-e2e, a path on this machine; the stack runs it only here.",
+                "harness-e2e pins a commit, but only a package:// worker is built from one; the executor refuses it.",
             ]
         );
     }
