@@ -935,9 +935,17 @@ try {
   await page
     .getByRole('button', { name: 'Cancel execution', exact: true })
     .click()
-  const confirmCancel = page.getByRole('dialog', {
+  const confirmCancel = page.getByRole('alertdialog', {
     name: 'Cancel this execution?',
   })
+  // The safe choice has the focus.
+  await confirmCancel
+    .getByRole('button', { name: 'Keep running', exact: true })
+    .waitFor()
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Keep running',
+  )
   await confirmCancel
     .getByText('The test running now stops. What already reported stays.')
     .waitFor()

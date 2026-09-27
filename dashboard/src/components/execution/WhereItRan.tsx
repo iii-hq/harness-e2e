@@ -1,6 +1,13 @@
-import { ExternalLink } from 'lucide-react'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@iii-dev/console-ui'
+import { ExternalLink, Square } from 'lucide-react'
 import { useState } from 'react'
-import { Callout, Dialog } from '@/design-system'
+import { Callout } from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { type PlanExecution, running } from '@/lib/plan-execution'
 import './where-it-ran.css'
@@ -302,7 +309,8 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
   )
 }
 
-/** Cancel where it runs, saying what stops and what is kept. */
+/** Cancel where it runs, saying what stops and what is kept: the host's
+ *  confirmation, as the list's delete, with the safe choice focused. */
 export function CancelExecutionDialog({
   bridge,
   execution,
@@ -336,38 +344,59 @@ export function CancelExecutionDialog({
   return (
     <Dialog
       open={open}
-      onClose={() => (busy ? undefined : onClose())}
-      size="sm"
-      title={copy.title}
-      description={copy.body}
-      bodyPadding
-      footer={
-        <div className="wr-dialog-actions">
-          <button
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose()
+      }}
+    >
+      <DialogContent
+        role="alertdialog"
+        className="ex-dialog"
+        aria-describedby="ep-cancel-body"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          document.getElementById('ep-cancel-keep')?.focus()
+        }}
+      >
+        <div className="ex-dialog-head">
+          <span className="ex-dialog-icon" aria-hidden="true">
+            <Square size={16} />
+          </span>
+          <div>
+            <DialogTitle className="ex-dialog-title">{copy.title}</DialogTitle>
+            <DialogDescription id="ep-cancel-body" className="ex-dialog-body">
+              {copy.body}
+            </DialogDescription>
+          </div>
+        </div>
+        {error ? (
+          <p role="alert" className="ex-error">
+            {error}
+          </p>
+        ) : null}
+        <div className="ex-dialog-actions">
+          <Button
+            id="ep-cancel-keep"
             type="button"
-            className="ds-button ds-button-quiet ds-button-default"
+            variant="pill"
+            size="sm"
+            disabled={busy}
             onClick={onClose}
-            disabled={busy}
           >
-            Keep it running
-          </button>
-          <button
+            Keep running
+          </Button>
+          <Button
             type="button"
-            className="ds-button ds-button-primary ds-button-default"
-            onClick={() => void confirm()}
-            disabled={busy}
+            variant="pill"
+            size="sm"
+            className="ex-danger"
+            disabled={busy || !bridge}
             aria-busy={busy || undefined}
+            onClick={() => void confirm()}
           >
             {busy ? 'Cancelling…' : copy.action}
-          </button>
+          </Button>
         </div>
-      }
-    >
-      {error ? (
-        <p role="alert" className="wr-error">
-          {error}
-        </p>
-      ) : null}
+      </DialogContent>
     </Dialog>
   )
 }

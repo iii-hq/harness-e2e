@@ -42,7 +42,6 @@ import type { SystemOutcome } from '@/components/SystemOutcome'
 import {
   buttonClassName,
   Callout,
-  Dialog,
   EmptyState,
   MetricCard,
   type OperationalStatus,
@@ -83,6 +82,7 @@ import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import { screenshotsOf } from '@/lib/screenshots'
 import { watchExecution } from '@/lib/watch-execution'
+import { buildLedgerRows, DeleteDialog } from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
 
 type DetailSection = 'metrics' | 'results' | 'technical'
@@ -1131,32 +1131,22 @@ export function ExecutionPage({
           <WhereItRan execution={detail.plan_execution} />
         ) : null}
       </div>
-      <Dialog
-        open={deleteOpen}
-        onClose={() => !deleting && setDeleteOpen(false)}
-        size="sm"
-        title="Delete execution?"
-        description="This permanently removes the execution and its retained evidence from the Console."
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={deleting}
-              onClick={() => setDeleteOpen(false)}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={deleting}
-              aria-busy={deleting}
-              onClick={() => void deleteExecution()}
-            >
-              {deleting ? 'Deleting…' : 'Delete execution'}
-            </button>
-          </div>
+      {/* The list's delete confirmation, on this execution. */}
+      <DeleteDialog
+        request={
+          deleteOpen && summary
+            ? { rows: buildLedgerRows([summary]), kept: [] }
+            : null
+        }
+        deleting={deleting}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={() => void deleteExecution()}
+        onClosed={() =>
+          document
+            .querySelector<HTMLElement>(
+              '.execution-header [aria-label="More actions"]',
+            )
+            ?.focus()
         }
       />
       {detail.plan_execution ? (

@@ -823,7 +823,7 @@ const FACT_ICONS = { gone: Minus, kept: Check, warn: AlertTriangle }
 
 export type DeleteRequest = { rows: LedgerRow[]; kept: LedgerRow[] }
 
-function DeleteDialog({
+export function DeleteDialog({
   request,
   deleting,
   onCancel,

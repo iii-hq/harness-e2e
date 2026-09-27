@@ -1998,3 +1998,51 @@ tr.ep-detail-row:hover {
 .ep-stack-more {
   font-family: var(--font-sans);
 }
+
+/* Run a test again (canvas: Execution detail · rerun): the host's dialog as
+   the list's confirmations, 560 wide, its facts on a surface. */
+.ep-confirm-wide {
+  max-width: 35rem;
+}
+
+.ep-confirm-facts {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  margin: 0;
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.25);
+}
+
+.ep-confirm-facts dt {
+  color: var(--color-ink-faint);
+}
+
+.ep-confirm-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ep-confirm-mono {
+  font-family: var(--font-mono);
+}
+
+.ex-dialog-title .ep-confirm-mono {
+  font-size: var(--text-sm);
+}
+
+.ep-confirm-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing);
+  color: inherit;
+}
+
+.ex-dialog-actions .ep-confirm-link {
+  margin-inline-end: auto;
+  font-size: var(--text-xs);
+}

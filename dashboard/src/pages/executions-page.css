@@ -459,7 +459,7 @@
 .ex-dialog-title {
   margin: 0;
   padding-inline-end: calc(var(--spacing) * 8);
-  font-size: var(--text-sm);
+  font-size: var(--text-base);
   font-weight: 600;
   line-height: calc(var(--spacing) * 5.5);
   overflow-wrap: anywhere;

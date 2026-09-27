@@ -13,6 +13,20 @@ export function placeOf(execution: PlanExecution): Place {
   return 'harness'
 }
 
+/** An executor image by its tag, with a long hex cut to 12:
+ *  `ghcr.io/iii-hq/harness-e2e:tools-d9a8…` → `tools-d9a8b54a2c85`. */
+export function shortImage(image: string) {
+  const tag = image.split(/[:@]/).pop() || image
+  return tag.replace(/([0-9a-f]{12})[0-9a-f]+$/, '$1')
+}
+
+/** A stack as recorded: its name and the first 12 of its lock's digest. */
+export function stackLine(stack: { name: string; sha256?: string }) {
+  return stack.sha256
+    ? `${stack.name} · ${stack.sha256.replace('sha256:', '').slice(0, 12)}`
+    : stack.name
+}
+
 export function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`
 }
@@ -315,7 +329,7 @@ export function cancelCopy(execution: PlanExecution) {
     return {
       title: 'Cancel the run on GitHub?',
       body: `Calls gh run cancel. Its ${plural(live, 'running job stops', 'running jobs stop')}; ${finished === 1 ? 'the job that finished is' : `the ${finished} jobs that finished are`} imported when the run ends.`,
-      action: 'Cancel the run',
+      action: 'Cancel run',
     }
   if (place === 'docker')
     return {
