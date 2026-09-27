@@ -49,6 +49,7 @@ import {
 import {
   changedTests,
   changedWarning,
+  draftChanges,
   draftDirty,
   draftProblem,
   type SuiteDraft,
@@ -64,6 +65,7 @@ import {
   testSuggestions,
   testsNote,
   tickDraft,
+  upsertSuite,
 } from '@/lib/suites-view'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import { type CatalogRowView, catalogRowView } from '@/lib/test-catalog-view'
@@ -1055,10 +1057,12 @@ export function SuitesPage() {
     setActionError(null)
     try {
       const created = await bridge.createSuite(suite.id)
-      await load()
-      // Opened to edit: the copy is saved, its changes are not yet.
+      // Listed and opened to edit as the worker answered, whatever the
+      // reload does: the copy is saved, its changes are not yet.
+      setSuites((current) => upsertSuite(current ?? [], created))
       putDraft(created.id, suiteDraft(created))
       window.location.hash = hashForSuites(created.id)
+      void load()
     } catch (cause) {
       setActionError(errorText(cause))
     } finally {
@@ -1095,14 +1099,11 @@ export function SuitesPage() {
     setSaving(true)
     setActionError(null)
     try {
-      await bridge.updateSuite(suiteId, {
-        label: draft.label.trim(),
-        scenarios: draft.shown.filter((id) => draft.tests.includes(id)),
-        repetitions: draft.runs,
-        technical_retries: draft.retries,
-      })
-      await load()
+      const saved = await bridge.updateSuite(suiteId, draftChanges(draft))
+      // The suite as saved closes the editor; the reload only refreshes.
+      setSuites((current) => upsertSuite(current ?? [], saved))
       putDraft(suiteId, null)
+      void load()
     } catch (cause) {
       setActionError(errorText(cause))
     } finally {

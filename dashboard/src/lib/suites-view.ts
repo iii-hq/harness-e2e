@@ -248,6 +248,25 @@ export function draftDirty(draft: SuiteDraft, suite: Suite) {
   )
 }
 
+/** What Save sends: the ticked tests in the order shown; the unticked stay
+ *  out. */
+export function draftChanges(draft: SuiteDraft) {
+  return {
+    label: draft.label.trim(),
+    scenarios: draft.shown.filter((id) => draft.tests.includes(id)),
+    repetitions: draft.runs,
+    technical_retries: draft.retries,
+  }
+}
+
+/** The list with `suite` as the worker answered it: in its place, or last
+ *  when it is new. */
+export function upsertSuite(suites: Suite[], suite: Suite) {
+  return suites.some((entry) => entry.id === suite.id)
+    ? suites.map((entry) => (entry.id === suite.id ? suite : entry))
+    : [...suites, suite]
+}
+
 /** What keeps the draft from being saved, said in the page's words. */
 export function draftProblem(draft: SuiteDraft): string | null {
   if (!draft.label.trim()) return 'Name the suite.'

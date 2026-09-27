@@ -5,6 +5,7 @@ import type {
 } from '@/lib/dashboard-data-source'
 import {
   changedTests,
+  draftChanges,
   draftDirty,
   draftProblem,
   sequenceSteps,
@@ -16,6 +17,7 @@ import {
   testSuggestions,
   testsNote,
   tickDraft,
+  upsertSuite,
 } from '@/lib/suites-view'
 import type { CatalogRowView } from '@/lib/test-catalog-view'
 
@@ -214,5 +216,40 @@ describe('suites view', () => {
     ]
     expect(testSuggestions('val', views, draft)).toEqual(['validation_chain'])
     expect(testSuggestions('  ', views, draft)).toEqual([])
+  })
+})
+
+describe('saving', () => {
+  it('sends the ticked tests in the order shown, the unticked left out', () => {
+    const saved = suite('mine', {
+      label: 'Mine',
+      source: 'local',
+      scenarios: ['a', 'b', 'c'],
+    })
+    const draft = tickDraft(
+      tickDraft(
+        { ...suiteDraft(saved), label: '  Fast  ', runs: 3 },
+        'b',
+        false,
+        [],
+      ),
+      'd',
+      true,
+      [],
+    )
+    expect(draftChanges(draft)).toEqual({
+      label: 'Fast',
+      scenarios: ['a', 'c', 'd'],
+      repetitions: 3,
+      technical_retries: 0,
+    })
+  })
+
+  it('puts the suite the worker answered in its place, or last when new', () => {
+    const a = suite('a')
+    const b = suite('b')
+    const renamed = { ...b, label: 'B' }
+    expect(upsertSuite([a, b], renamed)).toEqual([a, renamed])
+    expect(upsertSuite([a], b)).toEqual([a, b])
   })
 })
