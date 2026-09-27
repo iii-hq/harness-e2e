@@ -18,12 +18,6 @@
   margin-bottom: calc(var(--spacing) * -2.5);
 }
 
-/* Header actions in sentence case, as on the execution page. */
-.th-header .ds-button {
-  font-family: var(--font-sans);
-  text-transform: none;
-}
-
 .th-faint {
   color: var(--color-ink-faint);
   font-size: var(--text-xs);
