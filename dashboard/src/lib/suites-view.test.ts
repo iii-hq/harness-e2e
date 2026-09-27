@@ -8,6 +8,8 @@ import {
   draftChanges,
   draftDirty,
   draftProblem,
+  executionScope,
+  notRunNote,
   openSuite,
   sequenceSteps,
   suiteDraft,
@@ -118,7 +120,7 @@ describe('suites view', () => {
       id: 's',
       label: 's',
       count: '3 tests',
-      last: null,
+      last: { state: 'never_run', label: 'not run in this Console' },
       changed: '1 of 3 changed since their last run',
     })
   })
@@ -217,6 +219,35 @@ describe('suites view', () => {
     ]
     expect(testSuggestions('val', views, draft)).toEqual(['validation_chain'])
     expect(testSuggestions('  ', views, draft)).toEqual([])
+  })
+})
+
+describe('a suite none of the executions read ran', () => {
+  it('is not run in this Console only when they are every one it has', () => {
+    const quick = suite('quick', { scenarios: ['a'] })
+    const label = (scope: ReturnType<typeof executionScope>) =>
+      suiteListItem(quick, [], new Map(), scope).last.label
+    expect(label(executionScope(12, 12))).toBe('not run in this Console')
+    expect(label(executionScope(12))).toBe('not run in this Console')
+    // At the limit, or fewer than the total the worker reports.
+    expect(label(executionScope(100, 100))).toBe(
+      'not in the last 100 executions',
+    )
+    expect(label(executionScope(40, 57))).toBe('not in the last 40 executions')
+    expect(label(null)).toBe('executions could not be read')
+  })
+
+  it('says as much under Executions of this suite', () => {
+    expect(notRunNote(executionScope(3), false)).toMatch(
+      /^Not run in this Console yet\. /,
+    )
+    expect(notRunNote(executionScope(3), true)).toBe(
+      'Not run yet. Its executions will show here.',
+    )
+    expect(notRunNote(executionScope(100), false)).toMatch(
+      /^Not in the last 100 executions of this Console\. /,
+    )
+    expect(notRunNote(null, true)).toMatch(/could not be read/)
   })
 })
 

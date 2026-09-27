@@ -135,15 +135,57 @@ export function suiteRuns(
     })
 }
 
+/** The executions the page reads to find a suite's runs: the newest, as
+ *  many as the worker retains. */
+export const EXECUTIONS_READ = 100
+
+/** What the executions read say of a suite that is not among them: `read`
+ *  of them, `complete` when they are every one this Console has (fewer than
+ *  the limit, and no more than the total the worker reports). Null when they
+ *  could not be read. */
+export type ExecutionScope = { read: number; complete: boolean } | null
+
+export function executionScope(
+  read: number,
+  total?: number | null,
+): ExecutionScope {
+  return {
+    read,
+    complete: read < EXECUTIONS_READ && (total == null || total <= read),
+  }
+}
+
+/** A suite no execution read ran, said as far as they reach. */
+export function notRunLabel(scope: ExecutionScope) {
+  if (!scope) return 'executions could not be read'
+  return scope.complete
+    ? 'not run in this Console'
+    : `not in the last ${plural(scope.read, 'execution')}`
+}
+
+/** Under "Executions of this suite" when none of those read ran it. */
+export function notRunNote(scope: ExecutionScope, local: boolean) {
+  const after = local
+    ? 'Its executions will show here.'
+    : 'Executions started from this suite, or imported from GitHub runs of it, show here.'
+  if (!scope)
+    return `The executions of this Console could not be read. ${after}`
+  if (!scope.complete)
+    return `Not in the last ${plural(scope.read, 'execution')} of this Console. ${after}`
+  return local
+    ? `Not run yet. ${after}`
+    : `Not run in this Console yet. ${after}`
+}
+
 /** A suite in the list: its size, its last execution, and how many of its
  *  tests changed since they ran. */
 export type SuiteListItem = {
   id: string
   label: string
   count: string
-  /** The last execution's result, `Failed · Sep 24`; null when it never ran
-   *  in this Console. */
-  last: { state: ResultState; label: string } | null
+  /** The last execution's result, `Failed · Sep 24`, or why there is none:
+   *  `not run in this Console`, `not in the last 100 executions`. */
+  last: { state: ResultState; label: string }
   changed: string | null
 }
 
@@ -151,6 +193,7 @@ export function suiteListItem(
   suite: Suite,
   runs: SuiteRun[],
   views: ReadonlyMap<string, CatalogRowView>,
+  scope: ExecutionScope = executionScope(runs.length),
 ): SuiteListItem {
   const last = runs[0]
   const changed = changedTests(suite.scenarios, views).length
@@ -168,7 +211,7 @@ export function suiteListItem(
             .filter(Boolean)
             .join(' · '),
         }
-      : null,
+      : { state: 'never_run', label: notRunLabel(scope) },
     changed: changed > 0 ? changedNote(changed, suite.scenarios.length) : null,
   }
 }

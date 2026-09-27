@@ -52,6 +52,10 @@ import {
   draftChanges,
   draftDirty,
   draftProblem,
+  EXECUTIONS_READ,
+  type ExecutionScope,
+  executionScope,
+  notRunNote,
   openSuite,
   type SuiteDraft,
   type SuiteListItem,
@@ -193,8 +197,8 @@ export function SuiteList({
                 </span>
                 <StatusLabel
                   className="st-item-last"
-                  state={item.last?.state ?? 'never_run'}
-                  label={item.last?.label ?? 'not run in this Console'}
+                  state={item.last.state}
+                  label={item.last.label}
                 />
                 {item.changed ? (
                   <span className="st-item-changed">{item.changed}</span>
@@ -442,9 +446,11 @@ function Stepper({
 export function SuiteExecutions({
   runs,
   local,
+  scope,
 }: {
   runs: SuiteRun[]
   local: boolean
+  scope: ExecutionScope
 }) {
   return (
     <section className="st-section" aria-labelledby="st-executions">
@@ -452,11 +458,7 @@ export function SuiteExecutions({
         <h3 id="st-executions">Executions of this suite</h3>
       </div>
       {runs.length === 0 ? (
-        <p className="st-note">
-          {local
-            ? 'Not run yet. Its executions will show here.'
-            : 'Not run in this Console yet. Executions started from this suite, or imported from GitHub runs of it, show here.'}
-        </p>
+        <p className="st-note">{notRunNote(scope, local)}</p>
       ) : (
         <ul className="st-runs">
           {runs.map((run) => (
@@ -500,6 +502,8 @@ export type SuiteEditing = {
 export type SuiteDetailProps = {
   suite: Suite
   runs: SuiteRun[]
+  /** How far the executions read reach, for a suite none of them ran. */
+  scope?: ExecutionScope
   views: ReadonlyMap<string, CatalogRowView>
   /** Which tests run whole, in order; null until the catalog answers. */
   groups: string[][] | null
@@ -526,6 +530,7 @@ export type SuiteDetailProps = {
 export function SuiteDetail({
   suite,
   runs,
+  scope = executionScope(runs.length),
   views,
   groups,
   groupsError = null,
@@ -799,7 +804,7 @@ export function SuiteDetail({
           onAdd={(id) => tick(id, true)}
         />
       ) : null}
-      <SuiteExecutions runs={runs} local={local} />
+      <SuiteExecutions runs={runs} local={local} scope={scope} />
     </section>
   )
 }
@@ -904,6 +909,8 @@ export function SuitesPage() {
   const [suites, setSuites] = useState<Suite[] | null>(null)
   const [rows, setRows] = useState<TestCatalogRow[]>([])
   const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
+  // How far the executions read reach; null when they could not be read.
+  const [scope, setScope] = useState<ExecutionScope>(executionScope(0))
   // Which tests run whole, in order: the runner's catalog says it. Editing
   // waits for it; its failure is said in the editor.
   const [groups, setGroups] = useState<string[][] | null>(null)
@@ -949,15 +956,14 @@ export function SuitesPage() {
         // The last results and the executions add to the suites; they show
         // without them.
         listAllTests(next).catch(() => null),
-        next
-          .listExecutions({ limit: 100 })
-          .then((manifest) => manifest.executions ?? [])
-          .catch(() => [] as DashboardExecutionSummary[]),
+        next.listExecutions({ limit: EXECUTIONS_READ }).catch(() => null),
       ])
       if (!request.isCurrent()) return
       setSuites(listed.suites)
       if (tests) setRows(tests.rows)
-      setExecutions(recent)
+      const read = recent?.executions ?? []
+      setExecutions(read)
+      setScope(recent ? executionScope(read.length, recent.total) : null)
     } catch (cause) {
       if (request.isCurrent()) setError(errorText(cause))
     }
@@ -1035,10 +1041,10 @@ export function SuitesPage() {
       new Map(
         (suites ?? []).map((suite) => [
           suite.id,
-          suiteListItem(suite, runsBySuite.get(suite.id) ?? [], views),
+          suiteListItem(suite, runsBySuite.get(suite.id) ?? [], views, scope),
         ]),
       ),
-    [suites, runsBySuite, views],
+    [suites, runsBySuite, views, scope],
   )
 
   const { suite: selected, missing } = openSuite(suites, param, narrow)
@@ -1219,6 +1225,7 @@ export function SuitesPage() {
               key={selected.id}
               suite={selected}
               runs={runsBySuite.get(selected.id) ?? []}
+              scope={scope}
               views={views}
               groups={groups}
               groupsError={groupsError}
