@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { hashForSuites, hashForTests } from '@/hooks/use-hash-route'
 import type { Suite } from '@/lib/dashboard-data-source'
 import { type SuiteListItem, suiteListItem } from '@/lib/suites-view'
+import type { TestCatalogRow } from '@/lib/test-catalog'
+import { catalogRowView } from '@/lib/test-catalog-view'
 import {
   SuiteDetail,
   type SuiteDetailProps,
@@ -45,6 +47,8 @@ function detail(props: Partial<SuiteDetailProps> = {}) {
     <SuiteDetail
       suite={regression}
       runs={[]}
+      views={new Map()}
+      groups={[]}
       narrow={false}
       ready
       busy={false}
@@ -56,6 +60,53 @@ function detail(props: Partial<SuiteDetailProps> = {}) {
     />,
   )
 }
+
+const NOW = new Date('2026-09-27T12:00:00Z')
+
+function row(id: string, facts: Partial<TestCatalogRow> = {}): TestCatalogRow {
+  return {
+    test_id: id,
+    lifecycle: 'active',
+    current_version: 'sha256:c3c3',
+    available_versions: [],
+    selected_version: null,
+    result: null,
+    last_run: null,
+    recent_scores: [],
+    runs_current: 0,
+    runs_total: 0,
+    ...facts,
+  }
+}
+
+const views = new Map(
+  [
+    row('registry_implementation', {
+      last_run: {
+        at: '2026-09-24T10:00:00Z',
+        score: 92,
+        status: 'passed',
+        completion: 'completed',
+        definition: 'current',
+      },
+      recent_scores: [92, null, 100],
+      runs_current: 5,
+      runs_total: 8,
+    }),
+    row('registry_verification', {
+      last_run: {
+        at: '2026-09-08T10:00:00Z',
+        score: 100,
+        status: 'passed',
+        completion: 'completed',
+        definition: 'previous',
+      },
+      recent_scores: [100],
+      runs_total: 1,
+    }),
+    row('minimal_path'),
+  ].map((entry) => [entry.test_id, catalogRowView(entry, [], NOW)]),
+)
 
 describe('SuiteList', () => {
   it('keeps the repository apart from this Console, and says how to make one', () => {
@@ -119,5 +170,65 @@ describe('SuiteDetail', () => {
     expect(detail({ error: 'The suite store is read-only.' })).toContain(
       'role="alert">The suite store is read-only.',
     )
+  })
+})
+
+describe('the open suite’s tests and executions', () => {
+  const software = suite('software-engineering', {
+    label: 'Software engineering',
+    scenarios: [
+      'minimal_path',
+      'registry_implementation',
+      'registry_verification',
+    ],
+  })
+
+  it('lists each test with its last result, its scores and its step', () => {
+    const html = detail({
+      suite: software,
+      views,
+      groups: [['registry_implementation', 'registry_verification']],
+    })
+    expect(html).toContain('data-test-id="registry_implementation"')
+    expect(html).toContain('1 of 2 · in order')
+    expect(html).toContain('2 of 2 · in order')
+    expect(html).toContain(
+      'registry_implementation and registry_verification run whole, in order.',
+    )
+    expect(html).toContain('Lost points')
+    expect(html).toContain('Sep 8 · older definition')
+    expect(html).toContain('No run retained')
+    expect(html).toContain('Recent scores: 92, none, 100')
+    // The one test that changed since it ran, said once above the table.
+    expect(html).toContain('1 of these 3 tests changed definition')
+    expect(html).toContain(
+      'Not run in this Console yet. Executions started from this suite',
+    )
+  })
+
+  it('keeps the test and its last result in a narrow pane', () => {
+    const html = detail({ suite: software, views, narrow: true })
+    expect(html).not.toContain('Recent scores')
+    expect(html).toContain('Lost points')
+  })
+
+  it('links the executions that ran it', () => {
+    const html = detail({
+      suite: software,
+      runs: [
+        {
+          id: 'plan-1',
+          title: 'Software engineering',
+          meta: 'GitHub #35965100994 · Sep 24, 4:25 AM',
+          result: { state: 'failed' },
+          outcome: '11 of 15 passed · score 93.2',
+          day: 'Sep 24',
+        },
+      ],
+    })
+    expect(html).toContain('href="#/ext/harness-e2e/execution/plan-1"')
+    expect(html).toContain('Failed')
+    expect(html).toContain('· 11 of 15 passed · score 93.2')
+    expect(html).not.toContain('Not run in this Console yet')
   })
 })

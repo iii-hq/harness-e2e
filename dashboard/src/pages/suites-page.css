@@ -294,3 +294,95 @@
   gap: calc(var(--spacing) * 1.5);
   font-size: var(--text-xs);
 }
+
+/* The suite's tests: a framed table, a row per test over a hairline. Laid
+   out as a grid; legacy.css styles bare table elements, so each of them is
+   reset here. */
+.st-tests {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  padding: calc(var(--spacing) * 0.5) var(--spacing);
+  border-collapse: separate;
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+  background: var(--color-panel);
+  font-size: var(--ds-text-sm, 0.8125rem);
+}
+
+.st-tests thead,
+.st-tests tbody {
+  display: block;
+}
+
+.st-tests th,
+.st-tests td {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-align: start;
+  text-transform: none;
+  white-space: normal;
+}
+
+.st-tests .st-test {
+  display: grid;
+  grid-template-columns:
+    minmax(0, 1fr) calc(var(--spacing) * 47.5)
+    calc(var(--spacing) * 19);
+  align-items: center;
+  column-gap: calc(var(--spacing) * 3);
+  min-height: calc(var(--spacing) * 11.5);
+  padding: var(--spacing) calc(var(--spacing) * 2);
+  border-bottom: var(--ds-row-divider);
+}
+
+.st-tests .st-test:last-child {
+  border-bottom: 0;
+}
+
+.st-tests .st-test:hover {
+  background: transparent;
+}
+
+.st-tests[data-narrow] .st-test {
+  grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 35);
+}
+
+.st-tests .tc-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ran only on an earlier definition: it does not count as current. */
+.st-tests .tc-stack[data-older] {
+  opacity: 0.5;
+}
+
+.st-test-line {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  min-width: 0;
+}
+
+.st-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  height: calc(var(--spacing) * 4.5);
+  padding: 0 calc(var(--spacing) * 1.25);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  white-space: nowrap;
+}

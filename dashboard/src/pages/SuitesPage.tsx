@@ -5,7 +5,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@iii-dev/console-ui'
-import { ChevronLeft, Copy, Trash2 } from 'lucide-react'
+import { ChevronLeft, Copy, Info, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DashboardPageActions,
@@ -13,7 +13,7 @@ import {
   type HeaderAction,
 } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
-import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
+import { asCatalog, LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
   Callout,
@@ -23,7 +23,9 @@ import {
   StatusLabel,
 } from '@/design-system'
 import {
+  hashForExecution,
   hashForSuites,
+  hashForTestHistory,
   hashForTests,
   routeParams,
 } from '@/hooks/use-hash-route'
@@ -35,17 +37,21 @@ import {
   type Suite,
 } from '@/lib/dashboard-data-source'
 import {
+  changedTests,
+  changedWarning,
   type SuiteListItem,
   type SuiteRun,
+  sequenceSteps,
   suiteDigest,
   suiteHolds,
   suiteListItem,
   suiteRuns,
   suitesSummary,
+  testsNote,
 } from '@/lib/suites-view'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import { type CatalogRowView, catalogRowView } from '@/lib/test-catalog-view'
-import { listAllTests } from '@/pages/TestsCatalogPage'
+import { LastResult, listAllTests, Sparkline } from '@/pages/TestsCatalogPage'
 import '@/design-system/styles.css'
 import './executions-page.css'
 import './tests-catalog.css'
@@ -146,9 +152,131 @@ export function SuiteList({
   )
 }
 
+/** The suite's tests: each with its last result here and its recent scores,
+ *  and its step when it runs whole with others, in order. */
+export function SuiteTests({
+  ids,
+  views,
+  groups,
+  narrow,
+}: {
+  ids: string[]
+  views: ReadonlyMap<string, CatalogRowView>
+  groups: string[][]
+  narrow: boolean
+}) {
+  const steps = sequenceSteps(ids, groups)
+  return (
+    <section className="st-section" aria-labelledby="st-tests">
+      <div className="st-section-head">
+        <h3 id="st-tests">Tests</h3>
+        <span className="st-section-note">{testsNote(ids, groups, false)}</span>
+      </div>
+      <table
+        className="st-tests"
+        aria-labelledby="st-tests"
+        data-narrow={narrow || undefined}
+        data-suite-tests
+      >
+        <thead className="ds-visually-hidden">
+          <tr>
+            <th scope="col">Test</th>
+            <th scope="col">Last result</th>
+            {narrow ? null : <th scope="col">Recent scores</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {ids.map((id) => {
+            const view = views.get(id)
+            const step = steps.get(id)
+            return (
+              <tr key={id} className="st-test" data-test-id={id}>
+                <td className="tc-stack">
+                  <span className="st-test-line">
+                    <a className="tc-id" href={hashForTestHistory(id)}>
+                      {id}
+                    </a>
+                    {step ? (
+                      <span
+                        className="st-step"
+                        title="Runs whole, in this order"
+                      >
+                        {step}
+                      </span>
+                    ) : null}
+                  </span>
+                  {view?.sub ? (
+                    <span className="tc-sub" title={view.sub}>
+                      {view.sub}
+                    </span>
+                  ) : null}
+                </td>
+                {view ? <LastResult view={view} /> : <td />}
+                {narrow ? null : (
+                  <td>{view ? <Sparkline view={view} /> : null}</td>
+                )}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </section>
+  )
+}
+
+/** The executions that ran the suite, newest first. */
+export function SuiteExecutions({
+  runs,
+  local,
+}: {
+  runs: SuiteRun[]
+  local: boolean
+}) {
+  return (
+    <section className="st-section" aria-labelledby="st-runs">
+      <div className="st-section-head">
+        <h3 id="st-runs">Executions of this suite</h3>
+      </div>
+      {runs.length === 0 ? (
+        <p className="st-note">
+          {local
+            ? 'Not run yet. Its executions will show here.'
+            : 'Not run in this Console yet. Executions started from this suite, or imported from GitHub runs of it, show here.'}
+        </p>
+      ) : (
+        <ul className="st-runs">
+          {runs.map((run) => (
+            <li key={run.id}>
+              <a
+                className="st-run"
+                href={hashForExecution(run.id)}
+                data-suite-run={run.id}
+              >
+                <span className="st-run-text">
+                  <span className="st-run-title">{run.title}</span>
+                  <span className="st-run-meta">{run.meta}</span>
+                </span>
+                <span className="st-run-result">
+                  <StatusLabel
+                    state={run.result.state}
+                    label={run.result.label}
+                  />
+                  {run.outcome ? <span>· {run.outcome}</span> : null}
+                </span>
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export type SuiteDetailProps = {
   suite: Suite
   runs: SuiteRun[]
+  views: ReadonlyMap<string, CatalogRowView>
+  groups: string[][]
   narrow: boolean
   /** The bridge answered: the actions can run. */
   ready: boolean
@@ -163,6 +291,9 @@ export type SuiteDetailProps = {
 /** The open suite: its name, facts and purpose, and its actions. */
 export function SuiteDetail({
   suite,
+  runs,
+  views,
+  groups,
   narrow,
   ready,
   busy,
@@ -172,6 +303,7 @@ export function SuiteDetail({
   onDelete,
 }: SuiteDetailProps) {
   const local = suite.source === 'local'
+  const changed = changedTests(suite.scenarios, views).length
   return (
     <section
       className="st-detail"
@@ -255,6 +387,18 @@ export function SuiteDetail({
           {error}
         </p>
       ) : null}
+      {changed > 0 ? (
+        <Callout tone="warning" icon={<Info size={16} />}>
+          {changedWarning(changed, suite.scenarios.length)}
+        </Callout>
+      ) : null}
+      <SuiteTests
+        ids={suite.scenarios}
+        views={views}
+        groups={groups}
+        narrow={narrow}
+      />
+      <SuiteExecutions runs={runs} local={local} />
     </section>
   )
 }
@@ -334,6 +478,7 @@ export function SuitesPage() {
   const [suites, setSuites] = useState<Suite[] | null>(null)
   const [rows, setRows] = useState<TestCatalogRow[]>([])
   const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
+  const [groups, setGroups] = useState<string[][]>([])
   const [error, setError] = useState<string | null>(null)
   const [param, setParam] = useState<string | null>(suiteParam)
   const [busy, setBusy] = useState(false)
@@ -378,6 +523,22 @@ export function SuitesPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Which tests run whole, in order: the runner's catalog says it, when its
+  // Harness answers; without it the steps are not numbered.
+  useEffect(() => {
+    if (!bridge) return
+    let cancelled = false
+    bridge
+      .getCatalog()
+      .then((raw) => {
+        if (!cancelled) setGroups(asCatalog(raw).groups)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [bridge])
 
   // A finished run changes a suite's last execution and its tests' results.
   useEffect(() => {
@@ -564,6 +725,8 @@ export function SuitesPage() {
               key={selected.id}
               suite={selected}
               runs={runsBySuite.get(selected.id) ?? []}
+              views={views}
+              groups={groups}
               narrow={narrow}
               ready={Boolean(bridge)}
               busy={busy}
