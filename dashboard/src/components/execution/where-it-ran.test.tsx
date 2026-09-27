@@ -268,6 +268,21 @@ describe('where it ran · model', () => {
     })
   })
 
+  it('knows only the import of a run it does not follow', () => {
+    const imported = {
+      ...github,
+      state: 'importing',
+      source: { ...(github.source as object), follow: undefined },
+    } as unknown as PlanExecution
+    expect(
+      githubSteps(imported).map((step) => [step.label, step.state]),
+    ).toEqual([['Import', 'current']])
+    const html = renderToStaticMarkup(<LiveProgress execution={imported} />)
+    expect(html).toContain('Import')
+    expect(html).not.toContain('Group jobs')
+    expect(html).not.toContain('Waiting for GitHub')
+  })
+
   it('names an executor image by its tag, cut to 12', () => {
     expect(shortImage('ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85')).toBe(
       'tools-d9a8b54a2c85',

@@ -228,6 +228,20 @@ export function githubSteps(execution: PlanExecution) {
   const cancelled =
     execution.state === 'cancelling' || execution.state === 'cancelled'
   const importing = execution.state === 'importing'
+  const importStep = {
+    phase: 'import',
+    label: 'Import',
+    state: importing ? ('current' as StepState) : ('next' as StepState),
+    detail: importing
+      ? 'Importing what finished'
+      : cancelled
+        ? 'Imports what finished once the run ends'
+        : 'Automatic when the run ends',
+    time: '',
+  }
+  // A run this worker does not follow (imported from GitHub) reports no
+  // jobs: only its import is known.
+  if (!source.follow?.followed && jobs.length === 0) return [importStep]
   const jobState = (job: GithubJob | undefined, after: boolean): StepState =>
     job?.status === 'completed'
       ? 'done'
@@ -305,17 +319,7 @@ export function githubSteps(execution: PlanExecution) {
         : 'Aggregates the groups and writes the bundle',
       time: aggregate ? jobDuration(aggregate) : '',
     },
-    {
-      phase: 'import',
-      label: 'Import',
-      state: importing ? ('current' as StepState) : ('next' as StepState),
-      detail: importing
-        ? 'Importing what finished'
-        : cancelled
-          ? 'Imports what finished once the run ends'
-          : 'Automatic when the run ends',
-      time: '',
-    },
+    importStep,
   ]
 }
 

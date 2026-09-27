@@ -130,7 +130,8 @@ export function LiveProgress({ execution }: { execution: PlanExecution }) {
           ))}
         </ol>
       </section>
-      {source.kind === 'github' ? (
+      {source.kind === 'github' &&
+      (source.follow?.followed || source.follow?.jobs?.length) ? (
         <section className="wr-progress" aria-labelledby="group-jobs-title">
           <div className="wr-head">
             <h2 id="group-jobs-title" className="wr-title">
