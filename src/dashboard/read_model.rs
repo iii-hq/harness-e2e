@@ -320,18 +320,25 @@ fn run_facts(entry: &TestEntry) -> (Option<LastRun>, Vec<Option<f64>>, usize, us
         })
         .collect::<Vec<_>>();
     let current = |version: &str| entry.current_version.as_deref() == Some(version);
-    let last_run = runs.last().map(|(version, observation, run)| LastRun {
-        at: observation.completed_at.clone(),
-        score: run.score,
-        status: run.status,
-        completion: run.completion,
-        definition: if current(version) {
-            "current"
-        } else {
-            "previous"
-        }
-        .into(),
-    });
+    // The current definition's last run when there is one: the test history
+    // opens on that definition, so the row and the history agree.
+    let last_run = runs
+        .iter()
+        .rev()
+        .find(|(version, ..)| current(version))
+        .or(runs.last())
+        .map(|(version, observation, run)| LastRun {
+            at: observation.completed_at.clone(),
+            score: run.score,
+            status: run.status,
+            completion: run.completion,
+            definition: if current(version) {
+                "current"
+            } else {
+                "previous"
+            }
+            .into(),
+        });
     let recent_scores = runs[runs.len().saturating_sub(RECENT_SCORES)..]
         .iter()
         .map(|(_, _, run)| run.score)
@@ -1988,6 +1995,20 @@ mod tests {
         assert_eq!(last.at, "2026-08-09T10:00:00Z");
         assert_eq!(last.score, None);
         assert_eq!(last.status, RunStatus::InfrastructureError);
+        assert_eq!(last.definition, "current");
+
+        // A run of the current definition, then runs of another one: the
+        // last run is the current definition's, where the history opens.
+        model
+            .tests
+            .get_mut("direct_answer")
+            .unwrap()
+            .current_version = Some("old".into());
+        let earlier = row(&model);
+        assert_eq!((earlier.runs_current, earlier.runs_total), (1, 3));
+        let last = earlier.last_run.unwrap();
+        assert_eq!(last.at, "2026-08-08T10:00:00Z");
+        assert_eq!(last.score, Some(90.0));
         assert_eq!(last.definition, "current");
 
         // The definition moved on: the runs stay, none of them current.
