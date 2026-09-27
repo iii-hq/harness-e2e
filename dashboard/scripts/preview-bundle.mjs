@@ -5,6 +5,11 @@
 // rebuilding or restarting the harness-e2e worker. Each route is captured in
 // light, dark and narrow (640px wide, light).
 //
+// It opens the worker's standalone page (#/worker/harness-e2e), never the
+// e2e tab, and sets the dashboard's route before the bundle mounts, so the
+// Console's saved layout is left alone. Only the reads the pages make go
+// through (READS below); any other function is refused.
+//
 //   node scripts/preview-bundle.mjs executions tests suites stacks
 //   node scripts/preview-bundle.mjs --dist dist-console --out /tmp/shots executions
 //
@@ -40,9 +45,41 @@ if (!distDir) {
   distDir = path.join(root, 'dist-console')
 }
 const bundle = {
-  'page.js': readFileSync(path.join(distDir, 'page.js')),
+  'page-real.js': readFileSync(path.join(distDir, 'page.js')),
   'styles.css': readFileSync(path.join(distDir, 'styles.css')),
 }
+// The functions the dashboard only reads through (console-entry.tsx):
+// lists, gets, evidence and GitHub contracts. Anything else, and anything
+// outside e2e::dashboard::, is refused.
+const READS = [
+  'executions-list',
+  'execution-get',
+  'evidence-read',
+  'github-runs-list',
+  'github-run-contracts',
+  'github-status-get',
+  'evaluated-versions-list',
+  'tests-list',
+  'test-version-get',
+  'test-history-get',
+  'catalog-get',
+  'suites-list',
+  'stacks-list',
+  'credentials-list',
+].map((name) => `e2e::dashboard::${name}`)
+// The Console loads page.js; this one sets the route and guards the calls,
+// then hands over to the bundle.
+const wrapper = `import setup from './page-real.js'
+const READS = new Set(${JSON.stringify(READS)})
+export default function (host) {
+  if (window.__previewRoute) history.replaceState(null, '', window.__previewRoute)
+  const trigger = (id, payload, options) =>
+    READS.has(String(id))
+      ? host.iii.trigger(id, payload, options)
+      : Promise.reject(new Error('preview refuses ' + id))
+  // The host's client is frozen: a copy of its own members, trigger guarded.
+  return setup({ ...host, iii: { ...host.iii, trigger } })
+}`
 
 const variants = [
   { name: 'light', theme: 'light', width },
@@ -79,11 +116,18 @@ async function capture(route, { theme, width: viewportWidth }, file) {
     serviceWorkers: 'block',
   })
   // The Console keeps its theme in localStorage and html[data-theme].
-  await context.addInitScript((value) => {
-    localStorage.setItem('iii-theme', value)
-  }, theme)
+  await context.addInitScript(
+    ({ value, hash }) => {
+      localStorage.setItem('iii-theme', value)
+      window.__previewRoute = hash
+    },
+    { value: theme, hash: `#/ext/harness-e2e/${route}` },
+  )
   const page = await context.newPage()
-  const served = { 'page.js': 0, 'styles.css': 0 }
+  const served = { 'page-real.js': 0, 'styles.css': 0 }
+  await page.route('**/ui/harness-e2e/page.js*', (request) =>
+    request.fulfill({ contentType: 'text/javascript', body: wrapper }),
+  )
   for (const name of Object.keys(bundle)) {
     await page.route(`**/ui/harness-e2e/${name}*`, (request) => {
       served[name] += 1
@@ -96,29 +140,23 @@ async function capture(route, { theme, width: viewportWidth }, file) {
   const errors = []
   page.on('pageerror', (error) => errors.push(String(error).slice(0, 160)))
   try {
-    await page.goto(base, { waitUntil: 'load', timeout: 30_000 })
+    await page.goto(new URL('#/worker/harness-e2e', base).href, {
+      waitUntil: 'load',
+      timeout: 30_000,
+    })
     await page.evaluate((value) => {
       document.documentElement.dataset.theme = value
     }, theme)
-    // Open the extension's tab first; a bare hash change does not switch tabs.
-    const tab = page.getByRole('tab').filter({ hasText: /^e2e/ }).first()
-    const found = await tab
-      .waitFor({ timeout: 15_000 })
+    const found = await page
+      .waitForSelector('[data-harness-e2e-dashboard]', { timeout: 20_000 })
       .then(() => true)
       .catch(() => false)
     if (!found)
       return {
         ok: false,
         fatal: true,
-        message: `the Console at ${base} has no "e2e" tab. Check that its harness-e2e worker is running, open the Harness E2E page there once (the Console keeps its tabs), then run this again.`,
+        message: `the Console at ${base} shows no Harness E2E page at #/worker/harness-e2e. Check that its harness-e2e worker is running, then run this again.`,
       }
-    await tab.click()
-    await page.evaluate((next) => {
-      window.location.hash = next
-    }, `#/ext/harness-e2e/${route}`)
-    await page.waitForSelector('[data-harness-e2e-dashboard]', {
-      timeout: 15_000,
-    })
     // Pages mark their loading placeholders busy; wait them out.
     await page
       .waitForFunction(
@@ -132,7 +170,7 @@ async function capture(route, { theme, width: viewportWidth }, file) {
       .catch(() => errors.push('still loading after 15s'))
     await page.waitForTimeout(1000)
     await page.screenshot({ path: file })
-    if (!served['page.js'] || !served['styles.css'])
+    if (!served['page-real.js'] || !served['styles.css'])
       return {
         ok: false,
         message: `not the local bundle (served ${JSON.stringify(served)})`,

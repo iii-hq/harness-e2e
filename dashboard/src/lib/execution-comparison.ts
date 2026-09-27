@@ -12,6 +12,12 @@ import {
   suiteText,
 } from '@/lib/execution-view'
 import {
+  formatCost,
+  formatCount,
+  formatDuration,
+  formatTokens,
+} from '@/lib/format'
+import {
   comparisonMetric,
   formatMetricDelta,
   formatMetricValue,
@@ -113,6 +119,8 @@ export type ScenarioSide = {
 
 export type CriterionChange = {
   key: string
+  /** The criterion's id; `label` is its description when it has one. */
+  id: string
   label: string
   possible: number
   /** Mean points over the slots both sides scored. */
@@ -133,6 +141,8 @@ export type ScenarioComparison = {
   metrics: ComparedMetric[]
   /** Only the criteria whose points moved. */
   criteria: CriterionChange[]
+  /** Criteria short of their points by the same amount on both sides. */
+  lostOnBoth: CriterionChange[]
   /** Anything moved: presence, a run's state, a metric or a criterion. */
   differs: boolean
   sides: { a: ScenarioSide; b: ScenarioSide }
@@ -158,6 +168,16 @@ export type StackComparison = {
   /** Workers on one side only, other than that side's own code. */
   onlyA: string[]
   onlyB: string[]
+  /** Every worker on both sides, the runner and checkouts included, that
+   *  ran a different build: version, commit (`commit:` pins too) or a
+   *  checkout's uncommitted changes. */
+  changed: ComparisonChange[]
+  /** Workers on both sides that ran the same, known build. */
+  same: string[]
+  /** Workers on both sides whose builds cannot be told the same or not:
+   *  uncommitted changes on the same commit, a checkout whose commit was not
+   *  recorded, a version not observed. */
+  notComparable: Array<ComparisonChange & { reason: string }>
 }
 
 /** The runner that measured each side, and the scenarios whose definition moved with it. */
@@ -177,6 +197,8 @@ export type ComparisonSide = {
   subject: string
   /** Null when the execution recorded no parameters. */
   profile: string | null
+  /** The suite by name and digest; null when not recorded. */
+  suite: string | null
 }
 
 export type ExecutionComparison = {
@@ -602,11 +624,12 @@ function criteriaOf(run: LedgerRun): Criterion[] {
   })
 }
 
-/** Criteria whose mean points moved over the slots both sides scored. */
+/** Criteria whose mean points moved over the slots both sides scored, and
+ *  those that did not move but fell short of their points on both. */
 function criterionChanges(
   left: LedgerRun[],
   right: LedgerRun[],
-): CriterionChange[] {
+): { changed: CriterionChange[]; lostOnBoth: CriterionChange[] } {
   const pairs = [...new Set(left.map((run) => run.slotId))].flatMap(
     (slotId) => {
       const other = right.filter((run) => run.slotId === slotId)
@@ -623,6 +646,7 @@ function criterionChanges(
       for (const criterion of criteriaOf(run))
         known.set(keyOf(criterion), criterion)
   const changes: CriterionChange[] = []
+  const lostOnBoth: CriterionChange[] = []
   for (const [key, criterion] of known) {
     const before: Criterion[] = []
     const after: Criterion[] = []
@@ -646,9 +670,13 @@ function criterionChanges(
           entries.length
     const a = mean(before)
     const b = mean(after)
-    if (a === null || b === null || Math.abs(b - a) < 1e-9) continue
-    changes.push({
+    if (a === null || b === null) continue
+    const same = Math.abs(b - a) < 1e-9
+    if (same && a >= criterion.possible) continue
+    const list = same ? lostOnBoth : changes
+    list.push({
       key,
+      id: criterion.id,
       label: criterion.label,
       possible: criterion.possible,
       a,
@@ -660,7 +688,9 @@ function criterionChanges(
       },
     })
   }
-  return changes.sort((one, two) => one.key.localeCompare(two.key))
+  const byKey = (one: CriterionChange, two: CriterionChange) =>
+    one.key.localeCompare(two.key)
+  return { changed: changes.sort(byKey), lostOnBoth: lostOnBoth.sort(byKey) }
 }
 
 function stackOf(detail: DashboardExecutionDetail): StackWorker[] {
@@ -725,6 +755,7 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
     origin: parts.join(' · '),
     subject: providerModel(parameters),
     profile: parameters.profile,
+    suite: parameters.suite,
   }
 }
 
@@ -778,7 +809,16 @@ function stackComparison(
 ): StackComparison {
   const stacks = { a: stackOf(left), b: stackOf(right) }
   const recorded = { a: stacks.a.length > 0, b: stacks.b.length > 0 }
-  const empty = { recorded, yourCode: [], versions: [], onlyA: [], onlyB: [] }
+  const empty = {
+    recorded,
+    yourCode: [],
+    versions: [],
+    onlyA: [],
+    onlyB: [],
+    changed: [],
+    same: [],
+    notComparable: [],
+  }
   if (!recorded.a || !recorded.b) return empty
   const yourCode: StackComparison['yourCode'] = []
   for (const side of SIDES)
@@ -832,6 +872,63 @@ function stackComparison(
     )
       .sort()
       .join(' | ')
+  // What a worker ran, whatever its source: a checkout by its commit and
+  // state, a package built from a commit by the commit, else its version.
+  const builds = (side: 'a' | 'b', name: string) =>
+    distinct(
+      stacks[side]
+        .filter((worker) => worker.name === name)
+        .map((worker) =>
+          worker.source === 'path'
+            ? worker.commit
+              ? `@${worker.commit.slice(0, 7)}${worker.dirty ? ' + changes' : ''}`
+              : 'checkout, commit not recorded'
+            : worker.commit
+              ? `@${worker.commit.slice(0, 7)}`
+              : (worker.observed ?? 'version not observed'),
+        ),
+    )
+      .sort()
+      .join(' | ')
+  // What keeps a side's build from being vouched for, if anything.
+  const unknown = (side: 'a' | 'b', name: string) =>
+    distinct(
+      stacks[side]
+        .filter((worker) => worker.name === name)
+        .map((worker) =>
+          worker.commit
+            ? null
+            : worker.source === 'path'
+              ? 'commit not recorded'
+              : worker.observed
+                ? null
+                : 'version not observed',
+        ),
+    )
+  const dirty = (side: 'a' | 'b', name: string) =>
+    stacks[side].some(
+      (worker) =>
+        worker.name === name && worker.source === 'path' && worker.dirty,
+    )
+  const both = names('a')
+    .filter((name) => names('b').includes(name))
+    .sort()
+  // Known and different is a change; unknown on either side, or the same
+  // commit with uncommitted changes, cannot be compared; else the same.
+  const judged = both.map((name) => {
+    const a = builds('a', name)
+    const b = builds('b', name)
+    const unknownWhy = distinct([...unknown('a', name), ...unknown('b', name)])
+    const verdict =
+      unknownWhy.length > 0
+        ? unknownWhy.join(', ')
+        : a !== b
+          ? 'changed'
+          : dirty('a', name) || dirty('b', name)
+            ? 'uncommitted changes'
+            : 'same'
+    return { field: name, a, b, verdict }
+  })
   const fromCheckout = (name: string) =>
     [...stacks.a, ...stacks.b].some(
       (worker) => worker.name === name && worker.source === 'path',
@@ -852,7 +949,44 @@ function stackComparison(
       }),
     onlyA: only('a').filter((name) => !ownCode('a').includes(name)),
     onlyB: only('b').filter((name) => !ownCode('b').includes(name)),
+    changed: judged.flatMap(({ field, a, b, verdict }) =>
+      verdict === 'changed' ? [{ field, a, b }] : [],
+    ),
+    same: judged.flatMap(({ field, verdict }) =>
+      verdict === 'same' ? [field] : [],
+    ),
+    notComparable: judged.flatMap(({ field, a, b, verdict }) =>
+      verdict === 'changed' || verdict === 'same'
+        ? []
+        : [{ field, a, b, reason: verdict }],
+    ),
   }
+}
+
+/** What differs in the stack, in one line: "1 worker changed · 2 not
+ *  comparable · 2 only in A"; null only when both sides ran the same, known
+ *  stack. */
+export function stackChanges(stack: StackComparison): string | null {
+  const unrecorded = SIDES.filter((side) => !stack.recorded[side])
+  if (unrecorded.length > 0)
+    return `no stack recorded for ${sidesLabel(unrecorded)}`
+  const parts = [
+    ...(stack.changed.length > 0
+      ? [
+          `${stack.changed.length} worker${stack.changed.length === 1 ? '' : 's'} changed`,
+        ]
+      : []),
+    ...(stack.notComparable.length > 0
+      ? [
+          `${stack.notComparable.length} worker${stack.notComparable.length === 1 ? '' : 's'} not comparable`,
+        ]
+      : []),
+    ...SIDES.flatMap((side) => {
+      const count = onlyCount(stack, side)
+      return count > 0 ? [`${count} only in ${side.toUpperCase()}`] : []
+    }),
+  ]
+  return parts.length > 0 ? parts.join(' · ') : null
 }
 
 /** The workers of a your-code line, each one-side-only worker marked. */
@@ -1035,7 +1169,7 @@ export function compareExecutions(
     const exclusion =
       exclusions.find((entry) => entry.scenario_id === id) ?? null
     const metrics = metricRows(measure('a', [id]), measure('b', [id]))
-    const criteria = criterionChanges(
+    const { changed: criteria, lostOnBoth } = criterionChanges(
       runs.a.filter((run) => run.scenarioId === id),
       runs.b.filter((run) => run.scenarioId === id),
     )
@@ -1058,6 +1192,7 @@ export function compareExecutions(
       leftOut: exclude.has(id),
       metrics,
       criteria,
+      lostOnBoth,
       differs:
         present('a') !== present('b') ||
         stateOf('a', id) !== stateOf('b', id) ||
@@ -1201,6 +1336,177 @@ export function scenarioScore(
   const side = which === 'a' ? 'baseline' : 'candidate'
   if (score[side] !== null) return comparedValue(score, side)
   return scenario.sides[which].state ?? '—'
+}
+
+/** One observed difference worth reading first. */
+export type Highlight = {
+  /** The test it is about, to open; null for the comparison as a whole. */
+  test: string | null
+  /** Which way B's figure moved: a direction, never a verdict. */
+  direction: 'up' | 'down' | 'same'
+  text: string
+}
+
+export type ComparisonHighlights = {
+  /** "B scored 4.4 points lower", or why there is no score to compare. */
+  headline: string
+  detail: string
+  items: Highlight[]
+}
+
+/** How a test's figure is said to have moved in B, per metric. */
+const MOVES: Array<[MetricId, (more: boolean, amount: string) => string]> = [
+  ['tokens', (more, n) => `used ${n} ${more ? 'more' : 'fewer'} tokens`],
+  ['duration', (more, n) => `took ${n} ${more ? 'longer' : 'less time'}`],
+  ['turns', (more, n) => `took ${n} ${more ? 'more' : 'fewer'} turns`],
+  [
+    'function_calls',
+    (more, n) => `made ${n} ${more ? 'more' : 'fewer'} function calls`,
+  ],
+  [
+    'function_errors',
+    (more, n) => `had ${n} ${more ? 'more' : 'fewer'} function call errors`,
+  ],
+  ['cost', (more, n) => `cost ${n} ${more ? 'more' : 'less'}`],
+]
+
+/** A relative change smaller than this is not a highlight. */
+const NOTABLE_PERCENT = 10
+
+function points(value: number) {
+  return String(Number(Math.abs(value).toFixed(1)))
+}
+
+/** A score difference as it is written, to one decimal: what rounds to 0
+ *  did not move, and the plural follows the written number. */
+export function roundedPoints(delta: number): number {
+  return Number(Math.abs(delta).toFixed(1))
+}
+
+function pointsPhrase(delta: number) {
+  const size = roundedPoints(delta)
+  return `${size} ${size === 1 ? 'point' : 'points'}`
+}
+
+/** A figure as the highlights write it. */
+export function metricFigure(format: MetricFormat, value: number): string {
+  if (format === 'tokens') return formatTokens(value)
+  if (format === 'seconds') return formatDuration(value * 1000)
+  if (format === 'usd') return formatCost(value)
+  if (format === 'percent_points') return `${points(value)}%`
+  if (format === 'score') return String(Number(value.toFixed(1)))
+  return formatCount(value)
+}
+
+/**
+ * What changed most, over the counted tests: the tests whose score moved
+ * (largest first, with the criterion that moved most), then for each metric
+ * the test whose figure moved most, then how many kept their score. Every
+ * line states a difference; none says which side is better.
+ */
+export function comparisonHighlights(
+  comparison: ExecutionComparison,
+): ComparisonHighlights {
+  const counted = comparison.scenarios.filter((scenario) => scenario.counted)
+  const metric = (scenario: ScenarioComparison, id: MetricId) =>
+    scenario.metrics.find((entry) => entry.id === id)
+  const score = comparison.totals.find((entry) => entry.id === 'score')
+  const completed = comparison.totals.find((entry) => entry.id === 'completed')
+  const runs = (which: 'a' | 'b') =>
+    counted.reduce((total, scenario) => total + scenario.sides[which].runs, 0)
+  const headline =
+    counted.length === 0
+      ? 'No test is counted'
+      : !score || score.delta === null
+        ? 'No score to compare'
+        : roundedPoints(score.delta) === 0
+          ? 'B scored the same as A'
+          : `B scored ${pointsPhrase(score.delta)} ${score.delta < 0 ? 'lower' : 'higher'}`
+  const detail =
+    counted.length === 0
+      ? 'Count at least one test to compare.'
+      : !score || score.delta === null
+        ? 'A side has no score or is short of runs: its figures are shown, and no difference is taken from them.'
+        : `A completed ${completed?.baseline ?? 0} of ${runs('a')} runs; B completed ${completed?.candidate ?? 0} of ${runs('b')}. These are observed differences, not a verdict.`
+
+  const moved = counted
+    .flatMap((scenario) => {
+      const delta = metric(scenario, 'score')?.delta
+      return delta == null || roundedPoints(delta) === 0
+        ? []
+        : [{ scenario, delta }]
+    })
+    .sort((one, two) => Math.abs(two.delta) - Math.abs(one.delta))
+  const items: Highlight[] = moved.slice(0, 3).map(({ scenario, delta }) => {
+    const [criterion, ...others] = [...scenario.criteria].sort(
+      (one, two) => Math.abs(two.delta) - Math.abs(one.delta),
+    )
+    const why = criterion
+      ? `: ${criterion.id} went from ${points(criterion.a)}/${criterion.possible} to ${points(criterion.b)}/${criterion.possible}${others.length > 0 ? `, and ${others.length} more ${others.length === 1 ? 'criterion' : 'criteria'} moved` : ''}`
+      : ''
+    return {
+      test: scenario.id,
+      direction: delta < 0 ? 'down' : 'up',
+      text: `${delta < 0 ? 'lost' : 'gained'} ${pointsPhrase(delta)} in B${why}.`,
+    }
+  })
+  if (moved.length > 3)
+    items.push({
+      test: null,
+      direction: 'same',
+      text: `${moved.length - 3} more ${moved.length - 3 === 1 ? 'test' : 'tests'} changed score.`,
+    })
+
+  const moves = MOVES.flatMap(([id, phrase]) => {
+    const [top] = counted
+      .flatMap((scenario) => {
+        const entry = metric(scenario, id)
+        if (!entry || entry.delta === null || Math.abs(entry.delta) < 1e-9)
+          return []
+        const size =
+          entry.delta_percent === null ? 100 : Math.abs(entry.delta_percent)
+        return size < NOTABLE_PERCENT ? [] : [{ scenario, entry, size }]
+      })
+      .sort((one, two) => two.size - one.size)
+    return top ? [{ ...top, phrase }] : []
+  })
+    .sort((one, two) => two.size - one.size)
+    .slice(0, 3)
+  for (const { scenario, entry, phrase } of moves) {
+    const delta = entry.delta ?? 0
+    const amount =
+      entry.id === 'function_errors' || entry.delta_percent === null
+        ? metricFigure(entry.format, Math.abs(delta))
+        : `${Math.round(Math.abs(entry.delta_percent))}%`
+    items.push({
+      test: scenario.id,
+      direction: delta < 0 ? 'down' : 'up',
+      text: `${phrase(delta > 0, amount)} in B (${metricFigure(entry.format, entry.baseline ?? 0)} → ${metricFigure(entry.format, entry.candidate ?? 0)}).`,
+    })
+  }
+
+  // The same rounding as moved: every counted test with a score on both
+  // sides either moved or kept it.
+  const kept = counted.filter((scenario) => {
+    const delta = metric(scenario, 'score')?.delta
+    return delta != null && roundedPoints(delta) === 0
+  }).length
+  if (kept > 0)
+    items.push({
+      test: null,
+      direction: 'same',
+      text:
+        moved.length > 0
+          ? kept === 1
+            ? 'The other test kept its score.'
+            : `The other ${kept} tests kept their scores.`
+          : kept === 1
+            ? 'The counted test kept its score.'
+            : kept === 2
+              ? 'Both counted tests kept their scores.'
+              : `All ${kept} counted tests kept their scores.`,
+    })
+  return { headline, detail, items }
 }
 
 /** A pull-request-ready summary of the same comparison, without a verdict. */

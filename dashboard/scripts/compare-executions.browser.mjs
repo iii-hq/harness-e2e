@@ -33,7 +33,7 @@ function run(
             screenshots: [
               {
                 pointer: '/attachments/board.png',
-                caption: `board ${id}`,
+                caption: 'board',
                 media_type: 'image/png',
               },
             ],
@@ -178,6 +178,8 @@ const older = Array.from({ length: 50 }, (_, index) => ({
   completed_at: '2026-09-01T11:00:00Z',
 }))
 let withOlder = false
+// Refreshes of B that fail before one succeeds again.
+let failB = 0
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
@@ -209,7 +211,13 @@ const trigger = (name, request = {}) => {
     deleted.push(request.execution_id)
     return {}
   }
-  if (id === 'execution-get') return { detail: details[request.execution_id] }
+  if (id === 'execution-get') {
+    if (request.execution_id === b.id && failB > 0) {
+      failB -= 1
+      throw new Error('engine unavailable')
+    }
+    return { detail: details[request.execution_id] }
+  }
   if (id === 'evidence-read') {
     read.push(request)
     return {
@@ -262,37 +270,77 @@ try {
     await page.evaluate(() => location.hash),
     new RegExp(`/compare/${a.id}/${b.id}$`),
   )
-  // Why a scenario is out, in the run's words; its state where a score would be.
+  // The title is A × B; each side says where it ran and what it ran.
   await page
+    .getByRole('heading', { name: 'smoke × smoke rerun', level: 1 })
+    .waitFor()
+  await page
+    .getByRole('article', { name: 'A · Reference' })
+    .getByText('deepseek/flash · profile tech-lead · Smoke · 0123456789ab')
+    .waitFor()
+  // Why a test is out, in the run's words; its state where a score would be.
+  const picker = page.getByRole('region', { name: 'Tests in this comparison' })
+  await picker
     .getByText(
-      'technical_invalid in A: infrastructure_error — scenario setup failed: UNKNOWN_DB primary',
+      'Out by itself · technical_invalid in A: infrastructure_error — scenario setup failed: UNKNOWN_DB primary',
     )
-    .first()
     .waitFor()
   assert.equal(
-    await page.locator('[data-scenario="timer_wake"] td').nth(1).innerText(),
-    'infrastructure_error',
+    await picker.getByRole('checkbox', { name: /^timer_wake/ }).isChecked(),
+    false,
+  )
+  assert.match(
+    await page.locator('[data-scenario="timer_wake"] .cmp-score').innerText(),
+    /infrastructure error → 40/,
   )
   assert.equal(await page.getByText(/Not reported|Not comparable/).count(), 0)
-  // The parameter difference names each side's suite by name and digest.
-  const suite = page.locator('[data-change="suite"]')
-  await suite.getByText('Smoke · 0123456789ab', { exact: true }).waitFor()
-  await suite
-    .getByText('unnamed suite · fedcba987654', { exact: true })
-    .waitFor()
+  // Bringing it back counts it, and the link says so.
+  await picker.getByRole('checkbox', { name: /^timer_wake/ }).check()
+  await page.waitForFunction(() =>
+    location.hash.endsWith('?include=timer_wake'),
+  )
+  assert.equal(
+    await page
+      .locator('[data-scenario="timer_wake"]')
+      .getAttribute('data-counted'),
+    'true',
+  )
+  await picker.getByRole('button', { name: 'Automatic', exact: true }).click()
+  await page.waitForFunction(() => !location.hash.includes('?'))
+  // The suite difference names each side's suite by name and digest.
+  assert.equal(
+    await page.locator('[data-change="suite"] .ds-fact-value').innerText(),
+    'Smoke · 0123456789ab → unnamed suite · fedcba987654',
+  )
   await page
     .getByText(
       'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ.',
     )
     .waitFor()
   assert.equal(
-    await page.locator('[data-stack-summary]').innerText(),
-    'stack · 1 worker from your code @852b87e (uncommitted changes) · 1 only in B',
+    await page.locator('[data-change="stack"] .ds-fact-value').innerText(),
+    '1 worker changed · 1 only in B',
+  )
+  // Stack details opens the stack worker by worker.
+  await page.getByRole('button', { name: 'Stack details' }).click()
+  await page.locator('[data-stack-worker="harness-e2e"]').waitFor()
+  assert.equal(
+    await page.locator('[data-stack-only="b"] dd').innerText(),
+    'llm-router',
+  )
+  // No verdict anywhere.
+  assert.doesNotMatch(
+    await page.locator('[data-harness-e2e-dashboard]').innerText(),
+    /better|worse|improv|regress|winner/i,
   )
 
-  // Both sides' screenshots, read on demand from their native runs.
-  await page.getByRole('button', { name: 'persistent_state' }).click()
+  // Both sides' screenshots, paired by caption, read on demand from their
+  // native runs; one opens full size.
+  await page
+    .getByRole('button', { name: 'persistent_state', exact: true })
+    .click()
   await page.locator('[data-comparison-evidence="b"] img').waitFor()
+  assert.equal(await page.locator('[data-screenshot-pair]').count(), 1)
   assert.equal(await page.locator('[data-comparison-evidence] img').count(), 2)
   assert.deepEqual(
     read.map((request) => [request.execution_id, request.pointer]).sort(),
@@ -301,19 +349,43 @@ try {
       '/attachments/board.png',
     ]),
   )
+  await page.getByRole('button', { name: 'Open A · board full size' }).click()
+  const viewer = page.getByRole('dialog', { name: 'board' })
+  await viewer.getByRole('link', { name: 'Evidence record' }).waitFor()
+  await page.keyboard.press('Escape')
+  await viewer.waitFor({ state: 'detached' })
+  // Focus is back on the screenshot it opened from.
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-label'),
+    ),
+    'Open A · board full size',
+  )
 
-  // Rerun selected: Run again with B's parameters and only the ticked tests;
-  // one test of a sequential group brings the whole group.
-  for (const scenario of [
-    'minimal_path',
-    'timer_wake',
-    'registry_verification',
-  ])
-    await page
-      .getByRole('checkbox', { name: `Select ${scenario} to run again` })
-      .check()
-  await page.getByRole('button', { name: 'rerun selected (3)' }).click()
+  // Run again: B's parameters, on the tests B scored lower on.
+  await page.getByRole('button', { name: 'Run again · 1 test' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
+  await again.waitFor()
+  await again.getByText('catalog ready').waitFor()
+  assert.ok(
+    await again
+      .getByRole('checkbox', { name: /^persistent_state(\s|$)/ })
+      .isChecked(),
+  )
+  assert.equal(
+    await again.getByRole('checkbox', { name: /^minimal_path(\s|$)/ }).count(),
+    0,
+  )
+  await page.keyboard.press('Escape')
+  await again.waitFor({ state: 'detached' })
+
+  // Run this test again from an open row, and tick more in the dialog; one
+  // test of a sequential group brings the whole group.
+  await page.getByRole('button', { name: 'minimal_path', exact: true }).click()
+  await page
+    .locator('[data-scenario-detail="minimal_path"]')
+    .getByRole('button', { name: 'Run this test again' })
+    .click()
   await again.waitFor()
   await again.getByText('catalog ready').waitFor()
   assert.equal(await again.locator('#run-dialog-runs-value').innerText(), '3')
@@ -327,7 +399,14 @@ try {
     await again.locator('#run-dialog-agent').inputValue(),
     'tech-lead',
   )
-  // It opens on what will run: the ticked tests and their group, only those.
+  await again
+    .getByRole('group', { name: 'Show' })
+    .getByRole('button', { name: /^All/ })
+    .click()
+  for (const scenario of ['timer_wake', 'registry_verification'])
+    await again
+      .getByRole('checkbox', { name: new RegExp(`^${scenario}(\\s|$)`) })
+      .check()
   for (const scenario of ['minimal_path', 'timer_wake', ...group])
     assert.ok(
       await again
@@ -336,31 +415,43 @@ try {
     )
   assert.equal(
     await again
-      .getByRole('checkbox', { name: 'persistent_state', exact: true })
-      .count(),
-    0,
+      .getByRole('checkbox', { name: /^persistent_state(\s|$)/ })
+      .isChecked(),
+    false,
   )
-  await again.getByText('2 of 2 · in order', { exact: true }).waitFor()
   await again.getByRole('button', { name: 'Run 4 tests', exact: true }).click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-c'))
-  assert.deepEqual(started, [
+  assert.equal(started.length, 1)
+  assert.deepEqual(
     {
-      label: b.label,
-      parameters: {
-        ...b.parameters,
-        // A subset ticked by hand is an unnamed suite.
-        suite: null,
-        // In table order; the dialog adds the rest of the group after.
-        scenarios: [
-          'minimal_path',
-          'registry_verification',
-          'timer_wake',
-          'registry_implementation',
-        ],
-        where: 'harness',
-      },
+      ...started[0].parameters,
+      scenarios: [...started[0].parameters.scenarios].sort(),
     },
-  ])
+    {
+      ...b.parameters,
+      // A subset ticked by hand is an unnamed suite.
+      suite: null,
+      scenarios: ['minimal_path', ...group, 'timer_wake'].sort(),
+      where: 'harness',
+    },
+  )
+  assert.equal(started[0].label, b.label)
+
+  // B still running is followed; a refresh that fails keeps the comparison
+  // on screen, its open row included, says so, and clears once one works.
+  b.status = 'running'
+  await page.goto(`${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}`)
+  await page.locator('[data-comparison-live]').waitFor()
+  await page.getByRole('button', { name: 'minimal_path', exact: true }).click()
+  const open = page.locator('[data-scenario-detail="minimal_path"]')
+  await open.waitFor()
+  failB = 1
+  const refresh = page.locator('[data-comparison-refresh-error]')
+  await refresh.getByText('engine unavailable').waitFor({ timeout: 15_000 })
+  assert.ok(await open.isVisible())
+  await refresh.waitFor({ state: 'detached', timeout: 15_000 })
+  assert.ok(await open.isVisible())
+  b.status = 'passed'
 
   // From the list: rename one through its menu, then delete both; the one
   // the worker refuses stays, with the refusal said.
@@ -460,7 +551,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, suite difference by name and digest, exclusions, side-by-side screenshots, rerun selected with B parameters; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()

@@ -20,9 +20,10 @@ import {
 import { type ScreenshotEntry, screenshotSource } from '@/lib/screenshots'
 import './execution-page.css'
 
-type Image = { source: string } | { error: string } | undefined
+export type Image = { source: string } | { error: string } | undefined
 
-function useScreenshotImages(
+/** The screenshots' bytes, read once per set of keys. */
+export function useScreenshotImages(
   bridge: DashboardDataBridge | null,
   screenshots: ScreenshotEntry[],
 ) {

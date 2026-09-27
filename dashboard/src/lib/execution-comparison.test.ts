@@ -8,11 +8,13 @@ import {
   comparedValue,
   compareExecutions,
   compareRuns,
+  comparisonHighlights,
   comparisonMarkdown,
   exclusionPhrase,
   rerunPhrase,
   runnerWarning,
   scenarioScore,
+  stackChanges,
   stackSummary,
   yourCodeWorkers,
 } from '@/lib/execution-comparison'
@@ -430,7 +432,14 @@ describe('comparing two executions', () => {
       // session-manager is your code: one line, marked, not listed again.
       onlyA: [],
       onlyB: [],
+      // A checkout is a different build from the package it replaces.
+      changed: [{ field: 'llm-router', a: '1.2.0', b: '@a1b2c3d + changes' }],
+      same: ['harness-e2e'],
+      notComparable: [],
     })
+    expect(stackChanges(comparison.stack)).toBe(
+      '1 worker changed · 1 only in B',
+    )
     expect(yourCodeWorkers(comparison.stack.yourCode[0])).toBe(
       'llm-router, session-manager (only in B)',
     )
@@ -483,6 +492,7 @@ describe('comparing two executions', () => {
     expect(byId.minimal_path).toEqual([
       {
         key: 'cites_source:20',
+        id: 'cites_source',
         label: 'answer cites the source',
         possible: 20,
         a: 8,
@@ -496,6 +506,86 @@ describe('comparing two executions', () => {
         key: 'state_after_restart:50',
         delta: -38,
         reasons: { a: ['read back'], b: ['state lost on restart'] },
+      },
+    ])
+    // Short of its points by the same amount on both sides: not a change,
+    // but listed apart.
+    const minimal = comparison.scenarios.find(
+      (scenario) => scenario.id === 'minimal_path',
+    )
+    expect(minimal?.lostOnBoth).toMatchObject([
+      { id: 'answer', a: 74, b: 74, possible: 80, delta: 0 },
+    ])
+    expect(
+      comparison.scenarios.find(
+        (scenario) => scenario.id === 'persistent_state',
+      )?.lostOnBoth,
+    ).toEqual([])
+  })
+
+  it('highlights the largest differences by test and metric, without a verdict', () => {
+    const comparison = compareExecutions(imported(), local())
+    const highlights = comparisonHighlights(comparison)
+    expect(highlights.headline).toBe('B scored 13 points lower')
+    expect(highlights.detail).toBe(
+      'A completed 2 of 2 runs; B completed 2 of 2. These are observed differences, not a verdict.',
+    )
+    expect(highlights.items).toEqual([
+      {
+        test: 'persistent_state',
+        direction: 'down',
+        text: 'lost 38 points in B: state_after_restart went from 50/50 to 12/50.',
+      },
+      {
+        test: 'minimal_path',
+        direction: 'up',
+        text: 'gained 12 points in B: cites_source went from 8/20 to 20/20.',
+      },
+      {
+        test: 'minimal_path',
+        direction: 'down',
+        text: 'used 17% fewer tokens in B (1.2K → 1K).',
+      },
+    ])
+    expect(JSON.stringify(highlights)).not.toMatch(
+      /better|worse|improv|regress|winner/i,
+    )
+    // With every test out, nothing is compared.
+    const none = compareExecutions(imported(), local(), {
+      exclude: ['minimal_path', 'persistent_state'],
+    })
+    expect(comparisonHighlights(none)).toEqual({
+      headline: 'No test is counted',
+      detail: 'Count at least one test to compare.',
+      items: [],
+    })
+    // Differences are said as written: to one decimal, with the plural of
+    // the number shown; one that rounds to 0 kept its score.
+    const near = compareExecutions(
+      execution('near-a', [
+        { scenario: 'one', score: 80 },
+        { scenario: 'two', score: 80 },
+        { scenario: 'three', score: 80 },
+      ]),
+      execution('near-b', [
+        { scenario: 'one', score: 81.04 },
+        { scenario: 'two', score: 80.02 },
+        { scenario: 'three', score: 78.5 },
+      ]),
+    )
+    expect(comparisonHighlights(near).items.map((item) => item.text)).toEqual([
+      'lost 1.5 points in B.',
+      'gained 1 point in B.',
+      'The other test kept its score.',
+    ])
+    // The same executions on both sides: every test kept its score.
+    const same = comparisonHighlights(compareExecutions(local(), local()))
+    expect(same.headline).toBe('B scored the same as A')
+    expect(same.items).toEqual([
+      {
+        test: null,
+        direction: 'same',
+        text: 'All 3 counted tests kept their scores.',
       },
     ])
   })
@@ -557,6 +647,7 @@ describe('comparing two executions', () => {
     expect(comparison.b.subject).toBe('deepseek/pro')
     expect(comparison.stack.recorded).toEqual({ a: true, b: false })
     expect(stackSummary(comparison.stack)).toBe('no stack recorded for B')
+    expect(stackChanges(comparison.stack)).toBe('no stack recorded for B')
   })
 
   it('says why a scenario is out of the totals, in the runs’ own words', () => {
@@ -709,6 +800,11 @@ describe('comparing two executions', () => {
     expect(stackSummary(stack)).toBe(
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
     )
+    expect(stack.changed.map((change) => change.field)).toEqual([
+      'llm-router',
+      'state',
+    ])
+    expect(stack.same).toEqual(['harness-e2e', 'queue'])
   })
 
   it('compares a worker built from a commit by the commit, not its Cargo version', () => {
@@ -731,6 +827,63 @@ describe('comparing two executions', () => {
     const same = local()
     harness(same, '3f2a9c1dddddddddddddddddddddddddddddddd')
     expect(compareExecutions(a, same).stack.versions).toEqual([])
+    expect(
+      compareExecutions(a, same).stack.changed.map((change) => change.field),
+    ).toEqual(['llm-router'])
+    // The same commit with uncommitted changes on both sides is not the same
+    // build, nor a known change: it cannot be compared.
+    const dirty = compareExecutions(local(), local()).stack
+    expect(dirty.same).toEqual(['harness-e2e'])
+    expect(dirty.changed).toEqual([])
+    expect(dirty.notComparable).toEqual([
+      {
+        field: 'llm-router',
+        a: '@a1b2c3d + changes',
+        b: '@a1b2c3d + changes',
+        reason: 'uncommitted changes',
+      },
+      {
+        field: 'session-manager',
+        a: '@a1b2c3d + changes',
+        b: '@a1b2c3d + changes',
+        reason: 'uncommitted changes',
+      },
+    ])
+    expect(stackChanges(dirty)).toBe('2 workers not comparable')
+    // A version nobody observed, or a checkout whose commit was not
+    // recorded, cannot vouch for sameness either.
+    const unknown = (detail: DashboardExecutionDetail) => {
+      detail.plan_execution?.stack.push(
+        {
+          name: 'queue',
+          source: 'package',
+          requested: '^1',
+          observed: null,
+          commit: null,
+          dirty: null,
+        },
+        {
+          name: 'state',
+          source: 'path',
+          requested: null,
+          observed: '0.22.3',
+          commit: null,
+          dirty: null,
+        },
+      )
+      return detail
+    }
+    const blind = compareExecutions(
+      unknown(imported()),
+      unknown(imported()),
+    ).stack
+    expect(blind.same).toEqual(['harness-e2e', 'llm-router'])
+    expect(
+      blind.notComparable.map((entry) => [entry.field, entry.reason]),
+    ).toEqual([
+      ['queue', 'version not observed'],
+      ['state', 'commit not recorded'],
+    ])
   })
 })
 
