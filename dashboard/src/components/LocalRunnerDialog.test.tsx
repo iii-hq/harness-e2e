@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   choiceValue,
-  chooseWhere,
   executionStartRequest,
   lastUsedModel,
   namedSuite,
@@ -19,7 +18,6 @@ import type {
   Stack,
   Suite,
 } from '@/lib/dashboard-data-source'
-import { runSummary } from '@/lib/run-tests'
 
 const imported: ExecutionParameters = {
   suite: {
@@ -138,20 +136,21 @@ describe('where and stack fields', () => {
       ['stack-0123456789ab', 'local'],
       ['recorded', 'recorded'],
     ])
-    // Each says what it declares; the recorded one, the iii its YAML pins.
-    expect(choices.map((choice) => choice.declares)).toEqual([
-      'iii latest · 0 workers',
-      'iii latest · 0 workers',
-      'iii 0.24.2',
-    ])
     const picked = pickedStack(form.stack, choices, docker)
     expect(executionStartRequest(form, null, picked).parameters).toMatchObject({
       where: 'docker',
       stack: { name: 'default', yaml: recorded },
     })
-    // A GitHub run runs in Docker here, on the stack it recorded; one that
-    // recorded none, on this harness.
-    expect(runnerForm({ ...docker, where: 'github' }).where).toBe('docker')
+    // A GitHub run runs on GitHub again, on the stack it recorded, and
+    // sends that stack; one that recorded none, on this harness.
+    const onGithub = runnerForm({ ...docker, where: 'github' })
+    expect(onGithub.where).toBe('github')
+    expect(
+      executionStartRequest(onGithub, null, picked).parameters,
+    ).toMatchObject({
+      where: 'github',
+      stack: { name: 'default', yaml: recorded },
+    })
     expect(runnerForm({ ...docker, where: 'github', stack: null }).where).toBe(
       'harness',
     )
@@ -180,35 +179,6 @@ describe('where and stack fields', () => {
       executionStartRequest({ ...form, where: 'harness' }, null, choices[1])
         .parameters,
     ).not.toHaveProperty('stack')
-  })
-
-  it('drops a busy refusal on Run in Docker, so the footer sums up Docker', () => {
-    const refused = {
-      form: {
-        ...runnerForm(null, ['minimal_path']),
-        subject: 'deepseek\ndeepseek-v4-flash',
-      },
-      error: '"Nightly" is still running. Wait for it to finish or cancel it.',
-    }
-    const choices = stackChoices(listed, null)
-    const next = chooseWhere(refused, 'docker', choices)
-    expect(next).toEqual({
-      form: { ...refused.form, where: 'docker', stack: 'default' },
-      error: null,
-    })
-    const stack = pickedStack(next.form.stack, choices, null)
-    expect(
-      runSummary({
-        tests: 1,
-        runs: 1,
-        retries: 1,
-        suite: null,
-        where: next.form.where,
-        stack: stack?.label ?? null,
-      }).detail,
-    ).toBe('1 run per test · 1 retry · custom selection · in Docker on default')
-    // Back on this harness the stack picked stays for next time.
-    expect(chooseWhere(next, 'harness', choices).form.stack).toBe('default')
   })
 
   it('reads the recorded stack as the listed one holding the same YAML', () => {

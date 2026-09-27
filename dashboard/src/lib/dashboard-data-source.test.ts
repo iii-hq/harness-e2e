@@ -20,6 +20,7 @@ describe('live dashboard transport', () => {
         suite_update: 'suite-update',
         suite_delete: 'suite-delete',
         stacks_list: 'stacks-list',
+        github_status_get: 'github-status-get',
         stack_create: 'stack-create',
         stack_update: 'stack-update',
         stack_delete: 'stack-delete',

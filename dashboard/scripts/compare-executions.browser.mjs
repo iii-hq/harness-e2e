@@ -315,14 +315,16 @@ try {
   await page.getByRole('button', { name: 'rerun selected (3)' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.waitFor()
-  const output = (name) =>
-    again.getByRole('group', { name }).locator('output').textContent()
-  assert.equal(await output('Runs per test'), '3')
-  assert.equal(await output('Retries on crash'), '2')
+  await again.getByText('catalog ready').waitFor()
+  assert.equal(await again.locator('#run-dialog-runs-value').innerText(), '3')
+  assert.equal(
+    await again.locator('#run-dialog-technicalRetries-value').innerText(),
+    '2',
+  )
   // No seed: the Console always runs the canonical case.
   assert.doesNotMatch(await again.textContent(), /seed/i)
   assert.equal(
-    await again.locator('#run-tests-agent').inputValue(),
+    await again.locator('#run-dialog-agent').inputValue(),
     'tech-lead',
   )
   // It opens on what will run: the ticked tests and their group, only those.
@@ -338,9 +340,7 @@ try {
       .count(),
     0,
   )
-  // The group runs whole, in order.
-  await again.getByText('1 of 2 · in order').waitFor()
-  await again.getByText('2 of 2 · in order').waitFor()
+  await again.getByText('2 of 2 · in order', { exact: true }).waitFor()
   await again.getByRole('button', { name: 'Run 4 tests', exact: true }).click()
   await page.waitForFunction(() => location.hash.includes('/execution/plan-c'))
   assert.deepEqual(started, [
@@ -406,13 +406,7 @@ try {
     .click()
   await page.getByRole('menuitem', { name: 'Run again' }).click()
   const rerun = page.getByRole('dialog', { name: 'Run again' })
-  assert.equal(
-    await rerun
-      .getByRole('group', { name: 'Runs per test' })
-      .locator('output')
-      .textContent(),
-    '3',
-  )
+  assert.equal(await rerun.locator('#run-dialog-runs-value').innerText(), '3')
   await page.keyboard.press('Escape')
   await rerun.waitFor({ state: 'detached' })
 

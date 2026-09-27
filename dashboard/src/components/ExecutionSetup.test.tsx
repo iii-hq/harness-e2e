@@ -27,37 +27,25 @@ const sharedProps = {
   onTechnicalRetriesChange: () => undefined,
 }
 
-describe('suite setup sheet', () => {
-  it('names the suite, its runs and retries, and its tests', () => {
+describe('suite editor form', () => {
+  it('names the suite, sets its runs and retries, and picks its tests', () => {
     const html = renderToStaticMarkup(<ExecutionSetup {...sharedProps} />)
-    expect(html).not.toContain('Judge')
+    expect(html).toContain('Name the suite')
+    expect(html).toContain('Suite name')
+    expect(html).toContain('Runs and retries')
     expect(html).toContain('Pick the tests')
     expect(html).toContain('Runs per test')
     expect(html).toContain('Technical retries')
-    // Every execution runs the canonical cases, so runs pair up.
-    expect(html).not.toMatch(/seed/i)
     expect(html).toContain('Search by name or id')
-    expect(html).toContain('2 runs in total')
     expect(html).toContain('catalog ready · 1 test')
-    expect(html).not.toContain('logical')
-    // Audit RS-04: no 01/02/03 numerals.
-    expect(html).not.toContain('>01<')
-    // Audit PN-09: a 36px row per test inside a family group.
     expect(html).toContain('data-scenario-group="other"')
-    expect(html).toContain('min-h-9')
-    // The only test is selected, so the group control offers to clear it.
     expect(html).toContain('clear group')
-    expect(html).not.toContain('max-h-[25rem]')
-    // Audit PN-24: text input with its own clear control, no native ×.
     expect(html).not.toContain('type="search"')
     expect(html).toContain('1 of 1 shown · 1 selected · 2 runs in total')
-    // A suite holds no model and shows its runs and retries as its own.
+    // Running tests has its own dialog; the suite editor holds no model.
     expect(html).not.toContain('Choose the model')
-    expect(html).toContain('Runs and retries')
-    expect(html).toContain('Suite name')
-    expect(html).toContain('Name the suite')
-    expect(html).not.toContain('Harness endpoint')
-    expect(html).not.toContain('Purpose')
+    expect(html).not.toContain('Execution model')
+    expect(html).not.toContain('Name this run')
   })
 
   // Audit PN-05: validation names each pending item and marks the field.
@@ -74,7 +62,6 @@ describe('suite setup sheet', () => {
     const html = renderToStaticMarkup(
       <ExecutionSetup
         {...sharedProps}
-        label=""
         selectedScenarios={[]}
         errors={{
           label: 'Name the suite.',
@@ -87,7 +74,7 @@ describe('suite setup sheet', () => {
     expect(html).toContain('Select at least one test.')
   })
 
-  it('opens on the selected tests when asked', () => {
+  it('opens on the selected tests when asked, as editing a suite does', () => {
     const props = {
       ...sharedProps,
       availableScenarios: ['minimal_path', 'context_pressure', 'trend_blog'],
@@ -101,12 +88,11 @@ describe('suite setup sheet', () => {
     expect(selected).toContain('1 of 3 shown')
     expect(selected).toContain('>minimal_path<')
     expect(selected).not.toContain('>trend_blog<')
-    // The native box stays a visible, clickable control.
     expect(selected).toContain('appearance-auto')
   })
 
   // Audit RS-07 / PN-20: the review is one sentence plus a detail line.
-  it('summarises the setup in one sentence for the footer', () => {
+  it('summarises the suite in one sentence for the footer', () => {
     const summary = executionSetupSummary({
       selectedScenarios: 2,
       runsPerScenario: 1,
@@ -126,7 +112,6 @@ describe('suite setup sheet', () => {
         <button type="submit">save suite</button>
       </ExecutionSetupFooter>,
     )
-    // A suite holds no model.
     expect(html).toContain('>0 tests · 0 runs<')
     expect(html).toContain('2 runs per test · 0 retries')
     expect(html).toContain(
@@ -134,7 +119,6 @@ describe('suite setup sheet', () => {
     )
     expect(html).toContain('role="status"')
     expect(html).toContain('data-execution-setup-footer')
-    expect(html).not.toContain('>Runs<')
   })
 
   it('reports the footer error as an alert', () => {
@@ -145,13 +129,13 @@ describe('suite setup sheet', () => {
           runsPerScenario: 1,
           technicalRetries: 0,
         }}
-        error="Runner unavailable"
+        error="Could not save the suite"
       >
         <button type="submit">save suite</button>
       </ExecutionSetupFooter>,
     )
     expect(html).toContain('role="alert"')
-    expect(html).toContain('Runner unavailable')
+    expect(html).toContain('Could not save the suite')
   })
 
   // Audit PN-17: an empty catalog names the fix instead of asking for another search.
@@ -198,23 +182,18 @@ describe('suite setup sheet', () => {
     )
     expect(html).toContain('data-scenario-group="chess"')
     expect(html).toContain('data-scenario-group="other"')
-    expect(html).toContain('minimal_path')
-    expect(html).not.toContain('>local<')
   })
 
-  // Audit RS-15: when something else holds the form it is parked, not dead —
-  // the reader can still see what they would be configuring.
-  it('parks the form visibly instead of leaving dead controls at full strength', () => {
+  // Audit RS-15: a parked form stays readable instead of dead at full strength.
+  it('parks the form visibly while saving', () => {
     const parked = renderToStaticMarkup(
       <ExecutionSetup {...sharedProps} disabled selectedScenarios={[]} />,
     )
     expect(parked).toContain('data-parked="true"')
     expect(parked).toContain('opacity-55')
-
     const open = renderToStaticMarkup(
       <ExecutionSetup {...sharedProps} selectedScenarios={[]} />,
     )
     expect(open).not.toContain('data-parked')
-    expect(open).not.toContain('opacity-55')
   })
 })

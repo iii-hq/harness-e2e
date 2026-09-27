@@ -51,7 +51,7 @@ describe('run this scenario again', () => {
     expect(render(execution, 'minimal_path')).not.toContain('whole group')
   })
 
-  it('sends an imported execution to its GitHub run instead of running here', () => {
+  it('re-runs an imported execution’s job on GitHub', () => {
     const imported = {
       ...execution,
       source: {
@@ -60,16 +60,27 @@ describe('run this scenario again', () => {
         run_id: 42,
         run_attempt: 1,
         url: 'https://github.com/iii-hq/harness-e2e/actions/runs/42',
-        release_control_execution_id: null,
+        release_control_execution_id: '12d5f973-aaaa',
       },
     } as PlanExecution
     const html = render(imported, 'minimal_path')
     expect(html).toContain('Run minimal_path again on GitHub')
-    expect(html).toContain('would mix this stack with the one it ran on')
-    expect(html).toContain('import the run again')
+    expect(html).toContain('Re-runs its group’s job on GitHub')
+    expect(html).toContain('imports the run again when it ends')
     expect(html).toContain(
       'href="https://github.com/iii-hq/harness-e2e/actions/runs/42"',
     )
-    expect(html).not.toContain('>run again<')
+    expect(html).toContain('Release Control execution 12d5f973')
+    expect(html).toContain('>run again<')
+  })
+
+  it('says a Docker test runs again as the next attempt', () => {
+    const docker = {
+      ...execution,
+      source: { kind: 'docker', attempt: 1, phase: 'done', groups: [] },
+    } as unknown as PlanExecution
+    const html = render(docker, 'minimal_path')
+    expect(html).toContain('Run minimal_path again in Docker')
+    expect(html).toContain('as attempt 2')
   })
 })

@@ -1,7 +1,7 @@
-import { ExternalLink } from 'lucide-react'
-import type { ReactNode } from 'react'
-import { DisclosureLayer } from '@/components/DisclosureLayer'
-import { DataTable } from '@/design-system'
+import { ChevronRight, ExternalLink } from 'lucide-react'
+import { type ReactNode, useId, useState } from 'react'
+import { StackPanel } from '@/components/execution/StackPanel'
+import type { Stack } from '@/lib/dashboard-data-source'
 import { providerModel, suiteText } from '@/lib/execution-view'
 import type { PlanExecution } from '@/lib/plan-execution'
 
@@ -26,122 +26,120 @@ export function ExecutionOriginLink({
   )
 }
 
-/** What the execution ran with (what running it again needs), where it came
- *  from, the stack it ran on and the warnings recorded with it. */
-export function ExecutionConfiguration({
+/** What the execution ran with, as one band of facts under the header, and
+ *  the stack it ran on behind "Stack · N workers" (canvas: Execution detail). */
+export function ExecutionFacts({
   execution,
+  extra = [],
+  loadStacks,
 }: {
-  execution: PlanExecution
+  execution: PlanExecution | null
+  /** The Console's stacks, for a run that did not record its own. */
+  loadStacks?: () => Promise<{ stacks: Stack[] }>
+  /** Facts the page knows without a plan execution (started, versions). */
+  extra?: Array<[string, ReactNode]>
 }) {
-  const parameters = execution.parameters
-  const source = execution.source
-  const rows: Array<[string, ReactNode]> = [
-    ['origin', <ExecutionOriginLink key="origin" source={source} />],
+  const [stackOpen, setStackOpen] = useState(false)
+  const stackId = useId()
+  const rows: Array<[string, ReactNode]> = []
+  if (execution) {
+    const parameters = execution.parameters
+    const source = execution.source
+    rows.push(['Where', <ExecutionOriginLink key="origin" source={source} />])
+    if (parameters)
+      rows.push(
+        ['Suite', suiteText(parameters.suite) ?? 'not recorded'],
+        ['Model', providerModel(parameters)],
+        ['Profile', parameters.agent ?? 'default'],
+      )
+    if (parameters?.stack)
+      rows.push([
+        'Stack',
+        `${parameters.stack.name}${parameters.stack.sha256 ? ` · ${parameters.stack.sha256.replace('sha256:', '').slice(0, 12)}` : ''}`,
+      ])
+    else if (source.kind === 'github' && source.stack)
+      rows.push(['Stack', source.stack])
+    if (source.kind === 'docker' && source.image)
+      rows.push(['Image', source.image])
+    if (source.kind === 'github')
+      rows.push([
+        'Release Control',
+        source.release_control_execution_id ?? 'not reported',
+      ])
+    if (parameters && parameters.runs > 1)
+      rows.push(['Runs', String(parameters.runs)])
+    if (parameters && parameters.technical_retries > 0)
+      rows.push(['Retries', String(parameters.technical_retries)])
+  }
+  rows.push(...extra.filter(([label]) => !rows.some(([key]) => key === label)))
+  // The canvas order; anything else keeps its place after these.
+  const ORDER = [
+    'Where',
+    'Model',
+    'Profile',
+    'Runner',
+    'Harness',
+    'Suite',
+    'Stack',
+    'Image',
+    'Release Control',
+    'Runs',
+    'Retries',
+    'Id',
   ]
-  if (source.kind === 'github' && source.release_control_execution_id)
-    rows.push(['release control', source.release_control_execution_id])
-  if (parameters?.stack)
-    rows.push([
-      'stack',
-      `${parameters.stack.name}${parameters.stack.sha256 ? ` · ${parameters.stack.sha256.replace('sha256:', '').slice(0, 12)}` : ''}`,
-    ])
-  else if (source.kind === 'github' && source.stack)
-    rows.push(['stack', source.stack])
-  if (source.kind === 'docker' && source.image)
-    rows.push(['executor image', source.image])
-  if (parameters)
-    rows.push(
-      ['suite', suiteText(parameters.suite) ?? 'not recorded'],
-      ['model', providerModel(parameters)],
-      ['profile', parameters.agent ?? 'default'],
-      ['scenarios', parameters.scenarios.join(', ')],
-      ['runs', String(parameters.runs)],
-      ['technical retries', String(parameters.technical_retries)],
-    )
+  const rank = (label: string) => {
+    const index = ORDER.indexOf(label)
+    return index === -1 ? ORDER.length - 1 : index
+  }
+  rows.sort(([a], [b]) => rank(a) - rank(b))
+  const stack = execution?.stack ?? []
+  const workers = new Set(stack.map((worker) => worker.name)).size
   const differing = new Set(
-    execution.stack
+    stack
       .filter((worker) => worker.groups?.length)
       .map((worker) => worker.name),
-  )
+  ).size
   return (
     <section
-      id="configuration"
-      className="mt-6 grid min-w-0 scroll-mt-24 gap-3"
-      aria-labelledby="execution-configuration-heading"
-      data-execution-configuration
+      className="ep-facts"
+      aria-label="Execution facts"
+      data-execution-facts
     >
-      <h2
-        id="execution-configuration-heading"
-        className="m-0 text-base font-semibold text-ink"
-      >
-        Configuration
-      </h2>
-      <dl className="m-0 grid min-w-0 grid-cols-[max-content_minmax(0,1fr)] gap-x-6 gap-y-2 font-mono text-xs">
-        {rows.map(([key, value]) => (
-          <div key={key} className="contents">
-            <dt className="ds-label">{key}</dt>
-            <dd className="m-0 break-words text-ink">{value}</dd>
-          </div>
+      <div className="ep-facts-row">
+        {rows.map(([label, value]) => (
+          <span className="ep-fact" key={label}>
+            <span className="ep-fact-label">{label}</span>
+            <span className="ep-fact-value">{value}</span>
+          </span>
         ))}
-      </dl>
-      {execution.warnings?.length ? (
-        <ul
-          className="m-0 grid gap-1 pl-4 text-xs text-warning"
-          aria-label="Execution warnings"
-          data-execution-warnings
-        >
-          {execution.warnings.map((warning) => (
-            <li key={warning}>{warning}</li>
-          ))}
-        </ul>
-      ) : null}
-      {execution.stack.length > 0 ? (
-        <DisclosureLayer
-          id="stack"
-          label="stack"
-          scent={`${new Set(execution.stack.map((worker) => worker.name)).size} workers${differing.size ? ` · ${differing.size} differ between groups` : ''}`}
-          open={false}
-        >
-          <DataTable caption="Stack workers" collapse data-execution-stack>
-            <thead>
-              <tr>
-                <th scope="col">worker</th>
-                <th scope="col">source</th>
-                <th scope="col">requested</th>
-                <th scope="col">observed</th>
-                <th scope="col">groups</th>
-              </tr>
-            </thead>
-            <tbody>
-              {execution.stack.map((worker) => (
-                <tr
-                  key={`${worker.name}:${worker.requested}:${worker.observed}:${worker.groups?.join(',')}`}
-                >
-                  <td data-label="worker" className="font-mono text-xs">
-                    {worker.name}
-                  </td>
-                  <td data-label="source" className="font-mono text-xs">
-                    {worker.source}
-                    {worker.commit ? ` · ${worker.commit.slice(0, 12)}` : ''}
-                    {worker.dirty ? ' · dirty' : ''}
-                  </td>
-                  <td data-label="requested" className="font-mono text-xs">
-                    {worker.requested ?? '—'}
-                  </td>
-                  <td data-label="observed" className="font-mono text-xs">
-                    {worker.observed ?? '—'}
-                  </td>
-                  <td
-                    data-label="groups"
-                    className="font-mono text-xs text-ink-muted"
-                  >
-                    {worker.groups?.length ? worker.groups.join(', ') : 'all'}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        </DisclosureLayer>
+        {workers > 0 ? (
+          <button
+            type="button"
+            className="ep-act ep-fact-stack"
+            aria-expanded={stackOpen}
+            data-selected={stackOpen}
+            aria-controls={stackId}
+            onClick={() => setStackOpen(!stackOpen)}
+            data-stack-toggle
+          >
+            Stack · {workers} {workers === 1 ? 'worker' : 'workers'}
+            {differing ? ` · ${differing} differ between groups` : ''}
+            <ChevronRight
+              size={14}
+              aria-hidden="true"
+              className={stackOpen ? 'ep-rot' : undefined}
+            />
+          </button>
+        ) : null}
+      </div>
+      {stackOpen && execution ? (
+        <div className="ep-facts-stack">
+          <StackPanel
+            execution={execution}
+            id={stackId}
+            loadStacks={loadStacks}
+          />
+        </div>
       ) : null}
     </section>
   )

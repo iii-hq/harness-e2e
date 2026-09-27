@@ -17,11 +17,7 @@ describe('route chrome bridge', () => {
       <DashboardPageActions
         active="executions"
         actionsLabel="Execution actions"
-        actions={
-          <button type="button" className={dashboardHeaderActionClassName()}>
-            Quick execution
-          </button>
-        }
+        actions={[{ id: 'run', label: 'Run tests', primary: true }]}
       />,
     )
 

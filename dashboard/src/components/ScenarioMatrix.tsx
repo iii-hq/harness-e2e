@@ -1,5 +1,11 @@
-import { ChevronDown, Eye, RotateCcw } from 'lucide-react'
-import { useId, useMemo, useState } from 'react'
+import { Check, ChevronRight, ScrollText } from 'lucide-react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
+import {
+  formatSpan,
+  formatTokens,
+  formatUsd,
+} from '@/components/execution/ExecutionTotals'
+import { ScreenshotGallery } from '@/components/execution/screenshots'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import {
   buttonClassName,
@@ -28,63 +34,134 @@ import {
   type ScenarioMatrixItem,
   stepSignals,
 } from '@/lib/scenario-matrix'
+import { screenshotsOf } from '@/lib/screenshots'
+
+export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
+
+export function matchesFilter(item: ScenarioMatrixItem, filter: ResultFilter) {
+  const score = itemScore(item)
+  if (filter === 'lost') return score !== null && score < 100
+  if (filter === 'notrun') return item.runCount === 0
+  if (filter === 'passed')
+    return item.objective.status === 'passed' && score === 100
+  return true
+}
 
 export function ScenarioMatrix({
   detail,
   onTranscript,
   showContract = true,
   onRerun,
+  openKey = null,
+  running = false,
+  heading,
 }: {
   detail: DashboardExecutionDetail
+  /** The section title, on the filter row as the canvas draws it. */
+  heading?: string
+  /** Open this row from outside (Needs attention · Show test). */
+  openKey?: string | null
   onTranscript: (run: AssessmentRunView, title: string) => void
   /** The results contract is provenance; the layered execution page renders
    *  it in the provenance layer instead of above the table (audit ED-29). */
   showContract?: boolean
-  /** Run one scenario of the execution again; offered on every row. */
+  /** Run one scenario of the execution again. */
   onRerun?: (scenarioId: string) => void
+  running?: boolean
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
+  const [filter, setFilter] = useState<ResultFilter>('all')
+  useEffect(() => {
+    if (openKey) setFilter('all')
+  }, [openKey])
   if (model.items.length === 0) {
     return (
-      <div className="rounded-[var(--ds-radius-sm)] border border-dashed border-[var(--color-edge)] bg-panel-raised p-5 text-sm text-ink-muted">
+      <div className="ep-empty">
         No scenario reports were retained for this execution.
       </div>
     )
   }
-
+  const segments: Array<[ResultFilter, string, number]> = (
+    [
+      ['all', 'All', model.items.length],
+      [
+        'lost',
+        'Lost points',
+        model.items.filter((i) => matchesFilter(i, 'lost')).length,
+      ],
+      [
+        'notrun',
+        'Not run',
+        model.items.filter((i) => matchesFilter(i, 'notrun')).length,
+      ],
+      [
+        'passed',
+        'Full marks',
+        model.items.filter((i) => matchesFilter(i, 'passed')).length,
+      ],
+    ] as Array<[ResultFilter, string, number]>
+  ).filter(([key, , count]) => key === 'all' || count > 0)
+  const shown = model.items.filter((item) => matchesFilter(item, filter))
   return (
-    <div className="grid gap-4">
+    <div className="ep-results">
       {showContract ? (
         <ResultContractStrip contracts={model.contracts} />
       ) : null}
-      <ScenarioSummary summary={model.summary} />
-      <table
-        className="scenario-results-table block w-full table-fixed border-collapse text-left text-xs @[1000px]/harness:table"
-        aria-label="Scenario results"
-      >
-        <thead className="hidden border-b border-[var(--color-rule)] text-ink-muted @[1000px]/harness:table-header-group">
+      <div className="ep-results-bar">
+        {heading ? (
+          <h2 id="execution-results-heading" className="ep-results-title">
+            {heading}
+          </h2>
+        ) : null}
+        <fieldset className="ep-segments">
+          <legend className="ep-sr">Show</legend>
+          {segments.map(([key, label, count]) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={filter === key}
+              data-selected={filter === key}
+              data-result-filter={key}
+              onClick={() => setFilter(key)}
+            >
+              {label} <span className="ep-faint">{count}</span>
+            </button>
+          ))}
+        </fieldset>
+        <span className="ep-faint">
+          {running
+            ? 'Rows fill in as tests report.'
+            : 'Suite order. Open a test for its criteria, run and evidence.'}
+        </span>
+      </div>
+      <table className="ep-results-table" aria-label="Scenario results">
+        <thead>
           <tr>
             {[
-              'Scenario',
+              'Test',
               'Result',
               'Score',
-              'Runtime',
+              'Duration',
               'Tokens',
               'Cost',
-              'Evidence',
+              'Turns',
             ].map((label) => (
               <th
                 key={label}
                 scope="col"
-                className={`px-3 py-3 font-medium ${label === 'Scenario' ? 'w-[28%]' : label === 'Evidence' ? 'w-[20%]' : ''}`}
+                className={
+                  ['Duration', 'Tokens', 'Cost', 'Turns'].includes(label)
+                    ? 'ep-cell-wide'
+                    : undefined
+                }
               >
                 {label}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="block @[1000px]/harness:table-row-group">
-          {model.items.map((item) => (
+        <tbody>
+          {shown.map((item) => (
             <ScenarioResult
               key={item.key}
               detail={detailForScenario(detail, item)}
@@ -93,10 +170,14 @@ export function ScenarioMatrix({
               executionId={detail.id}
               onTranscript={onTranscript}
               onRerun={onRerun}
+              open={openKey === item.key}
             />
           ))}
         </tbody>
       </table>
+      {shown.length === 0 ? (
+        <p className="ep-faint">No test matches this filter.</p>
+      ) : null}
     </div>
   )
 }
@@ -206,55 +287,68 @@ function shortDigest(value: string | null) {
   return value.replace(/^sha256:/, '').slice(0, 12)
 }
 
-function ScenarioSummary({
-  summary,
-}: {
-  summary: ReturnType<typeof buildScenarioMatrix>['summary']
-}) {
-  const entries: Array<{
-    status: OperationalStatus
-    count: number
-    label: string
-  }> = [
-    { status: 'passed', count: summary.passed, label: 'passed' },
-    { status: 'failed', count: summary.failed, label: 'failed' },
-    {
-      status: 'inconclusive',
-      count: summary.inconclusive,
-      label: 'inconclusive',
-    },
-    {
-      status: 'unavailable',
-      count: summary.unavailable,
-      label: 'unavailable',
-    },
-    { status: 'running', count: summary.running, label: 'running' },
-    {
-      status: 'incomplete',
-      count: summary.incomplete,
-      label: 'incomplete',
-    },
-  ]
+export type RunCriterion = {
+  id: string
+  description: string
+  awarded: number
+  possible: number
+  gate: boolean
+  reason: string
+}
 
+/** The criteria a run projection carries, read defensively. */
+export function runCriteria(run: unknown): RunCriterion[] {
+  const list = (run as { criteria?: unknown } | null)?.criteria
+  if (!Array.isArray(list)) return []
+  return list.flatMap((entry) => {
+    if (!entry || typeof entry !== 'object') return []
+    const c = entry as Record<string, unknown>
+    if (typeof c.id !== 'string') return []
+    return [
+      {
+        id: c.id,
+        description: typeof c.description === 'string' ? c.description : '',
+        awarded: typeof c.awarded === 'number' ? c.awarded : 0,
+        possible: typeof c.possible === 'number' ? c.possible : 0,
+        gate: c.gate === true,
+        reason: typeof c.reason === 'string' ? c.reason : '',
+      },
+    ]
+  })
+}
+
+/** Mean of the retained runs' scores, null when none was scored. */
+export function itemScore(item: ScenarioMatrixItem): number | null {
+  const scores = item.runs
+    .map((run) => run.score)
+    .filter((score): score is number => typeof score === 'number')
+  if (scores.length === 0) return null
   return (
-    <section
-      className="flex flex-wrap items-center gap-x-5 gap-y-2 border-y border-[var(--color-rule)] py-3"
-      aria-label="Scenario result summary"
-    >
-      <strong className="font-mono text-xs font-semibold text-ink">
-        {summary.total} {summary.total === 1 ? 'scenario' : 'scenarios'}
-      </strong>
-      {entries
-        .filter((entry) => entry.count > 0)
-        .map((entry) => (
-          <StatusBadge
-            key={entry.status}
-            status={entry.status}
-            label={`${entry.count} ${entry.label}`}
-          />
-        ))}
-    </section>
+    Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 10) / 10
   )
+}
+
+function firstClause(text: string) {
+  const clause = text.split(/\.\s|\n|:\s/)[0].trim()
+  return clause.length > 64 ? `${clause.slice(0, 63)}…` : clause
+}
+
+/** One line under the test id: why it lost points or did not run. */
+export function rowNote(item: ScenarioMatrixItem): string {
+  if (item.runCount === 0)
+    return item.reason ? firstClause(item.reason) : 'No run retained'
+  const lost = runCriteria(item.primaryRun).filter(
+    (c) => c.awarded < c.possible,
+  )
+  const prefix = lost.some((c) => c.gate)
+    ? 'Failed a hard gate'
+    : item.objective.status !== 'passed' && item.reason
+      ? firstClause(item.reason)
+      : null
+  const suffix = lost.length
+    ? `${lost.length} ${lost.length === 1 ? 'criterion' : 'criteria'} lost`
+    : null
+  return [prefix, suffix].filter(Boolean).join(' · ')
 }
 
 function ScenarioResult({
@@ -264,9 +358,11 @@ function ScenarioResult({
   executionId,
   onTranscript,
   onRerun,
+  open = false,
 }: {
   detail: DashboardExecutionDetail
   item: ScenarioMatrixItem
+  open?: boolean
   /** Attempts the last one replaced: listed, counted nowhere. */
   previous: PreviousAttempt[]
   executionId: string
@@ -274,120 +370,112 @@ function ScenarioResult({
   onRerun?: (scenarioId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const rowRef = useRef<HTMLTableRowElement>(null)
+  useEffect(() => {
+    if (!open) return
+    setExpanded(true)
+    // Opened from outside (Needs attention): bring it into view once shown.
+    window.requestAnimationFrame(() =>
+      rowRef.current?.scrollIntoView({ block: 'center' }),
+    )
+  }, [open])
   const panelId = useId()
   const assessmentRuns = useMemo(
     () => buildAssessmentWorkspace(detail).runs,
     [detail],
   )
+  const turns = assessmentRuns.reduce<number | null>(
+    (sum, run) =>
+      typeof run.metrics.turns === 'number'
+        ? (sum ?? 0) + run.metrics.turns
+        : sum,
+    null,
+  )
   const metrics = useMemo(() => buildExecutionMetrics(detail), [detail])
-  const scoreMean = metrics.scoreMean
-  const scoreSamples = metrics.scoreSamples
-  const planned = metrics.planned
-  const usage = [
-    { label: 'Runtime', id: 'durationMs' as const, metric: metrics.durationMs },
-    {
-      label: 'Total tokens',
-      id: 'totalTokens' as const,
-      metric: metrics.subjectTokens,
-    },
-    { label: 'Reported cost', id: 'costUsd' as const, metric: metrics.cost },
-    {
-      label: 'Input tokens',
-      id: 'inputTokens' as const,
-      metric: metrics.inputTokens,
-    },
-    {
-      label: 'Output tokens',
-      id: 'outputTokens' as const,
-      metric: metrics.outputTokens,
-    },
-    {
-      label: 'Cache read',
-      id: 'cacheRead' as const,
-      metric: metrics.cacheReadTokens,
-    },
-    {
-      label: 'Cache written',
-      id: 'cacheWrite' as const,
-      metric: metrics.cacheWriteTokens,
-    },
-    { label: 'Turns', id: 'turns' as const, metric: metrics.turns },
-    {
-      label: 'Function calls',
-      id: 'functionCalls' as const,
-      metric: metrics.functionCalls,
-    },
-    {
-      label: 'Function errors',
-      id: 'functionErrors' as const,
-      metric: metrics.functionErrors,
-    },
-  ].map(({ label, metric }) => {
-    const value = metric.total ?? metric.observed
-    return {
-      label,
-      value:
-        value === null
-          ? '—'
-          : label === 'Runtime'
-            ? formatScenarioDuration(value)
-            : label === 'Reported cost'
-              ? value > 0 && value < 0.0001
-                ? '<$0.0001'
-                : `$${value.toFixed(4)}`
-              : formatDecimal(value),
-      detail:
-        metric.total !== null
-          ? 'Accumulated across runs, including retries'
-          : metric.observed !== null
-            ? `Partial · ${metric.samples}/${metric.expected} runs reported`
-            : 'Not reported',
-    }
-  })
+  const pick = (metric: { total: number | null; observed: number | null }) =>
+    metric.total ?? metric.observed
+  // A figure only part of the runs reported says so on hover.
+  const partialNote = (metric: {
+    total: number | null
+    observed: number | null
+    samples: number
+    expected: number
+  }) =>
+    metric.total === null && metric.observed !== null
+      ? `Partial · ${metric.samples}/${metric.expected} runs reported`
+      : undefined
+  const duration = pick(metrics.durationMs)
+  const tokens = pick(metrics.subjectTokens)
+  const cost = pick(metrics.cost)
+  const score =
+    metrics.scoreMean === null
+      ? itemScore(item)
+      : Math.round(metrics.scoreMean * 10) / 10
+  const scoreNote =
+    metrics.scoreSamples > 0
+      ? `Mean · ${metrics.scoreSamples}/${metrics.planned} planned runs scored`
+      : undefined
   const runId = item.primaryRun?.run_id
+  const primaryAssessment = assessmentRuns.find((run) => run.runId === runId)
+  const criteria = runCriteria(item.primaryRun)
+  const lost = criteria.filter((c) => c.awarded < c.possible)
+  const note = rowNote(item)
   const definition = shortDefinition(item.behaviorSha256)
-  const scenarioTitle = `${titleCase(item.scenarioId)}${definition ? ` · definition ${definition}` : ''}`
+  const count = (value: number | null) =>
+    value === null
+      ? '—'
+      : new Intl.NumberFormat('en-US').format(Math.round(value))
+  const runFacts: Array<[string, string]> = [
+    ['Input tokens', formatTokens(pick(metrics.inputTokens))],
+    ['Output tokens', formatTokens(pick(metrics.outputTokens))],
+    ['Cache read', formatTokens(pick(metrics.cacheReadTokens))],
+    ...(pick(metrics.cacheWriteTokens) !== null
+      ? [
+          ['Cache written', formatTokens(pick(metrics.cacheWriteTokens))] as [
+            string,
+            string,
+          ],
+        ]
+      : []),
+    ['Turns', count(turns)],
+    ['Function calls', count(pick(metrics.functionCalls))],
+    ['Function errors', count(pick(metrics.functionErrors))],
+  ]
+  const attempt = Number(item.primaryRun?.attempt_number ?? 1)
+  const runMeta = runId
+    ? `run ${runId.slice(0, 8)} · attempt ${attempt} · ${formatSpan(duration)} · ${formatUsd(cost)}`
+    : ''
+  const screenshots = expanded ? screenshotsOf(detail, item.scenarioId) : []
+  const title = `${item.scenarioId}${definition ? ` · definition ${definition}` : ''}`
   return (
     <>
       <tr
+        ref={rowRef}
         data-scenario-row={item.key}
-        className="grid grid-cols-2 gap-y-2 border-b border-[var(--color-rule)] py-3 align-top @[1000px]/harness:table-row"
+        className="ep-result-row"
         aria-label={`${titleCase(item.scenarioId)} scenario result`}
       >
-        <th
-          scope="row"
-          className="col-span-2 min-w-0 px-3 py-2 text-left font-normal"
-        >
+        <th scope="row" className="ep-cell ep-cell-test">
           <button
             type="button"
             aria-expanded={expanded}
             aria-controls={panelId}
             onClick={() => setExpanded(!expanded)}
-            className="flex min-h-8 w-full items-start gap-2 rounded-sm text-left focus-visible:outline-2 focus-visible:outline-offset-2"
+            className="ep-row-toggle"
           >
-            <ChevronDown
-              className={`mt-0.5 size-4 shrink-0 text-ink-muted ${expanded ? '' : '-rotate-90'}`}
+            <ChevronRight
+              size={16}
+              className={`ep-chevron ${expanded ? 'ep-rot' : ''}`}
               aria-hidden="true"
             />
-            <span className="min-w-0">
-              <strong
-                className="block break-words text-sm"
-                title={scenarioTitle}
-              >
-                {titleCase(item.scenarioId)}
-              </strong>
-              <span className="mt-1 block break-all text-label text-ink-muted">
-                {item.subjectId} · {item.runCount}{' '}
-                {item.runCount === 1 ? 'run' : 'runs'}
+            <span className="ep-row-id">
+              <span className="ep-mono ep-strong" title={title}>
+                {item.scenarioId}
               </span>
-              {definition ? (
-                <span className="mt-1 block font-mono text-label text-ink-muted">
-                  definition {definition}
-                </span>
-              ) : null}
+              {note ? <span className="ep-row-note">{note}</span> : null}
               {previous.length > 0 ? (
                 <span
-                  className="mt-1 block font-mono text-label text-warning"
+                  className="ep-row-note ep-warn-text"
                   data-reruns={previous.length}
                   title="Ran again; only the last attempt counts"
                 >
@@ -397,185 +485,245 @@ function ScenarioResult({
             </span>
           </button>
         </th>
-        <td className="min-w-0 px-3 py-2">
-          <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
-            Result
-          </span>
+        <td className="ep-cell" data-label="Result">
           <StatusBadge
             status={item.objective.status}
             label={item.objective.label}
           />
         </td>
-        <td className="min-w-0 px-3 py-2">
-          <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
-            Score
-          </span>
-          <strong className="font-mono">{scoreLabel(scoreMean)}</strong>
-          <span className="mt-1 block text-label text-ink-muted">
-            {scoreSamples > 0
-              ? `Mean · ${scoreSamples}/${planned} planned runs scored`
-              : 'Not reported'}
+        <td className="ep-cell" data-label="Score" title={scoreNote}>
+          <span className="ep-score">
+            <span className="ep-score-bar" aria-hidden="true">
+              <span
+                style={{ width: `${Math.max(0, Math.min(100, score ?? 0))}%` }}
+              />
+            </span>
+            <span className="ep-mono">{score ?? '—'}</span>
           </span>
         </td>
-        {usage
-          .filter((metric) =>
-            ['Runtime', 'Total tokens', 'Reported cost'].includes(metric.label),
-          )
-          .map((metric) => (
-            <td
-              key={metric.label}
-              className="min-w-0 px-3 py-2"
-              title={metric.detail}
-              data-primary-metric={metric.label}
-            >
-              <span className="mb-1 block text-label text-ink-muted @[1000px]/harness:hidden">
-                {metric.label}
-              </span>
-              <strong className="break-words font-mono">{metric.value}</strong>
-              {item.runCount > 1 ||
-              metric.detail !== 'Accumulated across runs, including retries' ? (
-                <span className="mt-1 block text-label text-ink-muted">
-                  {metric.detail}
-                </span>
-              ) : null}
-            </td>
-          ))}
-        <td className="col-span-2 min-w-0 px-3 py-2">
-          <div className="flex flex-wrap items-center gap-2">
-            {runId ? (
-              <a
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                  className: 'no-underline',
-                })}
-                href={hashForExecution(executionId, null, runId)}
-                aria-label={`Evidence record for ${titleCase(item.scenarioId)}`}
-                title="Evidence record"
-              >
-                <Eye size={15} aria-hidden="true" />
-              </a>
-            ) : !runId ? (
-              <span className="text-ink-muted">No retained run</span>
-            ) : null}
-            <ScenarioChatAction
-              compact
-              detail={detail}
-              scenarioId={item.scenarioId}
-              subjectId={item.subjectId}
-            />
-            {onRerun ? (
-              // Offered on every row, prominent where the scenario did not pass.
-              <button
-                type="button"
-                className={buttonClassName({
-                  variant:
-                    item.objective.status === 'passed' ? 'quiet' : 'secondary',
-                  size: 'compact',
-                })}
-                aria-label={`Run ${titleCase(item.scenarioId)} again`}
-                title="Run this scenario again"
-                data-rerun-scenario={item.scenarioId}
-                onClick={() => onRerun(item.scenarioId)}
-              >
-                <RotateCcw size={15} aria-hidden="true" />
-                {item.objective.status === 'passed' ? null : 'run again'}
-              </button>
-            ) : null}
-          </div>
+        <td
+          className="ep-cell ep-cell-wide ep-mono"
+          data-label="Duration"
+          data-primary-metric="Runtime"
+          title={partialNote(metrics.durationMs)}
+        >
+          {formatSpan(duration)}
+        </td>
+        <td
+          className="ep-cell ep-cell-wide ep-mono"
+          data-label="Tokens"
+          data-primary-metric="Total tokens"
+          title={
+            partialNote(metrics.subjectTokens) ??
+            (tokens === null ? undefined : `${count(tokens)} input + output`)
+          }
+        >
+          {formatTokens(tokens)}
+        </td>
+        <td
+          className="ep-cell ep-cell-wide ep-mono"
+          data-label="Cost"
+          data-primary-metric="Reported cost"
+          title={partialNote(metrics.cost)}
+        >
+          {formatUsd(cost)}
+        </td>
+        <td
+          className="ep-cell ep-cell-wide ep-mono"
+          data-label="Turns"
+          data-primary-metric="Turns"
+        >
+          {turns ?? '—'}
         </td>
       </tr>
-      <tr
-        id={panelId}
-        hidden={!expanded}
-        className={expanded ? 'block @[1000px]/harness:table-row' : 'hidden'}
-      >
-        <td
-          colSpan={7}
-          className="block min-w-0 bg-panel-raised p-4 @[1000px]/harness:table-cell"
-        >
-          {item.reason ? (
-            <p className="m-0 mb-3 break-words text-sm text-ink">
-              {item.reason}
-            </p>
-          ) : null}
-          <dl className="m-0 grid gap-3 @[640px]/harness:grid-cols-2 @[1000px]/harness:grid-cols-3">
-            {usage
-              .filter(
-                (metric) =>
-                  !['Runtime', 'Total tokens', 'Reported cost'].includes(
-                    metric.label,
-                  ),
-              )
-              .map((metric) => (
-                <ResultFact
-                  key={metric.label}
-                  label={metric.label}
-                  value={metric.value}
-                  detail={metric.detail}
-                />
-              ))}
-          </dl>
-          {item.runs.length > 1 ? (
-            <ul
-              className="m-0 mt-4 grid list-none gap-3 p-0"
-              aria-label="Retained runs"
-            >
-              {item.runs.map((run) => {
-                const assessment = assessmentRuns.find(
-                  (entry) => entry.runId === run.run_id,
-                )
-                return (
-                  <li
-                    key={run.attempt_id}
-                    className="flex flex-wrap items-center gap-3"
+      <tr id={panelId} hidden={!expanded} className="ep-detail-row">
+        <td colSpan={7} className="ep-detail-cell">
+          <div className="ep-detail">
+            {item.runCount === 0 ? (
+              <div className="ep-notrun">
+                <p>
+                  {item.reason
+                    ? `The test didn’t start, so it has no score or evidence. ${item.reason}`
+                    : 'No run was retained for this test, so it has no score or evidence.'}
+                </p>
+                {onRerun ? (
+                  <button
+                    type="button"
+                    className="ep-act ep-act-ctl"
+                    data-rerun-scenario={item.scenarioId}
+                    aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                    onClick={() => onRerun(item.scenarioId)}
                   >
-                    <span className="break-all font-mono text-label">
-                      {run.run_id}
-                    </span>
-                    <a
-                      className={buttonClassName({
-                        variant: 'secondary',
-                        size: 'compact',
-                      })}
-                      href={hashForExecution(executionId, null, run.run_id)}
+                    Run this test again
+                  </button>
+                ) : null}
+              </div>
+            ) : (
+              <div className="ep-row-grid">
+                <div className="ep-row-criteria">
+                  <h3 className="ep-h3">
+                    {lost.length ? 'Criteria that lost points' : 'Criteria'}
+                  </h3>
+                  {criteria.length > 0 && lost.length === 0 ? (
+                    <p className="ep-met">
+                      <Check size={14} aria-hidden="true" />
+                      Every criterion met.
+                    </p>
+                  ) : null}
+                  {lost.map((c) => (
+                    <div
+                      className="ep-lost"
+                      key={c.id}
+                      data-lost-criterion={c.id}
                     >
-                      evidence record
-                    </a>
-                    {assessment?.transcript ? (
+                      <div className="ep-lost-head">
+                        <span className="ep-lost-id">{c.id}</span>
+                        {c.gate ? (
+                          <span className="ep-gate">hard gate</span>
+                        ) : null}
+                        <span className="ep-lost-points">
+                          −{Math.round((c.possible - c.awarded) * 10) / 10}
+                        </span>
+                      </div>
+                      <code className="ep-lost-reason">
+                        {c.reason || c.description}
+                      </code>
+                    </div>
+                  ))}
+                  {item.reason && item.objective.status !== 'passed' ? (
+                    <p className="ep-row-reason">{item.reason}</p>
+                  ) : null}
+                  {criteria.length === 0 && !item.reason ? (
+                    <p className="ep-met">This run reported no criteria.</p>
+                  ) : null}
+                </div>
+                <div className="ep-row-run">
+                  <h3 className="ep-h3">Run</h3>
+                  <dl className="ep-run-tiles">
+                    {runFacts.map(([label, value]) => (
+                      <div key={label} className="ep-run-tile">
+                        <dt>{label}</dt>
+                        <dd>{value}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  <div className="ep-run-actions">
+                    <span className="ep-run-meta">{runMeta}</span>
+                    {primaryAssessment?.transcript ? (
                       <button
                         type="button"
-                        className={buttonClassName({
-                          variant: 'quiet',
-                          size: 'compact',
-                        })}
+                        className="ep-act ep-act-ctl"
+                        aria-label={`View transcript for ${titleCase(item.scenarioId)}`}
                         onClick={() =>
                           onTranscript(
-                            assessment,
-                            `${titleCase(item.scenarioId)} · ${run.run_id}`,
+                            primaryAssessment,
+                            `${item.scenarioId} · ${runId}`,
                           )
                         }
                       >
-                        transcript
+                        <ScrollText size={14} aria-hidden="true" />
+                        Transcript
                       </button>
                     ) : null}
-                  </li>
-                )
-              })}
-            </ul>
-          ) : null}
-          {previous.length > 0 ? (
-            <PreviousAttempts previous={previous} />
-          ) : null}
-          {!item.available && item.objective.status !== 'running' ? (
-            <p className="m-0 mt-3 text-sm text-ink-muted">
-              The expected report for this scenario is unavailable. Runtime and
-              workflow data are intentionally not inferred.
-            </p>
-          ) : null}
-          {item.workflowSteps.length > 0 ? (
-            <WorkflowDurationProfile tests={item.workflowSteps} />
-          ) : null}
+                    {runId ? (
+                      <a
+                        className="ep-act"
+                        href={hashForExecution(executionId, null, runId)}
+                        aria-label={`Evidence record for ${titleCase(item.scenarioId)}`}
+                      >
+                        Evidence record
+                      </a>
+                    ) : null}
+                    <ScenarioChatAction
+                      label="Ask in chat"
+                      buttonClass="ep-act"
+                      detail={detail}
+                      scenarioId={item.scenarioId}
+                      subjectId={item.subjectId}
+                    />
+                    {onRerun ? (
+                      <button
+                        type="button"
+                        className={`ep-act ${item.objective.status === 'passed' ? '' : 'ep-act-ctl'}`}
+                        aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                        data-rerun-scenario={item.scenarioId}
+                        onClick={() => onRerun(item.scenarioId)}
+                      >
+                        Run again
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            )}
+            {screenshots.length > 0 ? (
+              <div className="ep-row-shots">
+                <h3 className="ep-h3">
+                  Screenshots{' '}
+                  <span className="ep-h3-note">
+                    · select one to open it full size
+                  </span>
+                </h3>
+                <ScreenshotGallery
+                  bridge={null}
+                  heading={false}
+                  screenshots={screenshots}
+                />
+              </div>
+            ) : null}
+            {item.runs.length > 1 ? (
+              <ul className="ep-runs" aria-label="Retained runs">
+                {item.runs.map((run) => {
+                  const assessment = assessmentRuns.find(
+                    (entry) => entry.runId === run.run_id,
+                  )
+                  return (
+                    <li key={run.attempt_id}>
+                      <span className="ep-mono">{run.run_id}</span>
+                      <a
+                        className={buttonClassName({
+                          variant: 'secondary',
+                          size: 'compact',
+                        })}
+                        href={hashForExecution(executionId, null, run.run_id)}
+                      >
+                        Evidence record
+                      </a>
+                      {assessment?.transcript ? (
+                        <button
+                          type="button"
+                          className={buttonClassName({
+                            variant: 'quiet',
+                            size: 'compact',
+                          })}
+                          onClick={() =>
+                            onTranscript(
+                              assessment,
+                              `${item.scenarioId} · ${run.run_id}`,
+                            )
+                          }
+                        >
+                          Transcript
+                        </button>
+                      ) : null}
+                    </li>
+                  )
+                })}
+              </ul>
+            ) : null}
+            {previous.length > 0 ? (
+              <PreviousAttempts previous={previous} />
+            ) : null}
+            {!item.available && item.objective.status !== 'running' ? (
+              <p className="ep-faint">
+                The expected report for this scenario is unavailable. Runtime
+                and workflow data are intentionally not inferred.
+              </p>
+            ) : null}
+            {item.workflowSteps.length > 0 ? (
+              <WorkflowDurationProfile tests={item.workflowSteps} />
+            ) : null}
+          </div>
         </td>
       </tr>
     </>
@@ -648,37 +796,6 @@ function scoreLabel(value: number | null | undefined) {
 
 function formatDecimal(value: number) {
   return value.toLocaleString('en-US', { maximumFractionDigits: 1 })
-}
-
-function ResultFact({
-  label,
-  value,
-  detail,
-}: {
-  label: string
-  value: string
-  detail: string
-}) {
-  return (
-    // Bands separate by fill and gap now, so the hairline seams and the
-    // negative margins that closed them are gone (audit DS-14).
-    <div
-      className="min-w-0 rounded-[6px] bg-panel p-3 @[768px]/harness:p-4"
-      data-primary-metric={label}
-    >
-      <dt className="font-mono text-label font-semibold uppercase tracking-[0.06em] text-ink-muted">
-        {label}
-      </dt>
-      <dd className="m-0 mt-2 min-w-0">
-        <strong className="block truncate font-mono text-sm font-semibold tabular-nums text-ink">
-          {value}
-        </strong>
-        <span className="mt-1 block text-label leading-4 text-ink-muted">
-          {detail}
-        </span>
-      </dd>
-    </div>
-  )
 }
 
 function WorkflowDurationProfile({ tests }: { tests: SemanticTestReport[] }) {

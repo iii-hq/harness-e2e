@@ -1,5 +1,8 @@
-import { type ReactNode, useEffect } from 'react'
+import { useEffect } from 'react'
 import { useDashboardChrome } from '@/components/DashboardShell'
+import type { HeaderAction } from '@/components/shell/HeaderActions'
+
+export type { HeaderAction }
 
 export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
 
@@ -26,7 +29,9 @@ export function dashboardHeaderActionClassName({
 
 export type DashboardPageActionsProps = {
   active: DashboardSection
-  actions?: ReactNode
+  /** The section's actions for the Console header (list pages only: a
+   *  record's actions sit beside its title). */
+  actions?: HeaderAction[]
   actionsLabel?: string
   /** The open entity, shown as the console title's second line. */
   context?: string
@@ -39,7 +44,7 @@ export function DashboardPageActions({
   context,
 }: DashboardPageActionsProps) {
   const chrome = useDashboardChrome()
-  const hasActions = Boolean(actions)
+  const hasActions = Boolean(actions?.length)
   const setHeader = chrome?.setHeader
   const clearHeader = chrome?.clearHeader
 

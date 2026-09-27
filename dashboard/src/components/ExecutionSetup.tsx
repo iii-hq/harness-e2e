@@ -10,36 +10,14 @@ import {
 } from '@/design-system'
 import '@/design-system/styles.css'
 
-export const QUICK_EXECUTION_INTENT_KEY = 'harness-e2e:quick-execution'
-
-export function requestQuickExecution(scenarioIds: string[] = []) {
-  window.sessionStorage.setItem(
-    QUICK_EXECUTION_INTENT_KEY,
-    JSON.stringify(scenarioIds),
-  )
-}
-
-/** Returns the requested scope (possibly empty) or null when nothing asked. */
-export function consumeQuickExecutionRequest(): string[] | null {
-  const raw = window.sessionStorage.getItem(QUICK_EXECUTION_INTENT_KEY)
-  if (raw === null) return null
-  window.sessionStorage.removeItem(QUICK_EXECUTION_INTENT_KEY)
-  if (raw === 'open') return []
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed)
-      ? parsed.filter((item): item is string => typeof item === 'string')
-      : []
-  } catch {
-    return []
-  }
-}
+/* The suite editor's form: name, runs and retries, and the tests a suite
+   runs. (Running tests has its own dialog: components/run-dialog.) */
 
 export type ExecutionSetupField = 'label' | 'scenarios'
 export type ExecutionSetupErrors = Partial<Record<ExecutionSetupField, string>>
 
 /** Audit PN-05: validation runs on submit and names each pending item. A
- *  suite needs a name and a test. */
+ *  suite needs a name and at least one test. */
 export function validateExecutionSetup({
   label,
   selectedScenarios,
@@ -116,7 +94,7 @@ type ExecutionSetupProps = {
   query: string
   runs: string
   technicalRetries: string
-  /** Open on the "selected" filter: what the suite runs. */
+  /** Open on the "selected" filter (editing: what the suite runs). */
   initialOnlySelected?: boolean
   disabled?: boolean
   catalogLoading?: boolean
@@ -170,8 +148,6 @@ function clampNumber(value: string, min: number, max: number) {
   return String(Math.min(max, Math.max(min, Math.round(number))))
 }
 
-/** What a suite tests: its name, runs, retries and tests (the suite
- *  editor). */
 export function ExecutionSetup({
   idPrefix,
   label,
@@ -227,6 +203,7 @@ export function ExecutionSetup({
     )
   }
 
+  // Part of a suite; tucked under "Advanced" when running tests.
   const sampling = (
     <>
       <Field

@@ -3,19 +3,27 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DashboardShell,
   nextHeader,
-  PageActionsBar,
   sectionForRoute,
 } from '@/components/DashboardShell'
+import {
+  type HeaderAction,
+  HeaderActions,
+  PinnedPrimary,
+} from '@/components/shell/HeaderActions'
 
-// Container width is measured with ResizeObserver at runtime; the tests
-// choose the narrow state directly.
-const layout = vi.hoisted(() => ({ narrow: false }))
+// Pane width is measured with ResizeObserver and the phone viewport with
+// matchMedia at runtime; the tests choose both directly.
+const layout = vi.hoisted(() => ({ narrow: false, phone: false }))
 vi.mock('@/hooks/use-container-narrow', () => ({
   useContainerNarrow: () => [() => {}, layout.narrow],
 }))
+vi.mock('@/hooks/use-viewport-phone', () => ({
+  useViewportPhone: () => layout.phone,
+}))
 
-function renderShell({ narrow = false } = {}) {
+function renderShell({ narrow = false, phone = false } = {}) {
   layout.narrow = narrow
+  layout.phone = phone
   return renderToStaticMarkup(
     <DashboardShell
       route={{ page: 'workspace', view: 'executions' }}
@@ -27,7 +35,12 @@ function renderShell({ narrow = false } = {}) {
   )
 }
 
-describe('section navigation', () => {
+const ACTIONS: HeaderAction[] = [
+  { id: 'import', label: 'Import from GitHub', onSelect: () => {} },
+  { id: 'run', label: 'Run tests', primary: true, onSelect: () => {} },
+]
+
+describe('section navigation in the Console header', () => {
   it('maps every route to a section', () => {
     expect(sectionForRoute({ page: 'suites' })).toBe('suites')
     expect(sectionForRoute({ page: 'stacks' })).toBe('stacks')
@@ -42,100 +55,108 @@ describe('section navigation', () => {
     expect(sectionForRoute({ page: 'test-history', testId: 't' })).toBe('tests')
   })
 
-  it('renders both the wide links and the narrow select', () => {
+  // Layout A: one header row, the place named once, no bar of our own.
+  it('puts the title and the section tabs in the header, with no second bar', () => {
     const html = renderShell()
-    expect(html).toContain('harness-e2e-navigation-wide')
-    expect(html).toContain('harness-e2e-navigation-narrow')
-    expect(html).toContain('aria-label="Harness E2E section"')
-    expect(html).toContain('data-narrow="false"')
-  })
-
-  // Audit S-04 / A11Y-05 / A11Y-06: sections are links with aria-current,
-  // the shell owns the one skip-link and the main landmark.
-  it('navigates with links that mark the current section', () => {
-    const html = renderShell()
-    expect(html).toContain('<nav class="harness-e2e-navigation')
-    expect(html).toContain('aria-label="Harness E2E sections"')
-    expect(html).toContain(
+    const header = html.match(/<header[^>]*>.*?<\/header>/)?.[0] ?? ''
+    expect(header).toContain('Harness E2E')
+    expect(header).toContain('aria-label="Harness E2E sections"')
+    expect(header).toContain(
       'href="#/ext/harness-e2e/executions" aria-current="page"',
     )
-    expect(html).toContain('href="#/ext/harness-e2e/tests"')
+    for (const label of ['Tests', 'Suites', 'Stacks'])
+      expect(header).toContain(`>${label}</a>`)
+    expect(html).not.toContain('harness-e2e-navigation')
+    expect(html).not.toContain('<select')
     expect(html).not.toContain('role="tab"')
+  })
+
+  it('keeps the skip link and the main landmark', () => {
+    const html = renderShell()
     expect(html).toContain('class="skip-link" href="#harness-e2e-main"')
     expect(html).toContain('id="harness-e2e-main" tabindex="-1"')
   })
 
-  // Audit S-01 / RD-01: visibility of the narrow select is decided by
-  // dashboard-shell.css alone, keyed on data-narrow. A Tailwind `hidden`
-  // utility here would win (Tailwind is imported with `important`) and the
-  // navigation would disappear below 720px.
-  it('lets CSS alone decide when the narrow select is visible', () => {
+  it('switches section from a menu naming the current one below 720 px', () => {
     const html = renderShell({ narrow: true })
     expect(html).toContain('data-narrow="true"')
-    const narrowTag = html.match(
-      /<div class="harness-e2e-navigation-narrow[^"]*"/,
-    )?.[0]
-    expect(narrowTag).toBeTruthy()
-    expect(narrowTag).not.toMatch(/\bhidden\b/)
-  })
-
-  it('keeps every section reachable from the narrow select', () => {
-    const html = renderShell({ narrow: true })
-    for (const label of ['Tests', 'Executions', 'Suites', 'Stacks']) {
+    expect(html).toContain('aria-label="Section: Executions"')
+    expect(html).toMatch(
+      /role="menuitemradio"[^>]*aria-checked="true">Executions</,
+    )
+    for (const label of ['Tests', 'Executions', 'Suites', 'Stacks'])
       expect(html).toContain(`>${label}<`)
-    }
+    expect(html).not.toContain('harness-e2e-section-tabs')
   })
 
-  // Redesign canvas: sentence-case tabs, no icons, the current one marked.
-  it('labels the sections in sentence case, without icons', () => {
-    const html = renderShell()
-    const tabs = html.match(
-      /<ul class="harness-e2e-navigation-wide">.*?<\/ul>/,
-    )?.[0]
-    expect(tabs).toBeTruthy()
-    expect(tabs).not.toContain('<svg')
-    expect(tabs).toContain('aria-current="page">Executions</a>')
-    for (const label of ['Tests', 'Suites', 'Stacks'])
-      expect(tabs).toContain(`>${label}</a>`)
-  })
-
-  it('names the section without a slogan in the console header', () => {
-    const html = renderShell()
-    expect(html).not.toContain('evidence, plans and live evaluation control')
+  it('opens the sections as a sheet and leaves the title out on a phone', () => {
+    const html = renderShell({ phone: true })
+    expect(html).not.toContain('Harness E2E<')
+    expect(html).toContain('aria-label="Section: Executions"')
+    expect(html).not.toContain('harness-e2e-section-tabs')
   })
 })
 
-describe('page actions in the section bar', () => {
-  const actions = <button type="button">run tests</button>
-
-  // Audit S-05 / S-07: a section's primary action lives in the page, next to
-  // the section links, not in the console header.
-  it('renders the actions as a labelled group', () => {
+describe('section actions in the header', () => {
+  it('shows every action on a wide pane, the primary last', () => {
     const html = renderToStaticMarkup(
-      <PageActionsBar actions={actions} label="Overview actions" />,
+      <HeaderActions
+        actions={ACTIONS}
+        label="Execution actions"
+        narrow={false}
+        phone={false}
+      />,
     )
-    expect(html).toContain('harness-e2e-page-actions')
-    expect(html).toContain('<section class="harness-e2e-page-actions')
-    expect(html).toContain('aria-label="Overview actions"')
-    expect(html).toContain('>run tests<')
+    expect(html).toContain('aria-label="Execution actions"')
+    expect(html).not.toContain('More actions')
+    expect(html.indexOf('Import from GitHub')).toBeLessThan(
+      html.indexOf('Run tests'),
+    )
+    expect(html).toContain('harness-e2e-header-action-primary')
   })
 
-  it('renders nothing when a page has no actions', () => {
-    expect(renderToStaticMarkup(<PageActionsBar />)).toBe('')
+  it('folds secondary actions into ⋯ with full labels below 720 px', () => {
+    const html = renderToStaticMarkup(
+      <HeaderActions actions={ACTIONS} narrow phone={false} />,
+    )
+    expect(html).toContain('aria-label="More actions"')
+    const menu = html.match(/<div role="menu"[^>]*>.*?<\/div><\/div>/)?.[0]
+    expect(menu).toContain('Import from GitHub')
+    expect(menu).not.toContain('Run tests')
+    expect(html).toContain('>Run tests</button>')
+  })
+
+  it('keeps only ⋯ in the header on a phone and pins the primary below', () => {
+    const header = renderToStaticMarkup(
+      <HeaderActions actions={ACTIONS} narrow phone />,
+    )
+    expect(header).not.toContain('>Run tests</button>')
+    const pinned = renderToStaticMarkup(
+      <PinnedPrimary actions={ACTIONS} phone />,
+    )
+    expect(pinned).toContain('harness-e2e-pinned-primary')
+    expect(pinned).toContain('>Run tests</button>')
+    expect(
+      renderToStaticMarkup(<PinnedPrimary actions={ACTIONS} phone={false} />),
+    ).toBe('')
+  })
+
+  it('renders nothing when a section has no actions', () => {
+    expect(
+      renderToStaticMarkup(
+        <HeaderActions actions={[]} narrow={false} phone={false} />,
+      ),
+    ).toBe('')
   })
 })
 
 describe('header updates', () => {
-  const disabled = (
-    <button type="button" disabled>
-      Share link
-    </button>
-  )
-  const enabled = <button type="button">Share link</button>
+  const disabled: HeaderAction[] = [
+    { id: 'share', label: 'Share link', disabled: true },
+  ]
+  const enabled: HeaderAction[] = [{ id: 'share', label: 'Share link' }]
   const header = { key: 'tests:Comparison actions:true:compare' }
 
-  // TestsPage enables "Share link" once both versions are picked, under the
-  // same key. Until now only the effect cleanup (clearHeader) let it through.
   it('takes new actions under the same key', () => {
     const current = { ...header, actions: disabled }
     const next = { ...header, actions: enabled }

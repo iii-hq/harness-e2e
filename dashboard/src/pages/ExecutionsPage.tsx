@@ -22,7 +22,6 @@ import {
   ArrowRight,
   Check,
   Copy,
-  Download,
   ExternalLink,
   GitCompare,
   Minus,
@@ -44,10 +43,9 @@ import {
 } from 'react'
 import {
   DashboardPageActions,
-  dashboardHeaderActionClassName,
+  type HeaderAction,
 } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
-import { consumeQuickExecutionRequest } from '@/components/ExecutionSetup'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
@@ -97,6 +95,7 @@ import {
   NOT_REPORTED,
   plural,
 } from '@/lib/format'
+import { consumeQuickExecutionRequest } from '@/lib/quick-execution'
 import { RESULT_STATES, type ResultState } from '@/lib/result-status'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
@@ -1364,29 +1363,25 @@ export function ExecutionsPage() {
 
   const importLabel = narrow ? 'Import' : 'Import from GitHub'
   const headerActions = useMemo(
-    () =>
-      bridge ? (
-        <>
-          <button
-            className={dashboardHeaderActionClassName()}
-            type="button"
-            onClick={() => setImportOpen(true)}
-          >
-            <Download size={16} aria-hidden="true" />
-            {importLabel}
-          </button>
-          <button
-            className={dashboardHeaderActionClassName({ primary: true })}
-            type="button"
-            onClick={() => {
-              setRunnerScope([])
-              setRunnerOpen(true)
-            }}
-          >
-            Run tests
-          </button>
-        </>
-      ) : null,
+    (): HeaderAction[] | undefined =>
+      bridge
+        ? [
+            {
+              id: 'import',
+              label: importLabel,
+              onSelect: () => setImportOpen(true),
+            },
+            {
+              id: 'run',
+              label: 'Run tests',
+              primary: true,
+              onSelect: () => {
+                setRunnerScope([])
+                setRunnerOpen(true)
+              },
+            },
+          ]
+        : undefined,
     [bridge, importLabel],
   )
 

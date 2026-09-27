@@ -209,13 +209,15 @@ try {
     .first()
     .click()
   const run = page.getByRole('dialog', { name: 'Run tests' })
-  await run.getByText('Catalog ready', { exact: false }).waitFor()
-  /** Picks a suite in the dialog's Suite field. */
+  await run.getByText('catalog ready').waitFor()
+  const suiteField = run.locator('#run-dialog-suite')
   const pickSuite = async (dialog, name) => {
-    await dialog.locator('#run-tests-suite').click()
-    await dialog.getByRole('option', { name, exact: true }).click()
+    await dialog.locator('#run-dialog-suite').click()
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    await dialog
+      .getByRole('option', { name: new RegExp(`^${escaped}(\\s|$)`) })
+      .click()
   }
-  const repositorySuite = `Repository suite · ${pr.repetitions} run${pr.repetitions === 1 ? '' : 's'} per test`
   await pickSuite(run, 'PR')
   for (const scenario of pr.scenarios)
     assert.ok(
@@ -223,21 +225,21 @@ try {
         .getByRole('checkbox', { name: scenario, exact: true })
         .isChecked(),
     )
-  await run.getByText(repositorySuite, { exact: false }).waitFor()
+  await run
+    .getByText(`${pr.scenarios.length} tests ·`, { exact: false })
+    .first()
+    .waitFor()
   await run
     .getByRole('checkbox', { name: pr.scenarios[0], exact: true })
     .click()
   await run.getByText('Changed from PR. Runs as a custom selection.').waitFor()
-  await pickSuite(run, 'Custom')
-  await pickSuite(run, 'PR')
-  await run.getByText(repositorySuite, { exact: false }).waitFor()
-  await run.locator('#run-tests-model').click()
+  await run.getByRole('button', { name: 'Reset', exact: true }).click()
+  assert.equal(await suiteField.getAttribute('data-value'), 'pr')
   await run
-    .getByRole('combobox', { name: 'Find a model' })
-    .fill('deepseek-v4-flash')
-  await run
-    .getByRole('option', { name: 'deepseek / deepseek-v4-flash', exact: true })
-    .click()
+    .getByText(`${pr.scenarios.length} tests ·`, { exact: false })
+    .first()
+    .waitFor()
+  await run.getByLabel('Model').selectOption('deepseek::deepseek-v4-flash')
   await run
     .getByRole('button', {
       name: `Run ${pr.scenarios.length} tests`,
@@ -260,7 +262,7 @@ try {
   })
 
   // The execution names its suite in the header, with its digest.
-  const band = page.locator('[data-identity-band]')
+  const band = page.locator('[data-execution-facts]')
   await band
     .getByText(`PR · ${pr.sha256.replace(/^sha256:/, '').slice(0, 12)}`, {
       exact: true,
@@ -268,10 +270,13 @@ try {
     .waitFor()
 
   // Run again keeps the suite.
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
-  await again.getByText('Catalog ready', { exact: false }).waitFor()
-  assert.equal(await again.locator('#run-tests-suite').textContent(), 'PR')
+  await again.getByText('catalog ready').waitFor()
+  assert.equal(
+    await again.locator('#run-dialog-suite').getAttribute('data-value'),
+    'pr',
+  )
   await again
     .getByRole('button', {
       name: `Run ${pr.scenarios.length} tests`,
@@ -291,11 +296,8 @@ try {
     .first()
     .click()
   const fromLocal = page.getByRole('dialog', { name: 'Run tests' })
-  await fromLocal.getByText('Catalog ready', { exact: false }).waitFor()
+  await fromLocal.getByText('catalog ready').waitFor()
   await pickSuite(fromLocal, 'Regression, fast')
-  await fromLocal
-    .getByText('Saved in this Console · 2 runs per test', { exact: false })
-    .waitFor()
   await fromLocal
     .getByRole('button', { name: `Run ${fast} tests`, exact: true })
     .click()
@@ -314,14 +316,15 @@ try {
   await edit.getByRole('button', { name: 'save suite', exact: true }).click()
   await edit.waitFor({ state: 'hidden' })
   await page.goto(`${server.url}${localExecution}`)
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
-  await again.getByText('Catalog ready', { exact: false }).waitFor()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
+  await again.getByText('catalog ready').waitFor()
   assert.equal(
-    await again.locator('#run-tests-suite').textContent(),
-    'Regression, fast · as recorded',
+    await again.locator('#run-dialog-suite').getAttribute('data-value'),
+    'recorded:suite-1',
   )
   await again
-    .getByText('As this execution ran · 2 runs per test', { exact: false })
+    .locator('#run-dialog-suite')
+    .getByText('Regression, fast · as recorded')
     .waitFor()
   await again
     .getByRole('button', { name: `Run ${fast} tests`, exact: true })

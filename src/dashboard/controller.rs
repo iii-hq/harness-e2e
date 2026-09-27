@@ -367,6 +367,16 @@ impl Controller {
             .await
     }
 
+    /// Whether `gh` on this worker's machine can dispatch to its repository.
+    pub(super) async fn github_status(&self) -> Value {
+        self.plan_store.github_status(&self.github_repository).await
+    }
+
+    /// Groups a Docker execution runs at once (worker configuration).
+    pub(super) fn docker_parallel_groups(&self) -> usize {
+        self.plan_store.docker_parallel_groups()
+    }
+
     pub(super) async fn github_run_contracts(
         &self,
         request: GithubRunContractsRequest,
@@ -443,7 +453,11 @@ impl Controller {
         parameters: ExecutionParameters,
         label: &str,
     ) -> Result<Value> {
-        let execution = self.plan_store.start_execution(parameters, label).await?;
+        let execution = self
+            .plan_store
+            .start_execution_in(parameters, label, Some(&self.github_repository))
+            .await?;
+        self.invalidate_summaries().await;
         self.emit_change("started", &execution.id).await;
         Ok(json!({"execution_id": execution.id}))
     }

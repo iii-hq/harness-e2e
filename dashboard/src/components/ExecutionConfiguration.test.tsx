@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { ExecutionConfiguration } from '@/components/ExecutionConfiguration'
+import { ExecutionFacts } from '@/components/ExecutionConfiguration'
 import type { PlanExecution } from '@/lib/plan-execution'
 
 const execution: PlanExecution = {
@@ -63,42 +63,38 @@ const execution: PlanExecution = {
   slots: [],
   measurements: null,
 }
-
-describe('execution configuration', () => {
-  it('shows the suite, parameters, the linked origin and the stack', () => {
-    const html = renderToStaticMarkup(
-      <ExecutionConfiguration execution={execution} />,
-    )
+describe('execution facts', () => {
+  it('shows where it ran, the suite, the model, the profile and the stack button', () => {
+    const html = renderToStaticMarkup(<ExecutionFacts execution={execution} />)
     expect(html).toContain(
       'href="https://github.com/iii-hq/harness-e2e/actions/runs/35823421664"',
     )
     const text = html.replace(/<[^>]*>/g, '')
-    expect(text).toContain('GitHub #35823421664 · attempt 2')
+    expect(text).toContain('WhereGitHub #35823421664 · attempt 2')
     // The suite by name and digest, and the stack its contract names.
-    expect(text).toContain('suiteSoftware engineering · 8c0cde58a134')
-    expect(text).toContain('stackdefault')
+    expect(text).toContain('SuiteSoftware engineering · 8c0cde58a134')
+    expect(text).toContain('Stackdefault')
+    expect(text).toContain('Release Control366030b3')
     expect(html).toContain('deepseek/deepseek-flash')
     expect(html).toContain('tech-lead')
-    expect(html).toContain('kanban_c1_foundation, kanban_c2_persistence')
-    expect(html).toContain('2 workers · 1 differ between groups')
-    expect(html.match(/data-label="worker"/g)).toHaveLength(3)
-    expect(html).toContain('case-b')
+    expect(text).toContain('Stack · 2 workers · 1 differ between groups')
+    // The stack table stays closed until asked for.
+    expect(html).not.toContain('data-execution-stack')
   })
 
-  it('reads a local execution as local', () => {
+  it('reads a local execution as local, without a stack button', () => {
     const html = renderToStaticMarkup(
-      <ExecutionConfiguration
+      <ExecutionFacts
         execution={{ ...execution, source: { kind: 'local' }, stack: [] }}
       />,
     )
     expect(html).toContain('>local<')
-    expect(html).not.toContain('data-execution-stack')
-    expect(html).not.toContain('data-execution-warnings')
+    expect(html).not.toContain('data-stack-toggle')
   })
 
-  it('shows the checkout a local worker ran from and what was not recorded', () => {
+  it('adds the facts the page knows, without repeating a label', () => {
     const html = renderToStaticMarkup(
-      <ExecutionConfiguration
+      <ExecutionFacts
         execution={{
           ...execution,
           source: { kind: 'local' },
@@ -112,12 +108,16 @@ describe('execution configuration', () => {
               dirty: true,
             },
           ],
-          warnings: ['harness-e2e: /missing is not a readable Git checkout'],
         }}
+        extra={[
+          ['Suite', 'duplicate'],
+          ['Started', 'Sep 20, 10:00'],
+        ]}
       />,
     )
-    expect(html).toContain('path · 0123456789ab · dirty')
-    expect(html).toContain('data-execution-warnings')
-    expect(html).toContain('/missing is not a readable Git checkout')
+    const text = html.replace(/<[^>]*>/g, '')
+    expect(text).toContain('StartedSep 20, 10:00')
+    expect(text).not.toContain('duplicate')
+    expect(text).toContain('Stack · 1 worker')
   })
 })
