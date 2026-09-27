@@ -123,6 +123,26 @@ describe('execution comparison page', () => {
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
   })
 
+  it('says each side’s result as the executions list does', () => {
+    const a = imported()
+    const b = local()
+    a.status = 'failed'
+    const html = view(a, b)
+    const card = (which: string) =>
+      html.slice(
+        html.indexOf(`data-comparison-side="${which}"`),
+        html.indexOf(
+          '</article>',
+          html.indexOf(`data-comparison-side="${which}"`),
+        ),
+      )
+    expect(card('a')).toContain('data-state="failed"')
+    expect(card('a')).toContain('<span>Failed</span>')
+    expect(html).not.toContain('Finished')
+    b.status = 'running'
+    expect(view(imported(), b)).toContain('<span>Running</span>')
+  })
+
   it('writes a difference as B minus A, never a judgement', () => {
     const { scenarios } = compareExecutions(imported(), local())
     const [persistent] = byScoreChange(scenarios)

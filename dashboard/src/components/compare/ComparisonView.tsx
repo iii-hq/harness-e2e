@@ -50,6 +50,10 @@ import {
   type StackComparison,
   stackChanges,
 } from '@/lib/execution-comparison'
+import {
+  buildExecutionPresentation,
+  executionResult,
+} from '@/lib/execution-view'
 import { formatDuration, formatTokens, plural } from '@/lib/format'
 import { runResultState } from '@/lib/result-status'
 import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
@@ -177,8 +181,8 @@ function SideCard({
   side: ComparisonSide
   detail: DashboardExecutionDetail
 }) {
-  const status = String(detail.status ?? '')
-  const live = LIVE.includes(status)
+  // The execution's result as the list and its page say it.
+  const result = executionResult(buildExecutionPresentation(detail))
   return (
     <article
       className="cmp-side"
@@ -192,16 +196,8 @@ function SideCard({
         <span className="cmp-faint">{ROLE[which]}</span>
         <StatusLabel
           className="cmp-side-state"
-          state={
-            live ? 'running' : status === 'cancelled' ? 'cancelled' : 'passed'
-          }
-          label={
-            live
-              ? status.charAt(0).toUpperCase() + status.slice(1)
-              : status === 'cancelled'
-                ? 'Cancelled'
-                : 'Finished'
-          }
+          state={result.state}
+          label={result.label}
         />
       </div>
       <p className="cmp-side-title">{side.title}</p>
