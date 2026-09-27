@@ -111,6 +111,52 @@ export function githubRunAction(run: GithubRun, starting = false): RunAction {
   return run.execution_id ? 'imported' : 'import'
 }
 
+export type ImportStart = {
+  run_id: number
+  /** The execution the worker began, answered at once as `importing`. */
+  execution?: { execution_id: string; state: string }
+  /** Why the worker refused to begin it. */
+  error?: string
+}
+
+/** Asks the worker to import each run at once; one refused does not stop
+ *  the others. */
+export function startImports(
+  importRun: (
+    runId: number,
+  ) => Promise<{ execution_id: string; state: string }>,
+  ids: number[],
+): Promise<ImportStart[]> {
+  return Promise.all(
+    ids.map((run_id) =>
+      importRun(run_id).then(
+        (execution) => ({ run_id, execution }),
+        (cause) => ({ run_id, error: errorText(cause) }),
+      ),
+    ),
+  )
+}
+
+/** The rows with the executions their imports began. */
+export function withImports(
+  runs: GithubRun[],
+  starts: ImportStart[],
+): GithubRun[] {
+  return runs.map((run) => {
+    const execution = starts.find(
+      (start) => start.run_id === run.run_id,
+    )?.execution
+    return execution
+      ? {
+          ...run,
+          execution_id: execution.execution_id,
+          execution_state: execution.state,
+          execution_error: null,
+        }
+      : run
+  })
+}
+
 /** The rows an execution holds, at the state the worker says it ended in. */
 export function withExecutionState(
   runs: GithubRun[],
@@ -440,7 +486,7 @@ export function GithubRunRow({
         {action === 'failed' ? (
           <span className="gi-state-label">
             <AlertCircle size={16} aria-hidden="true" className="gi-alert" />
-            Failed
+            Import failed
           </span>
         ) : null}
         {action === 'importing' ? (
@@ -685,32 +731,25 @@ export function GithubImportDialog({
         Object.entries(current).filter(([runId]) => !ids.includes(+runId)),
       ),
     )
-    const accepted = await Promise.all(
-      ids.map(async (runId) => {
-        try {
-          const execution = await bridge.importGithubRun(runId)
-          setRuns((current) =>
-            current.map((run) =>
-              run.run_id === runId
-                ? {
-                    ...run,
-                    execution_id: execution.execution_id,
-                    execution_state: execution.state,
-                  }
-                : run,
-            ),
-          )
-          return true
-        } catch (cause) {
-          setFailures((current) => ({ ...current, [runId]: errorText(cause) }))
-          setStarted((current) => current.filter((entry) => entry !== runId))
-          return false
-        } finally {
-          setStarting((current) => current.filter((entry) => entry !== runId))
-        }
-      }),
+    const starts = await startImports(
+      (runId) => bridge.importGithubRun(runId),
+      ids,
     )
-    if (accepted.some(Boolean)) onImported()
+    const refused = starts.filter((start) => start.error !== undefined)
+    setRuns((current) => withImports(current, starts))
+    setFailures((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        refused.map((start) => [start.run_id, start.error]),
+      ),
+    }))
+    setStarted((current) =>
+      current.filter(
+        (runId) => !refused.some((start) => start.run_id === runId),
+      ),
+    )
+    setStarting((current) => current.filter((runId) => !ids.includes(runId)))
+    if (refused.length < starts.length) onImported()
   }
 
   const ready = phase === 'ready'

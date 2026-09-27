@@ -12,8 +12,10 @@ import {
   runMatches,
   shortSha,
   sortGithubRuns,
+  startImports,
   withContracts,
   withExecutionState,
+  withImports,
 } from '@/components/GithubImportDialog'
 import type { GithubRun } from '@/lib/dashboard-data-source'
 
@@ -154,6 +156,39 @@ describe('GitHub import model', () => {
     })
     expect(runMatches(failed, { ...all, show: 'imported' })).toBe(false)
     expect(runMatches(failed, { ...all, show: 'new' })).toBe(true)
+  })
+
+  it('starts every import even when the worker refuses one', async () => {
+    const asked: number[] = []
+    const starts = await startImports(
+      async (runId) => {
+        asked.push(runId)
+        if (runId === 2) throw new Error('gh: HTTP 404: Not Found')
+        return { execution_id: `plan-gh-${runId}`, state: 'importing' }
+      },
+      [1, 2, 3],
+    )
+    expect(asked).toEqual([1, 2, 3])
+    expect(starts).toEqual([
+      {
+        run_id: 1,
+        execution: { execution_id: 'plan-gh-1', state: 'importing' },
+      },
+      { run_id: 2, error: 'gh: HTTP 404: Not Found' },
+      {
+        run_id: 3,
+        execution: { execution_id: 'plan-gh-3', state: 'importing' },
+      },
+    ])
+    const rows = withImports(
+      [run({ run_id: 1 }), run({ run_id: 2 }), run({ run_id: 3 })],
+      starts,
+    )
+    expect(rows.map((entry) => githubRunAction(entry))).toEqual([
+      'importing',
+      'import',
+      'importing',
+    ])
   })
 
   it('follows an import the worker ended, to Imported or to Failed', () => {
@@ -331,7 +366,7 @@ describe('GitHub run row', () => {
         execution_error: 'gh: HTTP 410: artifact expired',
       }),
     )
-    expect(text(failed)).toContain('Failed')
+    expect(text(failed)).toContain('Import failed')
     expect(text(failed)).not.toContain('Imported')
     expect(text(failed)).toContain(
       'The import failed: gh: HTTP 410: artifact expired',

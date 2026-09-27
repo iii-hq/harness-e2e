@@ -447,6 +447,12 @@ const olderGithubRun = {
 }
 const githubImported = []
 let githubDown = false
+// How the worker ended each GitHub import, read on its finished change.
+const githubEnded = {}
+// Runs a first page leaves out (they went away on GitHub).
+let githubGone = []
+// A first page held back and answered after a newer one.
+let staleGithubList = null
 const started = []
 const deleted = []
 const cancelled = []
@@ -490,6 +496,13 @@ const trigger = async (name, request = {}) => {
       : executions
     return { executions: listed, total: listed.length }
   }
+  if (id === 'execution-get' && githubEnded[request.execution_id])
+    return {
+      detail: {
+        id: request.execution_id,
+        plan_execution: githubEnded[request.execution_id],
+      },
+    }
   if (id === 'execution-get')
     return {
       detail:
@@ -549,11 +562,19 @@ const trigger = async (name, request = {}) => {
     }
   if (id === 'github-runs-list') {
     if (githubDown) throw new Error('gh: HTTP 401: Bad credentials')
+    if (staleGithubList) {
+      const held = staleGithubList
+      staleGithubList = null
+      await held.released
+      return held.answer
+    }
     const first = (request.page ?? 1) === 1
     return {
       repository: 'iii-hq/harness-e2e',
       page: request.page ?? 1,
-      runs: first ? githubRuns : [olderGithubRun],
+      runs: first
+        ? githubRuns.filter((run) => !githubGone.includes(run.run_id))
+        : [olderGithubRun],
       next_page: first ? 2 : null,
       total_count: 3,
     }
@@ -695,6 +716,79 @@ try {
       .getAttribute('href'),
     '#/ext/harness-e2e/execution/plan-gh-101',
   )
+  // The worker ends them: one imported, one failed with why. The failed one
+  // does not read as imported and can be ticked to try again.
+  githubEnded['plan-gh-101'] = { state: 'completed', error: null }
+  githubEnded['plan-gh-102'] = {
+    state: 'failed',
+    error: 'gh: HTTP 410: artifact expired',
+  }
+  await page.evaluate(() => {
+    for (const execution_id of ['plan-gh-101', 'plan-gh-102'])
+      for (const handler of window.__changeHandlers ?? [])
+        handler({ kind: 'finished', execution_id })
+  })
+  const importedNow = importDialog.locator('[data-github-run="101"]')
+  const failedNow = importDialog.locator('[data-github-run="102"]')
+  await importedNow.getByText('Imported', { exact: true }).waitFor()
+  await failedNow.getByText('Import failed', { exact: true }).waitFor()
+  await failedNow
+    .getByText('The import failed: gh: HTTP 410: artifact expired')
+    .waitFor()
+  assert.equal(
+    await failedNow.getByText('Imported', { exact: true }).count(),
+    0,
+  )
+  await settled(
+    () => importDialog.getByText('Importing 2 runs in the background').count(),
+    0,
+  )
+  const retryBox = importDialog.getByRole('checkbox', {
+    name: 'Import run 102 again',
+  })
+  assert.ok(await retryBox.isEnabled())
+  // A refresh keeps only the ticked runs it still lists.
+  await retryBox.check()
+  await importDialog.getByText('1 run selected', { exact: true }).waitFor()
+  githubGone = [102]
+  await importDialog.getByRole('button', { name: 'Refresh runs' }).click()
+  await importDialog.getByText('No runs selected', { exact: true }).waitFor()
+  assert.equal(await importDialog.locator('[data-github-run="102"]').count(), 0)
+  githubGone = []
+  await page.keyboard.press('Escape')
+
+  // An answer of an older load is dropped: the dialog opened, closed and
+  // opened again shows the newer list, whatever the first answers late.
+  let releaseStale
+  staleGithubList = {
+    released: new Promise((resolve) => {
+      releaseStale = resolve
+    }),
+    answer: {
+      repository: 'iii-hq/harness-e2e',
+      page: 1,
+      runs: [{ ...githubRuns[0], run_id: 999, title: 'E2E · stale' }],
+      next_page: null,
+      total_count: 1,
+    },
+  }
+  const openImport = () =>
+    empty
+      .getByRole('button', { name: 'import from GitHub', exact: true })
+      .click()
+  await openImport()
+  await importDialog
+    .getByText('Asking GitHub for completed runs…', { exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await openImport()
+  await importDialog.locator('[data-github-run="102"]').waitFor()
+  releaseStale()
+  await page.waitForTimeout(300)
+  assert.equal(await importDialog.locator('[data-github-run="999"]').count(), 0)
+  await importDialog
+    .getByText('2 of 3 runs loaded · iii-hq/harness-e2e', { exact: true })
+    .waitFor()
   await page.keyboard.press('Escape')
 
   // One execution: ticked alone, there is nothing to compare it with.
@@ -1050,7 +1144,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, GitHub import that says to run gh auth login and retries, rows with branch, short commit, attempt and Release Control, contracts read per row, an older page with a run imported before, several runs imported at once with per-row progress, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running with the ended group’s results in, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, GitHub import that says to run gh auth login and retries, rows with branch, short commit, attempt and Release Control, contracts read per row, an older page with a run imported before, several runs imported at once with per-row progress, an import the worker ended as Imported or Failed, a refresh that keeps only listed runs ticked, an older load’s late answer dropped, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running with the ended group’s results in, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()
