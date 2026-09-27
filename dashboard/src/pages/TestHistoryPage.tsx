@@ -22,6 +22,7 @@ import {
   PageHeader,
 } from '@/design-system'
 import {
+  hashForRunComparison,
   hashForTestHistory,
   hashForTests,
   hashForVersionComparison,
@@ -371,20 +372,30 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 Link copied
               </span>
             ) : null}
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={selected.length !== 2}
-              title={
-                selected.length === 2
-                  ? undefined
-                  : 'Tick two runs in the list to compare them'
-              }
-              data-compare-runs
-            >
-              <GitCompare size={16} aria-hidden="true" />
-              {selected.length === 2 ? 'Compare A and B' : 'Compare two runs'}
-            </button>
+            {selected.length === 2 ? (
+              <a
+                className={buttonClassName({
+                  variant: 'secondary',
+                  className: 'no-underline',
+                })}
+                href={hashForRunComparison(testId, selected[0], selected[1])}
+                data-compare-runs
+              >
+                <GitCompare size={16} aria-hidden="true" />
+                Compare A and B
+              </a>
+            ) : (
+              <button
+                type="button"
+                className={buttonClassName({ variant: 'secondary' })}
+                disabled
+                title="Tick two runs in the list to compare them"
+                data-compare-runs
+              >
+                <GitCompare size={16} aria-hidden="true" />
+                Compare two runs
+              </button>
+            )}
             <a
               className={buttonClassName({
                 variant: 'primary',

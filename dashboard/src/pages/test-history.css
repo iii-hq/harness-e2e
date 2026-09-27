@@ -963,3 +963,54 @@
 .th-criterion .th-mono {
   font-weight: 500;
 }
+
+/* A × B of two runs */
+.rc-same {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  padding: calc(var(--spacing) * 0.75) calc(var(--spacing) * 2);
+  border-radius: var(--radius-sm);
+  background: var(--color-ok-muted);
+  font-size: var(--text-xs);
+}
+
+.rc-calls {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.rc-calls li {
+  display: grid;
+  grid-template-columns: calc(var(--spacing) * 27.5) minmax(0, 1fr) calc(
+      var(--spacing) *
+      18
+    );
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5);
+  min-height: calc(var(--spacing) * 6.5);
+  font-size: var(--text-xs);
+}
+
+.rc-calls-figures {
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.rc-subs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: calc(var(--spacing) * 4);
+}
+
+.harness-e2e-shell[data-narrow="true"] .rc-subs,
+.harness-e2e-shell[data-narrow="true"] .rc-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
