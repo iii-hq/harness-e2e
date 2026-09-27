@@ -273,6 +273,71 @@ pub(super) struct TestCatalogRow {
     pub available_versions: Vec<VersionDescriptor>,
     pub selected_version: Option<String>,
     pub result: Option<TestVersionResult>,
+    /// The most recent retained run, on any definition.
+    pub last_run: Option<LastRun>,
+    /// The scores of the last runs, oldest first; null where a run has none.
+    pub recent_scores: Vec<Option<f64>>,
+    /// Runs retained on the current definition.
+    pub runs_current: usize,
+    /// Runs retained on every definition.
+    pub runs_total: usize,
+}
+
+/// How many scores `recent_scores` carries.
+const RECENT_SCORES: usize = 8;
+
+#[derive(Debug, Clone, Serialize, JsonSchema)]
+pub(super) struct LastRun {
+    /// When its execution completed.
+    pub at: String,
+    pub score: Option<f64>,
+    pub status: RunStatus,
+    pub completion: CompletionState,
+    /// `current` when it ran the current definition, else `previous`.
+    pub definition: String,
+}
+
+/// The catalog's run facts for one test, from the same observations the
+/// test history reads: every run in the order it completed.
+fn run_facts(entry: &TestEntry) -> (Option<LastRun>, Vec<Option<f64>>, usize, usize) {
+    let mut observations = entry
+        .versions
+        .iter()
+        .flat_map(|(version, value)| value.observations.iter().map(move |o| (version, o)))
+        .collect::<Vec<_>>();
+    observations.sort_by(|(_, left), (_, right)| {
+        left.completed_at
+            .cmp(&right.completed_at)
+            .then_with(|| left.execution_id.cmp(&right.execution_id))
+    });
+    let runs = observations
+        .iter()
+        .flat_map(|(version, observation)| {
+            observation
+                .runs
+                .iter()
+                .map(move |run| (*version, *observation, run))
+        })
+        .collect::<Vec<_>>();
+    let current = |version: &str| entry.current_version.as_deref() == Some(version);
+    let last_run = runs.last().map(|(version, observation, run)| LastRun {
+        at: observation.completed_at.clone(),
+        score: run.score,
+        status: run.status,
+        completion: run.completion,
+        definition: if current(version) {
+            "current"
+        } else {
+            "previous"
+        }
+        .into(),
+    });
+    let recent_scores = runs[runs.len().saturating_sub(RECENT_SCORES)..]
+        .iter()
+        .map(|(_, _, run)| run.score)
+        .collect();
+    let runs_current = runs.iter().filter(|(version, ..)| current(version)).count();
+    (last_run, recent_scores, runs_current, runs.len())
 }
 
 /// The scenario definition as a reader needs it: what the subject is asked to
@@ -794,6 +859,7 @@ impl DashboardReadModel {
         } else {
             "active"
         };
+        let (last_run, recent_scores, runs_current, runs_total) = run_facts(entry);
         Ok(TestCatalogRow {
             test_id: test_id.into(),
             lifecycle: lifecycle.into(),
@@ -808,6 +874,10 @@ impl DashboardReadModel {
             available_versions,
             selected_version,
             result,
+            last_run,
+            recent_scores,
+            runs_current,
+            runs_total,
         })
     }
 
@@ -1849,6 +1919,115 @@ mod tests {
                 .execution_count,
             1
         );
+    }
+
+    #[test]
+    fn the_catalog_carries_each_tests_last_run_recent_scores_and_run_counts() {
+        let projection = |id: &str, completed_at: &str, definition: &str, scores: &[Option<u8>]| {
+            let mut metadata = super::super::tests::metadata();
+            metadata.id = id.into();
+            metadata.completed_at = completed_at.into();
+            let mut report = super::super::tests::report();
+            let template = report.scenarios[0].runs[0].clone();
+            let runs = scores
+                .iter()
+                .enumerate()
+                .map(|(index, score)| {
+                    let mut run = template.clone();
+                    run.run_id = format!("run-{index}");
+                    run.score = *score;
+                    if score.is_none() {
+                        run.status = RunStatus::InfrastructureError;
+                    }
+                    run
+                })
+                .collect();
+            let policy = report.scenarios[0].execution_policy.clone();
+            let mut scenario = E2eScenarioReport::aggregate("direct_answer", policy, runs);
+            scenario.behavior_sha256 = Some(definition.into());
+            report.scenarios = vec![scenario];
+            report.assessment_contract =
+                crate::assessment::AssessmentContract::from_assessment_evidence(&report);
+            ExecutionProjection::from_stored(&StoredRun {
+                metadata,
+                report: Some(report),
+                live_progress: None,
+                live_progress_error: None,
+            })
+            .unwrap()
+        };
+        // Listed newest first, as the store does; the facts follow completion.
+        let mut model = DashboardReadModel::from_projections(vec![
+            projection(
+                "local-new",
+                "2026-08-09T10:00:00Z",
+                "new",
+                &[Some(40), None],
+            ),
+            projection("local-old", "2026-08-08T10:00:00Z", "old", &[Some(90)]),
+        ])
+        .unwrap();
+        let row = |model: &DashboardReadModel| {
+            model
+                .tests_list(TestsListRequest::default())
+                .unwrap()
+                .rows
+                .into_iter()
+                .find(|row| row.test_id == "direct_answer")
+                .unwrap()
+        };
+        model
+            .tests
+            .get_mut("direct_answer")
+            .unwrap()
+            .current_version = Some("new".into());
+        let current = row(&model);
+        assert_eq!(current.recent_scores, vec![Some(90.0), Some(40.0), None]);
+        assert_eq!((current.runs_current, current.runs_total), (2, 3));
+        let last = current.last_run.unwrap();
+        assert_eq!(last.at, "2026-08-09T10:00:00Z");
+        assert_eq!(last.score, None);
+        assert_eq!(last.status, RunStatus::InfrastructureError);
+        assert_eq!(last.definition, "current");
+
+        // The definition moved on: the runs stay, none of them current.
+        model
+            .tests
+            .get_mut("direct_answer")
+            .unwrap()
+            .current_version = Some("newer".into());
+        let changed = row(&model);
+        assert_eq!((changed.runs_current, changed.runs_total), (0, 3));
+        assert_eq!(changed.last_run.unwrap().definition, "previous");
+
+        // Only the last eight scores travel.
+        let many = DashboardReadModel::from_projections(vec![projection(
+            "local-many",
+            "2026-08-10T10:00:00Z",
+            "new",
+            &(1..=10).map(|score| Some(score * 10)).collect::<Vec<_>>(),
+        )])
+        .unwrap();
+        let many = row(&many);
+        assert_eq!(many.runs_total, 10);
+        assert_eq!(
+            many.recent_scores,
+            (3..=10)
+                .map(|score| Some(f64::from(score * 10)))
+                .collect::<Vec<_>>()
+        );
+        let never = model
+            .tests_list(TestsListRequest {
+                query: Some(ScenarioId::MinimalPath.as_str().into()),
+                ..TestsListRequest::default()
+            })
+            .unwrap()
+            .rows
+            .into_iter()
+            .next()
+            .unwrap();
+        assert!(never.last_run.is_none() && never.recent_scores.is_empty());
+        assert_eq!((never.runs_current, never.runs_total), (0, 0));
     }
 
     #[test]
