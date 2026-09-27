@@ -156,61 +156,6 @@ export function liveNotes(execution: PlanExecution): Record<string, string> {
   )
 }
 
-/** "Running · on this harness · for 3m 40s" and the provisional count. */
-export function whereLine(execution: PlanExecution) {
-  const source = execution.source
-  const live = running(execution.state)
-  const place =
-    source.kind === 'github'
-      ? `on GitHub · dispatched ${formatWhen(execution.started_at)}`
-      : source.kind === 'docker'
-        ? 'in Docker'
-        : 'on this harness'
-  const state =
-    execution.state === 'cancelling'
-      ? 'Cancelling'
-      : live
-        ? 'Running'
-        : execution.state === 'importing'
-          ? 'Importing'
-          : null
-  const since =
-    live && source.kind === 'local'
-      ? ` · for ${elapsed(execution.started_at)}`
-      : ''
-  return state ? `${state} · ${place}${since}` : place
-}
-
-export function reportedLine(execution: PlanExecution) {
-  if (!running(execution.state)) return null
-  const source = execution.source
-  if (source.kind === 'github') {
-    // GitHub reports per group job; the tests arrive with the import.
-    const jobs = (source.follow?.jobs ?? []).filter((job) =>
-      /case-/.test(job.name),
-    )
-    if (jobs.length === 0) return 'Results arrive with the import'
-    const done = jobs.filter((job) => job.status === 'completed').length
-    return `${done} of ${plural(jobs.length, 'group job', 'group jobs')} finished · results at import`
-  }
-  const rows = testRows(execution)
-  const reported = rows.filter(
-    (row) => row.state === 'reported' || row.state === 'not-run',
-  ).length
-  return `${reported} of ${plural(rows.length, 'test', 'tests')} reported · results are provisional`
-}
-
-function formatWhen(value: string | null | undefined) {
-  const time = value ? Date.parse(value) : Number.NaN
-  if (!Number.isFinite(time)) return '—'
-  return new Date(time).toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    hour: 'numeric',
-    minute: '2-digit',
-  })
-}
-
 export const DOCKER_STEPS = [
   ['prepare', 'Prepare', 'Suite materialized, stack assembled and locked'],
   ['groups', 'Groups', ''],
@@ -264,8 +209,113 @@ export function dockerSteps(execution: PlanExecution) {
       label,
       state,
       detail: phase === 'groups' ? groupsLine : detail,
+      time: '',
     }
   })
+}
+
+const isGroupJob = (job: GithubJob) => /case-/.test(job.name)
+const isPrepareJob = (job: GithubJob) => /prepare|materialize/i.test(job.name)
+const isAggregateJob = (job: GithubJob) =>
+  /aggregate|finalize/i.test(job.name) && !isGroupJob(job)
+
+/** A GitHub run's four steps as it reports its jobs: the prepare job, the
+ *  group jobs, the aggregate job and this Console's import. */
+export function githubSteps(execution: PlanExecution) {
+  const source = execution.source
+  if (source.kind !== 'github') return []
+  const jobs = source.follow?.jobs ?? []
+  const cancelled =
+    execution.state === 'cancelling' || execution.state === 'cancelled'
+  const importing = execution.state === 'importing'
+  const jobState = (job: GithubJob | undefined, after: boolean): StepState =>
+    job?.status === 'completed'
+      ? 'done'
+      : job?.status === 'in_progress' || (after && !job)
+        ? 'current'
+        : 'next'
+  const prepare = jobs.find(isPrepareJob)
+  const groups = jobs.filter(isGroupJob)
+  const aggregate = jobs.find(isAggregateJob)
+  const finished = groups.filter((job) => job.status === 'completed').length
+  const live = groups.filter((job) => job.status === 'in_progress').length
+  const groupsDone = groups.length > 0 && finished === groups.length
+  const span = (list: GithubJob[]) => {
+    const starts = list.flatMap((job) =>
+      job.started_at ? [job.started_at] : [],
+    )
+    if (starts.length === 0) return ''
+    const first = starts.sort()[0]
+    const ends = list.flatMap((job) =>
+      job.completed_at ? [job.completed_at] : [],
+    )
+    return elapsed(
+      first,
+      list.every((job) => job.completed_at) ? ends.sort().at(-1) : null,
+    )
+  }
+  const prepareState: StepState =
+    prepare?.status === 'completed' || groups.length > 0
+      ? 'done'
+      : jobState(prepare, !importing)
+  let groupsState: StepState = groupsDone
+    ? 'done'
+    : prepareState === 'done'
+      ? 'current'
+      : 'next'
+  let aggregateState: StepState = importing
+    ? 'done'
+    : groupsDone
+      ? jobState(aggregate, true)
+      : 'next'
+  if (cancelled && groupsState === 'current') groupsState = 'stopped'
+  if (cancelled && aggregateState === 'next') aggregateState = 'current'
+  return [
+    {
+      phase: 'prepare',
+      label: 'Prepare job',
+      state: prepareState,
+      detail: 'Suite materialized, stack assembled and locked',
+      time: prepare ? jobDuration(prepare) : '',
+    },
+    {
+      phase: 'groups',
+      label: 'Group jobs',
+      state: groupsState,
+      detail:
+        groups.length === 0
+          ? 'Waiting for GitHub to start the jobs'
+          : cancelled
+            ? `${finished} of ${groups.length} finished before the cancel · ${groups.length - finished} stopped`
+            : [
+                `${finished} of ${groups.length} finished`,
+                live ? `${live} running` : null,
+              ]
+                .filter(Boolean)
+                .join(' · '),
+      time: span(groups),
+    },
+    {
+      phase: 'aggregate',
+      label: 'Aggregate job',
+      state: aggregateState,
+      detail: cancelled
+        ? 'GitHub is finishing the cancel'
+        : 'Aggregates the groups and writes the bundle',
+      time: aggregate ? jobDuration(aggregate) : '',
+    },
+    {
+      phase: 'import',
+      label: 'Import',
+      state: importing ? ('current' as StepState) : ('next' as StepState),
+      detail: importing
+        ? 'Importing what finished'
+        : cancelled
+          ? 'Imports what finished once the run ends'
+          : 'Automatic when the run ends',
+      time: '',
+    },
+  ]
 }
 
 /** The tests a GitHub group job runs: the slots of its group once the run

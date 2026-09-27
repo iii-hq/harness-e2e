@@ -920,13 +920,15 @@ try {
       where: 'harness',
     },
   })
-  // No plan, no role: just an execution.
-  await page.getByText('Execution · running', { exact: true }).waitFor()
-  // Cancel asks first, says what stops, then stops it: no next scenario.
+  // No plan, no role: just an execution. Its progress is one bar under the
+  // title; no second panel repeats it.
   await page
-    .locator('[data-where-line]')
-    .getByText('Running · on this harness', { exact: false })
+    .locator('[data-harness-progress]')
+    .getByText(/ of 2 tests reported · \d running · results are provisional$/)
     .waitFor()
+  assert.equal(await page.getByText('Execution · running').count(), 0)
+  assert.equal(await page.locator('[data-live-progress]').count(), 0)
+  // Cancel asks first, says what stops, then stops it: no next scenario.
   // The status line says tests · where · when, live as finished.
   await page
     .locator('[data-status-line]')
@@ -959,7 +961,7 @@ try {
     .click()
   await confirmCancel.waitFor({ state: 'hidden' })
   assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
-  await page.getByText('Execution · running').waitFor({ state: 'detached' })
+  await page.locator('[data-harness-progress]').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
   // that will run, under the execution's name, and sends its parameters
@@ -1081,29 +1083,22 @@ try {
     yaml: stacks[0].yaml,
   })
 
-  // A Docker execution that runs: its groups and where each is.
+  // A Docker execution that runs: its numbered steps, the current one the
+  // groups; each test's row says where it is.
   await page.goto(
     `${server.url}#/ext/harness-e2e/execution/${dockerRunning.id}`,
   )
-  const groups = page.locator('[data-docker-groups]')
-  await groups.locator('[data-docker-group]').first().waitFor()
-  await page
+  const progress = page.locator('[data-live-progress="docker"]')
+  await progress
     .locator('[data-step-state="current"]')
     .getByText('Groups', { exact: true })
     .waitFor()
-  await groups
-    .locator('[data-docker-group="case-persistent-state"] [data-group-state]')
-    .getByText('running', { exact: true })
-    .waitFor()
-  await page
+  await progress
     .locator('[data-step-state="current"]')
     .getByText('1 of 3 finished · 1 running · 1 waiting', { exact: true })
     .waitFor()
+  assert.equal(await page.locator('.wr-card').count(), 0)
   // The group that ended reports its test at once; the others fill in.
-  await page
-    .locator('[data-where-line]')
-    .getByText('1 of 3 tests reported · results are provisional')
-    .waitFor()
   const result = (scenario) =>
     page
       .getByRole('table', { name: 'Scenario results' })

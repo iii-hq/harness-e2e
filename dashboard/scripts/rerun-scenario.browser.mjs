@@ -320,7 +320,7 @@ try {
   )
   assert.equal(reruns.length, 0)
   await confirm.click()
-  await page.getByText('Execution · running', { exact: true }).waitFor()
+  await dialog.waitFor({ state: 'hidden' })
   assert.deepEqual(reruns, [
     { execution_id: localId, scenario_id: 'timer_wake' },
   ])

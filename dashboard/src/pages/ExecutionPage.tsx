@@ -10,7 +10,6 @@ import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionFacts } from '@/components/ExecutionConfiguration'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
-import { ExecutionProgress } from '@/components/ExecutionProgress'
 import { EvidenceRecordPage } from '@/components/execution/EvidenceRecord'
 import { ExecutionTotals } from '@/components/execution/ExecutionTotals'
 import {
@@ -22,13 +21,11 @@ import { ScreenshotGallery } from '@/components/execution/screenshots'
 import { TranscriptPage } from '@/components/execution/TranscriptPage'
 import {
   CancelExecutionDialog,
+  HarnessProgress,
+  LiveProgress,
   WhereItRan,
 } from '@/components/execution/WhereItRan'
-import {
-  liveNotes,
-  reportedLine,
-  whereLine,
-} from '@/components/execution/where-it-ran-model'
+import { liveNotes } from '@/components/execution/where-it-ran-model'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
@@ -745,6 +742,10 @@ export function ExecutionPage({
   const scenarioSummary = scenarioMatrix?.summary ?? null
   // In Docker a group's tests fill in as it ends: the table shows from the start.
   const docker = detail.plan_execution?.source.kind === 'docker'
+  // On GitHub the results arrive with the import: until then the page shows
+  // the run's steps and group jobs, not totals of nothing.
+  const githubLive =
+    detail.plan_execution?.source.kind === 'github' && (live || importing)
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
     : detail.plan_execution?.state === 'cancelling'
@@ -766,9 +767,11 @@ export function ExecutionPage({
   const statusLine = [
     `${tests} ${tests === 1 ? 'test' : 'tests'}`,
     statusWhere(detail),
-    presentation.startedAt
-      ? `${live ? (detail.plan_execution?.source.kind === 'github' ? 'dispatched ' : 'started ') : ''}${formatDate(presentation.startedAt)}`
-      : null,
+    rerunning && detail.plan_execution?.rerun
+      ? `${detail.plan_execution.rerun.scenarios.join(', ')} running again since ${formatDate(detail.plan_execution.rerun.started_at)}`
+      : presentation.startedAt
+        ? `${live ? (detail.plan_execution?.source.kind === 'github' ? 'dispatched ' : 'started ') : ''}${formatDate(presentation.startedAt)}`
+        : null,
     rerunScenarios > 0
       ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
       : null,
@@ -966,6 +969,11 @@ export function ExecutionPage({
             </>
           }
         />
+        {detail.plan_execution?.source.kind === 'local' &&
+        live &&
+        status.status !== 'cancelling' ? (
+          <HarnessProgress execution={detail.plan_execution} />
+        ) : null}
         {!noRun || detail.plan_execution ? (
           <ExecutionFacts
             execution={detail.plan_execution ?? null}
@@ -1003,26 +1011,10 @@ export function ExecutionPage({
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
           />
         ) : null}
+        {/* One representation of progress: numbered steps in Docker and on
+            GitHub; this harness's bar sits under the title. */}
         {detail.plan_execution && (live || importing) ? (
-          <div className="wr-live" role="status" data-where-line>
-            <span className="wr-live-line">
-              {whereLine(detail.plan_execution)}
-            </span>
-            {reportedLine(detail.plan_execution) ? (
-              <span className="wr-faint">
-                {reportedLine(detail.plan_execution)}
-              </span>
-            ) : null}
-          </div>
-        ) : null}
-        {detail.plan_execution && (live || importing) ? (
-          <WhereItRan execution={detail.plan_execution} />
-        ) : null}
-        {detail.plan_execution &&
-        detail.plan_execution.source.kind === 'local' &&
-        live &&
-        !importing ? (
-          <ExecutionProgress execution={detail.plan_execution} />
+          <LiveProgress execution={detail.plan_execution} />
         ) : null}
         {detail.plan_execution ? (
           <CancelExecutionDialog
@@ -1036,7 +1028,7 @@ export function ExecutionPage({
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
-        {(!live || docker) && scenarioMatrix ? (
+        {(!live || (detail.plan_execution && !githubLive)) && scenarioMatrix ? (
           <NeedsAttention
             items={attentionItems(scenarioMatrix.items, [
               ...(detail.plan_execution?.error
@@ -1064,7 +1056,8 @@ export function ExecutionPage({
         {primaryMetrics &&
         scenarioMatrix &&
         !detail.evidence_error &&
-        !noRun ? (
+        !noRun &&
+        !githubLive ? (
           <section
             id="metrics"
             className="scroll-mt-24"
@@ -1078,7 +1071,7 @@ export function ExecutionPage({
             />
           </section>
         ) : null}
-        {!noRun && (!live || rerunning || docker) ? (
+        {!noRun && !githubLive && (!live || detail.plan_execution) ? (
           <div className="execution-layers grid min-w-0">
             <section
               id="results"
@@ -1090,9 +1083,11 @@ export function ExecutionPage({
                 detail={detail}
                 openKey={openScenario}
                 running={live}
-                {...(docker && live && detail.plan_execution
+                {...(live && !rerunning && detail.plan_execution
                   ? {
-                      liveNote: 'A group’s tests fill in as it finishes.',
+                      liveNote: docker
+                        ? 'A group’s tests fill in as it finishes.'
+                        : 'Rows fill in as tests report.',
                       notes: liveNotes(detail.plan_execution),
                     }
                   : {})}

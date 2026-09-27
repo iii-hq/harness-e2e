@@ -88,8 +88,7 @@
 }
 
 .wr-steps,
-.wr-jobs,
-.wr-tests {
+.wr-jobs {
   display: grid;
   margin: 0;
   padding: 0;
@@ -120,8 +119,7 @@
   background: var(--color-panel, var(--surface));
 }
 
-.wr-job,
-.wr-test {
+.wr-job {
   display: grid;
   min-height: 2.25rem;
   grid-template-columns: 0.75rem minmax(0, 1fr) 6rem 5.5rem 1.75rem;
@@ -130,18 +128,8 @@
   padding: 0.25rem 0.75rem;
 }
 
-.wr-job + .wr-job,
-.wr-test + .wr-test {
+.wr-job + .wr-job {
   border-top: var(--ds-row-divider);
-}
-
-.wr-test {
-  grid-template-columns: 0.75rem minmax(0, 14rem) 5.5rem minmax(0, 1fr);
-}
-
-.wr-tests {
-  border-radius: var(--ds-radius-sm, 6px);
-  background: var(--color-panel, var(--surface));
 }
 
 .wr-job-name {
@@ -197,23 +185,127 @@
   }
 }
 
-.wr-live {
+/* Live progress (canvas: Execution detail · running): numbered step cards,
+   the current one raised; a filled mark is done, a ring is to come. */
+.wr-progress {
+  display: grid;
+  gap: 0.625rem;
+  margin-top: 1.25rem;
+  font-size: 0.8125rem;
+  line-height: 1.25rem;
+}
+
+.wr-step-cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.wr-step-card {
+  display: grid;
+  align-content: start;
+  gap: 0.375rem;
+  min-width: 0;
+  padding: 0.625rem 0.75rem;
+  border-radius: var(--ds-radius-md, 6px);
+  background: var(--color-panel, var(--surface));
+  outline: var(--ds-row-divider);
+  outline-offset: -1px;
+}
+
+.wr-step-card[data-step-state="current"] {
+  background: var(--color-panel-raised, var(--surface-raised));
+}
+
+.wr-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
+.wr-step-time {
+  margin-inline-start: auto;
+}
+
+.wr-step-mark {
+  display: inline-grid;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex: none;
+  place-items: center;
+  border-radius: 50%;
+  outline: 1px solid var(--color-ink-ghost, var(--ink-decor));
+  outline-offset: -1px;
+  color: var(--color-panel, var(--surface));
+}
+
+.wr-step-card[data-step-state="done"] .wr-step-mark {
+  background: var(--color-ok, var(--success));
+  outline: 0;
+}
+
+.wr-step-card[data-step-state="current"] .wr-step-mark {
+  background: var(--color-accent, var(--accent));
+  outline: 0;
+  animation: wr-pulse 1.4s ease-in-out infinite;
+}
+
+.wr-step-card[data-step-state="stopped"] .wr-step-mark {
+  background: var(--color-ink-ghost, var(--ink-decor));
+  outline: 0;
+}
+
+.wr-step-detail {
+  font-size: 0.75rem;
+  line-height: 1.0625rem;
+}
+
+.wr-step-card[data-step-state="next"] .wr-step-detail {
+  color: var(--color-ink-faint, var(--text-soft));
+}
+
+.wr-note {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+/* A harness execution's share of tests reported, under its title. */
+.wr-bar-line {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 0.25rem 0.75rem;
-  margin-top: 1rem;
-  font-size: 0.8125rem;
+  gap: 0.25rem 0.625rem;
+  margin-top: 0.5rem;
+  color: var(--color-ink-faint, var(--text-soft));
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
-.wr-live-line {
-  font-weight: 600;
+.wr-bar {
+  position: relative;
+  width: 17.5rem;
+  max-width: 100%;
+  height: 0.25rem;
+  overflow: hidden;
+  border-radius: 9999px;
+  background: var(--color-surface-selected, var(--surface-selected));
 }
 
-.wr-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 0.5rem;
+.wr-bar > span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 9999px;
+  background: var(--color-accent, var(--accent));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wr-step-card[data-step-state="current"] .wr-step-mark {
+    animation: none;
+  }
 }
 
 /* Narrow pane: tables stack into rows (name first, the rest beneath). */
@@ -222,14 +314,16 @@
     padding: 0.875rem;
   }
 
-  .wr-job,
-  .wr-test {
+  .wr-step-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .wr-job {
     grid-template-columns: 0.75rem minmax(0, 1fr) auto;
     padding-block: 0.5rem;
   }
 
-  .wr-job > :nth-child(4),
-  .wr-test > :nth-child(4) {
+  .wr-job > :nth-child(4) {
     grid-column: 2 / -1;
   }
 

@@ -5,7 +5,7 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@iii-dev/console-ui'
-import { ExternalLink, Square } from 'lucide-react'
+import { Check, ExternalLink, Square } from 'lucide-react'
 import { useState } from 'react'
 import { Callout } from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
@@ -14,53 +14,172 @@ import './where-it-ran.css'
 import {
   cancelCopy,
   dockerSteps,
+  githubSteps,
   jobDuration,
   jobLabel,
   jobTests,
   placeOf,
-  type TestRow,
+  plural,
   testRows,
 } from './where-it-ran-model'
-
-const STATE_LABEL: Record<TestRow['state'], string> = {
-  reported: 'Reported',
-  'not-run': 'Not run',
-  running: 'Running',
-  waiting: 'Waiting',
-  stopped: 'Stopped',
-}
 
 function Dot({ tone }: { tone: 'ok' | 'live' | 'idle' | 'alert' }) {
   return <span className="wr-dot" data-tone={tone} aria-hidden="true" />
 }
 
-function TestList({ rows }: { rows: TestRow[] }) {
-  if (rows.length === 0) return null
+/** A GitHub run's group jobs, as GitHub reports them. */
+function GroupJobList({ execution }: { execution: PlanExecution }) {
+  const source = execution.source
+  if (source.kind !== 'github') return null
   return (
-    <ul className="wr-tests" aria-label="Tests">
-      {rows.map((row) => (
-        <li key={row.id} className="wr-test" data-state={row.state}>
-          <Dot
-            tone={
-              row.state === 'running'
-                ? 'live'
-                : row.state === 'reported'
-                  ? 'ok'
-                  : row.state === 'not-run'
-                    ? 'alert'
-                    : 'idle'
-            }
-          />
-          <span className="wr-mono wr-ellipsis" title={row.id}>
-            {row.id}
-          </span>
-          <span className="wr-state">{STATE_LABEL[row.state]}</span>
-          <span className="wr-faint wr-ellipsis" title={row.detail}>
-            {row.detail}
-          </span>
-        </li>
-      ))}
+    <ul className="wr-jobs" aria-label="Group jobs">
+      {(source.follow?.jobs ?? []).map((job) => {
+        const label = jobLabel(job)
+        const tests = jobTests(job, execution)
+        return (
+          <li
+            key={job.id}
+            className="wr-job"
+            data-job-state={label.toLowerCase()}
+          >
+            <Dot
+              tone={
+                label === 'Running'
+                  ? 'live'
+                  : label === 'Done'
+                    ? 'ok'
+                    : label === 'Failed'
+                      ? 'alert'
+                      : 'idle'
+              }
+            />
+            <span className="wr-job-name">
+              <span className="wr-mono wr-ellipsis" title={job.name}>
+                {job.name}
+              </span>
+              {tests.length ? (
+                <span className="wr-faint wr-ellipsis">{tests.join(', ')}</span>
+              ) : null}
+            </span>
+            <span className="wr-state">{label}</span>
+            <span className="wr-mono wr-faint">{jobDuration(job)}</span>
+            {job.url ? (
+              <a
+                className="wr-icon-link"
+                href={job.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${job.name} on GitHub`}
+              >
+                <ExternalLink size={14} aria-hidden="true" />
+              </a>
+            ) : null}
+          </li>
+        )
+      })}
     </ul>
+  )
+}
+
+/** A live execution's progress, one representation (canvas: Execution
+ *  detail · running): numbered steps in Docker and on GitHub, with GitHub's
+ *  group jobs under them. A harness execution's is the bar under its title. */
+export function LiveProgress({ execution }: { execution: PlanExecution }) {
+  const source = execution.source
+  const steps =
+    source.kind === 'docker'
+      ? dockerSteps(execution)
+      : source.kind === 'github'
+        ? githubSteps(execution)
+        : []
+  if (steps.length === 0) return null
+  const jobs =
+    source.kind === 'github'
+      ? (source.follow?.jobs ?? []).filter((job) => /case-/.test(job.name))
+      : []
+  return (
+    <>
+      <section
+        className="wr-progress"
+        aria-labelledby="live-progress-title"
+        data-live-progress={source.kind}
+      >
+        <h2 id="live-progress-title" className="wr-title">
+          Progress
+        </h2>
+        <ol className="wr-step-cards">
+          {steps.map((step, index) => (
+            <li
+              key={step.phase}
+              className="wr-step-card"
+              data-step-state={step.state}
+              aria-current={step.state === 'current' ? 'step' : undefined}
+            >
+              <span className="wr-step-head">
+                <span className="wr-step-mark" aria-hidden="true">
+                  {step.state === 'done' ? <Check size={12} /> : null}
+                </span>
+                <span className="wr-mono wr-faint">{index + 1}</span>
+                <span className="wr-strong">{step.label}</span>
+                <span className="wr-mono wr-faint wr-step-time">
+                  {step.time}
+                </span>
+              </span>
+              <span className="wr-step-detail">{step.detail}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+      {source.kind === 'github' ? (
+        <section className="wr-progress" aria-labelledby="group-jobs-title">
+          <div className="wr-head">
+            <h2 id="group-jobs-title" className="wr-title">
+              Group jobs
+            </h2>
+            {jobs.length ? (
+              <span className="wr-mono wr-faint">
+                {jobs.filter((job) => job.status === 'completed').length}/
+                {jobs.length}
+              </span>
+            ) : null}
+          </div>
+          {source.follow?.jobs?.length ? (
+            <GroupJobList execution={execution} />
+          ) : (
+            <p className="wr-faint" role="status">
+              Waiting for GitHub to start the jobs…
+            </p>
+          )}
+          <p className="wr-faint wr-note">
+            GitHub holds the results until the run ends. Then this Console
+            imports the run by itself, and the totals and each test’s results
+            show here as on any execution.
+          </p>
+        </section>
+      ) : null}
+    </>
+  )
+}
+
+/** A harness execution's progress under its title: the share of tests that
+ *  reported, and how many run now. */
+export function HarnessProgress({ execution }: { execution: PlanExecution }) {
+  const rows = testRows(execution)
+  if (rows.length === 0) return null
+  const reported = rows.filter(
+    (row) => row.state === 'reported' || row.state === 'not-run',
+  ).length
+  const now = rows.filter((row) => row.state === 'running').length
+  return (
+    <div className="wr-bar-line" data-harness-progress>
+      <span className="wr-bar" aria-hidden="true">
+        <span style={{ width: `${(100 * reported) / rows.length}%` }} />
+      </span>
+      <span role="status">
+        {reported} of {plural(rows.length, 'test', 'tests')} reported · {now}{' '}
+        running · results are provisional
+      </span>
+    </div>
   )
 }
 
@@ -138,54 +257,7 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
             </dd>
           </dl>
           {source.follow?.jobs && source.follow.jobs.length > 0 ? (
-            <ul className="wr-jobs" aria-label="Group jobs">
-              {source.follow.jobs.map((job) => {
-                const label = jobLabel(job)
-                const tests = jobTests(job, execution)
-                return (
-                  <li
-                    key={job.id}
-                    className="wr-job"
-                    data-job-state={label.toLowerCase()}
-                  >
-                    <Dot
-                      tone={
-                        label === 'Running'
-                          ? 'live'
-                          : label === 'Done'
-                            ? 'ok'
-                            : label === 'Failed'
-                              ? 'alert'
-                              : 'idle'
-                      }
-                    />
-                    <span className="wr-job-name">
-                      <span className="wr-mono wr-ellipsis" title={job.name}>
-                        {job.name}
-                      </span>
-                      {tests.length ? (
-                        <span className="wr-faint wr-ellipsis">
-                          {tests.join(', ')}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="wr-state">{label}</span>
-                    <span className="wr-mono wr-faint">{jobDuration(job)}</span>
-                    {job.url ? (
-                      <a
-                        className="wr-icon-link"
-                        href={job.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`Open ${job.name} on GitHub`}
-                      >
-                        <ExternalLink size={14} aria-hidden="true" />
-                      </a>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ul>
+            <GroupJobList execution={execution} />
           ) : live ? (
             <p className="wr-faint" role="status">
               Waiting for GitHub to start the jobs…
@@ -291,19 +363,6 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
             ))}
           </ul>
         </>
-      ) : null}
-
-      {source.kind === 'local' ? (
-        <dl className="wr-facts">
-          <dt>Runner</dt>
-          <dd>This harness, on the stack this Console runs on</dd>
-        </dl>
-      ) : null}
-
-      {/* A Docker execution's tests are in the results table, filled in as
-          each group ends. */}
-      {live && source.kind === 'local' ? (
-        <TestList rows={testRows(execution)} />
       ) : null}
     </section>
   )
