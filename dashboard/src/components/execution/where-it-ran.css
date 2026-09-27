@@ -128,6 +128,11 @@
   padding: 0.25rem 0.75rem;
 }
 
+.wr-job + .wr-job,
+.wr-test + .wr-test {
+  border-top: var(--ds-row-divider);
+}
+
 .wr-test {
   grid-template-columns: 0.75rem minmax(0, 14rem) 5.5rem minmax(0, 1fr);
 }

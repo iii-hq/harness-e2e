@@ -68,6 +68,10 @@
   font-size: 0.8125rem;
 }
 
+.ep-attention-row + .ep-attention-row {
+  border-top: var(--ds-row-divider);
+}
+
 .ep-attention-text {
   min-width: 0;
 }
@@ -678,6 +682,10 @@
   width: 5.5rem;
 }
 
+.ep-result-row {
+  border-top: var(--ds-row-divider);
+}
+
 .ep-result-row:hover {
   background: var(--color-surface-hover, var(--surface-soft));
 }
@@ -996,6 +1004,7 @@
   align-items: start;
   gap: 0.625rem;
   padding: 0.625rem 0.875rem;
+  border-top: var(--ds-row-divider);
   font-size: 0.8125rem;
 }
 
@@ -1934,6 +1943,7 @@ tr.ep-detail-row:hover {
 
 .ep-stack-table td {
   padding: 6px 10px;
+  border-top: var(--ds-row-divider);
   vertical-align: middle;
 }
 
