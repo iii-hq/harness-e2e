@@ -589,15 +589,20 @@ export function RunComparePage({ testId }: { testId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const beginRequest = useLatestRequest()
+  // Swapping A and B asks for nothing new.
+  const wanted = [...new Set(pair.filter(Boolean))].sort().join(',')
 
   useEffect(() => {
+    if (!wanted) return
     const request = beginRequest()
     void getDashboardDataBridge()
       .then(async (bridge) => {
         const [data, tests] = await Promise.all([
+          // Exactly the two runs, wherever they sit in the history.
           bridge.getTestHistory({
             test_id: testId,
             test_version: ALL_DEFINITIONS,
+            executions: wanted.split(','),
             limit: 100,
           }),
           bridge.listTests({ limit: 100 }).catch(() => null),
@@ -612,7 +617,7 @@ export function RunComparePage({ testId }: { testId: string }) {
         if (request.isCurrent())
           setError(cause instanceof Error ? cause.message : String(cause))
       })
-  }, [beginRequest, testId])
+  }, [beginRequest, testId, wanted])
 
   useEffect(() => {
     replaceRouteParams(new URLSearchParams({ a: pair[0], b: pair[1] }))

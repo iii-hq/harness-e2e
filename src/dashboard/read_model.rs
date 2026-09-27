@@ -73,6 +73,10 @@ pub(super) struct TestHistoryRequest {
     pub system_version_id: Option<String>,
     #[serde(default)]
     pub result: Option<String>,
+    /// Only these executions, at most two: the runs an A × B compares, found
+    /// wherever they are in the history.
+    #[serde(default)]
+    pub executions: Option<Vec<String>>,
     #[serde(default)]
     pub cursor: Option<String>,
     #[serde(default)]
@@ -941,6 +945,9 @@ impl DashboardReadModel {
         if request.test_id.trim().is_empty() {
             bail!("test id is required");
         }
+        if request.executions.as_ref().is_some_and(|ids| ids.len() > 2) {
+            bail!("a test history is asked for at most two executions");
+        }
         let entry = self
             .tests
             .get(&request.test_id)
@@ -1789,6 +1796,10 @@ fn history_matches(observation: &Observation, request: &TestHistoryRequest) -> b
             .result
             .as_deref()
             .is_none_or(|value| value.eq_ignore_ascii_case(&observation.status))
+        && request
+            .executions
+            .as_ref()
+            .is_none_or(|ids| ids.contains(&observation.execution_id))
 }
 
 fn history_model_groups(groups: BTreeMap<String, BTreeSet<String>>) -> Vec<HistoryModelGroup> {

@@ -64,6 +64,8 @@ export type TestHistoryInput = {
   subject_model?: string
   system_version_id?: string
   result?: string
+  /** Only these executions, at most two: the runs an A × B compares. */
+  executions?: string[]
   cursor?: string
   limit?: number
 }

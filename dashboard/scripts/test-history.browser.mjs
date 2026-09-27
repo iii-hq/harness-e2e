@@ -51,7 +51,8 @@ const trigger = (name, request = {}) => {
         (request.test_version === 'all' ||
           item.behavior_sha256 === request.test_version) &&
         (!request.subject_model ||
-          item.subject_model === request.subject_model),
+          item.subject_model === request.subject_model) &&
+        (!request.executions || request.executions.includes(item.execution_id)),
     )
     return {
       ...source,
@@ -161,6 +162,11 @@ try {
     new RegExp(
       `/tests/form_flow_build/compare\\?a=${tree.execution_id}&b=${solo.execution_id}$`,
     ),
+  )
+  // Only the two runs are asked for, wherever they sit in the history.
+  assert.deepEqual(
+    [...requests.at(-1).executions].sort(),
+    [tree.execution_id, solo.execution_id].sort(),
   )
   await page
     .getByRole('article', { name: 'A · Reference' })

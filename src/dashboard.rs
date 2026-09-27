@@ -870,6 +870,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn test_history_finds_the_two_executions_an_a_b_compares() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..3 {
+            let mut value = report();
+            value.execution.execution_id = format!("execution-{index}");
+            value.execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-{index}");
+            run_metadata.completed_at = value.execution.completed_at.clone();
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let history = |executions: Vec<&str>, limit| {
+            model.test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: Some("all".into()),
+                executions: Some(executions.into_iter().map(Into::into).collect()),
+                limit: Some(limit),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+        };
+        // The oldest run is found even when the page holds one run only.
+        let pair = history(vec!["local-0", "local-2"], 1).unwrap();
+        assert_eq!(pair.total, 2);
+        assert_eq!(pair.observations[0].execution_id, "local-2");
+        let oldest = history(vec!["local-0"], 1).unwrap();
+        assert_eq!(oldest.observations[0].execution_id, "local-0");
+        assert_eq!(history(vec!["gone"], 1).unwrap().total, 0);
+        assert!(history(vec!["local-0", "local-1", "local-2"], 1).is_err());
+    }
+
+    #[test]
     fn metric_history_keeps_contracts_in_separate_series() {
         let root = tempfile::tempdir().unwrap();
         for (index, max_turns) in [(0, 1), (1, 2)] {
