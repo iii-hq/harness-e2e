@@ -388,10 +388,7 @@ function LiveState({
   return (
     <Panel className="mt-5" data-live-state={presentation.attention}>
       <div className="flex flex-wrap items-center gap-3">
-        <StatusBadge
-          status={status.status}
-          label={status.label.toLowerCase()}
-        />
+        <StatusBadge status={status.status} label={status.label} />
         <span className="font-mono text-xs text-ink-soft">
           {[scope, elapsed ? `${elapsed} elapsed` : null]
             .filter(Boolean)

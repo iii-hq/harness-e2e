@@ -15,6 +15,7 @@ import {
   cancelCopy,
   dockerSteps,
   githubSteps,
+  isGroupJob,
   jobDuration,
   jobLabel,
   jobTests,
@@ -33,7 +34,7 @@ function GroupJobList({ execution }: { execution: PlanExecution }) {
   if (source.kind !== 'github') return null
   return (
     <ul className="wr-jobs" aria-label="Group jobs">
-      {(source.follow?.jobs ?? []).map((job) => {
+      {(source.follow?.jobs ?? []).filter(isGroupJob).map((job) => {
         const label = jobLabel(job)
         const tests = jobTests(job, execution)
         return (
@@ -95,7 +96,7 @@ export function LiveProgress({ execution }: { execution: PlanExecution }) {
   if (steps.length === 0) return null
   const jobs =
     source.kind === 'github'
-      ? (source.follow?.jobs ?? []).filter((job) => /case-/.test(job.name))
+      ? (source.follow?.jobs ?? []).filter(isGroupJob)
       : []
   return (
     <>
@@ -144,7 +145,7 @@ export function LiveProgress({ execution }: { execution: PlanExecution }) {
               </span>
             ) : null}
           </div>
-          {source.follow?.jobs?.length ? (
+          {jobs.length ? (
             <GroupJobList execution={execution} />
           ) : (
             <p className="wr-faint" role="status">
@@ -224,7 +225,7 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
                 : ''}
             </dd>
           </dl>
-          {source.follow?.jobs && source.follow.jobs.length > 0 ? (
+          {source.follow?.jobs?.some(isGroupJob) ? (
             <GroupJobList execution={execution} />
           ) : null}
         </>

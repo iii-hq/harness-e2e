@@ -214,8 +214,9 @@ export function dockerSteps(execution: PlanExecution) {
   })
 }
 
-const isGroupJob = (job: GithubJob) => /case-/.test(job.name)
-const isPrepareJob = (job: GithubJob) => /prepare|materialize/i.test(job.name)
+export const isGroupJob = (job: GithubJob) => /case-/.test(job.name)
+const isPrepareJob = (job: GithubJob) =>
+  /prepare|materialize/i.test(job.name) && !isGroupJob(job)
 const isAggregateJob = (job: GithubJob) =>
   /aggregate|finalize/i.test(job.name) && !isGroupJob(job)
 

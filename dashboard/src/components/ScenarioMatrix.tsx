@@ -25,6 +25,7 @@ import type {
 import { shortDefinition } from '@/lib/definition-digest'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import { titleCase } from '@/lib/execution-view'
+import { sentenceCase } from '@/lib/format'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -1002,7 +1003,7 @@ function workflowStepStatus(statusValue: string): {
     return { status: 'cancelled', label: 'Cancelled' }
   }
   if (status === 'pending' || status === 'skipped') {
-    return { status: 'incomplete', label: titleCase(status) }
+    return { status: 'incomplete', label: sentenceCase(status) }
   }
-  return { status: 'unavailable', label: titleCase(status) }
+  return { status: 'unavailable', label: sentenceCase(status) }
 }

@@ -6,7 +6,7 @@ import {
   DialogTitle,
 } from '@iii-dev/console-ui'
 import { AlertTriangle, ExternalLink } from 'lucide-react'
-import { type ReactNode, useState } from 'react'
+import { type ReactNode, useRef, useState } from 'react'
 import {
   jobTests,
   plural,
@@ -144,10 +144,14 @@ export function ScenarioRerunDialog({
     setRunning(null)
     onClose()
   }
-  const copy = rerunCopy(execution, scenarioId ?? '')
-  const group = scenarioId ? rerunGroup(execution, scenarioId) : []
+  // The last test stays on screen while the dialog animates closed.
+  const shown = useRef(scenarioId)
+  if (scenarioId) shown.current = scenarioId
+  const test = shown.current ?? ''
+  const copy = rerunCopy(execution, test)
+  const group = test ? rerunGroup(execution, test) : []
   const rounds = execution.slots.filter(
-    (slot) => slot.scenario_id === scenarioId,
+    (slot) => slot.scenario_id === test,
   ).length
   const run = async () => {
     if (!bridge || !scenarioId) return
@@ -186,7 +190,7 @@ export function ScenarioRerunDialog({
       >
         <div>
           <DialogTitle className="ex-dialog-title">
-            Run <span className="ep-confirm-mono">{scenarioId}</span> again?
+            Run <span className="ep-confirm-mono">{test}</span> again?
           </DialogTitle>
           <DialogDescription id="ep-rerun-body" className="ex-dialog-body">
             {copy.body}

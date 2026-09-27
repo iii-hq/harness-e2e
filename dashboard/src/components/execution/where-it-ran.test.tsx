@@ -289,6 +289,23 @@ describe('where it ran · model', () => {
       ]),
     )
     expect(failed[0]).toMatchObject({ state: 'stopped', detail: 'Failed' })
+    // A group job whose test is named prepare… is not the prepare job.
+    const groupOnly = githubSteps(
+      jobs([
+        {
+          id: 10,
+          name: 'r01 · case-prepare-release',
+          status: 'in_progress',
+          url: '',
+        },
+      ]),
+    )
+    expect(groupOnly.map((step) => step.state)).toEqual([
+      'done',
+      'current',
+      'next',
+      'next',
+    ])
     expect(failed[1].state).toBe('next')
     // A job re-run: followed, its jobs not listed yet.
     const rerun = {
@@ -435,6 +452,8 @@ describe('where it ran · card', () => {
     const hub = renderToStaticMarkup(<LiveProgress execution={github} />)
     expect(hub).toContain('Aggregate job')
     expect(hub).toContain('E2E / case-timer-wake')
+    // Group jobs lists the group jobs only, as its count does.
+    expect(hub).not.toContain('title="aggregate"')
     expect(renderToStaticMarkup(<LiveProgress execution={harness} />)).toBe('')
     expect(
       renderToStaticMarkup(<HarnessProgress execution={harness} />),
