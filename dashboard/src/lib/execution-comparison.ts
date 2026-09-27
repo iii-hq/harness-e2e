@@ -1434,7 +1434,9 @@ export function comparisonHighlights(
           ? `The other ${kept} ${kept === 1 ? 'test kept its score' : 'tests kept their scores'}.`
           : kept === 1
             ? 'The counted test kept its score.'
-            : `All ${kept} counted tests kept their scores.`,
+            : kept === 2
+              ? 'Both counted tests kept their scores.'
+              : `All ${kept} counted tests kept their scores.`,
     })
   return { headline, detail, items }
 }
