@@ -459,6 +459,31 @@ try {
     )
   await page.keyboard.press('Escape')
   await fromCatalog.waitFor({ state: 'hidden' })
+  // Each opening starts from its own ticks: another selection replaces the
+  // last one, and Run tests in the header opens with none.
+  const tickedIn = (dialog) =>
+    dialog
+      .locator('input[type="checkbox"]:checked')
+      .evaluateAll((boxes) =>
+        boxes.map((box) => box.getAttribute('aria-label')).sort(),
+      )
+  await selection.getByRole('button', { name: 'Clear selection' }).click()
+  await page.getByRole('checkbox', { name: 'Select timer_wake' }).check()
+  await selection
+    .getByRole('button', { name: 'Run 1 test', exact: true })
+    .click()
+  await fromCatalog.getByText('catalog ready').waitFor()
+  assert.deepEqual(await tickedIn(fromCatalog), ['timer_wake'])
+  await page.keyboard.press('Escape')
+  await fromCatalog.waitFor({ state: 'hidden' })
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await fromCatalog.getByText('catalog ready').waitFor()
+  assert.deepEqual(await tickedIn(fromCatalog), [])
+  await page.keyboard.press('Escape')
+  await fromCatalog.waitFor({ state: 'hidden' })
 
   // Narrow: the suites table fits.
   await page.goto(`${server.url}#/ext/harness-e2e/suites`)

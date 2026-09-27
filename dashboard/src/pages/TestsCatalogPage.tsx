@@ -446,8 +446,15 @@ export function TestsCatalogPage() {
   )
   // Ticked tests, in the order they were ticked.
   const [selected, setSelected] = useState<string[]>([])
-  // The tests Run tests opens with, while it is open.
+  // The tests Run tests opens with, while it is open, and which opening it
+  // is: each one mounts the dialog afresh, so the ticks of the last one do
+  // not carry over.
   const [runner, setRunner] = useState<string[] | null>(null)
+  const [opening, setOpening] = useState(0)
+  const openRunner = useCallback((scope: string[]) => {
+    setOpening((count) => count + 1)
+    setRunner(scope)
+  }, [])
   const [naming, setNaming] = useState(false)
   const [saved, setSaved] = useState<Saved | null>(null)
   const [highlightId, setHighlightId] = useState<string | null>(() =>
@@ -527,8 +534,8 @@ export function TestsCatalogPage() {
   }, [highlightId, loading])
 
   const headerActions = useMemo(
-    () => catalogHeaderActions(bridge ? () => setRunner([]) : undefined),
-    [bridge],
+    () => catalogHeaderActions(bridge ? () => openRunner([]) : undefined),
+    [bridge, openRunner],
   )
 
   const setFilter = <K extends keyof CatalogFilters>(
@@ -729,7 +736,7 @@ export function TestsCatalogPage() {
             type="button"
             className={dashboardHeaderActionClassName({ primary: true })}
             disabled={!bridge}
-            onClick={() => setRunner(ticked)}
+            onClick={() => openRunner(ticked)}
           >
             {bar.run}
           </button>
@@ -811,6 +818,7 @@ export function TestsCatalogPage() {
       />
       <LocalRunnerDialog
         bridge={bridge}
+        key={opening}
         open={runner !== null}
         initialScenarios={runner ?? undefined}
         onClose={() => setRunner(null)}
