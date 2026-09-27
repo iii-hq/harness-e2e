@@ -18,6 +18,12 @@
   margin-bottom: calc(var(--spacing) * -2.5);
 }
 
+/* Header actions in sentence case, as on the execution page. */
+.th-header .ds-button {
+  font-family: var(--font-sans);
+  text-transform: none;
+}
+
 .th-faint {
   color: var(--color-ink-faint);
   font-size: var(--text-xs);
@@ -309,28 +315,34 @@
 }
 
 .th-loss-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 22) auto;
+  align-items: center;
+  gap: 0 calc(var(--spacing) * 2.5);
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
+/* The rows share the list's columns, so the counts line up. */
 .th-loss-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 22) calc(
-      var(--spacing) *
-      22
-    );
-  align-items: center;
-  gap: calc(var(--spacing) * 2.5);
-  min-height: calc(var(--spacing) * 7);
+  display: contents;
   font-size: var(--text-xs);
+}
+
+.th-loss-list li > * {
+  min-height: calc(var(--spacing) * 7);
+  line-height: calc(var(--spacing) * 7);
 }
 
 .th-loss-list li > :last-child {
   text-align: right;
   white-space: nowrap;
+}
+
+.th-loss-list .th-loss-bar {
+  min-height: 0;
+  line-height: 0;
 }
 
 .th-loss-bar {
@@ -772,10 +784,7 @@
 
 .th-session-list li {
   display: grid;
-  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) calc(
-      var(--spacing) *
-      22
-    );
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) auto;
   align-items: center;
   gap: calc(var(--spacing) * 2.5);
   min-height: calc(var(--spacing) * 10);

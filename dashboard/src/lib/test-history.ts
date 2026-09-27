@@ -97,16 +97,16 @@ export function profileText(observation: HistoryObservation) {
 }
 
 export function modelText(observation: HistoryObservation) {
-  return (
-    [observation.subject_provider, observation.subject_model]
-      .filter(Boolean)
-      .join('/') || 'unknown model'
-  )
+  const { subject_provider: provider, subject_model: model } = observation
+  // A model id may already carry its provider (`claude-code/claude-opus-5-5`).
+  if (model && provider && !model.startsWith(`${provider}/`))
+    return `${provider}/${model}`
+  return model || provider || 'unknown model'
 }
 
 /** The model without its provider, for a legend. */
 export function shortModel(observation: HistoryObservation) {
-  return observation.subject_model || modelText(observation)
+  return modelText(observation).split('/').at(-1) ?? modelText(observation)
 }
 
 /** The run as the canvas's verdict() reads it: a single run by its own
@@ -115,11 +115,13 @@ export function observationState(observation: HistoryObservation): ResultState {
   const runs = observation.runs ?? []
   if (runs.length === 1) {
     const [run] = runs
-    return runResultState({
+    const state = runResultState({
       status: run.status,
       completion: run.completion,
       score: run.score,
     })
+    // A run that scored nothing reads as failed, as the canvas paints it.
+    return state === 'lost_points' && run.score === 0 ? 'failed' : state
   }
   const score = observation.mean_score
   if (typeof score !== 'number') return 'inconclusive'
@@ -207,7 +209,7 @@ export function sessionRole(session: HistorySession, rootId: string | null) {
 /** A session id short enough for its row; the root's is a long digest. */
 export function sessionName(session: HistorySession) {
   const id = session.session_id
-  return id.length > 22 ? `${id.slice(0, 12)}…` : id
+  return id.length > 28 ? `${id.slice(0, 12)}…` : id
 }
 
 /* ---------------------------------------------------------- definitions */

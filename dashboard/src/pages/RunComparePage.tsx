@@ -100,6 +100,8 @@ type Row = {
   a: number | null
   b: number | null
   format: (value: number) => string
+  /** How the difference is written, when not like the values. */
+  delta: (value: number) => string
   points?: boolean
 }
 
@@ -120,15 +122,10 @@ export function metricRows(a: Side, b: Side): Row[] {
   const number = (value: number | null | undefined) =>
     typeof value === 'number' && Number.isFinite(value) ? value : null
   const rows: Array<
-    [string, readonly [number | null, number | null], Row['format'], boolean?]
+    [string, readonly [number | null, number | null], Row['delta'], boolean?]
   > = [
     ['Score', both((s) => number(s.observation.mean_score)), count, true],
-    [
-      'Criteria met',
-      both((s) => met(s.run)),
-      (value) =>
-        `${value}/${a.run?.details?.criteria.length ?? b.run?.details?.criteria.length ?? '?'}`,
-    ],
+    ['Criteria met', both((s) => met(s.run)), count],
     [
       'Duration',
       both((s) =>
@@ -188,13 +185,22 @@ export function metricRows(a: Side, b: Side): Row[] {
   ]
   return rows
     .filter(([, [left, right]]) => left !== null || right !== null)
-    .map(([label, [left, right], format, points]) => ({
-      label,
-      a: left,
-      b: right,
-      format,
-      points,
-    }))
+    .map(([label, [left, right], format, points]) => {
+      // Criteria met reads `8/9`; its difference is a count.
+      const total =
+        a.run?.details?.criteria.length ?? b.run?.details?.criteria.length
+      return {
+        label,
+        a: left,
+        b: right,
+        format:
+          label === 'Criteria met'
+            ? (value: number) => `${value}/${total ?? '?'}`
+            : format,
+        delta: format,
+        points,
+      }
+    })
 }
 
 export type CriterionChange = {
@@ -431,7 +437,7 @@ export function RunComparison({
                       {differenceText(
                         row.a,
                         row.b,
-                        row.format,
+                        row.delta,
                         row.points ? 'points' : 'value',
                       )}
                     </td>
@@ -635,7 +641,7 @@ export function RunComparePage({ testId }: { testId: string }) {
     />
   )
   const shell = (children: ReactNode) => (
-    <div className="ds-root cmp-page rc-page bg-canvas text-ink">
+    <div className="ds-root cmp-page rc-page">
       <DashboardPageActions active="tests" context={`${testId} · A × B`} />
       <div className="page-shell">{children}</div>
     </div>

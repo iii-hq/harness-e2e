@@ -175,9 +175,9 @@ export function TrendChart({
                 x1={line.x}
                 x2={line.x}
                 y1={8}
-                y2={152}
+                y2={BOTTOM + 16}
               />
-              <text className="th-axis" x={line.x + 4} y={8}>
+              <text className="th-axis" x={line.x + 4} y={BOTTOM + 14}>
                 {line.label}
               </text>
             </g>

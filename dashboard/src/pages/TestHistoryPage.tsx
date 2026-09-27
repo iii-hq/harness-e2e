@@ -125,6 +125,12 @@ export function resultChoices(observations: HistoryObservation[]) {
     .map(([id, label]) => ({ id, label, count: counts[id] }))
 }
 
+/** `All models · 2`, or the one model when only one ran. */
+export function modelPlaceholder(groups: HistoryResponse['subject_models']) {
+  const models = groups.flatMap((group) => group.models)
+  return models.length === 1 ? models[0] : `All models · ${models.length}`
+}
+
 export function selectionHint(selected: string[]) {
   if (selected.length === 0) return 'Tick two runs to compare them'
   return selected.length === 1 ? 'A ticked · tick B' : 'A and B ticked'
@@ -546,7 +552,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
                 aria-label="Model"
                 className="th-select"
                 value={filters.model || undefined}
-                placeholder={`All models · ${(history?.subject_models ?? []).reduce((total, group) => total + group.models.length, 0)}`}
+                placeholder={modelPlaceholder(history?.subject_models ?? [])}
                 allowEmpty
                 emptyLabel="All models"
                 onClear={() => setFilter('model', '')}

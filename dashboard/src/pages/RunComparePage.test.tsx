@@ -59,6 +59,9 @@ describe('two runs of a test', () => {
       />,
     )
     expect(html).toContain('+10 pts')
+    // Criteria met reads 8/9 → 9/9 and differs by a count.
+    expect(html).toContain('>8/9</td>')
+    expect(html).toContain('+1 · +13%')
     expect(html).toContain('−29m 19s · −78%')
     expect(html).not.toMatch(/Improved|Regressed|better|worse/)
   })
