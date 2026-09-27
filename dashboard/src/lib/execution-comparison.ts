@@ -1377,6 +1377,17 @@ function points(value: number) {
   return String(Number(Math.abs(value).toFixed(1)))
 }
 
+/** A score difference as it is written, to one decimal: what rounds to 0
+ *  did not move, and the plural follows the written number. */
+export function roundedPoints(delta: number): number {
+  return Number(Math.abs(delta).toFixed(1))
+}
+
+function pointsPhrase(delta: number) {
+  const size = roundedPoints(delta)
+  return `${size} ${size === 1 ? 'point' : 'points'}`
+}
+
 /** A figure as the highlights write it. */
 export function metricFigure(format: MetricFormat, value: number): string {
   if (format === 'tokens') return formatTokens(value)
@@ -1408,9 +1419,9 @@ export function comparisonHighlights(
       ? 'No test is counted'
       : !score || score.delta === null
         ? 'No score to compare'
-        : Math.abs(score.delta) < 0.05
+        : roundedPoints(score.delta) === 0
           ? 'B scored the same as A'
-          : `B scored ${points(score.delta)} ${Math.abs(score.delta) === 1 ? 'point' : 'points'} ${score.delta < 0 ? 'lower' : 'higher'}`
+          : `B scored ${pointsPhrase(score.delta)} ${score.delta < 0 ? 'lower' : 'higher'}`
   const detail =
     counted.length === 0
       ? 'Count at least one test to compare.'
@@ -1421,7 +1432,7 @@ export function comparisonHighlights(
   const moved = counted
     .flatMap((scenario) => {
       const delta = metric(scenario, 'score')?.delta
-      return delta == null || Math.abs(delta) < 1e-9
+      return delta == null || roundedPoints(delta) === 0
         ? []
         : [{ scenario, delta }]
     })
@@ -1436,7 +1447,7 @@ export function comparisonHighlights(
     return {
       test: scenario.id,
       direction: delta < 0 ? 'down' : 'up',
-      text: `${delta < 0 ? 'lost' : 'gained'} ${points(delta)} ${Math.abs(delta) === 1 ? 'point' : 'points'} in B${why}.`,
+      text: `${delta < 0 ? 'lost' : 'gained'} ${pointsPhrase(delta)} in B${why}.`,
     }
   })
   if (moved.length > 3)
@@ -1474,16 +1485,21 @@ export function comparisonHighlights(
     })
   }
 
-  const kept = counted.filter(
-    (scenario) => metric(scenario, 'score')?.delta === 0,
-  ).length
+  // The same rounding as moved: every counted test with a score on both
+  // sides either moved or kept it.
+  const kept = counted.filter((scenario) => {
+    const delta = metric(scenario, 'score')?.delta
+    return delta != null && roundedPoints(delta) === 0
+  }).length
   if (kept > 0)
     items.push({
       test: null,
       direction: 'same',
       text:
         moved.length > 0
-          ? `The other ${kept} ${kept === 1 ? 'test kept its score' : 'tests kept their scores'}.`
+          ? kept === 1
+            ? 'The other test kept its score.'
+            : `The other ${kept} tests kept their scores.`
           : kept === 1
             ? 'The counted test kept its score.'
             : kept === 2

@@ -559,6 +559,25 @@ describe('comparing two executions', () => {
       detail: 'Count at least one test to compare.',
       items: [],
     })
+    // Differences are said as written: to one decimal, with the plural of
+    // the number shown; one that rounds to 0 kept its score.
+    const near = compareExecutions(
+      execution('near-a', [
+        { scenario: 'one', score: 80 },
+        { scenario: 'two', score: 80 },
+        { scenario: 'three', score: 80 },
+      ]),
+      execution('near-b', [
+        { scenario: 'one', score: 81.04 },
+        { scenario: 'two', score: 80.02 },
+        { scenario: 'three', score: 78.5 },
+      ]),
+    )
+    expect(comparisonHighlights(near).items.map((item) => item.text)).toEqual([
+      'lost 1.5 points in B.',
+      'gained 1 point in B.',
+      'The other test kept its score.',
+    ])
     // The same executions on both sides: every test kept its score.
     const same = comparisonHighlights(compareExecutions(local(), local()))
     expect(same.headline).toBe('B scored the same as A')

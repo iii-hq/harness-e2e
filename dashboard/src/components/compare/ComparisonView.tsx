@@ -45,6 +45,7 @@ import {
   gapPhrase,
   metricFigure,
   rerunPhrase,
+  roundedPoints,
   runnerWarning,
   type ScenarioComparison,
   type StackComparison,
@@ -822,9 +823,9 @@ function rowSummary(scenario: ScenarioComparison): string {
   const moved =
     delta === null
       ? 'No score to compare'
-      : Math.abs(delta) < 1e-9
+      : roundedPoints(delta) === 0
         ? 'Same score on both sides'
-        : `B ${delta < 0 ? 'lost' : 'gained'} ${plural(Number(Math.abs(delta).toFixed(1)), 'point')}`
+        : `B ${delta < 0 ? 'lost' : 'gained'} ${plural(roundedPoints(delta), 'point')}`
   return [
     out ? `Out of the totals: ${out}` : null,
     scenario.criteria.length > 0
