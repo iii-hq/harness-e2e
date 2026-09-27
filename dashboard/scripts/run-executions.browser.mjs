@@ -966,6 +966,10 @@ try {
     .getByRole('button', { name: 'Cancel execution', exact: true })
     .click()
   await confirmCancel.waitFor({ state: 'hidden' })
+  // Focus lands on More actions, which stays whatever the header becomes.
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'More actions',
+  )
   assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
   await page.locator('[data-harness-progress]').waitFor({ state: 'detached' })
 

@@ -1074,7 +1074,11 @@ export function ExecutionPage({
             execution={detail.plan_execution}
             open={cancelOpen}
             onClose={() => setCancelOpen(false)}
-            onCancelled={() => void load()}
+            onCancelled={() => {
+              // Asked: the header's Cancel waits for the reload that says so.
+              setCancelling(true)
+              void load().finally(() => setCancelling(false))
+            }}
           />
         ) : null}
         {detail.live_progress ? (

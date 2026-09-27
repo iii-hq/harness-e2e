@@ -6,7 +6,7 @@ import {
   DialogTitle,
 } from '@iii-dev/console-ui'
 import { Check, ExternalLink, Square } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { sentenceCase } from '@/lib/format'
 import type { PlanExecution } from '@/lib/plan-execution'
@@ -314,6 +314,10 @@ export function CancelExecutionDialog({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Each opening starts clean: an earlier refusal is not this one's.
+  useEffect(() => {
+    if (open) setError(null)
+  }, [open])
   const copy = cancelCopy(execution)
   const confirm = async () => {
     if (!bridge) return
@@ -343,6 +347,16 @@ export function CancelExecutionDialog({
         onOpenAutoFocus={(event) => {
           event.preventDefault()
           document.getElementById('ep-cancel-keep')?.focus()
+        }}
+        // The Cancel button may be gone once it cancels: focus goes to the
+        // header's More actions, which stays.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          document
+            .querySelector<HTMLElement>(
+              '.execution-header [aria-label="More actions"]',
+            )
+            ?.focus()
         }}
       >
         <div className="ex-dialog-head">
