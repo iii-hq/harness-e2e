@@ -178,6 +178,8 @@ const older = Array.from({ length: 50 }, (_, index) => ({
   completed_at: '2026-09-01T11:00:00Z',
 }))
 let withOlder = false
+// Refreshes of B that fail before one succeeds again.
+let failB = 0
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
@@ -209,7 +211,13 @@ const trigger = (name, request = {}) => {
     deleted.push(request.execution_id)
     return {}
   }
-  if (id === 'execution-get') return { detail: details[request.execution_id] }
+  if (id === 'execution-get') {
+    if (request.execution_id === b.id && failB > 0) {
+      failB -= 1
+      throw new Error('engine unavailable')
+    }
+    return { detail: details[request.execution_id] }
+  }
   if (id === 'evidence-read') {
     read.push(request)
     return {
@@ -429,6 +437,22 @@ try {
   )
   assert.equal(started[0].label, b.label)
 
+  // B still running is followed; a refresh that fails keeps the comparison
+  // on screen, its open row included, says so, and clears once one works.
+  b.status = 'running'
+  await page.goto(`${server.url}#/ext/harness-e2e/compare/${a.id}/${b.id}`)
+  await page.locator('[data-comparison-live]').waitFor()
+  await page.getByRole('button', { name: 'minimal_path', exact: true }).click()
+  const open = page.locator('[data-scenario-detail="minimal_path"]')
+  await open.waitFor()
+  failB = 1
+  const refresh = page.locator('[data-comparison-refresh-error]')
+  await refresh.getByText('engine unavailable').waitFor({ timeout: 15_000 })
+  assert.ok(await open.isVisible())
+  await refresh.waitFor({ state: 'detached', timeout: 15_000 })
+  assert.ok(await open.isVisible())
+  b.status = 'passed'
+
   // From the list: rename one through its menu, then delete both; the one
   // the worker refuses stays, with the refusal said.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
@@ -527,7 +551,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()

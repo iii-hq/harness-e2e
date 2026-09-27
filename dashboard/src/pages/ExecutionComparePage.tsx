@@ -323,7 +323,9 @@ export function ExecutionComparePage({
     </div>
   )
 
-  if (!left || !right || error || !sides || !comparison)
+  // Only a first load that failed replaces the page: a refresh that fails
+  // keeps what was loaded (open rows, dialogs, the viewer) and says so.
+  if (!left || !right || !sides || !comparison)
     return shell(
       <ComparisonPlaceholder
         missing={!left || !right}
@@ -415,6 +417,7 @@ export function ExecutionComparePage({
           hashForComparison(right, left),
           choiceToParams(choice),
         )}
+        refreshError={error}
         onCount={(ids) =>
           setChoice(
             ids === null

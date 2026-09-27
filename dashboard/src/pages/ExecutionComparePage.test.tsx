@@ -227,6 +227,19 @@ describe('execution comparison page', () => {
     expect(html).toContain('data-comparison-live')
     expect(html).toContain('B is still running')
     expect(html).toContain('B partial')
+    // A refresh that failed is said above the comparison, which stays.
+    const failed = renderToStaticMarkup(
+      <ComparisonView
+        comparison={compareExecutions(local(), b)}
+        sides={{ a: local(), b }}
+        swap="#swap"
+        refreshError="engine unavailable"
+        onCount={() => undefined}
+      />,
+    )
+    expect(failed).toContain('Refresh failed.')
+    expect(failed).toContain('engine unavailable')
+    expect(failed).toContain('data-comparison-scenarios')
   })
 
   it('pairs both sides’ screenshots by caption and shows each', () => {

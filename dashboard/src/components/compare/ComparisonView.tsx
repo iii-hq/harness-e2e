@@ -1353,12 +1353,15 @@ export function ComparisonView({
   sides,
   bridge = null,
   swap,
+  refreshError = null,
   onCount,
   onRunTest,
 }: {
   comparison: ExecutionComparison
   sides: Sides
   bridge?: DashboardDataBridge | null
+  /** Why the last refresh failed; what was loaded stays on screen. */
+  refreshError?: string | null
   /** The link to the same comparison with A and B swapped. */
   swap: string
   /** Count exactly these tests; null goes back to the automatic rule. */
@@ -1423,6 +1426,15 @@ export function ComparisonView({
   ]
   return (
     <>
+      {refreshError ? (
+        <p className="cmp-warning" role="status" data-comparison-refresh-error>
+          <AlertTriangle size={16} aria-hidden="true" />
+          <span>
+            Refresh failed. Showing the comparison as last loaded; updates will
+            retry. {refreshError}
+          </span>
+        </p>
+      ) : null}
       <section className="cmp-sides" aria-label="Executions compared">
         <SideCard which="a" side={comparison.a} detail={sides.a} />
         <a
