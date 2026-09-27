@@ -8,6 +8,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
   type RefObject,
   type SelectHTMLAttributes,
   type TableHTMLAttributes,
@@ -165,6 +166,8 @@ export type PageHeaderProps = HTMLAttributes<HTMLElement> & {
   back?: { label: string; href: string }
   /** The title is a machine id (a test id): Geist Mono. */
   mono?: boolean
+  /** A small control beside the title (rename). */
+  titleAction?: ReactNode
 }
 
 export function PageHeader({
@@ -178,6 +181,7 @@ export function PageHeader({
   variant,
   back,
   mono = false,
+  titleAction,
   className,
   ...props
 }: PageHeaderProps) {
@@ -221,17 +225,20 @@ export function PageHeader({
         {context && variant !== 'list' ? (
           <p className="ds-page-context">{context}</p>
         ) : null}
-        <Heading
-          id={headingId}
-          className={
-            classes(
-              variant === 'list' && 'ds-visually-hidden',
-              mono && 'ds-page-title-mono',
-            ) || undefined
-          }
-        >
-          {title}
-        </Heading>
+        <div className="ds-page-title-row">
+          <Heading
+            id={headingId}
+            className={
+              classes(
+                variant === 'list' && 'ds-visually-hidden',
+                mono && 'ds-page-title-mono',
+              ) || undefined
+            }
+          >
+            {title}
+          </Heading>
+          {titleAction}
+        </div>
         <p className="ds-page-summary">{summary}</p>
       </div>
       {actions ? <div className="ds-page-actions">{actions}</div> : null}
@@ -658,9 +665,12 @@ export function inputClassName(className?: string) {
 
 export function Input({
   className,
+  ref,
   ...props
-}: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={inputClassName(className)} {...props} />
+}: InputHTMLAttributes<HTMLInputElement> & {
+  ref?: Ref<HTMLInputElement>
+}) {
+  return <input ref={ref} className={inputClassName(className)} {...props} />
 }
 
 export function Textarea({

@@ -544,15 +544,20 @@ try {
   // unchanged even when the catalog cannot be read.
   catalogDown = true
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
-  const band = page.locator('[data-identity-band]')
+  const band = page.locator('[data-execution-facts]')
   await band.getByText('1.8.8', { exact: true }).waitFor()
   await band.getByText('0.11.28', { exact: true }).waitFor()
   // Its suite, by name and digest, and the stack its contract names.
   await band
     .getByText('Software engineering 2025 · 0123456789ab', { exact: true })
     .waitFor()
-  await band.getByText('default', { exact: true }).waitFor()
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await band
+    .locator('.ep-fact', {
+      has: page.locator('.ep-fact-label', { hasText: /^Stack$/ }),
+    })
+    .getByText(/^default( · [0-9a-f]{12})?$/)
+    .waitFor()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again
     .getByRole('status')
@@ -615,7 +620,7 @@ try {
   // With the catalog read, the form still opens on the tests that will run.
   catalogDown = false
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
   await again.getByText('2 of 6', { exact: true }).waitFor()
   assert.equal(
@@ -671,8 +676,13 @@ try {
   // recorded.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${dockered.id}`)
   await band.getByText('Docker · attempt 2', { exact: true }).waitFor()
-  await band.getByText('default', { exact: true }).waitFor()
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await band
+    .locator('.ep-fact', {
+      has: page.locator('.ep-fact-label', { hasText: /^Stack$/ }),
+    })
+    .getByText(/^default( · [0-9a-f]{12})?$/)
+    .waitFor()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
   assert.equal(
     await again
@@ -701,11 +711,10 @@ try {
   })
   assert.equal(started[3].parameters.where, 'docker')
 
-  // A finished execution can be deleted.
+  // A finished execution can be deleted, from the ⋯ menu, after a confirm.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
-  await page
-    .getByRole('button', { name: 'Delete execution', exact: true })
-    .click()
+  await page.getByRole('button', { name: 'More actions', exact: true }).click()
+  await page.getByRole('menuitem', { name: 'Delete…' }).click()
   await page
     .getByRole('button', { name: 'delete execution', exact: true })
     .click()

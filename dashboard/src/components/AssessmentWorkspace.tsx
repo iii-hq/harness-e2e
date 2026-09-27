@@ -4,7 +4,7 @@ import {
   MessageCircle,
   ShieldCheck,
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { TestCriteriaList } from '@/components/AboutTestPanel'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
 import { SemanticTestFlow } from '@/components/SemanticTestFlow'
@@ -14,6 +14,7 @@ import {
   Callout,
   Dialog,
   type OperationalStatus,
+  PageHeader,
 } from '@/design-system'
 import type {
   AssessmentOutcome,
@@ -455,7 +456,7 @@ function AssessmentCard({ entry }: { entry: AssessmentEntry }) {
   )
 }
 
-function AssessmentDetailContent({
+export function AssessmentDetailContent({
   run,
   entries,
 }: {
@@ -695,6 +696,86 @@ export function AssessmentDetailDialog({
       <AssessmentDetailContent run={run} entries={run.assessments} />
       {scopedDetail && <SemanticTestFlow detail={scopedDetail} />}
     </Dialog>
+  )
+}
+
+/** The evidence record as its own page (linkable, back to the execution):
+ *  the same content as the dialog, under a detail header. */
+export function AssessmentDetailPage({
+  run,
+  detail,
+  backHref,
+  transcriptHref,
+  children,
+}: {
+  run: AssessmentRunView
+  detail?: DashboardExecutionDetail | null
+  backHref: string
+  transcriptHref?: string
+  /** Screenshots and anything else the page adds under the record. */
+  children?: ReactNode
+}) {
+  const scopedDetail = detail && {
+    ...detail,
+    reports: detail.reports
+      .filter((record) => record.subject_id === run.subjectId && record.report)
+      .map((record) => ({
+        ...record,
+        report: record.report && {
+          ...record.report,
+          scenarios: record.report.scenarios
+            .filter((scenario) => scenario.scenario_id === run.scenarioId)
+            .map((scenario) => ({
+              ...scenario,
+              runs: scenario.runs.filter(
+                (candidate) =>
+                  candidate.run_id === run.runId &&
+                  candidate.attempt_id === run.attemptId,
+              ),
+            })),
+        },
+      })),
+  }
+  return (
+    <div className="ds-root page-shell ep-page" data-evidence-page>
+      <PageHeader
+        variant="detail"
+        mono
+        back={{ label: 'Back to the execution', href: backHref }}
+        context="Evidence record"
+        title={run.scenarioId}
+        summary={`${run.subjectId} · run ${run.runId}${
+          shortDefinition(run.behaviorSha256)
+            ? ` · definition ${shortDefinition(run.behaviorSha256)}`
+            : ''
+        }`}
+        actions={
+          <>
+            <RunStatusBadges run={run} />
+            {transcriptHref && run.transcript ? (
+              <a
+                className={buttonClassName({ variant: 'quiet' })}
+                href={transcriptHref}
+              >
+                Transcript
+              </a>
+            ) : null}
+            <ScenarioChatAction
+              compact
+              detail={detail}
+              scenarioId={run.scenarioId}
+              subjectId={run.subjectId}
+              runId={run.runId}
+            />
+          </>
+        }
+      />
+      <div className="grid gap-6">
+        <AssessmentDetailContent run={run} entries={run.assessments} />
+        {children}
+        {scopedDetail && <SemanticTestFlow detail={scopedDetail} />}
+      </div>
+    </div>
   )
 }
 

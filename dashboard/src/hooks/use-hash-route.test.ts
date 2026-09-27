@@ -50,6 +50,15 @@ describe('dashboard hash routes', () => {
       executionId: 'exec-1',
       anchor: null,
       runId: 'run/1',
+      view: 'evidence',
+    })
+    const transcript = hashForExecution('exec-1', null, 'run/1', 'transcript')
+    expect(transcript).toBe(
+      '#/ext/harness-e2e/execution/exec-1/run/run%2F1/transcript',
+    )
+    expect(routeFromHash(transcript)).toMatchObject({
+      runId: 'run/1',
+      view: 'transcript',
     })
   })
 

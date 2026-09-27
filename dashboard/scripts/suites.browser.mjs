@@ -262,7 +262,7 @@ try {
   })
 
   // The execution names its suite in the header, with its digest.
-  const band = page.locator('[data-identity-band]')
+  const band = page.locator('[data-execution-facts]')
   await band
     .getByText(`PR · ${pr.sha256.replace(/^sha256:/, '').slice(0, 12)}`, {
       exact: true,
@@ -270,7 +270,7 @@ try {
     .waitFor()
 
   // Run again keeps the suite.
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
   await again.getByText('catalog ready').waitFor()
   assert.equal(
@@ -316,7 +316,7 @@ try {
   await edit.getByRole('button', { name: 'save suite', exact: true }).click()
   await edit.waitFor({ state: 'hidden' })
   await page.goto(`${server.url}${localExecution}`)
-  await page.getByRole('button', { name: 'run again', exact: true }).click()
+  await page.getByRole('button', { name: 'Run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
   assert.equal(
     await again.locator('#run-dialog-suite').getAttribute('data-value'),

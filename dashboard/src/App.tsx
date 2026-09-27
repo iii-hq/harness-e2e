@@ -17,6 +17,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
           executionId={route.executionId}
           anchor={route.anchor}
           runId={route.runId}
+          view={route.view ?? null}
         />
       )
     case 'compare':

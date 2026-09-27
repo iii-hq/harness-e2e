@@ -29,6 +29,8 @@ type ScenarioChatActionProps = {
   label?: string
   compact?: boolean
   className?: string
+  /** Replaces the button's own class (a page with its own action style). */
+  buttonClass?: string
 }
 
 type MenuPosition = CSSProperties & { width: number }
@@ -51,6 +53,7 @@ export function ScenarioChatAction({
   label,
   compact = false,
   className = '',
+  buttonClass,
 }: ScenarioChatActionProps) {
   const triggerRef = useRef<HTMLButtonElement>(null)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -190,10 +193,13 @@ export function ScenarioChatAction({
     <span className={`relative inline-flex ${className}`}>
       <button
         ref={triggerRef}
-        className={buttonClassName({
-          variant: 'secondary',
-          size: compact ? 'compact' : 'default',
-        })}
+        className={
+          buttonClass ??
+          buttonClassName({
+            variant: 'secondary',
+            size: compact ? 'compact' : 'default',
+          })
+        }
         type="button"
         title={compact ? buttonLabel : undefined}
         aria-label={`${buttonLabel} for ${titleCase(scenarioId)}`}
@@ -207,7 +213,7 @@ export function ScenarioChatAction({
           void activate()
         }}
       >
-        <MessageCircle size={15} aria-hidden="true" />
+        <MessageCircle size={buttonClass ? 14 : 15} aria-hidden="true" />
         {compact ? <span className="sr-only">{buttonLabel}</span> : buttonLabel}
         {!compact && multiple ? (
           <ChevronDown size={13} aria-hidden="true" />

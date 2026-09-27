@@ -9,8 +9,11 @@ export type DashboardRoute =
       page: 'execution'
       executionId: string
       anchor: string | null
-      /** Evidence record open on top of the execution (audit AW-09). */
+      /** A run of the execution shown as its own page (audit AW-09). */
       runId: string | null
+      /** Which page of the run: its evidence record (default) or its
+       *  transcript. */
+      view?: 'evidence' | 'transcript' | null
     }
   /** Two executions, A (base) and B. */
   | { page: 'compare'; left: string | null; right: string | null }
@@ -100,6 +103,7 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
         executionId: rest[0] ?? '',
         anchor: null,
         runId: rest[2] ?? null,
+        view: rest[3] === 'transcript' ? 'transcript' : 'evidence',
       }
     }
     return {
@@ -139,11 +143,13 @@ export function hashForExecution(
   executionId: string,
   anchor: string | null = null,
   runId: string | null = null,
+  view: 'evidence' | 'transcript' = 'evidence',
 ): string {
   const route = dashboardHash(
     `execution${executionId ? `/${encodeSegment(executionId)}` : ''}`,
   )
-  if (runId) return `${route}/run/${encodeSegment(runId)}`
+  if (runId)
+    return `${route}/run/${encodeSegment(runId)}${view === 'transcript' ? '/transcript' : ''}`
   return anchor ? `${route}/${encodeSegment(anchor)}` : route
 }
 

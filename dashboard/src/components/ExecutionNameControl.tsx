@@ -1,5 +1,5 @@
 import { Check, PencilLine, X } from 'lucide-react'
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { buttonClassName, Input } from '@/design-system'
 
 function errorText(cause: unknown) {
@@ -13,14 +13,29 @@ export function ExecutionNameControl({
   fallbackLabel,
   label,
   onRename,
+  openSignal = 0,
+  hideTrigger = false,
 }: {
   executionId: string
   fallbackLabel: string
   label: string
   onRename: (executionId: string, label: string) => Promise<void>
+  /** Bump to open the field from elsewhere (the ⋯ menu's Rename). */
+  openSignal?: number
+  /** No pencil while closed: something else opens it. */
+  hideTrigger?: boolean
 }) {
   const [draft, setDraft] = useState(label)
   const [editing, setEditing] = useState(false)
+  const input = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (openSignal === 0) return
+    setEditing(true)
+    // The menu that asked hands focus back to its trigger as it closes;
+    // take it after that.
+    const timer = window.setTimeout(() => input.current?.focus(), 80)
+    return () => window.clearTimeout(timer)
+  }, [openSignal])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,6 +66,8 @@ export function ExecutionNameControl({
           onSubmit={(event) => void submit(event)}
         >
           <Input
+            ref={input}
+            autoFocus
             aria-label={`Name ${fallbackLabel}`}
             className="w-56"
             maxLength={80}
@@ -87,7 +104,7 @@ export function ExecutionNameControl({
             <X aria-hidden="true" size={14} />
           </button>
         </form>
-      ) : (
+      ) : hideTrigger ? null : (
         <button
           aria-label={`Rename ${label.trim() || fallbackLabel}`}
           className={buttonClassName({ variant: 'quiet', size: 'compact' })}

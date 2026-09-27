@@ -214,19 +214,11 @@ describe('ScenarioMatrix', () => {
     const html = renderToStaticMarkup(
       <ScenarioMatrix detail={complete} onTranscript={() => {}} />,
     )
-    expect(html).toMatch(
-      /data-primary-metric="Total tokens"[\s\S]*?<strong[^>]*>300<\/strong>/,
-    )
-    expect(html).toMatch(
-      /data-primary-metric="Reported cost"[\s\S]*?<strong[^>]*>\$0.2000<\/strong>/,
-    )
-    expect(html).toMatch(
-      /data-primary-metric="Runtime"[\s\S]*?<strong[^>]*>2\.0 s<\/strong>/,
-    )
-    expect(html).toMatch(
-      /data-primary-metric="Function calls"[\s\S]*?<strong[^>]*>20<\/strong>/,
-    )
-    expect(html).toContain('@[1000px]/harness:table')
+    expect(html).toMatch(/data-primary-metric="Total tokens"[^>]*>300</)
+    expect(html).toMatch(/data-primary-metric="Reported cost"[^>]*>\$0\.2000</)
+    expect(html).toMatch(/data-primary-metric="Runtime"[^>]*>2s</)
+    expect(html).toMatch(/<dt>Function calls<\/dt><dd[^>]*>20</)
+    expect(html).toContain('ep-results-table')
     expect(html).not.toContain(' lg:')
     const partial = executionMetricsFixture([
       { runs: [metricRun('first', 100), metricRun('last', null)] },
@@ -234,9 +226,7 @@ describe('ScenarioMatrix', () => {
     const partialHtml = renderToStaticMarkup(
       <ScenarioMatrix detail={partial} onTranscript={() => {}} />,
     )
-    expect(partialHtml).toMatch(
-      /data-primary-metric="Total tokens"[\s\S]*?<strong[^>]*>100<\/strong>/,
-    )
+    expect(partialHtml).toMatch(/data-primary-metric="Total tokens"[^>]*>100</)
     expect(partialHtml).toContain('Partial · 1/2 runs reported')
   })
 
@@ -283,7 +273,10 @@ describe('ScenarioMatrix', () => {
     ]) {
       expect(html).toContain(`/run/${runId}`)
     }
-    expect(html.match(/>transcript<\/button>/g)).toHaveLength(4)
+    // Each retained run keeps its transcript; the primary one also in Run.
+    expect(
+      html.match(/>Transcript<\/button>/g)?.length ?? 0,
+    ).toBeGreaterThanOrEqual(4)
     expect(
       html.match(/aria-label="Evidence record for Security Review"/g),
     ).toHaveLength(2)
@@ -303,7 +296,7 @@ describe('ScenarioMatrix', () => {
     const html = renderToStaticMarkup(
       <ScenarioMatrix detail={partial} onTranscript={() => {}} />,
     )
-    expect(html).toContain('80/100')
+    expect(html).toContain('<span class="ep-mono">80</span>')
     expect(html).toContain('Mean · 1/2 planned runs scored')
   })
 
@@ -331,7 +324,9 @@ describe('ScenarioMatrix', () => {
       <ScenarioMatrix detail={detail} onTranscript={() => {}} />,
     )
 
-    expect(html).toContain('4 scenarios')
+    expect(html).toContain('All <span class="ep-faint">4</span>')
+    expect(html).toContain('Lost points <span class="ep-faint">1</span>')
+    expect(html).toContain('Not run <span class="ep-faint">2</span>')
     expect(html).toContain('report state')
     expect(html).toContain('objective outcome')
     // The report is identified by its results contract digest, shortened as
@@ -344,18 +339,18 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('Completion and evidence yield')
     expect(html).not.toContain('execution reliability')
     expect(html).toContain('Mean · 1/1 planned runs scored')
-    expect(html).toContain('65/100')
+    expect(html).toContain('<span class="ep-mono">65</span>')
     expect(html).not.toContain('completion rate')
     expect(html).not.toContain('data-scenario-aggregate')
     expect(html).not.toContain('quality')
     expect(html).not.toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
-    expect(html).toContain('1 passed')
-    expect(html).toContain('1 incomplete')
+    expect(html).toContain('data-status="passed"')
+    expect(html).toContain('data-status="incomplete"')
     expect(html).not.toContain('hard gate')
-    expect(html).toContain('1 inconclusive')
-    expect(html).toContain('1 unavailable')
-    expect(html).toContain('Security Review · definition a1a1a1a1')
+    expect(html).toContain('data-status="inconclusive"')
+    expect(html).toContain('data-status="unavailable"')
+    expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
     expect(html).toContain(
@@ -374,7 +369,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('$0.0123')
     expect(html).toContain('data-primary-metric="Runtime"')
     expect(html).toContain('data-primary-metric="Total tokens"')
-    expect(html).toContain('data-primary-metric="Function calls"')
+    expect(html).toContain('<dt>Function calls</dt>')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
     expect(html).not.toContain('data-step-metric="Findings"')
@@ -456,7 +451,7 @@ describe('ScenarioMatrix', () => {
     // Every row can run again; one that did not pass says so in words.
     expect(html).toContain('aria-label="Run Security Review again"')
     expect(html).toMatch(
-      /data-rerun-scenario="persistent_state"[^>]*>.*?run again<\/button>/,
+      /data-rerun-scenario="persistent_state"[^>]*>.*?Run again<\/button>/,
     )
     // The attempts it replaced reach no figure, summary or comparison run.
     const without = { ...reran, previous_reports: [] }
@@ -516,7 +511,7 @@ describe('ScenarioMatrix', () => {
     const panelId = html.match(/aria-controls="([^"]+)"/)?.[1]
     expect(panelId).toBeTruthy()
     expect(html).toContain(`id="${panelId}" hidden=""`)
-    expect(html).toContain('title="Persistent State · definition b2b2b2b2"')
+    expect(html).toContain('title="persistent_state · definition b2b2b2b2"')
     expect(html).toContain('data-status="incomplete"')
     expect(html).not.toContain('completion evaluator')
   })

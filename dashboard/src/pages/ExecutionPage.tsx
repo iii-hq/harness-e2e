@@ -1,4 +1,4 @@
-import { Link2, RotateCcw, Trash2 } from 'lucide-react'
+import { GitCompare, RotateCcw } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -6,16 +6,20 @@ import {
   useMemo,
   useState,
 } from 'react'
-import { AssessmentDetailDialog } from '@/components/AssessmentWorkspace'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
-import {
-  ExecutionConfiguration,
-  ExecutionOriginLink,
-} from '@/components/ExecutionConfiguration'
-import { ExecutionMetricsPanel } from '@/components/ExecutionMetricsPanel'
+import { ExecutionFacts } from '@/components/ExecutionConfiguration'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
 import { ExecutionProgress } from '@/components/ExecutionProgress'
+import { EvidenceRecordPage } from '@/components/execution/EvidenceRecord'
+import { ExecutionTotals } from '@/components/execution/ExecutionTotals'
+import {
+  attentionItems,
+  ExecutionMoreMenu,
+  NeedsAttention,
+} from '@/components/execution/NeedsAttention'
+import { ScreenshotGallery } from '@/components/execution/screenshots'
+import { TranscriptPage } from '@/components/execution/TranscriptPage'
 import {
   CancelExecutionDialog,
   WhereItRan,
@@ -27,7 +31,6 @@ import {
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
-import { PrimaryMetricsView } from '@/components/PrimaryMetricsView'
 import {
   contractScent,
   ResultContractStrip,
@@ -35,7 +38,6 @@ import {
 } from '@/components/ScenarioMatrix'
 import { ScenarioRerunDialog } from '@/components/ScenarioRerunDialog'
 import type { SystemOutcome } from '@/components/SystemOutcome'
-import { TranscriptDialog } from '@/components/TranscriptDialog'
 import {
   buttonClassName,
   Callout,
@@ -47,7 +49,11 @@ import {
   Panel,
   StatusBadge,
 } from '@/design-system'
-import { hashForExecution, hashForWorkspace } from '@/hooks/use-hash-route'
+import {
+  hashForComparison,
+  hashForExecution,
+  hashForWorkspace,
+} from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type AssessmentRunView,
@@ -72,11 +78,9 @@ import {
   workerVersion,
 } from '@/lib/execution-view'
 import { scenarioReruns } from '@/lib/plan-execution'
-import {
-  buildPrimaryMetrics,
-  excludeUnsuccessfulTests,
-} from '@/lib/primary-metrics'
+import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
+import { screenshotsOf } from '@/lib/screenshots'
 import { watchExecution } from '@/lib/watch-execution'
 import '@/design-system/styles.css'
 
@@ -472,15 +476,25 @@ export function EvidenceBundleUnavailable({
   )
 }
 
+/** Where the execution ran, as the status line says it. */
+function statusWhere(detail: DashboardExecutionDetail) {
+  const kind = detail.plan_execution?.source.kind
+  if (kind === 'github') return 'on GitHub'
+  if (kind === 'docker') return 'in Docker'
+  return 'on this harness'
+}
+
 export function ExecutionPage({
   executionId,
   anchor,
   runId,
+  view = null,
 }: {
   executionId: string
   anchor?: string | null
-  /** Evidence record open on top of the execution (audit AW-09). */
+  /** A run shown as its own page: its evidence record or transcript. */
   runId?: string | null
+  view?: 'evidence' | 'transcript' | null
 }) {
   const [summary, setSummary] = useState<DashboardExecutionSummary | null>(null)
   const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
@@ -489,18 +503,15 @@ export function ExecutionPage({
   const [copied, setCopied] = useState(false)
   const [cancelling, setCancelling] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
+  const [renameSignal, setRenameSignal] = useState(0)
+  const [openScenario, setOpenScenario] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
   // The parameters the Run again form opened with; null while it is closed.
   const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
   // The scenario the Run this scenario again dialog is open on.
   const [scenarioRerun, setScenarioRerun] = useState<string | null>(null)
-  const [transcript, setTranscript] = useState<{
-    run: AssessmentRunView
-    title: string
-  } | null>(null)
   const anchorSection = anchor ? sectionFromAnchor(anchor) : null
-  const [excludeFailedTests, setExcludeFailedTests] = useState(false)
   const beginRequest = useLatestRequest()
   const loadedExecutionId = detail?.id
 
@@ -542,7 +553,6 @@ export function ExecutionPage({
     setError(null)
     setDetail(null)
     setSummary(null)
-    setExcludeFailedTests(false)
     void load()
   }, [load])
 
@@ -572,21 +582,10 @@ export function ExecutionPage({
     [detail],
   )
 
-  const allPrimaryMetrics = useMemo(
+  const primaryMetrics = useMemo(
     () => (detail ? buildPrimaryMetrics(detail) : null),
     [detail],
   )
-  const resultDetail = useMemo(
-    () =>
-      detail && excludeFailedTests ? excludeUnsuccessfulTests(detail) : detail,
-    [detail, excludeFailedTests],
-  )
-  const primaryMetrics = useMemo(
-    () => (resultDetail ? buildPrimaryMetrics(resultDetail) : null),
-    [resultDetail],
-  )
-  const excludedTests =
-    (allPrimaryMetrics?.tests.length ?? 0) - (primaryMetrics?.tests.length ?? 0)
 
   if (error && !detail)
     return (
@@ -656,12 +655,105 @@ export function ExecutionPage({
   const evidenceRun = runId
     ? (assessmentModel.runs.find((run) => run.runId === runId) ?? null)
     : null
+  // A run's evidence record and transcript are pages of their own (linkable,
+  // back to the execution) instead of dialogs over it.
+  if (evidenceRun) {
+    const backHref = hashForExecution(detail.id, 'results')
+    const transcriptHref = hashForExecution(
+      detail.id,
+      null,
+      evidenceRun.runId,
+      'transcript',
+    )
+    const evidenceHref = hashForExecution(detail.id, null, evidenceRun.runId)
+    return (
+      <div className="harness-e2e-execution-page">
+        <DashboardPageActions
+          active="executions"
+          context={evidenceRun.scenarioId}
+        />
+        {view === 'transcript' ? (
+          <TranscriptPage
+            title={evidenceRun.scenarioId}
+            runLine={`run ${evidenceRun.runId} · ${evidenceRun.subjectId} · ${formatDuration((evidenceRun.metrics.durationMs ?? 0) / 1000)}`}
+            messages={evidenceRun.transcript?.messages}
+            backHref={evidenceHref}
+            backLabel="Back to the evidence record"
+            evidenceHref={evidenceHref}
+          />
+        ) : (
+          <EvidenceRecordPage
+            run={evidenceRun}
+            detail={detail}
+            backHref={backHref}
+            transcriptHref={transcriptHref}
+            onRerun={
+              bridge && detail.plan_execution
+                ? () => setScenarioRerun(evidenceRun.scenarioId)
+                : undefined
+            }
+            onOpenFile={
+              bridge
+                ? async (path) => {
+                    const record = detail.reports.find(
+                      (entry) =>
+                        entry.scenario_id === evidenceRun.scenarioId &&
+                        entry.report?.scenarios.some((scenario) =>
+                          scenario.runs.some(
+                            (candidate) =>
+                              candidate.run_id === evidenceRun.runId,
+                          ),
+                        ),
+                    )
+                    const file = await bridge.readEvidence({
+                      execution_id:
+                        typeof record?.native_execution_id === 'string' &&
+                        record.native_execution_id
+                          ? record.native_execution_id
+                          : detail.id,
+                      path,
+                    })
+                    const raw = atob(file.base64)
+                    const bytes = new Uint8Array(raw.length)
+                    for (let index = 0; index < raw.length; index += 1)
+                      bytes[index] = raw.charCodeAt(index)
+                    const url = URL.createObjectURL(
+                      new Blob([bytes], { type: file.media_type }),
+                    )
+                    window.open(url, '_blank', 'noopener')
+                    window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+                  }
+                : undefined
+            }
+          >
+            <ScreenshotGallery
+              bridge={bridge}
+              heading={false}
+              screenshots={screenshotsOf(detail, evidenceRun.scenarioId).filter(
+                (screenshot) => screenshot.runId === evidenceRun.runId,
+              )}
+            />
+          </EvidenceRecordPage>
+        )}
+        {detail.plan_execution ? (
+          <ScenarioRerunDialog
+            bridge={bridge}
+            execution={detail.plan_execution}
+            scenarioId={scenarioRerun}
+            onClose={() => setScenarioRerun(null)}
+            onStarted={() => {
+              setScenarioRerun(null)
+              void load()
+            }}
+          />
+        ) : null}
+      </div>
+    )
+  }
   const scenarioSummary = scenarioMatrix?.summary ?? null
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
     : executionStatus(presentation)
-  const runCount =
-    scenarioMatrix?.items.reduce((total, item) => total + item.runCount, 0) ?? 0
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const rerunScenarios = new Set(
     detail.plan_execution?.slots
@@ -669,30 +761,26 @@ export function ExecutionPage({
       .map((slot) => slot.scenario_id),
   ).size
   const { title } = executionTitle(presentation)
+  const loadStacks = bridge ? () => bridge.listStacks() : undefined
+  // Facts the band shows beside what the plan execution recorded.
   const identity: Array<[string, ReactNode]> = [
-    ['suite', executionSuite(detail)],
+    ...(detail.plan_execution
+      ? []
+      : ([['Where', 'This harness']] as Array<[string, ReactNode]>)),
     [
-      'subject',
+      'Model',
       presentation.subjects.map(providerModel).join(', ') || 'not reported',
     ],
-    [
-      'started',
-      presentation.startedAt ? formatDate(presentation.startedAt) : '—',
-    ],
-    [
-      'origin',
-      detail.plan_execution ? (
-        <ExecutionOriginLink
-          key="origin"
-          source={detail.plan_execution.source}
-        />
-      ) : (
-        'local'
-      ),
-    ],
     // What the execution ran on, to compare with another one.
-    ...stackVersions(detail),
-    ['id', `${detail.id.slice(0, 8)}…${detail.id.slice(-6)}`],
+    ...stackVersions(detail).map(
+      ([label, value]) =>
+        [label.charAt(0).toUpperCase() + label.slice(1), value] as [
+          string,
+          ReactNode,
+        ],
+    ),
+    ['Suite', executionSuite(detail)],
+    ['Id', `${detail.id.slice(0, 9)}…${detail.id.slice(-6)}`],
   ]
   const ready = Boolean(bridge)
   const cancelRun = async () => {
@@ -737,24 +825,28 @@ export function ExecutionPage({
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
           variant="detail"
-          back={{
-            label: 'Back to Executions',
-            href: hashForWorkspace('executions'),
-          }}
           className="pm-page-header execution-header"
           title={title}
           summary={
             <>
-              <StatusBadge
-                status={status.status}
-                label={status.label.toLowerCase()}
-              />
+              <StatusBadge status={status.status} label={status.label} />{' '}
               <span>
                 {detail.live_progress
                   ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
                   : live
                     ? 'Execution in progress · results are provisional'
-                    : `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'} · ${runCount} ${runCount === 1 ? 'run' : 'runs'}${rerunScenarios > 0 ? ` · ${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts` : ''}`}
+                    : [
+                        `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'}`,
+                        statusWhere(detail),
+                        presentation.startedAt
+                          ? formatDate(presentation.startedAt)
+                          : null,
+                        rerunScenarios > 0
+                          ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
               </span>
             </>
           }
@@ -763,15 +855,31 @@ export function ExecutionPage({
             { label: 'executions', href: hashForWorkspace('executions') },
             { label: title },
           ]}
+          titleAction={
+            ready && detail.plan_execution ? (
+              <ExecutionNameControl
+                executionId={detail.id}
+                fallbackLabel={title}
+                label={detail.plan_execution.label ?? ''}
+                onRename={renameExecution}
+                openSignal={renameSignal}
+              />
+            ) : undefined
+          }
           actions={
             <>
-              {ready && detail.plan_execution ? (
-                <ExecutionNameControl
-                  executionId={detail.id}
-                  fallbackLabel={title}
-                  label={detail.plan_execution.label ?? ''}
-                  onRename={renameExecution}
-                />
+              {!live ? (
+                <a
+                  className={buttonClassName({
+                    variant: 'quiet',
+                    className: 'no-underline',
+                  })}
+                  href={hashForComparison(detail.id)}
+                  data-compare-with
+                >
+                  <GitCompare size={15} aria-hidden="true" />
+                  Compare with…
+                </a>
               ) : null}
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
@@ -792,15 +900,21 @@ export function ExecutionPage({
                   }
                 >
                   <RotateCcw size={15} aria-hidden="true" />
-                  run again
+                  Run again
                 </button>
               ) : null}
-              <button
-                className={buttonClassName({
-                  variant: 'quiet',
-                })}
-                type="button"
-                onClick={() => {
+              {copied ? (
+                <span className="ep-faint" role="status">
+                  Copied
+                </span>
+              ) : null}
+              <ExecutionMoreMenu
+                onRename={
+                  ready && detail.plan_execution
+                    ? () => setRenameSignal((signal) => signal + 1)
+                    : undefined
+                }
+                onCopyLink={() => {
                   void navigator.clipboard
                     ?.writeText(window.location.href)
                     .then(() => {
@@ -808,36 +922,30 @@ export function ExecutionPage({
                       window.setTimeout(() => setCopied(false), 1500)
                     })
                 }}
-              >
-                <Link2 size={13} aria-hidden="true" />
-                {copied ? 'link copied' : 'copy link'}
-              </button>
-              {ready && !live ? (
-                <button
-                  className={buttonClassName({
-                    variant: 'quiet',
-                  })}
-                  type="button"
-                  aria-label="Delete execution"
-                  title="Delete execution"
-                  onClick={() => setDeleteOpen(true)}
-                >
-                  <Trash2 size={15} aria-hidden="true" />
-                </button>
-              ) : null}
+                onCopyId={() => {
+                  void navigator.clipboard?.writeText(detail.id).then(() => {
+                    setCopied(true)
+                    window.setTimeout(() => setCopied(false), 1500)
+                  })
+                }}
+                githubUrl={
+                  detail.plan_execution?.source.kind === 'github'
+                    ? detail.plan_execution.source.url
+                    : null
+                }
+                onDelete={ready ? () => setDeleteOpen(true) : undefined}
+                deleteDisabled={live}
+              />
             </>
           }
         />
-
-        {/* Audit ED-05: identity is one band of facts, not four cards. */}
-        <dl className="execution-identity" data-identity-band>
-          {identity.map(([label, value]) => (
-            <div className="grid min-w-0 content-start gap-1" key={label}>
-              <dt className="ds-label">{label}</dt>
-              <dd className="m-0 min-w-0 break-words text-ink">{value}</dd>
-            </div>
-          ))}
-        </dl>
+        {!noRun || detail.plan_execution ? (
+          <ExecutionFacts
+            execution={detail.plan_execution ?? null}
+            extra={identity}
+            loadStacks={loadStacks}
+          />
+        ) : null}
 
         {detail.evidence_error ? (
           <EvidenceBundleUnavailable detail={detail} />
@@ -847,11 +955,6 @@ export function ExecutionPage({
             Refresh failed. Showing the last received snapshot; automatic
             updates will retry. {error}
           </p>
-        ) : null}
-        {detail.plan_execution?.error && !live ? (
-          <Callout className="mt-4" tone="warning" title="Execution error">
-            {detail.plan_execution.error}
-          </Callout>
         ) : null}
         {detail.live_progress_error ? (
           <p className="mt-4 text-sm text-warning" role="status">
@@ -900,8 +1003,7 @@ export function ExecutionPage({
             ) : null}
           </div>
         ) : null}
-        {detail.plan_execution &&
-        (live || importing || detail.plan_execution.source.kind !== 'local') ? (
+        {detail.plan_execution && (live || importing) ? (
           <WhereItRan execution={detail.plan_execution} />
         ) : null}
         {detail.plan_execution &&
@@ -922,49 +1024,45 @@ export function ExecutionPage({
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
-        {primaryMetrics && !detail.evidence_error ? (
+        {!live && scenarioMatrix ? (
+          <NeedsAttention
+            items={attentionItems(scenarioMatrix.items, [
+              ...(detail.plan_execution?.error
+                ? [`Execution error: ${detail.plan_execution.error}`]
+                : []),
+              ...(detail.plan_execution?.warnings ?? []),
+            ])}
+            onRerun={
+              ready && detail.plan_execution ? setScenarioRerun : undefined
+            }
+            onShow={(key) => {
+              setOpenScenario(key)
+              window.setTimeout(
+                () =>
+                  document
+                    .querySelector(`[data-scenario-row="${CSS.escape(key)}"]`)
+                    ?.scrollIntoView({ block: 'center' }),
+                0,
+              )
+            }}
+          />
+        ) : null}
+        {primaryMetrics &&
+        scenarioMatrix &&
+        !detail.evidence_error &&
+        !noRun ? (
           <section
             id="metrics"
-            className="mt-6 scroll-mt-24"
+            className="scroll-mt-24"
             aria-label="Execution summary"
           >
-            <PrimaryMetricsView
-              key={executionId}
-              baseline={primaryMetrics}
-              baselineExecutionId={executionId}
-              baselineLabel={title}
-              summaryOnly
-              toolbarActions={
-                <div className="pm-execution-filter">
-                  <label className="pm-filter">
-                    <input
-                      type="checkbox"
-                      checked={excludeFailedTests}
-                      onChange={(event) =>
-                        setExcludeFailedTests(event.target.checked)
-                      }
-                    />
-                    Exclude tests with zero score or failures
-                  </label>
-                  {excludeFailedTests ? (
-                    <span className="pm-muted" role="status">
-                      {excludedTests} {excludedTests === 1 ? 'test' : 'tests'}{' '}
-                      excluded · metrics recalculated
-                    </span>
-                  ) : null}
-                </div>
-              }
+            <ExecutionTotals
+              metrics={primaryMetrics}
+              items={scenarioMatrix.items}
+              running={live}
+              detail={detail}
             />
-            {!noRun &&
-            !live &&
-            resultDetail &&
-            primaryMetrics.tests.length > 0 ? (
-              <ExecutionMetricsPanel detail={resultDetail} />
-            ) : null}
           </section>
-        ) : null}
-        {detail.plan_execution && !live ? (
-          <ExecutionConfiguration execution={detail.plan_execution} />
         ) : null}
         {!noRun && (!live || rerunning) ? (
           <div className="execution-layers mt-6 grid min-w-0 gap-3">
@@ -973,35 +1071,32 @@ export function ExecutionPage({
               className="min-w-0 scroll-mt-24"
               aria-labelledby="execution-results-heading"
             >
-              <h2
-                id="execution-results-heading"
-                className="m-0 mb-4 text-base font-semibold text-ink"
-              >
-                Scenario results
-              </h2>
-              {excludeFailedTests && primaryMetrics?.tests.length === 0 ? (
-                <EmptyState
-                  title="All scenarios excluded"
-                  description="Clear the filter to show the retained test results."
-                />
-              ) : (
-                <ScenarioMatrix
-                  detail={resultDetail ?? detail}
-                  onTranscript={(run, title) => setTranscript({ run, title })}
-                  showContract={false}
-                  // Offered once finished.
-                  onRerun={
-                    ready && !live && detail.plan_execution
-                      ? setScenarioRerun
-                      : undefined
-                  }
-                />
-              )}
+              <ScenarioMatrix
+                heading="Results by test"
+                detail={detail}
+                openKey={openScenario}
+                running={live}
+                onTranscript={(run) => {
+                  window.location.hash = hashForExecution(
+                    detail.id,
+                    null,
+                    run.runId,
+                    'transcript',
+                  )
+                }}
+                showContract={false}
+                // Offered once finished.
+                onRerun={
+                  ready && !live && detail.plan_execution
+                    ? setScenarioRerun
+                    : undefined
+                }
+              />
             </section>
             <DisclosureLayer
               key={anchor}
               id="technical"
-              label="provenance"
+              label="Provenance"
               scent={contractScent(scenarioMatrix?.contracts ?? [])}
               open={anchorSection === 'technical'}
             >
@@ -1012,6 +1107,12 @@ export function ExecutionPage({
               />
             </DisclosureLayer>
           </div>
+        ) : null}
+        {detail.plan_execution &&
+        !live &&
+        !importing &&
+        detail.plan_execution.source.kind !== 'local' ? (
+          <WhereItRan execution={detail.plan_execution} />
         ) : null}
       </div>
       <Dialog
@@ -1061,24 +1162,6 @@ export function ExecutionPage({
         label={detail.plan_execution?.label ?? detail.label ?? ''}
         onClose={() => setRerun(null)}
       />
-      {/* Audit AW-09: the evidence record is a route, so back returns here. */}
-      {evidenceRun ? (
-        <AssessmentDetailDialog
-          run={evidenceRun}
-          detail={detail}
-          onClose={() => {
-            window.location.hash = hashForExecution(detail.id, 'results')
-          }}
-        />
-      ) : null}
-      {transcript && (
-        <TranscriptDialog
-          title={transcript.title}
-          messages={transcript.run.transcript?.messages}
-          open
-          onClose={() => setTranscript(null)}
-        />
-      )}
     </div>
   )
 }

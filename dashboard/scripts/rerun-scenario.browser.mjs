@@ -258,21 +258,26 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  // Every scenario can run again; the one that did not pass says so.
+  // Every scenario can run again from its open row; the one that did not
+  // pass says so with the prominent button.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${localId}`)
+  const openRow = (id) =>
+    page.locator(`[data-scenario-row*=":${id}:"] .ep-row-toggle`).click()
+  await page.locator('[data-scenario-row]').first().waitFor()
+  for (const id of ['timer_wake', 'minimal_path', 'registry_verification'])
+    await openRow(id)
   const timerAgain = page.getByRole('button', {
     name: 'Run Timer Wake again',
     exact: true,
   })
   await timerAgain.waitFor()
-  assert.equal((await timerAgain.innerText()).trim(), 'run again')
-  assert.equal(
+  assert.ok((await timerAgain.getAttribute('class')).includes('ep-act-ctl'))
+  assert.ok(
     (
       await page
         .getByRole('button', { name: 'Run Minimal Path again', exact: true })
-        .innerText()
-    ).trim(),
-    '',
+        .getAttribute('class')
+    ).includes('ep-act-ctl') === false,
   )
 
   // A scenario of a sequential group says its group runs with it.
@@ -329,8 +334,8 @@ try {
   const running = page.locator('[aria-label="Timer Wake scenario result"]')
   await running.getByText('Running', { exact: true }).waitFor()
   await page
-    .locator('[aria-label="Minimal Path scenario result"]')
-    .getByText('90/100')
+    .locator('[aria-label="Minimal Path scenario result"] [data-label="Score"]')
+    .getByText('90', { exact: true })
     .waitFor()
   assert.equal(await page.locator('[data-rerun-scenario]').count(), 0)
 
@@ -345,7 +350,7 @@ try {
   const row = page.locator('[aria-label="Timer Wake scenario result"]')
   await row.getByText('rerun ×1', { exact: true }).waitFor()
   await row
-    .getByRole('button', { name: /Timer Wake/ })
+    .getByRole('button', { name: /timer_wake/ })
     .first()
     .click()
   const previous = page.locator('[data-previous-attempt="native-timer-1"]')
@@ -365,6 +370,9 @@ try {
   // An imported execution runs again on GitHub: its group's job re-runs
   // there and the Console imports the run again when it ends.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${importedId}`)
+  await page
+    .locator('[data-scenario-row*=":timer_wake:"] .ep-row-toggle')
+    .click()
   await page
     .getByRole('button', { name: 'Run Timer Wake again', exact: true })
     .click()

@@ -239,11 +239,7 @@
 }
 
 /* Detail: back button, one 20/600 title (mono for machine ids), actions
-   beside it, capped at the host's content width and left-aligned. */
-.ds-page-header-detail {
-  max-width: 76rem;
-}
-
+   beside it at the right edge of the pane. */
 .ds-page-header-detail h1,
 .ds-page-header-detail h2 {
   font-family: var(--font-sans);
@@ -1024,4 +1020,11 @@
     min-height: 3rem;
     font-size: 1rem;
   }
+}
+
+.ds-page-title-row {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 0.25rem;
 }

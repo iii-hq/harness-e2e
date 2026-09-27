@@ -62,10 +62,10 @@ export function ScenarioRerunDialog({
       size="sm"
       title={
         source.kind === 'docker'
-          ? `Run ${scenarioId} again in Docker`
+          ? `Run ${scenarioId ?? 'a test'} again in Docker`
           : source.kind === 'github'
-            ? `Run ${scenarioId} again on GitHub`
-            : `Run ${scenarioId} again`
+            ? `Run ${scenarioId ?? 'a test'} again on GitHub`
+            : `Run ${scenarioId ?? 'a test'} again`
       }
       description={
         source.kind === 'docker'
