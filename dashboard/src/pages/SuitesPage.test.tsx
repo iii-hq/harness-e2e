@@ -2,7 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { hashForSuites, hashForTests } from '@/hooks/use-hash-route'
 import type { Suite } from '@/lib/dashboard-data-source'
-import { type SuiteListItem, suiteListItem } from '@/lib/suites-view'
+import {
+  type SuiteListItem,
+  suiteDraft,
+  suiteListItem,
+  tickDraft,
+} from '@/lib/suites-view'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import { catalogRowView } from '@/lib/test-catalog-view'
 import {
@@ -54,6 +59,7 @@ function detail(props: Partial<SuiteDetailProps> = {}) {
       busy={false}
       error={null}
       onCopy={() => {}}
+      onEdit={() => {}}
       onRun={() => {}}
       onDelete={() => {}}
       {...props}
@@ -230,5 +236,65 @@ describe('the open suite’s tests and executions', () => {
     expect(html).toContain('Failed')
     expect(html).toContain('· 11 of 15 passed · score 93.2')
     expect(html).not.toContain('Not run in this Console yet')
+  })
+})
+
+describe('editing a suite of this Console', () => {
+  const groups = [['registry_implementation', 'registry_verification']]
+  const quick = suite('suite-1', {
+    label: 'Regression · quick',
+    source: 'local',
+    scenarios: [
+      'minimal_path',
+      'registry_implementation',
+      'registry_verification',
+    ],
+  })
+  const editing = (draft = suiteDraft(quick)) => ({
+    draft,
+    catalog: [...views.values()],
+    saving: false,
+    onChange: () => {},
+    onSave: () => {},
+    onDiscard: () => {},
+  })
+
+  it('offers Edit, Delete and Run while it is not being edited', () => {
+    const html = detail({ suite: quick })
+    expect(html).toContain('id="st-edit"')
+    expect(html).toContain('aria-label="Delete Regression · quick"')
+    expect(html).toContain('Run this suite')
+    expect(html).not.toContain('Save suite')
+  })
+
+  it('edits the name, runs and retries in place, with Discard and Save', () => {
+    const html = detail({ suite: quick, views, groups, editing: editing() })
+    expect(html).toContain('id="st-name"')
+    expect(html).toContain('value="Regression · quick"')
+    expect(html).toContain('Runs of each test')
+    expect(html).toContain('Retries on crash')
+    expect(html).toContain('aria-label="More runs"')
+    expect(html).toContain('Discard')
+    expect(html).toContain('Save suite')
+    expect(html).not.toContain('Run this suite')
+    expect(html).not.toContain('id="st-edit"')
+    // Nothing changed yet.
+    expect(html).not.toContain('Unsaved changes')
+    expect(html).toContain('Untick to take a test out')
+    expect(html).toContain('aria-label="Keep minimal_path in the suite"')
+    expect(html).toContain('Add tests')
+  })
+
+  it('keeps an unticked test listed, faded, and says the changes are unsaved', () => {
+    const draft = tickDraft(suiteDraft(quick), 'minimal_path', false, groups)
+    const html = detail({
+      suite: quick,
+      views,
+      groups,
+      editing: editing(draft),
+    })
+    expect(html).toContain('Unsaved changes')
+    expect(html).toMatch(/data-test-id="minimal_path" data-off="true"/)
+    expect(html).toContain('2 tests · 1 run each · 1 retry')
   })
 })

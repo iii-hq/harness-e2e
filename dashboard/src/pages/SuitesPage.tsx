@@ -1,11 +1,12 @@
 import {
   Button,
+  Checkbox,
   Dialog,
   DialogContent,
   DialogDescription,
   DialogTitle,
 } from '@iii-dev/console-ui'
-import { ChevronLeft, Copy, Info, Trash2 } from 'lucide-react'
+import { ChevronLeft, Copy, Info, Minus, Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   DashboardPageActions,
@@ -20,6 +21,7 @@ import {
   EmptyState,
   FactChip,
   FactList,
+  Input,
   StatusLabel,
 } from '@/design-system'
 import {
@@ -39,15 +41,21 @@ import {
 import {
   changedTests,
   changedWarning,
+  draftDirty,
+  draftProblem,
+  type SuiteDraft,
   type SuiteListItem,
   type SuiteRun,
   sequenceSteps,
   suiteDigest,
+  suiteDraft,
   suiteHolds,
   suiteListItem,
   suiteRuns,
   suitesSummary,
+  testSuggestions,
   testsNote,
+  tickDraft,
 } from '@/lib/suites-view'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import { type CatalogRowView, catalogRowView } from '@/lib/test-catalog-view'
@@ -152,34 +160,48 @@ export function SuiteList({
   )
 }
 
+/** Ticking tests in and out of a suite being edited. */
+type TestsEdit = {
+  tests: string[]
+  onTick: (id: string, on: boolean) => void
+}
+
 /** The suite's tests: each with its last result here and its recent scores,
- *  and its step when it runs whole with others, in order. */
+ *  and its step when it runs whole with others, in order. Editing, a box
+ *  keeps each in the suite; an unticked one stays listed, faded. */
 export function SuiteTests({
   ids,
   views,
   groups,
   narrow,
+  edit = null,
 }: {
   ids: string[]
   views: ReadonlyMap<string, CatalogRowView>
   groups: string[][]
   narrow: boolean
+  edit?: TestsEdit | null
 }) {
-  const steps = sequenceSteps(ids, groups)
+  const kept = edit ? ids.filter((id) => edit.tests.includes(id)) : ids
+  const steps = sequenceSteps(kept, groups)
   return (
     <section className="st-section" aria-labelledby="st-tests">
       <div className="st-section-head">
         <h3 id="st-tests">Tests</h3>
-        <span className="st-section-note">{testsNote(ids, groups, false)}</span>
+        <span className="st-section-note">
+          {testsNote(kept, groups, Boolean(edit))}
+        </span>
       </div>
       <table
         className="st-tests"
         aria-labelledby="st-tests"
         data-narrow={narrow || undefined}
+        data-editing={edit ? true : undefined}
         data-suite-tests
       >
         <thead className="ds-visually-hidden">
           <tr>
+            {edit ? <th scope="col">In the suite</th> : null}
             <th scope="col">Test</th>
             <th scope="col">Last result</th>
             {narrow ? null : <th scope="col">Recent scores</th>}
@@ -189,8 +211,23 @@ export function SuiteTests({
           {ids.map((id) => {
             const view = views.get(id)
             const step = steps.get(id)
+            const on = !edit || edit.tests.includes(id)
             return (
-              <tr key={id} className="st-test" data-test-id={id}>
+              <tr
+                key={id}
+                className="st-test"
+                data-test-id={id}
+                data-off={on ? undefined : true}
+              >
+                {edit ? (
+                  <td>
+                    <Checkbox
+                      aria-label={`Keep ${id} in the suite`}
+                      checked={on}
+                      onChange={() => edit.onTick(id, !on)}
+                    />
+                  </td>
+                ) : null}
                 <td className="tc-stack">
                   <span className="st-test-line">
                     <a className="tc-id" href={hashForTestHistory(id)}>
@@ -221,6 +258,112 @@ export function SuiteTests({
         </tbody>
       </table>
     </section>
+  )
+}
+
+/** Search the catalog for tests the suite does not hold, and add them. */
+function AddTests({
+  catalog,
+  draft,
+  onAdd,
+}: {
+  catalog: CatalogRowView[]
+  draft: SuiteDraft
+  onAdd: (id: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const found = testSuggestions(query, catalog, draft)
+  return (
+    <div className="st-add">
+      <label className="st-field st-add-field" htmlFor="st-add">
+        <span className="st-field-label">Add tests</span>
+        <Input
+          id="st-add"
+          type="text"
+          value={query}
+          placeholder="Search the catalog"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+      {query.trim() ? (
+        found.length > 0 ? (
+          // biome-ignore lint/a11y/useSemanticElements: a labelled set of buttons
+          <div
+            className="st-suggestions"
+            role="group"
+            aria-label="Tests to add"
+          >
+            {found.map((id) => (
+              <button
+                key={id}
+                type="button"
+                className="st-suggestion"
+                aria-label={`Add ${id}`}
+                onClick={() => onAdd(id)}
+              >
+                <Plus size={16} aria-hidden="true" />
+                {id}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <p className="st-section-note" role="status">
+            No test to add matches.
+          </p>
+        )
+      ) : null}
+    </div>
+  )
+}
+
+/** Runs of each test, or retries on crash: − value +. */
+function Stepper({
+  id,
+  label,
+  noun,
+  value,
+  min,
+  max,
+  onChange,
+}: {
+  id: string
+  label: string
+  noun: string
+  value: number
+  min: number
+  max: number
+  onChange: (value: number) => void
+}) {
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a labelled stepper group
+    <div className="st-field" role="group" aria-labelledby={`${id}-label`}>
+      <span className="st-field-label" id={`${id}-label`}>
+        {label}
+      </span>
+      <div className="st-stepper">
+        <button
+          type="button"
+          className="st-step-button"
+          aria-label={`Fewer ${noun}`}
+          disabled={value <= min}
+          onClick={() => onChange(value - 1)}
+        >
+          <Minus size={16} aria-hidden="true" />
+        </button>
+        <output id={id} className="st-stepper-value" aria-live="polite">
+          {value}
+        </output>
+        <button
+          type="button"
+          className="st-step-button"
+          aria-label={`More ${noun}`}
+          disabled={value >= max}
+          onClick={() => onChange(value + 1)}
+        >
+          <Plus size={16} aria-hidden="true" />
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -272,6 +415,17 @@ export function SuiteExecutions({
   )
 }
 
+/** A suite of this Console being edited: its draft and what changes it. */
+export type SuiteEditing = {
+  draft: SuiteDraft
+  /** Every test of the catalog, to add. */
+  catalog: CatalogRowView[]
+  saving: boolean
+  onChange: (draft: SuiteDraft) => void
+  onSave: () => void
+  onDiscard: () => void
+}
+
 export type SuiteDetailProps = {
   suite: Suite
   runs: SuiteRun[]
@@ -283,12 +437,16 @@ export type SuiteDetailProps = {
   /** An action on this suite is under way. */
   busy: boolean
   error: string | null
+  /** Set while the suite (one of this Console) is being edited. */
+  editing?: SuiteEditing | null
   onCopy: () => void
+  onEdit: () => void
   onRun: () => void
   onDelete: () => void
 }
 
-/** The open suite: its name, facts and purpose, and its actions. */
+/** The open suite: its name, facts and purpose, its actions, its tests and
+ *  the executions that ran it. A suite of this Console edits in place. */
 export function SuiteDetail({
   suite,
   runs,
@@ -298,17 +456,38 @@ export function SuiteDetail({
   ready,
   busy,
   error,
+  editing = null,
   onCopy,
+  onEdit,
   onRun,
   onDelete,
 }: SuiteDetailProps) {
   const local = suite.source === 'local'
-  const changed = changedTests(suite.scenarios, views).length
+  const draft = editing?.draft ?? null
+  const tests = draft ? draft.tests : suite.scenarios
+  const changed = changedTests(tests, views).length
+  const dirty = draft ? draftDirty(draft, suite) : false
+  const update = (patch: Partial<SuiteDraft>) =>
+    draft && editing?.onChange({ ...draft, ...patch })
+  const tick = (id: string, on: boolean) =>
+    draft && editing?.onChange(tickDraft(draft, id, on, groups))
+
+  // Into the name when editing starts; back to Edit when it ends.
+  const wasEditing = useRef(Boolean(editing))
+  useEffect(() => {
+    if (editing && !wasEditing.current)
+      document.getElementById('st-name')?.focus()
+    if (!editing && wasEditing.current)
+      document.getElementById('st-edit')?.focus()
+    wasEditing.current = Boolean(editing)
+  }, [editing])
+
   return (
     <section
       className="st-detail"
       aria-labelledby="st-title"
       data-suite-detail={suite.id}
+      data-editing={editing ? true : undefined}
     >
       {narrow ? (
         <a className="st-back" href={hashForSuites()}>
@@ -318,9 +497,28 @@ export function SuiteDetail({
       ) : null}
       <div className="st-head">
         <div className="st-head-main">
-          <h2 id="st-title" className="st-title">
-            {suite.label}
-          </h2>
+          {draft ? (
+            <>
+              <h2 id="st-title" className="ds-visually-hidden">
+                Editing {suite.label}
+              </h2>
+              <label className="st-field st-name" htmlFor="st-name">
+                <span className="st-field-label">Name</span>
+                <Input
+                  id="st-name"
+                  type="text"
+                  maxLength={160}
+                  value={draft.label}
+                  aria-invalid={draft.label.trim() ? undefined : true}
+                  onChange={(event) => update({ label: event.target.value })}
+                />
+              </label>
+            </>
+          ) : (
+            <h2 id="st-title" className="st-title">
+              {suite.label}
+            </h2>
+          )}
           <FactList aria-label="About this suite">
             <FactChip
               className="st-fact-words"
@@ -331,9 +529,9 @@ export function SuiteDetail({
               className="st-fact-words"
               label="Holds"
               value={suiteHolds(
-                suite.scenarios.length,
-                suite.repetitions,
-                suite.technical_retries,
+                tests.length,
+                draft ? draft.runs : suite.repetitions,
+                draft ? draft.retries : suite.technical_retries,
               )}
             />
             <FactChip label="Id" value={suite.id} />
@@ -357,14 +555,47 @@ export function SuiteDetail({
               Copy to edit
             </button>
           )}
-          <button
-            type="button"
-            className={dashboardHeaderActionClassName({ primary: true })}
-            disabled={!ready}
-            onClick={onRun}
-          >
-            Run this suite
-          </button>
+          {local && !editing ? (
+            <button
+              id="st-edit"
+              type="button"
+              className={dashboardHeaderActionClassName()}
+              disabled={!ready || busy}
+              onClick={onEdit}
+            >
+              Edit
+            </button>
+          ) : null}
+          {editing ? (
+            <>
+              <button
+                type="button"
+                className={dashboardHeaderActionClassName()}
+                disabled={editing.saving}
+                onClick={editing.onDiscard}
+              >
+                Discard
+              </button>
+              <button
+                type="button"
+                className={dashboardHeaderActionClassName({ primary: true })}
+                disabled={editing.saving}
+                aria-busy={editing.saving || undefined}
+                onClick={editing.onSave}
+              >
+                {editing.saving ? 'Saving…' : 'Save suite'}
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className={dashboardHeaderActionClassName({ primary: true })}
+              disabled={!ready}
+              onClick={onRun}
+            >
+              Run this suite
+            </button>
+          )}
           {local ? (
             <button
               type="button"
@@ -373,7 +604,7 @@ export function SuiteDetail({
               })}
               aria-label={`Delete ${suite.label}`}
               title="Delete suite"
-              disabled={!ready || busy}
+              disabled={!ready || busy || Boolean(editing?.saving)}
               onClick={onDelete}
             >
               <Trash2 size={16} aria-hidden="true" />
@@ -387,17 +618,54 @@ export function SuiteDetail({
           {error}
         </p>
       ) : null}
+      {draft ? (
+        <div className="st-edit">
+          <Stepper
+            id="st-runs"
+            label="Runs of each test"
+            noun="runs"
+            value={draft.runs}
+            min={1}
+            max={20}
+            onChange={(runs) => update({ runs })}
+          />
+          <Stepper
+            id="st-retries"
+            label="Retries on crash"
+            noun="retries"
+            value={draft.retries}
+            min={0}
+            max={3}
+            onChange={(retries) => update({ retries })}
+          />
+          <p className="st-edit-note">
+            A suite is only what to test. The model and the stack are picked
+            when it runs.
+          </p>
+          <span className="st-dirty" role="status">
+            {dirty ? 'Unsaved changes' : ''}
+          </span>
+        </div>
+      ) : null}
       {changed > 0 ? (
         <Callout tone="warning" icon={<Info size={16} />}>
-          {changedWarning(changed, suite.scenarios.length)}
+          {changedWarning(changed, tests.length)}
         </Callout>
       ) : null}
       <SuiteTests
-        ids={suite.scenarios}
+        ids={draft ? draft.shown : suite.scenarios}
         views={views}
         groups={groups}
         narrow={narrow}
+        edit={draft ? { tests: draft.tests, onTick: tick } : null}
       />
+      {draft && editing ? (
+        <AddTests
+          catalog={editing.catalog}
+          draft={draft}
+          onAdd={(id) => tick(id, true)}
+        />
+      ) : null}
       <SuiteExecutions runs={runs} local={local} />
     </section>
   )
@@ -484,6 +752,13 @@ export function SuitesPage() {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Suite | null>(null)
+  // The suite of this Console being edited, and its draft until it is saved
+  // or discarded; opening another suite drops it.
+  const [editing, setEditing] = useState<{
+    suiteId: string
+    draft: SuiteDraft
+  } | null>(null)
+  const [saving, setSaving] = useState(false)
   // The suite Run tests opens on ('' for none) while it is open, and which
   // opening it is: each one mounts the dialog afresh.
   const [runner, setRunner] = useState<string | null>(null)
@@ -566,8 +841,10 @@ export function SuitesPage() {
   // The open suite lives in the hash, so Back leaves a suite for the list.
   useEffect(() => {
     const sync = () => {
-      setParam(suiteParam())
+      const next = suiteParam()
+      setParam(next)
       setActionError(null)
+      setEditing((current) => (current?.suiteId === next ? current : null))
     }
     window.addEventListener('hashchange', sync)
     return () => window.removeEventListener('hashchange', sync)
@@ -580,6 +857,7 @@ export function SuitesPage() {
       ),
     [rows],
   )
+  const catalog = useMemo(() => [...views.values()], [views])
   const runsBySuite = useMemo(
     () =>
       new Map(
@@ -629,6 +907,8 @@ export function SuitesPage() {
     try {
       const created = await bridge.createSuite(suite.id)
       await load()
+      // Opened to edit: the copy is saved, its changes are not yet.
+      setEditing({ suiteId: created.id, draft: suiteDraft(created) })
       window.location.hash = hashForSuites(created.id)
     } catch (cause) {
       setActionError(errorText(cause))
@@ -643,6 +923,7 @@ export function SuitesPage() {
     try {
       await bridge.deleteSuite(suite.id)
       setDeleting(null)
+      setEditing(null)
       await load()
       window.location.hash = hashForSuites()
     } catch (cause) {
@@ -650,6 +931,33 @@ export function SuitesPage() {
       setActionError(errorText(cause))
     } finally {
       setBusy(false)
+    }
+  }
+
+  const save = async () => {
+    if (!bridge || !editing) return
+    const { suiteId, draft } = editing
+    const problem = draftProblem(draft)
+    if (problem) {
+      setActionError(problem)
+      if (!draft.label.trim()) document.getElementById('st-name')?.focus()
+      return
+    }
+    setSaving(true)
+    setActionError(null)
+    try {
+      await bridge.updateSuite(suiteId, {
+        label: draft.label.trim(),
+        scenarios: draft.shown.filter((id) => draft.tests.includes(id)),
+        repetitions: draft.runs,
+        technical_retries: draft.retries,
+      })
+      await load()
+      setEditing(null)
+    } catch (cause) {
+      setActionError(errorText(cause))
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -731,7 +1039,29 @@ export function SuitesPage() {
               ready={Boolean(bridge)}
               busy={busy}
               error={actionError}
+              editing={
+                editing?.suiteId === selected.id
+                  ? {
+                      draft: editing.draft,
+                      catalog,
+                      saving,
+                      onChange: (draft) =>
+                        setEditing({ suiteId: selected.id, draft }),
+                      onSave: () => void save(),
+                      onDiscard: () => {
+                        setEditing(null)
+                        setActionError(null)
+                      },
+                    }
+                  : null
+              }
               onCopy={() => void copy(selected)}
+              onEdit={() =>
+                setEditing({
+                  suiteId: selected.id,
+                  draft: suiteDraft(selected),
+                })
+              }
               onRun={() => openRunner(selected.id)}
               onDelete={() => setDeleting(selected)}
             />
