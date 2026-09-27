@@ -65,7 +65,6 @@ function CredentialDialog({
     setError(null)
     try {
       const { credentials } = await bridge.setCredential(name, value)
-      setValue('')
       onSaved(credentials, name)
     } catch (cause) {
       setError(errorText(cause))
@@ -137,13 +136,17 @@ function CredentialDialog({
             <label className="sk-field-label" htmlFor="credential-value">
               Value
             </label>
+            {/* Masked by CSS, not type=password, so the browser does not
+                offer to save the key; uncontrolled, so React never writes
+                it to the value attribute. */}
             <input
               id="credential-value"
-              className="sk-input sk-input-mono"
-              type="password"
-              value={value}
+              className="sk-input sk-input-mono sk-secret"
+              type="text"
               placeholder="Paste the key"
               autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
               spellCheck={false}
               readOnly={saving}
               aria-disabled={saving || undefined}

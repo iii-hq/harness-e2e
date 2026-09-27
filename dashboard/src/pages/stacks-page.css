@@ -1084,6 +1084,11 @@
   font-size: var(--text-xs);
 }
 
+/* A key typed in plain text, drawn as dots. */
+.sk-secret {
+  -webkit-text-security: disc;
+}
+
 .sk-hint[data-tone="warn"] {
   color: color-mix(in srgb, var(--color-warn) 75%, var(--color-ink));
 }

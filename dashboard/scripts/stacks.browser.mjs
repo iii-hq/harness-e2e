@@ -523,9 +523,26 @@ try {
     'OPENAI_API_KEY',
   )
   assert.equal(await set.locator('#credential-name').isEditable(), false)
+  // Drawn as dots, never offered to the browser's password manager, and
+  // never written to an attribute.
   const value = set.locator('#credential-value')
-  assert.equal(await value.getAttribute('type'), 'password')
+  assert.equal(await value.getAttribute('type'), 'text')
+  assert.equal(await value.getAttribute('autocomplete'), 'off')
+  assert.equal(await value.getAttribute('spellcheck'), 'false')
+  assert.equal(
+    await value.evaluate((input) =>
+      getComputedStyle(input).getPropertyValue('-webkit-text-security'),
+    ),
+    'disc',
+  )
   await value.fill('sk-typed-7c1b')
+  assert.equal(await value.getAttribute('value'), null)
+  assert.equal(
+    await page.evaluate(() =>
+      document.documentElement.outerHTML.includes('sk-typed-7c1b'),
+    ),
+    false,
+  )
   await set
     .getByRole('button', { name: 'Save credential', exact: true })
     .click()
