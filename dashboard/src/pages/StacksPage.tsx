@@ -1,6 +1,26 @@
-import { ConfirmDialog } from '@iii-dev/console-ui'
-import { Copy, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  ConfirmDialog,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@iii-dev/console-ui'
+import {
+  ArrowUpRight,
+  CircleX,
+  Copy,
+  Lock,
+  Trash2,
+  TriangleAlert,
+} from 'lucide-react'
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import {
   DashboardPageActions,
   dashboardHeaderActionClassName,
@@ -12,14 +32,9 @@ import { ProviderCredentials } from '@/components/ProviderCredentials'
 import {
   buttonClassName,
   Callout,
-  Dialog,
   EmptyState,
   FactChip,
   FactList,
-  Field,
-  fieldDescribedBy,
-  Input,
-  Textarea,
 } from '@/design-system'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
@@ -27,13 +42,23 @@ import {
   getDashboardDataBridge,
   type Stack,
 } from '@/lib/dashboard-data-source'
+import { formatDateTime } from '@/lib/format'
 import {
   BASE_STACK,
+  iiiHint,
   pinOf,
+  savedStatus,
   stackDiff,
+  stackFile,
   stackSub,
   stacksSummary,
+  templateHint,
+  templateUrl,
   warningsTitle,
+  workerWarns,
+  yamlLine,
+  yamlLines,
+  yamlMeta,
 } from '@/lib/stacks-view'
 import '@/design-system/styles.css'
 import './executions-page.css'
@@ -43,179 +68,416 @@ function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-function plural(count: number, one: string, many: string) {
-  return `${count} ${count === 1 ? one : many}`
+/** The list with a stack as the worker answered it, in its place or last. */
+function upsertStack(stacks: Stack[] | null, stack: Stack) {
+  const listed = stacks ?? []
+  return listed.some((entry) => entry.id === stack.id)
+    ? listed.map((entry) => (entry.id === stack.id ? stack : entry))
+    : [...listed, stack]
 }
 
-function Warnings({ warnings }: { warnings: string[] }) {
-  if (warnings.length === 0) return null
-  return (
-    <Callout
-      tone="warning"
-      title={plural(warnings.length, 'warning', 'warnings')}
-      data-stack-warnings
-    >
-      <ul className="m-0 grid list-disc gap-1 pl-4">
-        {warnings.map((warning, index) => (
-          // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
-          <li key={index}>{warning}</li>
-        ))}
-      </ul>
-    </Callout>
-  )
-}
+const CREATED = 'Created. Change what you need, then save.'
 
-/** Edits a stack of this Console: its name and its YAML, as written. Saving
- *  keeps the editor open with the warnings of what was saved. A repository
- *  stack opens read-only. */
-function StackEditor({
-  bridge,
+/** A stack opened from the list: what it installs, its workers and warnings
+ *  beside its YAML exactly as written. A repository stack is read-only and
+ *  copied to edit; a stack of this Console is edited here, its name and its
+ *  YAML. Saving keeps it open with the warnings of what was saved; YAML the
+ *  runner refuses is said next to the editor, which keeps what was typed. */
+export function StackSheet({
   stack,
-  onClose,
+  mode,
+  narrow,
+  bridge,
+  busy,
+  copyError,
+  created = false,
+  onCopy,
   onSaved,
+  onClose,
 }: {
-  bridge: DashboardDataBridge
   stack: Stack
+  mode: 'view' | 'edit'
+  narrow: boolean
+  bridge: DashboardDataBridge | null
+  busy: boolean
+  /** Why Copy to edit did not go through. */
+  copyError: string | null
+  /** Opened right after it was created. */
+  created?: boolean
+  onCopy: () => void
+  onSaved: (stack: Stack) => void
   onClose: () => void
-  onSaved: () => void
 }) {
-  const [label, setLabel] = useState(stack.label)
-  const [yaml, setYaml] = useState(stack.yaml)
-  const [saved, setSaved] = useState(stack)
-  const [attempted, setAttempted] = useState(false)
+  const editing = mode === 'edit'
+  const [draft, setDraft] = useState({ label: stack.label, yaml: stack.yaml })
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [status, setStatus] = useState('')
-  const readOnly = stack.source === 'repository'
-  const labelError =
-    attempted && label.trim() === '' ? 'Name the stack.' : undefined
-  const changed = label.trim() !== saved.label || yaml !== saved.yaml
+  const [status, setStatus] = useState(created ? CREATED : '')
+  const [copied, setCopied] = useState(false)
+  const [asking, setAsking] = useState(false)
+  const code = useRef<HTMLElement>(null)
+  const dirty =
+    editing && (draft.label.trim() !== stack.label || draft.yaml !== stack.yaml)
+  const lines = yamlLines(stack.yaml)
+  const editorLines = draft.yaml.split('\n').length
+  const warnings = stack.warnings
 
-  const save = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    if (label.trim() === '') {
-      setAttempted(true)
-      document.getElementById('stack-editor-label')?.focus()
+  const close = () => (dirty ? setAsking(true) : onClose())
+  const save = async () => {
+    if (!bridge) return
+    if (draft.label.trim() === '') {
+      setError(
+        'Name the stack (up to 160 characters, without control characters).',
+      )
+      document.getElementById('sk-name')?.focus()
       return
     }
     setSaving(true)
     setError(null)
     try {
       const next = await bridge.updateStack(stack.id, {
-        label: label.trim(),
-        yaml,
+        label: draft.label.trim(),
+        yaml: draft.yaml,
       })
-      setSaved(next)
-      setStatus(
-        next.warnings.length
-          ? `saved with ${plural(next.warnings.length, 'warning', 'warnings')}`
-          : 'saved',
-      )
-      onSaved()
+      setDraft({ label: next.label, yaml: next.yaml })
+      setStatus(savedStatus(next))
+      onSaved(next)
     } catch (cause) {
       setError(errorText(cause))
     } finally {
       setSaving(false)
     }
   }
+  const copyYaml = () => {
+    void navigator.clipboard
+      ?.writeText(editing ? draft.yaml : stack.yaml)
+      .then(() => setCopied(true))
+      .catch(() => setCopied(false))
+  }
+
+  const [tone, said] = saving
+    ? ['faint', 'Saving…']
+    : copyError && !editing
+      ? ['alert', copyError]
+      : !editing
+        ? ['faint', 'Read-only. Copies you make appear under This Console.']
+        : dirty
+          ? [
+              'warn',
+              'Unsaved changes. The summary and warnings refresh when you save.',
+            ]
+          : [
+              'faint',
+              status ||
+                (stack.updated_at
+                  ? `Saved ${formatDateTime(stack.updated_at)}.`
+                  : ''),
+            ]
+
   return (
-    <Dialog
-      open
-      onClose={() => !saving && onClose()}
-      size="lg"
-      tall
-      kicker={readOnly ? 'Repository stack' : 'Stack'}
-      title={readOnly ? `View ${stack.label}` : `Edit ${stack.label}`}
-      description={
-        readOnly
-          ? 'A stack of the repository, read-only: copy it to edit a stack of this Console.'
-          : 'Where a suite runs: an iii Compose project plus iii and an optional template, as in stacks/*.yaml. Only YAML that does not parse, or no containers, is refused; everything else is a warning.'
-      }
-      closeLabel="Close stack editor"
-      className="ds-root"
-      footer={
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <span className="mr-auto text-xs text-ink-soft" role="status">
-            {saving ? '' : changed ? 'unsaved changes' : status}
-          </span>
-          <button
-            className={buttonClassName({ variant: 'secondary' })}
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-          >
-            close
-          </button>
-          {readOnly ? null : (
-            <button
-              className={buttonClassName({ variant: 'primary' })}
-              type="submit"
-              form="stack-editor-form"
-              disabled={saving}
-              aria-busy={saving}
-            >
-              {saving ? 'saving…' : 'save stack'}
-            </button>
-          )}
-        </div>
-      }
-    >
-      <form
-        id="stack-editor-form"
-        className="grid min-w-0 gap-4"
-        onSubmit={save}
-        noValidate
+    <>
+      <Dialog
+        open
+        onOpenChange={(open) => {
+          if (!open && !saving) close()
+        }}
       >
-        {readOnly ? null : (
-          <Field
-            label="Stack name"
-            htmlFor="stack-editor-label"
-            meta="required"
-            error={labelError}
-          >
-            <Input
-              id="stack-editor-label"
-              value={label}
-              maxLength={160}
-              aria-invalid={labelError ? true : undefined}
-              aria-describedby={fieldDescribedBy('stack-editor-label', {
-                error: Boolean(labelError),
-              })}
-              onChange={(event) => setLabel(event.target.value)}
-              disabled={saving}
-            />
-          </Field>
-        )}
-        <Warnings warnings={saved.warnings} />
-        <Field
-          label="Stack YAML"
-          htmlFor="stack-editor-yaml"
-          hint={
-            readOnly
-              ? 'As stacks/ in this runner writes it.'
-              : 'Kept exactly as written, comments included.'
-          }
-          error={error}
+        <DialogContent
+          className="sk-sheet"
+          data-narrow={narrow || undefined}
+          data-stack-sheet={mode}
+          onOpenAutoFocus={(event) => {
+            if (editing) return
+            event.preventDefault()
+            code.current?.focus()
+          }}
         >
-          <Textarea
-            id="stack-editor-yaml"
-            className="min-h-[24rem] font-mono text-xs leading-5"
-            value={yaml}
-            readOnly={readOnly}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-            aria-invalid={error ? true : undefined}
-            aria-describedby={fieldDescribedBy('stack-editor-yaml', {
-              hint: true,
-              error: Boolean(error),
-            })}
-            onChange={(event) => setYaml(event.target.value)}
-            disabled={saving}
-          />
-        </Field>
-      </form>
-    </Dialog>
+          <header className="sk-sheet-head">
+            {editing ? (
+              <>
+                <DialogTitle className="ds-visually-hidden">
+                  Edit {stack.label}
+                </DialogTitle>
+                <label className="sk-field-label" htmlFor="sk-name">
+                  Stack name
+                </label>
+                <input
+                  id="sk-name"
+                  className="sk-input sk-name-input"
+                  value={draft.label}
+                  maxLength={160}
+                  autoComplete="off"
+                  disabled={saving}
+                  onChange={(event) =>
+                    setDraft({ ...draft, label: event.target.value })
+                  }
+                />
+              </>
+            ) : (
+              <div className="sk-sheet-title-row">
+                <DialogTitle className="sk-sheet-title">
+                  {stack.label}
+                </DialogTitle>
+                <span className="sk-badge">
+                  <Lock size={14} aria-hidden="true" />
+                  Repository · read-only
+                </span>
+              </div>
+            )}
+            <DialogDescription className="sk-sheet-desc">
+              {editing
+                ? 'Kept in this Console. Only YAML that does not parse, or has no containers, is refused. Everything else is a warning.'
+                : `${stackFile(stack)}, built into this runner. Copy it to change a version, a worker or the template.`}
+            </DialogDescription>
+          </header>
+
+          <div className="sk-sheet-body">
+            <aside className="sk-aside" aria-label="What it declares">
+              {editing && error ? (
+                <div className="sk-alert" role="alert" id="sk-error">
+                  <CircleX size={16} aria-hidden="true" />
+                  <span>
+                    <strong>Not saved.</strong> {error}
+                  </span>
+                </div>
+              ) : null}
+              {warnings.length ? (
+                <div className="sk-warnbox" role="status" data-stack-warnings>
+                  <span className="sk-warnbox-title">
+                    <TriangleAlert size={16} aria-hidden="true" />
+                    {warningsTitle(warnings.length)}
+                    {editing ? ' as last saved' : ''}
+                  </span>
+                  <ul>
+                    {warnings.map((warning, index) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
+                      <li key={index}>{warning}</li>
+                    ))}
+                  </ul>
+                  <span className="sk-warnbox-note">
+                    Warnings never stop a run.
+                  </span>
+                </div>
+              ) : null}
+              <section className="sk-section" aria-labelledby="sk-installs">
+                <h3 id="sk-installs">Installs</h3>
+                <dl className="sk-installs">
+                  <dt>iii release</dt>
+                  <dd>
+                    <span className="sk-mono">{stack.iii ?? '—'}</span>
+                    {iiiHint(stack.iii) ? (
+                      <span className="sk-faint">{iiiHint(stack.iii)}</span>
+                    ) : null}
+                  </dd>
+                  <dt>Template</dt>
+                  <dd>
+                    {stack.template ? (
+                      <>
+                        <a
+                          className="sk-mono sk-link"
+                          href={templateUrl(stack.template)}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {stack.template}
+                          <ArrowUpRight size={12} aria-hidden="true" />
+                        </a>
+                        <span className="sk-faint">
+                          {templateHint(stack.template)}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="sk-faint">
+                        None. The groups start from an empty project.
+                      </span>
+                    )}
+                  </dd>
+                </dl>
+              </section>
+              <section className="sk-section" aria-labelledby="sk-workers">
+                <h3 id="sk-workers">
+                  Workers{' '}
+                  <span className="sk-count">{stack.containers.length}</span>
+                </h3>
+                {stack.containers.length ? (
+                  // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+                  <ul role="list" className="sk-workers">
+                    {stack.containers.map((container) => (
+                      <li key={container.name} data-worker={container.name}>
+                        <span className="sk-worker-name">
+                          <span>{container.name}</span>
+                          <span
+                            className="sk-worker-ref"
+                            data-warn={workerWarns(container) || undefined}
+                          >
+                            {container.worker ?? 'no worker'}
+                          </span>
+                        </span>
+                        <span
+                          className="sk-worker-pin"
+                          data-set={
+                            container.version || container.commit
+                              ? true
+                              : undefined
+                          }
+                        >
+                          {pinOf(container)}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </section>
+              <section className="sk-section" aria-labelledby="sk-added">
+                <h3 id="sk-added">Added when it runs</h3>
+                <p className="sk-faint">
+                  The workers these depend on (state, llm-router,
+                  session-manager and the rest) come from their packages. Each
+                  group gets its own namespace, data directory and provider
+                  credentials. Credentials never go in a stack.
+                </p>
+              </section>
+            </aside>
+
+            <div className="sk-yaml">
+              <div className="sk-yaml-bar">
+                <span className="sk-yaml-file">
+                  {editing ? 'YAML' : stackFile(stack)}
+                </span>
+                <span className="sk-faint">
+                  {editing
+                    ? 'kept exactly as written, comments included'
+                    : yamlMeta(stack.yaml)}
+                </span>
+                <button
+                  type="button"
+                  className="sk-btn sk-btn-small"
+                  onClick={copyYaml}
+                >
+                  <Copy size={14} aria-hidden="true" />
+                  {copied ? 'Copied' : 'Copy YAML'}
+                </button>
+              </div>
+              {editing ? (
+                <div className="sk-editor">
+                  <div className="sk-gutter" aria-hidden="true">
+                    {Array.from(
+                      { length: editorLines },
+                      (_, index) => index + 1,
+                    ).join('\n')}
+                  </div>
+                  <textarea
+                    id="sk-yaml"
+                    className="sk-textarea"
+                    aria-label="Stack YAML"
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? 'sk-error' : undefined}
+                    spellCheck={false}
+                    autoCapitalize="off"
+                    autoCorrect="off"
+                    wrap="off"
+                    value={draft.yaml}
+                    disabled={saving}
+                    style={{ '--sk-lines': editorLines } as CSSProperties}
+                    onChange={(event) => {
+                      setCopied(false)
+                      setDraft({ ...draft, yaml: event.target.value })
+                    }}
+                  />
+                </div>
+              ) : (
+                <section
+                  ref={code}
+                  className="sk-code"
+                  aria-label="Stack YAML, read-only"
+                  // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region reads by keyboard
+                  tabIndex={0}
+                >
+                  {lines.map((line, index) => {
+                    const part = yamlLine(line)
+                    return (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: the lines of a text that does not change here
+                      <div key={index} className="sk-line">
+                        <span className="sk-ln" aria-hidden="true">
+                          {index + 1}
+                        </span>
+                        <span
+                          className="sk-text"
+                          data-comment={part.comment || undefined}
+                        >
+                          {part.key ? (
+                            <span className="sk-key">{part.key}</span>
+                          ) : null}
+                          {part.rest || ' '}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </section>
+              )}
+            </div>
+          </div>
+
+          <footer className="sk-sheet-foot">
+            <span className="sk-status" role="status" data-tone={tone}>
+              {said}
+            </span>
+            {editing ? (
+              <>
+                <button
+                  type="button"
+                  className="sk-btn"
+                  disabled={saving}
+                  onClick={() => {
+                    if (!dirty) return onClose()
+                    setDraft({ label: stack.label, yaml: stack.yaml })
+                    setError(null)
+                  }}
+                >
+                  {dirty ? 'Discard changes' : 'Close'}
+                </button>
+                <button
+                  type="button"
+                  className="sk-btn sk-btn-primary"
+                  disabled={saving || !bridge}
+                  aria-busy={saving || undefined}
+                  onClick={() => void save()}
+                >
+                  {saving ? 'Saving…' : 'Save stack'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button type="button" className="sk-btn" onClick={onClose}>
+                  Close
+                </button>
+                <button
+                  type="button"
+                  className="sk-btn sk-btn-primary"
+                  disabled={busy || !bridge}
+                  aria-busy={busy || undefined}
+                  onClick={onCopy}
+                >
+                  {busy ? 'Copying…' : 'Copy to edit'}
+                </button>
+              </>
+            )}
+          </footer>
+        </DialogContent>
+      </Dialog>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={(open) => {
+          if (!open) setAsking(false)
+        }}
+        title={`Discard changes to ${stack.label}?`}
+        description="What you changed in it is not saved. Discarding keeps the stack as it was last saved."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        tone="danger"
+        onConfirm={onClose}
+      />
+    </>
   )
 }
 
@@ -427,7 +689,12 @@ export function StacksPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [editing, setEditing] = useState<Stack | null>(null)
+  // The stack open in the sheet, and whether it was just created.
+  const [sheet, setSheet] = useState<{
+    id: string
+    mode: 'view' | 'edit'
+    created?: boolean
+  } | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
   const [, setCreating] = useState(false)
   const [running, setRunning] = useState(false)
@@ -465,8 +732,8 @@ export function StacksPage() {
     setActionError(null)
     try {
       const created = await bridge.createStack(stack.id)
-      setStacks((current) => [...(current ?? []), created])
-      setEditing(created)
+      setStacks((current) => upsertStack(current, created))
+      setSheet({ id: created.id, mode: 'edit', created: true })
       void load()
     } catch (cause) {
       setActionError(errorText(cause))
@@ -494,6 +761,7 @@ export function StacksPage() {
   }
 
   const failedFirstLoad = Boolean(error) && stacks === null
+  const open = sheet ? stacks?.find((stack) => stack.id === sheet.id) : null
   return (
     <div className="ds-root ex-page sk-page" data-narrow={narrow || undefined}>
       <DashboardPageActions
@@ -527,7 +795,7 @@ export function StacksPage() {
           </span>
         </Callout>
       ) : null}
-      {actionError ? (
+      {actionError && !open ? (
         <Callout tone="danger" title="That did not go through">
           {actionError}
         </Callout>
@@ -563,7 +831,12 @@ export function StacksPage() {
           stacks={stacks}
           ready={Boolean(bridge)}
           busy={busy}
-          onOpen={setEditing}
+          onOpen={(stack) =>
+            setSheet({
+              id: stack.id,
+              mode: stack.source === 'local' ? 'edit' : 'view',
+            })
+          }
           onCopy={(stack) => void copy(stack)}
           onDelete={setDeleting}
           onNew={() => setCreating(true)}
@@ -571,13 +844,22 @@ export function StacksPage() {
       )}
       <ProviderCredentials bridge={bridge} />
 
-      {editing && bridge ? (
-        <StackEditor
-          key={editing.id}
+      {open ? (
+        <StackSheet
+          key={`${open.id}:${sheet?.mode}`}
+          stack={open}
+          mode={sheet?.mode ?? 'view'}
+          narrow={narrow}
           bridge={bridge}
-          stack={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => void load()}
+          busy={busy}
+          copyError={actionError}
+          created={sheet?.created}
+          onCopy={() => void copy(open)}
+          onSaved={(saved) => {
+            setStacks((current) => upsertStack(current, saved))
+            void load()
+          }}
+          onClose={() => setSheet(null)}
         />
       ) : null}
       <ConfirmDialog
