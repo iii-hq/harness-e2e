@@ -31,6 +31,12 @@ const local = []
 const calls = { create: [], update: [], remove: [], start: [] }
 // A refusal the next suite-create answers with, once.
 let refuseCreate = null
+// The same for the next suites-list and catalog-get.
+let refuseSuites = null
+let refuseCatalog = null
+const once = (message) => {
+  throw new Error(message)
+}
 const executions = new Map()
 
 // The catalog: every test the master plan runs, one with a current run, one
@@ -118,7 +124,14 @@ function start(request) {
 
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
-  if (id === 'suites-list') return { suites: [...repository, ...local] }
+  if (id === 'suites-list') {
+    if (refuseSuites) {
+      const message = refuseSuites
+      refuseSuites = null
+      once(message)
+    }
+    return { suites: [...repository, ...local] }
+  }
   if (id === 'suite-create') {
     if (refuseCreate) {
       const message = refuseCreate
@@ -167,6 +180,11 @@ const trigger = (name, request = {}) => {
       1,
     )
     return {}
+  }
+  if (id === 'catalog-get' && refuseCatalog) {
+    const message = refuseCatalog
+    refuseCatalog = null
+    once(message)
   }
   if (id === 'catalog-get')
     return {
@@ -251,6 +269,15 @@ try {
     .waitFor()
   const regression = repository.find((suite) => suite.id === 'regression')
 
+  // A hash naming a suite that is not here says so, and opens no other one.
+  await page.goto(`${server.url}#/ext/harness-e2e/suites?suite=suite-gone`)
+  const gone = page.locator('[data-suite-missing]')
+  await gone.getByText('That suite is not here any more').waitFor()
+  assert.equal(await detail.count(), 0)
+  assert.equal(await page.locator('[data-suites] [aria-current]').count(), 0)
+  await gone.getByRole('link', { name: 'All the suites' }).click()
+  await page.locator('[data-suite-detail="regression"]').waitFor()
+
   // Copy to edit: the copy is a suite of this Console, saved, and opened in
   // place to edit. A suite holds no model.
   await inRepository.locator('[data-suite="regression"]').click()
@@ -284,9 +311,35 @@ try {
   // Add tests searches the catalog; an added test can be taken out again.
   await page.locator('#st-add').fill('minimal')
   await detail.getByRole('button', { name: 'Add minimal_path' }).click()
+  // The suggestion goes; focus is back in the search.
+  assert.equal(await page.evaluate(() => document.activeElement?.id), 'st-add')
   await detail
     .getByRole('checkbox', { name: 'Keep minimal_path in the suite' })
     .uncheck()
+  // Another suite, with changes unsaved, asks first; Keep editing is in
+  // focus and keeps them.
+  await inRepository.locator('[data-suite="pr"]').click()
+  const discard = page.getByRole('alertdialog', {
+    name: 'Discard changes to Regression copy?',
+  })
+  await discard.waitFor()
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Keep editing',
+  )
+  await discard.getByRole('button', { name: 'Keep editing' }).click()
+  await discard.waitFor({ state: 'hidden' })
+  assert.equal(await suiteName.inputValue(), 'Regression, fast')
+  // A navigation it cannot hold back (a pasted hash, Back) keeps the draft:
+  // the suite reopens in it.
+  await page.evaluate(() => {
+    location.hash = '#/ext/harness-e2e/suites?suite=pr'
+  })
+  await page.locator('[data-suite-detail="pr"]').waitFor()
+  await page.goBack()
+  await suiteName.waitFor()
+  assert.equal(await suiteName.inputValue(), 'Regression, fast')
+  await detail.getByText('Unsaved changes', { exact: true }).waitFor()
   await detail.getByRole('button', { name: 'Save suite', exact: true }).click()
   await detail.getByRole('button', { name: 'Edit', exact: true }).waitFor()
   assert.deepEqual(calls.update, [
@@ -312,8 +365,38 @@ try {
   await detail.getByRole('button', { name: 'Discard', exact: true }).click()
   await detail.getByRole('heading', { name: 'Regression, fast' }).waitFor()
   assert.equal(calls.update.length, 1)
+  // New suite, with changes unsaved, asks too; discarding them leaves.
+  await detail.getByRole('button', { name: 'Edit', exact: true }).click()
+  await suiteName.fill('Doomed')
+  await page.getByRole('button', { name: 'New suite', exact: true }).click()
+  await page
+    .getByRole('alertdialog', { name: 'Discard changes to Regression, fast?' })
+    .getByRole('button', { name: 'Discard changes' })
+    .click()
+  await page.waitForFunction(() => location.hash.endsWith('/tests'))
+  assert.equal(calls.update.length, 1)
 
-  // Run this suite opens Run tests on it.
+  // Editing waits for the catalog's sequential groups: when it fails, the
+  // editor says why, Save waits, and Try again reads it.
+  refuseCatalog = 'the running Harness has no registered models'
+  await page.goto(`${server.url}#/ext/harness-e2e/suites?suite=suite-1`)
+  await detail.getByRole('button', { name: 'Edit', exact: true }).click()
+  await detail.getByText('Which tests run together could not be read').waitFor()
+  await detail
+    .getByText('the running Harness has no registered models.', {
+      exact: false,
+    })
+    .waitFor()
+  const save = detail.getByRole('button', { name: 'Save suite', exact: true })
+  assert.equal(await save.isDisabled(), true)
+  await detail.getByRole('button', { name: 'Try again' }).click()
+  await detail.locator('#st-save-blocked').waitFor({ state: 'detached' })
+  assert.equal(await save.isDisabled(), false)
+  await detail.getByRole('button', { name: 'Discard', exact: true }).click()
+
+  // Run this suite opens Run tests on it; when the suites fail to load, a
+  // refresh of the catalog picks it.
+  refuseSuites = 'suites unavailable'
   await detail
     .getByRole('button', { name: 'Run this suite', exact: true })
     .click()
@@ -321,9 +404,16 @@ try {
   await fromSuite.getByText('catalog ready').waitFor()
   assert.equal(
     await fromSuite.locator('#run-dialog-suite').getAttribute('data-value'),
-    'suite-1',
+    '',
   )
-  await page.keyboard.press('Escape')
+  await fromSuite.getByRole('button', { name: 'Refresh catalog' }).click()
+  await page.waitForFunction(
+    () =>
+      document
+        .querySelector('#run-dialog-suite')
+        ?.getAttribute('data-value') === 'suite-1',
+  )
+  await fromSuite.getByRole('button', { name: 'Close', exact: true }).click()
   await fromSuite.waitFor({ state: 'hidden' })
 
   // Run tests: the suite is the first field. Picking one ticks what it
@@ -478,6 +568,8 @@ try {
     .click()
   await copy.waitFor({ state: 'detached' })
   assert.deepEqual(calls.remove, [{ suite_id: 'suite-1' }])
+  // Its buttons are gone: focus is on the page's heading.
+  await page.waitForFunction(() => document.activeElement?.id === 'st-heading')
   // New suite leads to the catalog, where ticked tests are saved as one.
   await page.getByRole('link', { name: 'New suite', exact: true }).click()
   await page.waitForFunction(() => location.hash.endsWith('/tests'))
@@ -622,7 +714,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    "Suites browser flow passed: repository suites listed apart and read-only, a suite's tests with their last results, changed definitions and sequential steps, Copy to edit and edit in place (name, runs, untick, add tests, discard), Run this suite, the executions of a suite, delete a suite of this Console, New suite to the catalog, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, even after its suite was edited (as recorded), the Tests catalog saves ticked tests as a suite and runs them, narrow drill-in.",
+    "Suites browser flow passed: repository suites listed apart and read-only, a suite's tests with their last results, changed definitions and sequential steps, a missing suite said, Copy to edit and edit in place (name, runs, untick, add tests, discard), unsaved changes asked before leaving and kept across Back, the catalog failure in the editor with Try again, Run this suite (picked once the suites load), the executions of a suite, delete a suite of this Console, New suite to the catalog, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, even after its suite was edited (as recorded), the Tests catalog saves ticked tests as a suite and runs them, narrow drill-in.",
   )
 } catch (error) {
   console.error(
