@@ -357,6 +357,18 @@ const contractsRead = new Promise((resolve) => {
   releaseContracts = resolve
 })
 const server = await createConsoleTestHost()
+// A dialog fills its fields after it opens: wait until a field reads what it
+// should instead of reading it once.
+const settled = async (read, expected, timeout = 10_000) => {
+  const deadline = Date.now() + timeout
+  let value = await read()
+  while (value !== expected && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    value = await read()
+  }
+  assert.equal(value, expected)
+}
+
 const trigger = async (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'executions-list') {
@@ -547,8 +559,8 @@ try {
   await runTests.getByText('catalog ready').waitFor()
   assert.equal(await runTests.getByText('Harness endpoint').count(), 0)
   await runTests.getByText('The model of your last execution.').waitFor()
-  assert.equal(
-    await runTests.getByLabel('Model').inputValue(),
+  await settled(
+    () => runTests.getByLabel('Model').inputValue(),
     'deepseek::deepseek-v4-flash',
   )
   await runTests
@@ -656,13 +668,13 @@ try {
     .getByRole('status')
     .filter({ hasText: 'Catalog unavailable' })
     .waitFor()
-  assert.equal(
-    await again.locator('#run-dialog-label').inputValue(),
+  await settled(
+    () => again.locator('#run-dialog-label').inputValue(),
     'Software engineering',
   )
   // Its suite, as recorded, even though this runner does not list it.
-  assert.equal(
-    await again.locator('#run-dialog-suite').getAttribute('data-value'),
+  await settled(
+    () => again.locator('#run-dialog-suite').getAttribute('data-value'),
     'recorded:software-engineering-2025',
   )
   await again
@@ -674,8 +686,8 @@ try {
     await again.locator('#run-dialog-technicalRetries-value').innerText(),
     '0',
   )
-  assert.equal(
-    await again.locator('#run-dialog-agent').inputValue(),
+  await settled(
+    () => again.locator('#run-dialog-agent').inputValue(),
     'tech-lead',
   )
   // The catalog has to load before running: Run waits for it, then sends the
@@ -732,8 +744,8 @@ try {
   await runTests.getByText('catalog ready').waitFor()
   assert.equal(await runTests.locator('#run-dialog-stack').count(), 0)
   await runTests.getByRole('radio', { name: 'Docker' }).click()
-  assert.equal(
-    await runTests.locator('#run-dialog-stack').getAttribute('data-value'),
+  await settled(
+    () => runTests.locator('#run-dialog-stack').getAttribute('data-value'),
     'default',
   )
   await runTests.locator('#run-dialog-stack').click()
@@ -785,8 +797,8 @@ try {
       .getAttribute('aria-checked'),
     'true',
   )
-  assert.equal(
-    await again.locator('#run-dialog-stack').getAttribute('data-value'),
+  await settled(
+    () => again.locator('#run-dialog-stack').getAttribute('data-value'),
     'recorded',
   )
   await again
