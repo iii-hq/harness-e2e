@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use tokio::sync::{broadcast, Mutex, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock, Semaphore};
 use url::Url;
 
 use super::bus::DashboardEvents;
@@ -24,6 +24,10 @@ use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
 const MAX_LOG_TAIL_BYTES: u64 = 256 * 1024;
 const MAX_LOG_CHUNK_BYTES: u64 = 64 * 1024;
+/// GitHub imports downloading and installing at once. Each pulls a run's
+/// evidence bundle (hundreds of MB); the others wait their turn, already
+/// `importing`.
+const GITHUB_IMPORTS: usize = 2;
 
 struct ControllerState {
     job: Option<RunMetadata>,
@@ -39,6 +43,8 @@ pub(super) struct Controller {
     /// The read model and the previous-attempts revision it left out.
     read_model: RwLock<Option<(u64, Arc<DashboardReadModel>)>>,
     events: Option<Arc<DashboardEvents>>,
+    /// Turns for the GitHub imports in the background (`GITHUB_IMPORTS`).
+    github_imports: Semaphore,
 }
 
 impl Controller {
@@ -88,6 +94,7 @@ impl Controller {
             state: Mutex::new(ControllerState { job: None }),
             read_model: RwLock::new(None),
             events,
+            github_imports: Semaphore::new(GITHUB_IMPORTS),
         });
         if let Some(control) = controller.control.as_ref() {
             for record in control.records().await? {
@@ -412,7 +419,8 @@ impl Controller {
     }
 
     /// Answers with the execution at once; the download and installation
-    /// continue in the background and end in `completed` or `failed`.
+    /// continue in the background, `GITHUB_IMPORTS` at a time, and end in
+    /// `completed` or `failed`.
     pub(super) async fn github_run_import(
         self: &Arc<Self>,
         request: GithubRunImportRequest,
@@ -429,6 +437,7 @@ impl Controller {
             let controller = Arc::clone(self);
             let id = execution.id.clone();
             tokio::spawn(async move {
+                let _turn = controller.github_imports.acquire().await;
                 if let Err(error) = controller.plan_store.finish_github_import(&id).await {
                     tracing::error!(execution_id = %id, error = %format!("{error:#}"), "record the GitHub import outcome");
                 }
@@ -712,4 +721,98 @@ fn read_log_chunk(path: &Path, after: Option<u64>) -> Result<LogChunk> {
         offset: length,
         truncated: from > requested,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+    use crate::plans::store::tests::{fake_gh, manager_with_gh, FakeRunner};
+
+    #[tokio::test]
+    async fn github_imports_answer_at_once_and_download_two_at_a_time() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // Every run answers; listing a run's artifacts holds until `release`
+        // exists, then lists none, so each import ends failed.
+        let mut gh = fake_gh(
+            root.path(),
+            r#"here="$(dirname "$0")"
+case "$*" in
+  *artifacts*) echo "$*" >> "$here/downloads"
+    while [ ! -f "$here/release" ]; do sleep 0.02; done ;;
+  *) printf '%s' '{"run_attempt":1,"display_title":"E2E · rc","html_url":"https://github.com/o/r/actions/runs/1","created_at":"2026-09-20T10:00:00Z"}' ;;
+esac"#,
+        );
+        gh.api_timeout = Duration::from_secs(30);
+        let controller = Arc::new(Controller {
+            plan_store: manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh),
+            github_repository: "o/r".into(),
+            runs_dir: data.clone(),
+            defaults: Defaults {
+                url: "ws://localhost:49134".into(),
+                model: String::new(),
+                provider: String::new(),
+                runs: 1,
+                technical_retries: 1,
+                seed: None,
+            },
+            control: None,
+            state: Mutex::new(ControllerState { job: None }),
+            read_model: RwLock::new(None),
+            events: None,
+            github_imports: Semaphore::new(GITHUB_IMPORTS),
+        });
+        let downloads = || {
+            fs::read_to_string(root.path().join("downloads"))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+
+        let mut ids = Vec::new();
+        for run_id in [1, 2, 3] {
+            let accepted = controller
+                .github_run_import(GithubRunImportRequest {
+                    repository: None,
+                    run_id,
+                })
+                .await
+                .unwrap();
+            assert_eq!(accepted["state"], "importing");
+            ids.push(accepted["execution_id"].as_str().unwrap().to_owned());
+        }
+
+        // Two download; the third waits its turn, still importing.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while downloads() < GITHUB_IMPORTS {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("two imports should start downloading");
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert_eq!(downloads(), GITHUB_IMPORTS);
+        let waiting = controller.plan_store.read_execution(&ids[2]).await.unwrap();
+        assert_eq!(waiting.state, "importing");
+
+        // Once one finishes, the third takes its turn.
+        fs::write(root.path().join("release"), "").unwrap();
+        for id in &ids {
+            let ended = tokio::time::timeout(Duration::from_secs(20), async {
+                loop {
+                    let execution = controller.plan_store.read_execution(id).await.unwrap();
+                    if execution.state != "importing" {
+                        return execution;
+                    }
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .expect("every import should end");
+            assert_eq!(ended.state, "failed");
+        }
+        assert_eq!(downloads(), 3);
+    }
 }

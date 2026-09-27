@@ -2126,7 +2126,7 @@ pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::control::{ExecutionPhase, LaneBudget};
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
@@ -2135,7 +2135,7 @@ pub(super) mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    pub(super) struct FakeRunner {
+    pub(crate) struct FakeRunner {
         root: PathBuf,
         owner: Mutex<Option<String>>,
         records: Mutex<HashMap<String, ExecutionRecord>>,
@@ -2156,7 +2156,7 @@ pub(super) mod tests {
         dirty: AtomicBool,
     }
     impl FakeRunner {
-        pub(super) fn new(root: PathBuf) -> Self {
+        pub(crate) fn new(root: PathBuf) -> Self {
             Self {
                 root,
                 owner: Mutex::new(None),
@@ -2442,7 +2442,7 @@ pub(super) mod tests {
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
         manager_with_gh(root, runner, github::GithubCli::default())
     }
-    fn manager_with_gh(
+    pub(crate) fn manager_with_gh(
         root: &Path,
         runner: Arc<FakeRunner>,
         github: github::GithubCli,
@@ -2462,7 +2462,7 @@ pub(super) mod tests {
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
-    fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
+    pub(crate) fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
         use std::os::unix::fs::PermissionsExt;
         let program = directory.join("gh");
         fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
