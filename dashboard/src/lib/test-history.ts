@@ -85,6 +85,29 @@ export type HistoryResponse = Omit<TestHistoryResponse, 'observations'> & {
 
 /* ---------------------------------------------------------------- a run */
 
+/** A run of the history: its execution and its case, since an execution
+ *  with rotating seeds runs one test on more than one case. */
+export function runKey(observation: HistoryObservation) {
+  return `${observation.execution_id}:${observation.case_id}`
+}
+
+/** The execution a key names; execution ids never hold a colon. */
+export function keyExecution(key: string) {
+  const colon = key.indexOf(':')
+  return colon === -1 ? key : key.slice(0, colon)
+}
+
+/** The run a key names. A key with the execution alone (an older link)
+ *  names its first case. */
+export function findRun(observations: HistoryObservation[], key: string) {
+  return (
+    observations.find((item) => runKey(item) === key) ??
+    (key.includes(':')
+      ? undefined
+      : observations.find((item) => item.execution_id === key))
+  )
+}
+
 /** The execution the run is listed under: its plan execution, when any. */
 export function listedExecution(observation: HistoryObservation) {
   return observation.plan_execution_id || observation.execution_id

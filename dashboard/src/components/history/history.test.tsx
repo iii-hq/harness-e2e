@@ -7,6 +7,7 @@ import {
 } from '@/components/history/RunsTable'
 import { SessionTree } from '@/components/history/SessionTree'
 import { budgetLine, TestContract } from '@/components/history/TestContract'
+import { runKey } from '@/lib/test-history'
 import { formFlow, formFlowRow, run } from '@/test-fixtures/test-history'
 
 const table = (open: string[] = [], narrow = false, selected: string[] = []) =>
@@ -47,7 +48,7 @@ describe('the runs list', () => {
 
   it('opens a run on its tiles, session tree, lost criteria and links', () => {
     const tree = run('9:13')
-    const html = table([tree.execution_id])
+    const html = table([runKey(tree)])
     expect(html).toContain('data-sessions="3"')
     expect(html).toContain(
       '1 root session + 3 sub-agents, 2 levels deep · 196 turns in all',
@@ -76,13 +77,36 @@ describe('the runs list', () => {
 
   it('keeps run, score and actions on a narrow pane and letters A and B', () => {
     const [b, a] = [run('9:13'), run('10:01')]
-    const html = table([], true, [a.execution_id, b.execution_id])
+    const html = table([], true, [runKey(a), runKey(b)])
     expect(html).not.toContain('Model · profile')
     expect(html).not.toContain('Criteria lost')
     expect(html).toContain('title="Compared as A"')
     expect(html).toContain('title="Compared as B"')
     // A third run cannot be ticked while two are.
     expect(html).toContain('disabled=""')
+  })
+
+  it('keeps apart two cases of one execution', () => {
+    const first = run('9:13')
+    const second = { ...run('9:13'), case_id: 'form_flow_build:seed-2' }
+    const html = renderToStaticMarkup(
+      <RunsTable
+        observations={[first, second]}
+        current={null}
+        grouped={false}
+        selected={[runKey(second)]}
+        onToggleSelected={() => undefined}
+        open={new Set([runKey(second)])}
+        onToggleOpen={() => undefined}
+        narrow={false}
+      />,
+    )
+    expect(html).toContain(`data-run-key="${runKey(first)}"`)
+    expect(html).toContain(`data-run-key="${runKey(second)}"`)
+    // Only the second case is ticked and open.
+    expect((html.match(/title="Compared as A"/g) ?? []).length).toBe(1)
+    expect((html.match(/data-sessions=/g) ?? []).length).toBe(1)
+    expect(html).toContain(`id="th-detail-${runKey(second)}"`)
   })
 
   it('names an untitled execution by its id', () => {

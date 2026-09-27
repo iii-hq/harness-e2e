@@ -34,9 +34,11 @@ import type { TestSpec } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
   differenceText,
+  findRun,
   type HistoryObservation,
   type HistoryResponse,
   type HistoryRun,
+  keyExecution,
   modelText,
   observationState,
   scoreText,
@@ -590,7 +592,9 @@ export function RunComparePage({ testId }: { testId: string }) {
   const [copied, setCopied] = useState(false)
   const beginRequest = useLatestRequest()
   // Swapping A and B asks for nothing new.
-  const wanted = [...new Set(pair.filter(Boolean))].sort().join(',')
+  const wanted = [...new Set(pair.filter(Boolean).map(keyExecution))]
+    .sort()
+    .join(',')
 
   useEffect(() => {
     if (!wanted) return
@@ -624,9 +628,7 @@ export function RunComparePage({ testId }: { testId: string }) {
   }, [pair])
 
   const sides = useMemo(() => {
-    const find = (id: string) =>
-      history?.observations.find((item) => item.execution_id === id)
-    const [a, b] = pair.map(find)
+    const [a, b] = pair.map((key) => findRun(history?.observations ?? [], key))
     return a && b ? { a: side(a), b: side(b) } : null
   }, [history, pair])
 

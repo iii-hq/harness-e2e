@@ -11,7 +11,7 @@ import { Ellipsis, GitCompare, Info } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
-import { RunsTable, runKey } from '@/components/history/RunsTable'
+import { RunsTable } from '@/components/history/RunsTable'
 import { TestContract } from '@/components/history/TestContract'
 import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
@@ -40,12 +40,14 @@ import {
   ALL_DEFINITIONS,
   type ChartMetric,
   definitionChoices,
+  findRun,
   type HistoryObservation,
   type HistoryResponse,
   losses,
   profileText,
   type Result,
   resultOf,
+  runKey,
   staleNotice,
   summaryFigures,
   toggleSelection,
@@ -313,15 +315,17 @@ export function TestHistoryPage({ testId }: { testId: string }) {
     replaceRouteParams(historyStateToParams(filters, selected))
   }, [filters, selected])
 
-  // A tick on a run the filters no longer load is dropped.
+  // A tick on a run the filters no longer load is dropped; one from an
+  // older link, by execution alone, lands on that execution's first case.
   useEffect(() => {
     if (!history) return
-    const loaded = new Set(history.observations.map(runKey))
-    setSelected((keys) =>
-      keys.every((key) => loaded.has(key))
-        ? keys
-        : keys.filter((key) => loaded.has(key)),
-    )
+    setSelected((keys) => {
+      const next = keys.flatMap((key) => {
+        const found = findRun(history.observations, key)
+        return found ? [runKey(found)] : []
+      })
+      return next.join() === keys.join() ? keys : next
+    })
   }, [history])
 
   const setFilter = <K extends keyof HistoryFilters>(

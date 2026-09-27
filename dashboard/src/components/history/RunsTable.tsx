@@ -33,15 +33,11 @@ import {
   modelText,
   observationState,
   profileText,
+  runKey,
   scoreStatus,
   scoreText,
 } from '@/lib/test-history'
 import '@/pages/test-history.css'
-
-/** Where a run is shown, in its row and in the A × B. */
-export function runKey(observation: HistoryObservation) {
-  return observation.execution_id
-}
 
 export function executionText(observation: HistoryObservation) {
   return (
@@ -100,7 +96,7 @@ function RunDetail({
   const lost = run ? lostCriteria(run) : []
   const links = runLinks(observation, run)
   const scored = typeof (run?.score ?? observation.mean_score) === 'number'
-  const headingId = `th-subs-${observation.execution_id}-${run?.run_id ?? 'run'}`
+  const headingId = `th-subs-${runKey(observation)}-${run?.run_id ?? 'run'}`
   return (
     <div className="th-run-detail" data-run={run?.run_id}>
       {label ? <p className="th-h3">{label}</p> : null}

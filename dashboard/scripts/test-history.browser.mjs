@@ -14,6 +14,7 @@ const formFlow = fixture.history
 const row = fixture.catalog_row
 const at = (hour) =>
   formFlow.observations.find((item) => item.completed_at.includes(`T${hour}`))
+const key = (item) => `${item.execution_id}:${item.case_id}`
 const tree = at('12:13') // 9:13 AM in the canvas: a Tech Lead and two more
 const solo = at('13:01') // 10:01 AM: one session
 
@@ -102,10 +103,10 @@ try {
 
   // A run opens on its session tree.
   const when = await page
-    .locator(`[data-run-key="${tree.execution_id}"] .th-strong`)
+    .locator(`[data-run-key="${key(tree)}"] .th-strong`)
     .innerText()
   await page.getByRole('button', { name: `Details of the ${when} run` }).click()
-  const detail = page.locator(`#th-detail-${tree.execution_id}`)
+  const detail = page.locator(`[id="th-detail-${key(tree)}"]`)
   await detail
     .getByText(
       '1 root session + 3 sub-agents, 2 levels deep · 196 turns in all',
@@ -139,7 +140,7 @@ try {
   const compare = page.locator('[data-compare-runs]')
   assert.equal(await compare.isDisabled(), true)
   const soloWhen = await page
-    .locator(`[data-run-key="${solo.execution_id}"] .th-strong`)
+    .locator(`[data-run-key="${key(solo)}"] .th-strong`)
     .innerText()
   await page.getByRole('checkbox', { name: `Pick ${when} for A/B` }).check()
   await page.getByText('A ticked · tick B').waitFor()
@@ -160,7 +161,7 @@ try {
   assert.match(
     await page.evaluate(() => location.hash),
     new RegExp(
-      `/tests/form_flow_build/compare\\?a=${tree.execution_id}&b=${solo.execution_id}$`,
+      `/tests/form_flow_build/compare\\?a=${encodeURIComponent(key(tree))}&b=${encodeURIComponent(key(solo))}$`,
     ),
   )
   // Only the two runs are asked for, wherever they sit in the history.
@@ -192,7 +193,9 @@ try {
   await page.getByText('−10 pts').waitFor()
   assert.match(
     await page.evaluate(() => location.hash),
-    new RegExp(`\\?a=${solo.execution_id}&b=${tree.execution_id}$`),
+    new RegExp(
+      `\\?a=${encodeURIComponent(key(solo))}&b=${encodeURIComponent(key(tree))}$`,
+    ),
   )
   await page.getByRole('link', { name: 'Back to form_flow_build' }).click()
   await page

@@ -5,9 +5,12 @@ import {
   axisTop,
   definitionChoices,
   differenceText,
+  findRun,
+  keyExecution,
   losses,
   metricValue,
   niceMax,
+  runKey,
   scoreStatus,
   staleNotice,
   summaryFigures,
@@ -171,5 +174,18 @@ describe('a run', () => {
     expect(differenceText(196, 53, count)).toBe('−143 · −73%')
     expect(differenceText(4, 4, count)).toBe('no change')
     expect(differenceText(null, 4, count)).toBe('—')
+  })
+})
+
+describe('run keys', () => {
+  it('name the execution and the case, and an old link its first case', () => {
+    const first = run('9:13')
+    const second = { ...run('9:13'), case_id: 'form_flow_build:seed-2' }
+    const runs = [first, second]
+    expect(runKey(second)).toBe(`${second.execution_id}:form_flow_build:seed-2`)
+    expect(keyExecution(runKey(second))).toBe(second.execution_id)
+    expect(findRun(runs, runKey(second))).toBe(second)
+    expect(findRun(runs, second.execution_id)).toBe(first)
+    expect(findRun(runs, `${second.execution_id}:gone`)).toBeUndefined()
   })
 })
