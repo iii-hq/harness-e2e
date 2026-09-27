@@ -5,79 +5,236 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@iii-dev/console-ui'
-import { AlertCircle, Ellipsis, TriangleAlert } from 'lucide-react'
-import { useState } from 'react'
+import { AlertCircle, CircleMinus, Ellipsis, TriangleAlert } from 'lucide-react'
+import { type ReactNode, useState } from 'react'
+import { itemScore, runCriteria } from '@/components/ScenarioMatrix'
 import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
 import './execution-page.css'
+
+/** Error: it did not run or broke a gate; warning: its result cannot be
+ *  trusted as is; neutral: it ran and lost points. */
+export type AttentionTone = 'error' | 'warning' | 'neutral'
 
 export type AttentionItem =
   | {
       kind: 'test'
       key: string
       scenarioId: string
-      label: string
-      reason: string
+      tone: AttentionTone
+      /** What happened, after the test's id: one line. */
+      summary: string
+      /** The whole error, when the line cuts it short. */
+      detail: string | null
     }
   | { kind: 'warning'; key: string; text: string }
 
-/** What needs a look first: every test that did not pass, with why, then
- *  what the execution recorded as a warning. */
+const LONG_TEXT = 160
+const TONE_ORDER: Record<AttentionTone, number> = {
+  error: 0,
+  warning: 1,
+  neutral: 2,
+}
+
+function firstLine(text: string) {
+  const line = text.split('\n')[0].trim()
+  return line.length > LONG_TEXT
+    ? `${line.slice(0, LONG_TEXT).trimEnd()}…`
+    : line
+}
+
+/** Why a criterion it lost says it lost: the first gate, else the first. */
+function lostCriterion(item: ScenarioMatrixItem) {
+  const lost = runCriteria(item.primaryRun).filter(
+    (criterion) => criterion.awarded < criterion.possible,
+  )
+  const picked = lost.find((criterion) => criterion.gate) ?? lost[0]
+  return picked ? picked.reason || picked.description || picked.id : null
+}
+
+/** What a test that did not pass says after its id, and how loud. */
+function testAttention(
+  item: ScenarioMatrixItem,
+): Pick<
+  Extract<AttentionItem, { kind: 'test' }>,
+  'tone' | 'summary' | 'detail'
+> | null {
+  // The row names the test: an error that starts with its id says it once.
+  const prefixes = [`${item.scenarioId}: `, `scenario '${item.scenarioId}': `]
+  const prefix = prefixes.find((text) => item.reason?.startsWith(text))
+  const reason = prefix
+    ? (item.reason?.slice(prefix.length) ?? null)
+    : item.reason
+  const score = itemScore(item)
+  const outOf = score === null ? '' : ` (${score}/100)`
+  const because = (text: string | null) => (text ? `: ${firstLine(text)}` : '.')
+  const detail =
+    reason && (reason.includes('\n') || reason.length > LONG_TEXT)
+      ? reason
+      : null
+  switch (item.objective.status) {
+    case 'unavailable':
+      return reason
+        ? { tone: 'error', summary: `left no run${because(reason)}`, detail }
+        : {
+            tone: 'warning',
+            summary: 'left no run, so it has no score.',
+            detail: null,
+          }
+    case 'inconclusive':
+      return {
+        tone: 'warning',
+        summary: `${score === null ? 'is inconclusive' : `scored ${score} but is inconclusive`}${because(reason ?? lostCriterion(item))}`,
+        detail,
+      }
+    case 'incomplete':
+      return {
+        tone: 'neutral',
+        summary: `didn’t complete the task${outOf}${because(lostCriterion(item) ?? reason)}`,
+        detail: null,
+      }
+    case 'failed': {
+      const gate = runCriteria(item.primaryRun).some(
+        (criterion) => criterion.gate && criterion.awarded < criterion.possible,
+      )
+      return gate
+        ? {
+            tone: 'error',
+            summary: `failed a hard gate${outOf}${because(lostCriterion(item))}`,
+            detail: null,
+          }
+        : { tone: 'error', summary: `failed${because(reason)}`, detail }
+    }
+    default:
+      return null
+  }
+}
+
+/** What needs a look first: every test that did not pass or left no run,
+ *  with why, errors first; then what the execution recorded as a warning,
+ *  less an execution error that only repeats a test's. */
 export function attentionItems(
   items: ScenarioMatrixItem[],
   warnings: string[] = [],
 ): AttentionItem[] {
-  const tests: AttentionItem[] = items
-    .filter((item) =>
-      ['failed', 'inconclusive'].includes(item.objective.status),
+  const tests = items
+    .flatMap((item) => {
+      const attention = testAttention(item)
+      return attention
+        ? [
+            {
+              kind: 'test' as const,
+              key: item.key,
+              scenarioId: item.scenarioId,
+              ...attention,
+            },
+          ]
+        : []
+    })
+    .sort((left, right) => TONE_ORDER[left.tone] - TONE_ORDER[right.tone])
+  const repeats = (text: string) =>
+    items.some(
+      (item) =>
+        item.reason &&
+        text === `Execution error: ${item.scenarioId}: ${item.reason}`,
     )
-    .map((item) => ({
-      kind: 'test',
-      key: item.key,
-      scenarioId: item.scenarioId,
-      label: item.objective.label,
-      reason:
-        item.reason ?? 'No reason recorded; open the test for its criteria.',
-    }))
   return [
     ...tests,
-    ...warnings.map((text, index) => ({
-      kind: 'warning' as const,
-      key: `warning-${index}`,
-      text,
-    })),
+    ...warnings
+      .filter((text) => !repeats(text))
+      .map((text, index) => ({
+        kind: 'warning' as const,
+        key: `warning-${index}`,
+        text,
+      })),
   ]
 }
 
-const LONG_TEXT = 160
+const ICONS: Record<AttentionTone, ReactNode> = {
+  error: <AlertCircle size={16} aria-hidden="true" className="ep-alert-icon" />,
+  warning: (
+    <TriangleAlert size={16} aria-hidden="true" className="ep-warn-icon" />
+  ),
+  neutral: (
+    <CircleMinus size={16} aria-hidden="true" className="ep-neutral-icon" />
+  ),
+}
 
-function AttentionText({ text, id }: { text: string; id: string }) {
+/** One line: its icon, what happened, and the actions; the whole error
+ *  shows under the line once asked for. */
+function AttentionRow({
+  item,
+  onShow,
+  onRerun,
+}: {
+  item: AttentionItem
+  onShow: (key: string) => void
+  onRerun?: (scenarioId: string) => void
+}) {
   const [open, setOpen] = useState(false)
-  const long = text.length > LONG_TEXT || text.includes('\n')
+  const test = item.kind === 'test' ? item : null
+  const text = test
+    ? test.summary
+    : firstLine(item.kind === 'warning' ? item.text : '')
+  const detail = test
+    ? test.detail
+    : item.kind === 'warning' && text !== item.text.trim()
+      ? item.text
+      : null
+  const rawId = `${item.key}-raw`
   return (
-    <>
-      <span className="ep-attention-reason">
-        {long && !open
-          ? `${text.split('\n')[0].slice(0, LONG_TEXT).trimEnd()}…`
-          : null}
-        {!long ? text : null}
+    <li
+      className="ep-attention-row"
+      data-attention-test={test?.scenarioId}
+      data-attention-tone={test?.tone}
+    >
+      {ICONS[test?.tone ?? 'warning']}
+      <span className="ep-attention-text">
+        {test ? (
+          <>
+            <span className="ep-mono ep-strong">{test.scenarioId}</span>{' '}
+          </>
+        ) : null}
+        {text}
+        {detail && open ? (
+          <pre id={rawId} className="ep-attention-raw">
+            {detail}
+          </pre>
+        ) : null}
       </span>
-      {long && open ? (
-        <pre id={id} className="ep-attention-raw">
-          {text}
-        </pre>
-      ) : null}
-      {long ? (
-        <button
-          type="button"
-          className="ds-button ds-button-quiet ds-button-compact"
-          aria-expanded={open}
-          aria-controls={id}
-          onClick={() => setOpen(!open)}
-        >
-          {open ? 'Hide error' : 'Show error'}
-        </button>
-      ) : null}
-    </>
+      <span className="ep-attention-actions">
+        {detail ? (
+          <button
+            type="button"
+            className="ds-button ds-button-quiet ds-button-compact"
+            aria-expanded={open}
+            aria-controls={rawId}
+            onClick={() => setOpen(!open)}
+          >
+            {open ? 'Hide error' : 'Show error'}
+          </button>
+        ) : null}
+        {test ? (
+          <button
+            type="button"
+            className="ds-button ds-button-quiet ds-button-compact"
+            onClick={() => onShow(test.key)}
+          >
+            Show test
+          </button>
+        ) : null}
+        {test && onRerun ? (
+          <button
+            type="button"
+            className="ds-button ds-button-secondary ds-button-compact"
+            onClick={() => onRerun(test.scenarioId)}
+            aria-label={`Run ${test.scenarioId} again`}
+            data-attention-rerun={test.scenarioId}
+          >
+            Run again
+          </button>
+        ) : null}
+      </span>
+    </li>
   )
 }
 
@@ -103,56 +260,14 @@ export function NeedsAttention({
         </span>
       </div>
       <ul>
-        {items.map((item) =>
-          item.kind === 'test' ? (
-            <li
-              key={item.key}
-              className="ep-attention-row"
-              data-attention-test={item.scenarioId}
-            >
-              <AlertCircle
-                size={16}
-                aria-hidden="true"
-                className="ep-alert-icon"
-              />
-              <span className="ep-attention-text">
-                <span className="ep-mono ep-strong">{item.scenarioId}</span>{' '}
-                <AttentionText text={item.reason} id={`${item.key}-raw`} />
-              </span>
-              <span className="ep-attention-actions">
-                <button
-                  type="button"
-                  className="ds-button ds-button-quiet ds-button-compact"
-                  onClick={() => onShow(item.key)}
-                >
-                  Show test
-                </button>
-                {onRerun ? (
-                  <button
-                    type="button"
-                    className="ds-button ds-button-secondary ds-button-compact"
-                    onClick={() => onRerun(item.scenarioId)}
-                    aria-label={`Run ${item.scenarioId} again`}
-                    data-attention-rerun={item.scenarioId}
-                  >
-                    Run again
-                  </button>
-                ) : null}
-              </span>
-            </li>
-          ) : (
-            <li key={item.key} className="ep-attention-row">
-              <TriangleAlert
-                size={16}
-                aria-hidden="true"
-                className="ep-warn-icon"
-              />
-              <span className="ep-attention-text">
-                <AttentionText text={item.text} id={`${item.key}-raw`} />
-              </span>
-            </li>
-          ),
-        )}
+        {items.map((item) => (
+          <AttentionRow
+            key={item.key}
+            item={item}
+            onShow={onShow}
+            onRerun={onRerun}
+          />
+        ))}
       </ul>
     </section>
   )

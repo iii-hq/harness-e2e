@@ -870,7 +870,7 @@ export function ExecutionPage({
               {!live ? (
                 <a
                   className={buttonClassName({
-                    variant: 'quiet',
+                    variant: 'secondary',
                     className: 'no-underline',
                   })}
                   href={hashForComparison(detail.id)}
@@ -883,9 +883,10 @@ export function ExecutionPage({
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
+              {/* The page's one primary action (canvas: Execution detail). */}
               {ready ? (
                 <button
-                  className={buttonClassName({ variant: 'secondary' })}
+                  className={buttonClassName({ variant: 'primary' })}
                   type="button"
                   onClick={() => {
                     setRerunOpen(true)

@@ -102,12 +102,19 @@ describe('transcript page', () => {
 })
 
 describe('needs attention', () => {
-  const item = (key: string, status: string, reason: string | null) =>
+  const item = (
+    key: string,
+    status: string,
+    reason: string | null,
+    runs: Array<{ score: number; criteria?: unknown[] }> = [],
+  ) =>
     ({
       key,
       scenarioId: key,
       objective: { status, label: status, raw: status },
       reason,
+      runs,
+      primaryRun: runs.at(-1) ?? null,
     }) as unknown as ScenarioMatrixItem
 
   it('lists what did not pass with why, then the warnings', () => {
@@ -124,9 +131,59 @@ describe('needs attention', () => {
     )
     expect(html).toContain('Needs attention')
     expect(html).toContain('timer_wake')
-    expect(html).toContain('Criterion “wakes” missed')
+    expect(html).toContain('failed: Criterion “wakes” missed')
     expect(html).toContain('Show test')
     expect(html).not.toContain('minimal_path')
+  })
+
+  it('says each case as the canvas does, errors first, without repeating the execution error', () => {
+    const error = `compose::add failed: container 'state': could not download ${'x'.repeat(200)}`
+    const lost = [
+      {
+        id: 'criterion_creation',
+        description: 'Creating a ticket',
+        awarded: 0,
+        possible: 10,
+        gate: true,
+        reason: 'its details were unavailable',
+      },
+    ]
+    const items = attentionItems(
+      [
+        item('kanban_c4_ticket_flow', 'incomplete', null, [
+          { score: 80, criteria: lost },
+        ]),
+        item('linkly_tutorial', 'unavailable', null),
+        item(
+          'alertmanager_route_match',
+          'inconclusive',
+          "scenario 'alertmanager_route_match': route::match was still registered",
+          [{ score: 100 }],
+        ),
+        item('kanban_c7_live', 'unavailable', error),
+      ],
+      [`Execution error: kanban_c7_live: ${error}`, 'Something else'],
+    )
+    expect(
+      items.map((entry) =>
+        entry.kind === 'test'
+          ? `${entry.scenarioId} ${entry.summary.slice(0, 48)}`
+          : entry.text,
+      ),
+    ).toEqual([
+      "kanban_c7_live left no run: compose::add failed: container 'sta",
+      'linkly_tutorial left no run, so it has no score.',
+      'alertmanager_route_match scored 100 but is inconclusive: route::match was',
+      'kanban_c4_ticket_flow didn’t complete the task (80/100): its details w',
+      'Something else',
+    ])
+    const [c7] = items
+    expect(c7.kind === 'test' && c7.detail).toBe(error)
+    const html = renderToStaticMarkup(
+      <NeedsAttention items={items} onShow={() => {}} />,
+    )
+    expect(html).toContain('Show error')
+    expect(html).toContain('data-attention-tone="neutral"')
   })
 
   it('renders nothing when everything passed', () => {

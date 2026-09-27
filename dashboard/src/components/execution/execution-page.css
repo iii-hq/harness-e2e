@@ -74,13 +74,6 @@
 
 .ep-attention-text {
   min-width: 0;
-}
-
-.ep-attention-reason {
-  display: block;
-  margin-top: 0.125rem;
-  color: var(--color-ink-faint, var(--text-soft));
-  font-size: 0.75rem;
   overflow-wrap: anywhere;
 }
 
@@ -92,6 +85,11 @@
 .ep-warn-icon {
   margin-top: 0.125rem;
   color: var(--color-warn, var(--warning));
+}
+
+.ep-neutral-icon {
+  margin-top: 0.125rem;
+  color: var(--color-ink-faint, var(--text-soft));
 }
 
 .ep-more {

@@ -115,8 +115,9 @@ describe('needs attention (canvas)', () => {
             kind: 'test',
             key: 'k',
             scenarioId: 'kanban_c4',
-            label: 'x',
-            reason: 'short',
+            tone: 'neutral',
+            summary: 'didn’t complete the task (80/100): short',
+            detail: null,
           },
           {
             kind: 'warning',
