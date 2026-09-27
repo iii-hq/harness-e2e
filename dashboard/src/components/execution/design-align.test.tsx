@@ -53,6 +53,38 @@ describe('results by test (canvas)', () => {
     expect(rowNote(full)).toBe('')
   })
 
+  it('says what the result says: an incomplete task, never a gate it did not fail on', () => {
+    const incomplete = item({
+      ...lost,
+      objective: {
+        status: 'incomplete',
+        label: 'Incomplete',
+        raw: 'incomplete',
+      },
+    })
+    expect(rowNote(incomplete)).toBe('Task incomplete · 2 criteria lost')
+    // The error names the test the row already names: not again.
+    const inconclusive = item({
+      scenarioId: 'alertmanager_route_match',
+      objective: {
+        status: 'inconclusive',
+        label: 'Inconclusive',
+        raw: 'inconclusive',
+      },
+      reason:
+        "scenario 'alertmanager_route_match': cleanup failed after the run: exit 1",
+    })
+    expect(rowNote(inconclusive)).toBe('Cleanup failed after the run')
+    const neverStarted = item({
+      scenarioId: 'kanban_c7_live',
+      runCount: 0,
+      objective: { status: 'not-run', label: 'Not run', raw: 'not_run' },
+      reason:
+        "kanban_c7_live: compose::add failed: container 'state': could not download",
+    })
+    expect(rowNote(neverStarted)).toBe('Didn’t start · compose::add failed')
+  })
+
   it('filters by lost points, not run and full marks', () => {
     expect(matchesFilter(lost, 'lost')).toBe(true)
     expect(matchesFilter(full, 'passed')).toBe(true)

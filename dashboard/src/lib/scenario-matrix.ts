@@ -314,6 +314,16 @@ function unavailableScenario(
   }
 }
 
+/** Why a test did not pass, less the test's own id the row already names
+ *  (`kanban_c7: …`, `scenario 'kanban_c7': …`). */
+export function ownReason(
+  item: Pick<ScenarioMatrixItem, 'reason' | 'scenarioId'>,
+) {
+  const prefixes = [`${item.scenarioId}: `, `scenario '${item.scenarioId}': `]
+  const prefix = prefixes.find((text) => item.reason?.startsWith(text))
+  return prefix ? (item.reason?.slice(prefix.length) ?? null) : item.reason
+}
+
 /** A test's key within its round: tests repeat across rounds. */
 export function roundKey(round: unknown, scenarioId: string) {
   return `${String(round ?? 1)}:${scenarioId}`

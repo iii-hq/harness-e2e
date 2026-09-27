@@ -8,7 +8,7 @@ import {
 import { AlertCircle, CircleMinus, Ellipsis, TriangleAlert } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
 import { itemScore, runCriteria } from '@/components/ScenarioMatrix'
-import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
+import { ownReason, type ScenarioMatrixItem } from '@/lib/scenario-matrix'
 import './execution-page.css'
 
 /** Error: it did not run or broke a gate; warning: its result cannot be
@@ -59,11 +59,7 @@ function testAttention(
   'tone' | 'summary' | 'detail'
 > | null {
   // The row names the test: an error that starts with its id says it once.
-  const prefixes = [`${item.scenarioId}: `, `scenario '${item.scenarioId}': `]
-  const prefix = prefixes.find((text) => item.reason?.startsWith(text))
-  const reason = prefix
-    ? (item.reason?.slice(prefix.length) ?? null)
-    : item.reason
+  const reason = ownReason(item)
   const score = itemScore(item)
   const outOf = score === null ? '' : ` (${score}/100)`
   const because = (text: string | null) => (text ? `: ${firstLine(text)}` : '.')
