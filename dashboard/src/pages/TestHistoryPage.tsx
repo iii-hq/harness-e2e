@@ -9,6 +9,7 @@ import {
 import { Ellipsis, GitCompare, Info } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
   buttonClassName,
   EmptyState,
@@ -32,9 +33,12 @@ import { requestQuickExecution } from '@/lib/quick-execution'
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
+  type ChartMetric,
   definitionChoices,
   type HistoryResponse,
+  losses,
   staleNotice,
+  summaryFigures,
 } from '@/lib/test-history'
 import '@/design-system/styles.css'
 import './test-history.css'
@@ -200,6 +204,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [metric, setMetric] = useState<ChartMetric>('score')
   const beginRequest = useLatestRequest()
 
   useEffect(() => {
@@ -261,6 +266,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   ) => setFilters((current) => ({ ...current, [key]: value }))
 
   const spec = row?.spec ?? null
+  const observations = history?.observations ?? []
   const choices = history ? definitionChoices(history) : []
   const stale = history ? staleNotice(history) : null
   const total = choices.reduce((sum, choice) => sum + choice.runs, 0)
@@ -406,6 +412,28 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             </span>
           ) : null}
         </section>
+      ) : null}
+
+      {observations.length > 0 ? (
+        <>
+          <section className="th-kpis" aria-label="Summary">
+            {summaryFigures(observations).map((figure) => (
+              <div className="th-kpi" key={figure.label}>
+                <span className="th-kpi-label">{figure.label}</span>
+                <span className="th-kpi-value">{figure.value}</span>
+                <span className="th-kpi-sub">{figure.sub}</span>
+              </div>
+            ))}
+          </section>
+          <div className="th-two">
+            <TrendChart
+              observations={observations}
+              metric={metric}
+              onMetric={setMetric}
+            />
+            <LossesPanel losses={losses(observations, spec)} />
+          </div>
+        </>
       ) : null}
     </div>
   )
