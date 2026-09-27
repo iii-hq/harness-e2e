@@ -159,7 +159,7 @@
   height: calc(var(--spacing) * 5);
   margin-inline-start: auto;
   padding: 0 calc(var(--spacing) * 1.75);
-  border-radius: 9999px;
+  border-radius: var(--radius-full);
   background: var(--color-surface-selected);
   font-family: var(--font-mono);
   font-size: var(--ds-text-label, 0.6875rem);
@@ -249,7 +249,7 @@
 .tc-spark > span {
   width: calc(var(--spacing) * 1.25);
   height: max(2px, calc(var(--spacing) * 5 * var(--tc-score, 0)));
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: var(--color-ink);
 }
 
