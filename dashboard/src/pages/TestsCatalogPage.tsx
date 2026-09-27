@@ -147,8 +147,26 @@ function CatalogRevision({ revision }: { revision: string }) {
   )
 }
 
+/** A test's last result: its label and score over when it ran. Faded when
+ *  it ran an earlier definition. Suites shows it too. */
+export function LastResult({ view }: { view: CatalogRowView }) {
+  return (
+    <td className="tc-stack" data-older={view.older || undefined}>
+      <span className="tc-result">
+        <StatusLabel state={view.result} />
+        {view.score === null ? null : (
+          <span className="tc-score">{view.score}</span>
+        )}
+      </span>
+      <span className="tc-sub" title={view.whenTitle ?? undefined}>
+        {view.when}
+      </span>
+    </td>
+  )
+}
+
 /** The last scores as bars, oldest first; a run without a score is a stub. */
-function Sparkline({ view }: { view: CatalogRowView }) {
+export function Sparkline({ view }: { view: CatalogRowView }) {
   return (
     <span className="tc-spark" role="img" aria-label={view.sparkLabel}>
       {view.spark.map((score, index) => (
@@ -299,20 +317,7 @@ export function CatalogTable({
                       </span>
                     ) : null}
                   </td>
-                  <td className="tc-stack" data-older={view.older || undefined}>
-                    <span className="tc-result">
-                      <StatusLabel state={view.result} />
-                      {view.score === null ? null : (
-                        <span className="tc-score">{view.score}</span>
-                      )}
-                    </span>
-                    <span
-                      className="tc-sub"
-                      title={view.whenTitle ?? undefined}
-                    >
-                      {view.when}
-                    </span>
-                  </td>
+                  <LastResult view={view} />
                   {narrow ? null : (
                     <>
                       <td>

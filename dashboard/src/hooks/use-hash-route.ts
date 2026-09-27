@@ -195,8 +195,12 @@ export function hashForRunComparison(
   )
 }
 
-export function hashForSuites(): string {
-  return dashboardHash('suites')
+/** The Suites page, open on one suite when `suiteId` is given. */
+export function hashForSuites(suiteId?: string | null): string {
+  const hash = dashboardHash('suites')
+  return suiteId
+    ? hashWithParams(hash, new URLSearchParams({ suite: suiteId }))
+    : hash
 }
 
 export function hashForStacks(): string {

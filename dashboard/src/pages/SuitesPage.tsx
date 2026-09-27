@@ -1,462 +1,593 @@
-import { useCallback, useEffect, useState } from 'react'
-import { DashboardPageActions } from '@/components/DashboardPageActions'
 import {
-  ExecutionSetup,
-  ExecutionSetupFooter,
-  focusFirstInvalid,
-  validateExecutionSetup,
-} from '@/components/ExecutionSetup'
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@iii-dev/console-ui'
+import { ChevronLeft, Copy, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  asCatalog,
-  type RunnerCatalog,
-  withSequentialGroups,
-} from '@/components/LocalRunnerDialog'
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+  type HeaderAction,
+} from '@/components/DashboardPageActions'
+import { useDashboardChrome } from '@/components/DashboardShell'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
-  DataTable,
-  Dialog,
+  Callout,
   EmptyState,
-  PageHeader,
+  FactChip,
+  FactList,
+  StatusLabel,
 } from '@/design-system'
 import {
+  hashForSuites,
+  hashForTests,
+  routeParams,
+} from '@/hooks/use-hash-route'
+import { useLatestRequest } from '@/hooks/use-latest-request'
+import {
   type DashboardDataBridge,
+  type DashboardExecutionSummary,
   getDashboardDataBridge,
   type Suite,
 } from '@/lib/dashboard-data-source'
+import {
+  type SuiteListItem,
+  type SuiteRun,
+  suiteDigest,
+  suiteHolds,
+  suiteListItem,
+  suiteRuns,
+  suitesSummary,
+} from '@/lib/suites-view'
+import type { TestCatalogRow } from '@/lib/test-catalog'
+import { type CatalogRowView, catalogRowView } from '@/lib/test-catalog-view'
+import { listAllTests } from '@/pages/TestsCatalogPage'
+import '@/design-system/styles.css'
+import './executions-page.css'
+import './tests-catalog.css'
+import './suites-page.css'
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-function plural(count: number, one: string, many: string) {
-  return `${count} ${count === 1 ? one : many}`
+/** The suite the hash opens: `#/suites?suite=<id>`. */
+function suiteParam() {
+  return typeof window === 'undefined'
+    ? null
+    : routeParams(window.location.hash).get('suite')
 }
 
-/** What a suite holds, in one line. */
-function suiteScope(suite: Suite) {
-  return [
-    plural(suite.scenarios.length, 'test', 'tests'),
-    `${plural(suite.repetitions, 'run', 'runs')} each`,
-    plural(suite.technical_retries, 'retry', 'retries'),
-  ].join(' · ')
-}
-
-type Draft = {
-  label: string
-  scenarios: string[]
-  runs: string
-  technicalRetries: string
-}
-
-/** Edits a suite of this Console: its name, tests, runs and retries. */
-function SuiteEditor({
-  bridge,
-  suite,
-  onClose,
-  onSaved,
+/** The two blocks of the list: the repository's suites, read-only, then this
+ *  Console's, which say how to make one while there are none. */
+export function SuiteList({
+  suites,
+  items,
+  selectedId,
 }: {
-  bridge: DashboardDataBridge
-  suite: Suite
-  onClose: () => void
-  onSaved: () => void
+  suites: Suite[]
+  items: ReadonlyMap<string, SuiteListItem>
+  selectedId: string | null
 }) {
-  const [draft, setDraft] = useState<Draft>({
-    label: suite.label,
-    scenarios: suite.scenarios,
-    runs: String(suite.repetitions),
-    technicalRetries: String(suite.technical_retries),
-  })
-  const [catalog, setCatalog] = useState<RunnerCatalog | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [query, setQuery] = useState('')
-  const [attempted, setAttempted] = useState(false)
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  const loadCatalog = useCallback(async () => {
-    setLoading(true)
-    setError(null)
-    try {
-      setCatalog(asCatalog(await bridge.getCatalog()))
-    } catch (cause) {
-      setCatalog(null)
-      setError(errorText(cause))
-    } finally {
-      setLoading(false)
-    }
-  }, [bridge])
-  useEffect(() => {
-    void loadCatalog()
-  }, [loadCatalog])
-
-  const listed = catalog?.scenarios ?? []
-  // Without the catalog the suite's own tests stay listed.
-  const available = [
-    ...listed,
-    ...suite.scenarios.filter((id) => !listed.includes(id)),
+  const local = suites.filter((suite) => suite.source === 'local')
+  const groups = [
+    {
+      key: 'repository',
+      label: 'Repository',
+      note: 'read-only',
+      suites: suites.filter((suite) => suite.source !== 'local'),
+    },
+    {
+      key: 'local',
+      label: 'This Console',
+      note: local.length ? 'editable' : '',
+      suites: local,
+    },
   ]
-  const validation = () =>
-    validateExecutionSetup({
-      label: draft.label,
-      selectedScenarios: draft.scenarios,
-    })
-  const errors = attempted ? validation() : {}
-  const update = <K extends keyof Draft>(key: K, value: Draft[K]) =>
-    setDraft((current) => ({ ...current, [key]: value }))
-  const save = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault()
-    const pending = validation()
-    if (Object.keys(pending).length > 0) {
-      setAttempted(true)
-      focusFirstInvalid('suite-editor', pending)
-      return
-    }
-    setSaving(true)
-    setError(null)
-    try {
-      await bridge.updateSuite(suite.id, {
-        label: draft.label.trim(),
-        scenarios: draft.scenarios,
-        repetitions: Math.max(1, Number(draft.runs) || 1),
-        technical_retries: Math.max(0, Number(draft.technicalRetries) || 0),
-      })
-      onSaved()
-    } catch (cause) {
-      setError(errorText(cause))
-    } finally {
-      setSaving(false)
-    }
-  }
-  const runsPerScenario = Math.max(1, Number(draft.runs) || 1)
-  const technicalRetries = Math.max(0, Number(draft.technicalRetries) || 0)
+  return (
+    <aside className="st-list" aria-label="Suites" data-suites>
+      {groups.map((group) => (
+        // biome-ignore lint/a11y/useSemanticElements: a labelled block of links, not a form group
+        <div
+          key={group.key}
+          className="st-group"
+          role="group"
+          aria-labelledby={`st-group-${group.key}`}
+          data-suite-group={group.key}
+        >
+          <div className="st-group-head">
+            <span className="ds-label" id={`st-group-${group.key}`}>
+              {group.label}
+            </span>
+            {group.note ? (
+              <span className="st-group-note">{group.note}</span>
+            ) : null}
+          </div>
+          {group.suites.map((suite) => {
+            const item = items.get(suite.id)
+            if (!item) return null
+            return (
+              <a
+                key={suite.id}
+                className="st-item"
+                href={hashForSuites(suite.id)}
+                aria-current={suite.id === selectedId ? 'true' : undefined}
+                data-suite={suite.id}
+              >
+                <span className="st-item-head">
+                  <span className="st-item-label">{item.label}</span>
+                  <span className="st-item-count">{item.count}</span>
+                </span>
+                <StatusLabel
+                  className="st-item-last"
+                  state={item.last?.state ?? 'never_run'}
+                  label={item.last?.label ?? 'not run in this Console'}
+                />
+                {item.changed ? (
+                  <span className="st-item-changed">{item.changed}</span>
+                ) : null}
+              </a>
+            )
+          })}
+          {group.key === 'local' && local.length === 0 ? (
+            <p className="st-note">
+              Copy a repository suite, or tick tests in{' '}
+              <a href={hashForTests()}>Tests</a> and save them, to make one you
+              can edit.
+            </p>
+          ) : null}
+        </div>
+      ))}
+    </aside>
+  )
+}
+
+export type SuiteDetailProps = {
+  suite: Suite
+  runs: SuiteRun[]
+  narrow: boolean
+  /** The bridge answered: the actions can run. */
+  ready: boolean
+  /** An action on this suite is under way. */
+  busy: boolean
+  error: string | null
+  onCopy: () => void
+  onRun: () => void
+  onDelete: () => void
+}
+
+/** The open suite: its name, facts and purpose, and its actions. */
+export function SuiteDetail({
+  suite,
+  narrow,
+  ready,
+  busy,
+  error,
+  onCopy,
+  onRun,
+  onDelete,
+}: SuiteDetailProps) {
+  const local = suite.source === 'local'
+  return (
+    <section
+      className="st-detail"
+      aria-labelledby="st-title"
+      data-suite-detail={suite.id}
+    >
+      {narrow ? (
+        <a className="st-back" href={hashForSuites()}>
+          <ChevronLeft size={16} aria-hidden="true" />
+          Suites
+        </a>
+      ) : null}
+      <div className="st-head">
+        <div className="st-head-main">
+          <h2 id="st-title" className="st-title">
+            {suite.label}
+          </h2>
+          <FactList aria-label="About this suite">
+            <FactChip
+              className="st-fact-words"
+              label="Source"
+              value={local ? 'this Console' : 'repository · read-only'}
+            />
+            <FactChip
+              className="st-fact-words"
+              label="Holds"
+              value={suiteHolds(
+                suite.scenarios.length,
+                suite.repetitions,
+                suite.technical_retries,
+              )}
+            />
+            <FactChip label="Id" value={suite.id} />
+            <FactChip
+              label="Digest"
+              value={suiteDigest(suite)}
+              full={suite.sha256 ?? 'none: this runner cannot materialize it'}
+            />
+          </FactList>
+        </div>
+        <div className="st-actions">
+          {local ? null : (
+            <button
+              type="button"
+              className={dashboardHeaderActionClassName()}
+              disabled={!ready || busy}
+              aria-busy={busy || undefined}
+              onClick={onCopy}
+            >
+              <Copy size={16} aria-hidden="true" />
+              Copy to edit
+            </button>
+          )}
+          <button
+            type="button"
+            className={dashboardHeaderActionClassName({ primary: true })}
+            disabled={!ready}
+            onClick={onRun}
+          >
+            Run this suite
+          </button>
+          {local ? (
+            <button
+              type="button"
+              className={dashboardHeaderActionClassName({
+                className: 'harness-e2e-header-action-icon',
+              })}
+              aria-label={`Delete ${suite.label}`}
+              title="Delete suite"
+              disabled={!ready || busy}
+              onClick={onDelete}
+            >
+              <Trash2 size={16} aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
+      </div>
+      {suite.purpose ? <p className="st-purpose">{suite.purpose}</p> : null}
+      {error ? (
+        <p className="st-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </section>
+  )
+}
+
+function DeleteSuiteDialog({
+  suite,
+  deleting,
+  onCancel,
+  onConfirm,
+}: {
+  suite: Suite | null
+  deleting: boolean
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  // The suite stays named while the dialog animates out.
+  const shown = useRef<Suite | null>(null)
+  if (suite) shown.current = suite
+  const label = shown.current?.label ?? 'suite'
   return (
     <Dialog
-      open
-      onClose={() => !saving && onClose()}
-      size="lg"
-      tall
-      kicker="Suite"
-      title={`Edit ${suite.label}`}
-      description="A suite is only what to test. The model and the stack are chosen when it runs."
-      closeLabel="Close suite editor"
-      className="ds-root"
-      footer={
-        <ExecutionSetupFooter
-          summary={{
-            selectedScenarios: draft.scenarios.length,
-            runsPerScenario,
-            technicalRetries,
-          }}
-          pending={Object.values(errors)}
-          error={error}
-        >
-          <button
-            className={buttonClassName({ variant: 'secondary' })}
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-          >
-            cancel
-          </button>
-          <button
-            className={buttonClassName({ variant: 'primary' })}
-            type="submit"
-            form="suite-editor-form"
-            disabled={saving}
-            aria-busy={saving}
-          >
-            {saving ? 'saving…' : 'save suite'}
-          </button>
-        </ExecutionSetupFooter>
-      }
+      open={suite !== null}
+      onOpenChange={(open) => {
+        if (!open && !deleting) onCancel()
+      }}
     >
-      <form
-        id="suite-editor-form"
-        className="grid min-w-0 gap-6"
-        onSubmit={save}
-        noValidate
+      <DialogContent
+        role="alertdialog"
+        className="ex-dialog"
+        aria-describedby="st-delete-body"
       >
-        <ExecutionSetup
-          idPrefix="suite-editor"
-          stickyOffset="dialog"
-          initialOnlySelected
-          label={draft.label}
-          availableScenarios={available}
-          selectedScenarios={draft.scenarios}
-          query={query}
-          runs={draft.runs}
-          technicalRetries={draft.technicalRetries}
-          disabled={saving}
-          catalogLoading={loading}
-          catalogStatus={
-            loading
-              ? { tone: 'loading', text: 'loading catalog…' }
-              : catalog
-                ? {
-                    tone: 'ready',
-                    text: `catalog ready · ${plural(catalog.scenarios.length, 'test', 'tests')}`,
-                  }
-                : { tone: 'unavailable', text: 'catalog unavailable' }
-          }
-          errors={errors}
-          onRefreshCatalog={() => void loadCatalog()}
-          onLabelChange={(value) => update('label', value)}
-          onSelectedScenariosChange={(value) =>
-            update(
-              'scenarios',
-              withSequentialGroups(
-                value,
-                draft.scenarios,
-                catalog?.groups ?? [],
-              ),
-            )
-          }
-          onQueryChange={setQuery}
-          onRunsChange={(value) => update('runs', value)}
-          onTechnicalRetriesChange={(value) =>
-            update('technicalRetries', value)
-          }
-        />
-      </form>
+        <div className="ex-dialog-head">
+          <span className="ex-dialog-icon" aria-hidden="true">
+            <Trash2 size={16} />
+          </span>
+          <div>
+            <DialogTitle className="ex-dialog-title">
+              Delete {label}?
+            </DialogTitle>
+            <DialogDescription id="st-delete-body" className="ex-dialog-body">
+              Executions that ran it keep its name and digest.
+            </DialogDescription>
+          </div>
+        </div>
+        <div className="ex-dialog-actions">
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            disabled={deleting}
+            onClick={onCancel}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            variant="pill"
+            size="sm"
+            className="ex-danger"
+            disabled={deleting}
+            aria-busy={deleting}
+            onClick={onConfirm}
+          >
+            {deleting ? 'Deleting…' : 'Delete suite'}
+          </Button>
+        </div>
+      </DialogContent>
     </Dialog>
   )
 }
 
-/** Suites: the master plan's, read-only, and this Console's. Any suite can
- *  be copied into one of this Console to edit. */
+/** Suites: the repository's, read-only, and this Console's. A repository
+ *  suite is copied into one of this Console to edit it. */
 export function SuitesPage() {
+  const narrow = useDashboardChrome()?.narrow ?? false
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [suites, setSuites] = useState<Suite[] | null>(null)
+  const [rows, setRows] = useState<TestCatalogRow[]>([])
+  const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
-  const [editing, setEditing] = useState<Suite | null>(null)
+  const [param, setParam] = useState<string | null>(suiteParam)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Suite | null>(null)
+  // The suite Run tests opens on ('' for none) while it is open, and which
+  // opening it is: each one mounts the dialog afresh.
+  const [runner, setRunner] = useState<string | null>(null)
+  const [opening, setOpening] = useState(0)
+  const openRunner = useCallback((suiteId: string) => {
+    setOpening((count) => count + 1)
+    setRunner(suiteId)
+  }, [])
+  const beginRequest = useLatestRequest()
 
   const load = useCallback(async () => {
+    const request = beginRequest()
+    setError(null)
     try {
       const next = await getDashboardDataBridge()
+      if (!request.isCurrent()) return
       setBridge(next)
-      const listed = (await next.listSuites()).suites
-      setSuites(listed)
-      setError(null)
-      return listed
+      const [listed, tests, recent] = await Promise.all([
+        next.listSuites(),
+        // The last results and the executions add to the suites; they show
+        // without them.
+        listAllTests(next).catch(() => null),
+        next
+          .listExecutions({ limit: 100 })
+          .then((manifest) => manifest.executions ?? [])
+          .catch(() => [] as DashboardExecutionSummary[]),
+      ])
+      if (!request.isCurrent()) return
+      setSuites(listed.suites)
+      if (tests) setRows(tests.rows)
+      setExecutions(recent)
     } catch (cause) {
-      setError(errorText(cause))
-      return null
+      if (request.isCurrent()) setError(errorText(cause))
     }
-  }, [])
+  }, [beginRequest])
+
   useEffect(() => {
     void load()
   }, [load])
 
+  // A finished run changes a suite's last execution and its tests' results.
+  useEffect(() => {
+    if (!bridge) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    let timer: number | undefined
+    bridge
+      .subscribeRunChanges(() => {
+        if (timer) window.clearTimeout(timer)
+        timer = window.setTimeout(() => void load(), 400)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+      dispose?.()
+    }
+  }, [bridge, load])
+
+  // The open suite lives in the hash, so Back leaves a suite for the list.
+  useEffect(() => {
+    const sync = () => {
+      setParam(suiteParam())
+      setActionError(null)
+    }
+    window.addEventListener('hashchange', sync)
+    return () => window.removeEventListener('hashchange', sync)
+  }, [])
+
+  const views = useMemo(
+    () =>
+      new Map<string, CatalogRowView>(
+        rows.map((row) => [row.test_id, catalogRowView(row, [])]),
+      ),
+    [rows],
+  )
+  const runsBySuite = useMemo(
+    () =>
+      new Map(
+        (suites ?? []).map((suite) => [
+          suite.id,
+          suiteRuns(executions, suite.id),
+        ]),
+      ),
+    [suites, executions],
+  )
+  const items = useMemo(
+    () =>
+      new Map(
+        (suites ?? []).map((suite) => [
+          suite.id,
+          suiteListItem(suite, runsBySuite.get(suite.id) ?? [], views),
+        ]),
+      ),
+    [suites, runsBySuite, views],
+  )
+
+  const named = suites?.find((suite) => suite.id === param) ?? null
+  // Wide, a suite is always open (the first by default); narrow, the list
+  // shows until one is picked.
+  const selected = named ?? (narrow ? null : (suites?.[0] ?? null))
+  const failedFirstLoad = Boolean(error) && suites === null
+
+  const headerActions = useMemo<HeaderAction[]>(
+    () =>
+      bridge
+        ? [
+            {
+              id: 'run',
+              label: 'Run tests',
+              primary: true,
+              onSelect: () => openRunner(''),
+            },
+          ]
+        : [],
+    [bridge, openRunner],
+  )
+
   const copy = async (suite: Suite) => {
     if (!bridge) return
-    setBusy(suite.id)
-    setError(null)
+    setBusy(true)
+    setActionError(null)
     try {
       const created = await bridge.createSuite(suite.id)
       await load()
-      setEditing(created)
+      window.location.hash = hashForSuites(created.id)
     } catch (cause) {
-      setError(errorText(cause))
+      setActionError(errorText(cause))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
   const remove = async (suite: Suite) => {
     if (!bridge) return
-    setBusy(suite.id)
-    setError(null)
+    setBusy(true)
+    setActionError(null)
     try {
       await bridge.deleteSuite(suite.id)
       setDeleting(null)
       await load()
+      window.location.hash = hashForSuites()
     } catch (cause) {
-      setError(errorText(cause))
+      setDeleting(null)
+      setActionError(errorText(cause))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
   return (
-    <div className="ds-root min-h-dvh bg-canvas text-ink">
-      <DashboardPageActions active="suites" />
-      <div className="page-shell">
-        <PageHeader
-          variant="list"
-          title="Suites"
-          summary="What to test: scenarios, runs of each and technical retries. The repository's suites are read-only; copy one to edit it here."
-        />
-        {error ? (
-          <p className="mt-4 text-sm text-danger" role="alert">
-            {error}
-          </p>
-        ) : null}
-        {suites === null ? (
-          error ? (
-            <EmptyState
-              className="mt-6"
-              tone="error"
-              title="Suites could not be loaded"
-              description={error}
-              actions={
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => void load()}
-                >
-                  try again
-                </button>
-              }
-            />
-          ) : (
-            <div className="mt-6 grid gap-2" aria-busy="true" role="status">
-              <span className="ds-visually-hidden">Loading suites</span>
-              {['first', 'second', 'third'].map((placeholder) => (
-                <div
-                  key={placeholder}
-                  className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-                />
-              ))}
-            </div>
-          )
-        ) : (
-          <div className="mt-6" data-suites>
-            <DataTable caption="Suites" collapse minWidth="52rem">
-              <thead>
-                <tr>
-                  <th scope="col">Suite</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Holds</th>
-                  <th scope="col">Digest</th>
-                  <th scope="col">
-                    <span className="ds-visually-hidden">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {suites.map((suite) => (
-                  <tr key={suite.id} data-suite={suite.id}>
-                    <td data-label="Suite">
-                      <span className="grid gap-0.5">
-                        <strong className="text-sm font-semibold text-ink">
-                          {suite.label}
-                        </strong>
-                        <span className="font-mono text-xs text-ink-muted">
-                          {suite.id}
-                        </span>
-                        {suite.purpose ? (
-                          <span className="max-w-[32rem] text-xs leading-5 text-ink-soft">
-                            {suite.purpose}
-                          </span>
-                        ) : null}
-                      </span>
-                    </td>
-                    <td data-label="Source" className="text-xs text-ink-soft">
-                      {suite.source === 'local' ? 'this Console' : 'repository'}
-                    </td>
-                    <td data-label="Holds" className="text-xs text-ink">
-                      {suiteScope(suite)}
-                    </td>
-                    <td
-                      data-label="Digest"
-                      className="font-mono text-xs text-ink-muted"
-                      title={suite.sha256 ?? undefined}
-                    >
-                      {suite.sha256
-                        ? suite.sha256.replace(/^sha256:/, '').slice(0, 12)
-                        : '—'}
-                    </td>
-                    <td className="text-right">
-                      <span className="inline-flex flex-wrap justify-end gap-2">
-                        <button
-                          className={buttonClassName({
-                            variant: 'secondary',
-                            size: 'compact',
-                          })}
-                          type="button"
-                          aria-label={`Copy ${suite.label}`}
-                          disabled={!bridge || busy !== null}
-                          onClick={() => void copy(suite)}
-                        >
-                          copy
-                        </button>
-                        {suite.source === 'local' ? (
-                          <>
-                            <button
-                              className={buttonClassName({
-                                variant: 'secondary',
-                                size: 'compact',
-                              })}
-                              type="button"
-                              aria-label={`Edit ${suite.label}`}
-                              disabled={!bridge || busy !== null}
-                              onClick={() => setEditing(suite)}
-                            >
-                              edit
-                            </button>
-                            <button
-                              className={buttonClassName({
-                                variant: 'quiet',
-                                size: 'compact',
-                              })}
-                              type="button"
-                              aria-label={`Delete ${suite.label}`}
-                              disabled={!bridge || busy !== null}
-                              onClick={() => setDeleting(suite)}
-                            >
-                              delete
-                            </button>
-                          </>
-                        ) : null}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </DataTable>
-          </div>
+    <div className="ds-root ex-page st-page">
+      <DashboardPageActions
+        active="suites"
+        actionsLabel="Suite actions"
+        actions={headerActions}
+        context={selected?.label}
+      />
+      <header className="ex-header">
+        <h1>Suites</h1>
+        {failedFirstLoad ? null : (
+          <p>{suites ? suitesSummary(suites) : 'Loading the suites…'}</p>
         )}
-      </div>
-      {editing && bridge ? (
-        <SuiteEditor
-          key={editing.id}
-          bridge={bridge}
-          suite={editing}
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null)
-            void load()
-          }}
-        />
+      </header>
+
+      {error && !failedFirstLoad ? (
+        <Callout tone="danger" title="The suites could not be reloaded">
+          <span className="ex-callout-line">
+            {error}
+            <button
+              className={buttonClassName({
+                variant: 'secondary',
+                size: 'compact',
+              })}
+              type="button"
+              onClick={() => void load()}
+            >
+              try again
+            </button>
+          </span>
+        </Callout>
       ) : null}
-      <Dialog
-        open={deleting !== null}
-        onClose={() => busy === null && setDeleting(null)}
-        size="sm"
-        title={`Delete ${deleting?.label ?? 'suite'}?`}
-        description="Executions that ran it keep its name and digest."
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={busy !== null}
-              onClick={() => setDeleting(null)}
-            >
-              cancel
-            </button>
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={busy !== null}
-              aria-busy={busy !== null}
-              onClick={() => deleting && void remove(deleting)}
-            >
-              {busy !== null ? 'deleting…' : 'delete suite'}
-            </button>
+
+      {suites === null ? (
+        failedFirstLoad ? (
+          <EmptyState
+            tone="error"
+            title="Suites could not be loaded"
+            description={error}
+            actions={
+              <button
+                className={buttonClassName({ variant: 'secondary' })}
+                type="button"
+                onClick={() => void load()}
+              >
+                try again
+              </button>
+            }
+          />
+        ) : (
+          <div className="ex-loading" aria-busy="true" role="status">
+            <span className="ds-visually-hidden">Loading the suites</span>
+            {Array.from({ length: 5 }, (_, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+              <div key={index} />
+            ))}
           </div>
-        }
+        )
+      ) : (
+        <div className="st-layout" data-narrow={narrow || undefined}>
+          {narrow && selected ? null : (
+            <SuiteList
+              suites={suites}
+              items={items}
+              selectedId={selected?.id ?? null}
+            />
+          )}
+          {selected ? (
+            <SuiteDetail
+              key={selected.id}
+              suite={selected}
+              runs={runsBySuite.get(selected.id) ?? []}
+              narrow={narrow}
+              ready={Boolean(bridge)}
+              busy={busy}
+              error={actionError}
+              onCopy={() => void copy(selected)}
+              onRun={() => openRunner(selected.id)}
+              onDelete={() => setDeleting(selected)}
+            />
+          ) : null}
+        </div>
+      )}
+
+      <DeleteSuiteDialog
+        suite={deleting}
+        deleting={busy}
+        onCancel={() => setDeleting(null)}
+        onConfirm={() => deleting && void remove(deleting)}
+      />
+      <LocalRunnerDialog
+        key={opening}
+        bridge={bridge}
+        open={runner !== null}
+        initialSuite={runner || undefined}
+        onClose={() => setRunner(null)}
       />
     </div>
   )
