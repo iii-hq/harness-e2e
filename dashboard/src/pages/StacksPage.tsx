@@ -1017,7 +1017,7 @@ export function StacksPage() {
           onNew={openNew}
         />
       )}
-      <ProviderCredentials bridge={bridge} />
+      <ProviderCredentials bridge={bridge} narrow={narrow} />
 
       {open ? (
         <StackSheet
