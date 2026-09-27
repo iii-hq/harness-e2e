@@ -215,6 +215,8 @@ export function SuiteList({
 /** Ticking tests in and out of a suite being edited. */
 type TestsEdit = {
   tests: string[]
+  /** While it saves, or while the sequential groups are unknown. */
+  disabled: boolean
   onTick: (id: string, on: boolean) => void
 }
 
@@ -276,6 +278,7 @@ export function SuiteTests({
                     <Checkbox
                       aria-label={`Keep ${id} in the suite`}
                       checked={on}
+                      disabled={edit.disabled}
                       onChange={() => edit.onTick(id, !on)}
                     />
                   </td>
@@ -317,10 +320,12 @@ export function SuiteTests({
 function AddTests({
   catalog,
   draft,
+  disabled,
   onAdd,
 }: {
   catalog: CatalogRowView[]
   draft: SuiteDraft
+  disabled: boolean
   onAdd: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
@@ -334,6 +339,7 @@ function AddTests({
           type="text"
           value={query}
           placeholder="Search the catalog"
+          disabled={disabled}
           onChange={(event) => setQuery(event.target.value)}
         />
       </label>
@@ -351,6 +357,7 @@ function AddTests({
                 type="button"
                 className="st-suggestion"
                 aria-label={`Add ${id}`}
+                disabled={disabled}
                 onClick={() => onAdd(id)}
               >
                 <Plus size={16} aria-hidden="true" />
@@ -376,6 +383,7 @@ function Stepper({
   value,
   min,
   max,
+  disabled,
   onChange,
 }: {
   id: string
@@ -384,6 +392,7 @@ function Stepper({
   value: number
   min: number
   max: number
+  disabled: boolean
   onChange: (value: number) => void
 }) {
   return (
@@ -397,7 +406,7 @@ function Stepper({
           type="button"
           className="st-step-button"
           aria-label={`Fewer ${noun}`}
-          disabled={value <= min}
+          disabled={disabled || value <= min}
           onClick={() => onChange(value - 1)}
         >
           <Minus size={16} aria-hidden="true" />
@@ -409,7 +418,7 @@ function Stepper({
           type="button"
           className="st-step-button"
           aria-label={`More ${noun}`}
-          disabled={value >= max}
+          disabled={disabled || value >= max}
           onClick={() => onChange(value + 1)}
         >
           <Plus size={16} aria-hidden="true" />
@@ -521,6 +530,8 @@ export function SuiteDetail({
   const tests = draft ? draft.tests : suite.scenarios
   const changed = changedTests(tests, views).length
   const dirty = draft ? draftDirty(draft, suite) : false
+  // While it saves, what it sends cannot change under it.
+  const locked = Boolean(editing?.saving)
   const update = (patch: Partial<SuiteDraft>) =>
     draft && editing?.onChange({ ...draft, ...patch })
   const tick = (id: string, on: boolean) =>
@@ -568,6 +579,7 @@ export function SuiteDetail({
                   type="text"
                   maxLength={160}
                   value={draft.label}
+                  disabled={locked}
                   aria-invalid={draft.label.trim() ? undefined : true}
                   onChange={(event) => update({ label: event.target.value })}
                 />
@@ -686,6 +698,7 @@ export function SuiteDetail({
             value={draft.runs}
             min={1}
             max={20}
+            disabled={locked}
             onChange={(runs) => update({ runs })}
           />
           <Stepper
@@ -695,6 +708,7 @@ export function SuiteDetail({
             value={draft.retries}
             min={0}
             max={3}
+            disabled={locked}
             onChange={(retries) => update({ retries })}
           />
           <p className="st-edit-note">
@@ -716,12 +730,15 @@ export function SuiteDetail({
         views={views}
         groups={groups}
         narrow={narrow}
-        edit={draft ? { tests: draft.tests, onTick: tick } : null}
+        edit={
+          draft ? { tests: draft.tests, disabled: locked, onTick: tick } : null
+        }
       />
       {draft && editing ? (
         <AddTests
           catalog={editing.catalog}
           draft={draft}
+          disabled={locked}
           onAdd={(id) => tick(id, true)}
         />
       ) : null}

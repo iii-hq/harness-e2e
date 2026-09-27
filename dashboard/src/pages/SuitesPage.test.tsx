@@ -286,6 +286,22 @@ describe('editing a suite of this Console', () => {
     expect(html).toContain('Add tests')
   })
 
+  it('holds every control still while it saves', () => {
+    const html = detail({
+      suite: quick,
+      views,
+      groups,
+      editing: { ...editing(), saving: true },
+    })
+    expect(html).toMatch(/id="st-name"[^>]*disabled=""/)
+    expect(html).toMatch(
+      /aria-label="Keep minimal_path in the suite"[^>]*disabled=""/,
+    )
+    expect(html).toMatch(/id="st-add"[^>]*disabled=""/)
+    expect(html).toMatch(/aria-label="More runs"[^>]*disabled=""/)
+    expect(html).toContain('Saving…')
+  })
+
   it('keeps an unticked test listed, faded, and says the changes are unsaved', () => {
     const draft = tickDraft(suiteDraft(quick), 'minimal_path', false, groups)
     const html = detail({
