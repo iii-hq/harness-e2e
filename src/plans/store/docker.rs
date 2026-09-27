@@ -2939,6 +2939,89 @@ mod tests {
         assert_eq!(reports[3]["state"], "cancelled");
     }
 
+    #[tokio::test]
+    async fn running_a_scenario_again_leaves_what_the_last_import_said_of_the_other_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            Arc::new(FakeLauncher::default()),
+            DockerSettings::default(),
+        );
+        let id = "plan-again".to_owned();
+        let checkout = store.docker_folder(&id).join("checkout");
+        let snapshot =
+            serde_json::to_value(test_plan::embedded().unwrap().materialize("pr").unwrap())
+                .unwrap();
+        write_contracts(&checkout.join("target/harness-e2e-contract"), &snapshot).unwrap();
+        let (mut groups, _) = prepared_groups(&checkout).unwrap();
+        // The last import: the first group left no run (failed), the second
+        // was cancelled before it ran, both said so as not run; the last two
+        // ran.
+        let mut slots = group_slots(&groups);
+        for (index, state) in [(0, "failed"), (1, "cancelled"), (2, "done"), (3, "done")] {
+            groups[index].state = state.into();
+        }
+        for slot in &mut slots[..2] {
+            (slot.state, slot.error) = ("not_run".into(), Some("compose::add failed".into()));
+        }
+        for slot in &mut slots[2..] {
+            (slot.state, slot.execution_id) =
+                ("finished".into(), format!("native-{}", slot.group_id));
+        }
+        // Now the third group's scenario runs again, and was cancelled
+        // before it ran; the fourth is the one it runs again after.
+        groups[2].state = "cancelled".into();
+        let again = groups[2].scenarios.clone();
+        let execution = PlanExecution {
+            id: id.clone(),
+            idempotency_key: "execution:again".into(),
+            label: None,
+            parameters: Some(docker_parameters("pr")),
+            slots,
+            source: ExecutionSource::Docker {
+                attempt: 2,
+                phase: "groups".into(),
+                image: None,
+                groups,
+            },
+            stack: Vec::new(),
+            warnings: Vec::new(),
+            state: "cancelling".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: true,
+            error: None,
+            measurements: None,
+            system_under_test: None,
+            rerun: Some(Rerun {
+                scenarios: again,
+                runs: Vec::new(),
+                started_at: now(),
+                state: "completed".into(),
+                error: None,
+                finished_at: None,
+            }),
+        };
+        store.write_execution(&execution).await.unwrap();
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        // Neither the group that left no run nor the one an earlier cancel
+        // stopped reads as stopped by this one: what the import said stays.
+        for report in &reports[..2] {
+            assert!(report.get("state").is_none(), "{report}");
+            assert_eq!(report["error"], "compose::add failed");
+        }
+        // The one running again keeps its last attempt's run.
+        assert!(reports[2].get("state").is_none(), "{}", reports[2]);
+        assert_eq!(
+            reports[2]["native_execution_id"],
+            "native-case-tool-contract-recovery"
+        );
+    }
+
     #[test]
     fn an_execution_warns_when_its_models_provider_has_no_key_and_still_runs() {
         let set = BTreeMap::from([("ZAI_API_KEY".to_owned(), "k".to_owned())]);

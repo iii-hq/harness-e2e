@@ -4,7 +4,9 @@ use std::collections::BTreeSet;
 #[cfg(test)]
 use std::fs;
 
-use crate::plans::store::{execution_summary, native_runs, PlanExecution, PlanStore, Slot};
+use crate::plans::store::{
+    execution_summary, native_runs, ExecutionSource, PlanExecution, PlanStore, Slot,
+};
 
 impl PlanStore {
     pub(crate) async fn dashboard_summaries(
@@ -141,17 +143,10 @@ impl PlanStore {
             } else if slot.state == "pending" {
                 // Waiting for its turn: queued, not missing.
                 current[0]["state"] = json!("queued");
-            } else if slot.state == "not_run"
-                && slot.execution_id.is_empty()
-                && matches!(execution.state.as_str(), "running" | "cancelling")
-            {
-                // Stopped before it ran while the rest still ends (a Docker
-                // group cancelled or interrupted): why, not missing.
-                current[0]["state"] = json!(if execution.cancel_requested {
-                    "cancelled"
-                } else {
-                    "interrupted"
-                });
+            } else if let Some(stopped) = stopped_group(&execution, slot) {
+                // Stopped before it ran while the rest still ends: why, not
+                // missing.
+                current[0]["state"] = json!(stopped);
             }
             reports.extend(current);
             // Earlier attempts are shown with their slot and counted nowhere:
@@ -186,6 +181,32 @@ impl PlanStore {
             .collect::<Vec<_>>());
         Ok(Some(summary))
     }
+}
+
+/// The state of the Docker group this drive stopped before the slot ran
+/// (`cancelled` or `interrupted`), while the execution still ends. What an
+/// earlier import said of a group a scenario run again does not run is left
+/// as it said it.
+fn stopped_group<'a>(execution: &'a PlanExecution, slot: &Slot) -> Option<&'a str> {
+    let ExecutionSource::Docker { groups, .. } = &execution.source else {
+        return None;
+    };
+    if !slot.execution_id.is_empty()
+        || !matches!(execution.state.as_str(), "running" | "cancelling")
+    {
+        return None;
+    }
+    let group = groups
+        .iter()
+        .find(|group| group.round == slot.round && group.group_id == slot.group_id)?;
+    let this_drive = execution.rerun.as_ref().is_none_or(|rerun| {
+        group
+            .scenarios
+            .iter()
+            .any(|scenario| rerun.scenarios.contains(scenario))
+    });
+    (this_drive && matches!(group.state.as_str(), "cancelled" | "interrupted"))
+        .then_some(group.state.as_str())
 }
 
 /// What one native run reports for a slot's scenario, or one unavailable
