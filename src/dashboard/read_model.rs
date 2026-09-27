@@ -1942,7 +1942,7 @@ mod tests {
                     run
                 })
                 .collect();
-            let policy = report.scenarios[0].execution_policy.clone();
+            let policy = report.scenarios[0].execution_policy;
             let mut scenario = E2eScenarioReport::aggregate("direct_answer", policy, runs);
             scenario.behavior_sha256 = Some(definition.into());
             report.scenarios = vec![scenario];
