@@ -29,6 +29,8 @@ const repository = master.suites.map((suite) => ({
 }))
 const local = []
 const calls = { create: [], update: [], remove: [], start: [] }
+// A refusal the next suite-create answers with, once.
+let refuseCreate = null
 const executions = new Map()
 
 // The catalog: every test the master plan runs, one with a current run, one
@@ -118,6 +120,11 @@ const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'suites-list') return { suites: [...repository, ...local] }
   if (id === 'suite-create') {
+    if (refuseCreate) {
+      const message = refuseCreate
+      refuseCreate = null
+      throw new Error(message)
+    }
     calls.create.push(request)
     // A copy of a suite, or the tests given (one run, one retry each).
     const from = request.tests
@@ -414,8 +421,13 @@ try {
   await name.getByRole('button', { name: 'Save suite', exact: true }).click()
   await name.getByText('Name the suite.').waitFor()
   await name.getByRole('textbox', { name: 'Suite name' }).fill('Picked')
+  // The worker's refusal is said in the dialog, which stays open.
+  refuseCreate = 'The suite store is read-only.'
+  await name.getByRole('button', { name: 'Save suite', exact: true }).click()
+  await name.getByText('The suite store is read-only.').waitFor()
   await name.getByRole('button', { name: 'Save suite', exact: true }).click()
   await name.waitFor({ state: 'hidden' })
+  assert.equal(local.filter((suite) => suite.label === 'Picked').length, 1)
   assert.deepEqual(calls.create.at(-1), {
     tests: ['registry_implementation', 'registry_verification', 'minimal_path'],
     label: 'Picked',

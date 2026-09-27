@@ -12,6 +12,7 @@ import {
   catalogHeaderActions,
   catalogSelection,
   listAllTests,
+  saveTestsAsSuite,
 } from '@/pages/TestsCatalogPage'
 
 const NOW = new Date('2026-09-27T12:00:00Z')
@@ -174,5 +175,74 @@ describe('tests catalog actions', () => {
     expect(listed.rows.map((entry) => entry.test_id)).toEqual(['a', 'b'])
     expect(listed.revision).toBe('r1')
     expect(requests).toEqual([{ limit: 100 }, { limit: 100, cursor: 'r1:1' }])
+  })
+})
+
+describe('save as suite', () => {
+  const created = {
+    id: 'suite-1',
+    label: 'Picked',
+    source: 'local' as const,
+    purpose: '',
+    scenarios: ['minimal_path', 'registry_implementation'],
+    repetitions: 1,
+    technical_retries: 1,
+    sha256: null,
+    updated_at: null,
+    warnings: ['The whole group was added.'],
+  }
+
+  it('reports the suite it created with its warnings, and the new list', async () => {
+    const done = await saveTestsAsSuite(
+      {
+        createSuiteOfTests: async () => created,
+        listSuites: async () => ({ suites: [created] }),
+      },
+      ['minimal_path'],
+      'Picked',
+    )
+    expect(done).toEqual({
+      saved: {
+        label: 'Picked',
+        count: 2,
+        warnings: ['The whole group was added.'],
+      },
+      suites: [created],
+    })
+  })
+
+  it('is saved once created, even when the list fails to load after', async () => {
+    let creates = 0
+    const done = await saveTestsAsSuite(
+      {
+        createSuiteOfTests: async () => {
+          creates += 1
+          return created
+        },
+        listSuites: async () => {
+          throw new Error('listing failed')
+        },
+      },
+      ['minimal_path'],
+      'Picked',
+    )
+    expect(creates).toBe(1)
+    expect(done.saved.label).toBe('Picked')
+    expect(done.suites).toBeNull()
+  })
+
+  it('fails as the worker said when the suite is not created', async () => {
+    await expect(
+      saveTestsAsSuite(
+        {
+          createSuiteOfTests: async () => {
+            throw new Error('Name the suite.')
+          },
+          listSuites: async () => ({ suites: [] }),
+        },
+        [],
+        '',
+      ),
+    ).rejects.toThrow('Name the suite.')
   })
 })

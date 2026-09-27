@@ -431,6 +431,30 @@ function SaveSuiteDialog({
 
 type Saved = { label: string; count: number; warnings: string[] }
 
+/** Creates the suite, then lists the suites again for the chips and the
+ *  filter. Once it is created, a list that fails to load only leaves the
+ *  chips as they were: the save is not reported as failed, which would
+ *  invite saving it twice. */
+export async function saveTestsAsSuite(
+  bridge: Pick<DashboardDataBridge, 'createSuiteOfTests' | 'listSuites'>,
+  tests: string[],
+  label: string,
+): Promise<{ saved: Saved; suites: Suite[] | null }> {
+  const suite = await bridge.createSuiteOfTests(tests, label)
+  const suites = await bridge
+    .listSuites()
+    .then((listed) => listed.suites)
+    .catch(() => null)
+  return {
+    saved: {
+      label: suite.label,
+      count: suite.scenarios.length,
+      warnings: suite.warnings ?? [],
+    },
+    suites,
+  }
+}
+
 export function TestsCatalogPage() {
   const narrow = useDashboardChrome()?.narrow ?? false
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
@@ -551,13 +575,9 @@ export function TestsCatalogPage() {
 
   const saveSuite = async (label: string) => {
     if (!bridge) return
-    const suite = await bridge.createSuiteOfTests(ticked, label)
-    setSaved({
-      label: suite.label,
-      count: suite.scenarios.length,
-      warnings: suite.warnings ?? [],
-    })
-    setSuites((await bridge.listSuites()).suites)
+    const done = await saveTestsAsSuite(bridge, ticked, label)
+    setSaved(done.saved)
+    if (done.suites) setSuites(done.suites)
   }
 
   return (
