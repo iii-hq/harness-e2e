@@ -242,12 +242,21 @@ export function githubSteps(execution: PlanExecution) {
   // A run this worker does not follow (imported from GitHub) reports no
   // jobs: only its import is known.
   if (!source.follow?.followed && jobs.length === 0) return [importStep]
+  // A job that ended other than success stops its step (Failed,
+  // Cancelled, Skipped, as the job list says it).
   const jobState = (job: GithubJob | undefined, after: boolean): StepState =>
     job?.status === 'completed'
-      ? 'done'
+      ? job.conclusion === 'success'
+        ? 'done'
+        : 'stopped'
       : job?.status === 'in_progress' || (after && !job)
         ? 'current'
         : 'next'
+  const jobDetail = (
+    job: GithubJob | undefined,
+    state: StepState,
+    detail: string,
+  ) => (job && state === 'stopped' ? jobLabel(job) : detail)
   const prepare = jobs.find(isPrepareJob)
   const groups = jobs.filter(isGroupJob)
   const aggregate = jobs.find(isAggregateJob)
@@ -270,7 +279,7 @@ export function githubSteps(execution: PlanExecution) {
   }
   // A job run again comes after a prepare that already happened.
   const prepareState: StepState =
-    prepare?.status === 'completed' || groups.length > 0 || execution.rerun
+    groups.length > 0 || execution.rerun
       ? 'done'
       : jobState(prepare, !importing)
   let groupsState: StepState = groupsDone
@@ -290,7 +299,11 @@ export function githubSteps(execution: PlanExecution) {
       phase: 'prepare',
       label: 'Prepare job',
       state: prepareState,
-      detail: 'Suite materialized, stack assembled and locked',
+      detail: jobDetail(
+        prepare,
+        prepareState,
+        'Suite materialized, stack assembled and locked',
+      ),
       time: prepare ? jobDuration(prepare) : '',
     },
     {
@@ -316,7 +329,11 @@ export function githubSteps(execution: PlanExecution) {
       state: aggregateState,
       detail: cancelled
         ? 'GitHub is finishing the cancel'
-        : 'Aggregates the groups and writes the bundle',
+        : jobDetail(
+            aggregate,
+            aggregateState,
+            'Aggregates the groups and writes the bundle',
+          ),
       time: aggregate ? jobDuration(aggregate) : '',
     },
     importStep,

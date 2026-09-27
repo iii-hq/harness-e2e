@@ -268,6 +268,44 @@ describe('where it ran · model', () => {
     })
   })
 
+  it('stops a step whose job ended other than success; a re-run starts past the prepare', () => {
+    const jobs = (list: unknown[]) =>
+      ({
+        ...github,
+        source: {
+          ...(github.source as object),
+          follow: { followed: true, jobs: list },
+        },
+      }) as unknown as PlanExecution
+    const failed = githubSteps(
+      jobs([
+        {
+          id: 9,
+          name: 'Materialize the suite and assemble the stack',
+          status: 'completed',
+          conclusion: 'failure',
+          url: '',
+        },
+      ]),
+    )
+    expect(failed[0]).toMatchObject({ state: 'stopped', detail: 'Failed' })
+    expect(failed[1].state).toBe('next')
+    // A job re-run: followed, its jobs not listed yet.
+    const rerun = {
+      ...jobs([]),
+      rerun: { scenarios: ['timer_wake'] },
+    } as unknown as PlanExecution
+    expect(githubSteps(rerun).map((step) => step.state)).toEqual([
+      'done',
+      'current',
+      'next',
+      'next',
+    ])
+    expect(githubSteps(rerun)[1].detail).toBe(
+      'Waiting for GitHub to start the jobs',
+    )
+  })
+
   it('knows only the import of a run it does not follow', () => {
     const imported = {
       ...github,
