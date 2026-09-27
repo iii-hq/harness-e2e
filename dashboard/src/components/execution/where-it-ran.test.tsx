@@ -351,22 +351,24 @@ describe('where it ran · rounds', () => {
 })
 
 describe('where it ran · card', () => {
-  it('shows the GitHub run, workflow ref and group jobs', () => {
+  it('shows the workflow ref and group jobs, not the run the band names', () => {
     const html = renderToStaticMarkup(<WhereItRan execution={github} />)
-    expect(html).toContain('GitHub #77')
+    expect(html).not.toContain('GitHub #77')
+    expect(html).not.toContain('Release Control')
     expect(html).toContain('exact-stack-e2e.yml @ main 88aee14')
-    expect(html).toContain('Automatic when the run ends')
     expect(html).toContain('E2E / case-timer-wake')
     expect(html).toContain('data-job-state="running"')
     expect(html).toContain('6m 47s')
   })
 
-  it('shows the Docker steps, groups, image and the missing credentials', () => {
+  it('shows the Docker steps and groups; image and credentials are said once, elsewhere', () => {
     const html = renderToStaticMarkup(<WhereItRan execution={docker} />)
-    expect(html).toContain('No provider credentials')
+    // Needs attention says the missing credentials; the band, the image.
+    expect(html).not.toContain('No provider credentials')
+    expect(html).not.toContain('tools-d9a8b54a2c85')
     expect(html).toContain('Suite materialized, stack assembled and locked')
     expect(html).toContain('data-docker-group="case-timer-wake"')
-    expect(html).toContain('tools-d9a8b54a2c85')
+    expect(html).toContain('data-group-state="true">Running<')
     // Its tests are in the results table, filled in as each group ends.
     expect(html).not.toContain('aria-label="Tests"')
     expect(html).not.toContain('results at import')

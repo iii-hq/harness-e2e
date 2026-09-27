@@ -7,10 +7,9 @@ import {
 } from '@iii-dev/console-ui'
 import { Check, ExternalLink, Square } from 'lucide-react'
 import { useState } from 'react'
-import { Callout } from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
 import { sentenceCase } from '@/lib/format'
-import { type PlanExecution, running } from '@/lib/plan-execution'
+import type { PlanExecution } from '@/lib/plan-execution'
 import './where-it-ran.css'
 import {
   cancelCopy,
@@ -184,11 +183,12 @@ export function HarnessProgress({ execution }: { execution: PlanExecution }) {
   )
 }
 
-/** Where the execution runs and what happens there: this harness, Docker
+/** Where a finished execution ran, past what the facts band already says
+ *  (the run, Release Control, image and stack): GitHub's workflow ref and
+ *  group jobs, Docker's steps and groups. Where it runs: this harness, Docker
  *  (steps and groups) or GitHub (run, ref and group jobs). */
 export function WhereItRan({ execution }: { execution: PlanExecution }) {
   const source = execution.source
-  const live = running(execution.state) || execution.state === 'importing'
   const place = placeOf(execution)
   return (
     <section
@@ -212,21 +212,6 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
       {source.kind === 'github' ? (
         <>
           <dl className="wr-facts">
-            <dt>Run</dt>
-            <dd>
-              <a
-                className="wr-link"
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                GitHub #{source.run_id}
-                {source.run_attempt > 1
-                  ? ` · attempt ${source.run_attempt}`
-                  : ''}
-                <ExternalLink size={12} aria-hidden="true" />
-              </a>
-            </dd>
             <dt>Workflow</dt>
             <dd className="wr-mono">
               exact-stack-e2e.yml
@@ -237,51 +222,12 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
                 ? ` ${source.follow.head_sha.slice(0, 7)}`
                 : ''}
             </dd>
-            {source.release_control_execution_id ? (
-              <>
-                <dt>Reports</dt>
-                <dd className="wr-mono">
-                  Release Control{' '}
-                  {source.release_control_execution_id.slice(0, 8)}
-                </dd>
-              </>
-            ) : null}
-            <dt>Import</dt>
-            <dd>
-              {execution.state === 'importing'
-                ? 'Importing what finished…'
-                : execution.state === 'cancelling'
-                  ? 'GitHub is finishing the cancel; what finished is imported when the run ends.'
-                  : live
-                    ? 'Automatic when the run ends'
-                    : 'Imported'}
-            </dd>
           </dl>
           {source.follow?.jobs && source.follow.jobs.length > 0 ? (
             <GroupJobList execution={execution} />
-          ) : live ? (
-            <p className="wr-faint" role="status">
-              Waiting for GitHub to start the jobs…
-            </p>
           ) : null}
         </>
       ) : null}
-
-      {source.kind === 'docker'
-        ? (execution.warnings ?? [])
-            .filter((warning) =>
-              /provider_env_file|without credentials/.test(warning),
-            )
-            .map((warning) => (
-              <Callout
-                key={warning}
-                tone="warning"
-                title="No provider credentials"
-              >
-                {warning} Recorded when the execution started.
-              </Callout>
-            ))
-        : null}
 
       {source.kind === 'docker' ? (
         <>
@@ -308,25 +254,6 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
               </li>
             ))}
           </ol>
-          <dl className="wr-facts">
-            {source.image ? (
-              <>
-                <dt>Image</dt>
-                <dd className="wr-mono">{source.image}</dd>
-              </>
-            ) : null}
-            {execution.parameters?.stack ? (
-              <>
-                <dt>Stack</dt>
-                <dd className="wr-mono">
-                  {execution.parameters.stack.name}
-                  {execution.parameters.stack.sha256
-                    ? ` · ${execution.parameters.stack.sha256.replace('sha256:', '').slice(0, 12)}, locked`
-                    : ''}
-                </dd>
-              </>
-            ) : null}
-          </dl>
           <ul className="wr-jobs" aria-label="Groups" data-docker-groups>
             {source.groups.map((group) => (
               <li

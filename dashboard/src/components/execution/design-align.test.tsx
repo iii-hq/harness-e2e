@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { matchesFilter, rowNote } from '@/components/ScenarioMatrix'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
-import { ExecutionTotals } from './ExecutionTotals'
+import { ExecutionTotals, formatTokens, formatUsd } from './ExecutionTotals'
 import { NeedsAttention } from './NeedsAttention'
 
 const metric = (value: number | null): MetricValue => ({
@@ -95,6 +95,13 @@ describe('results by test (canvas)', () => {
 })
 
 describe('execution totals (canvas)', () => {
+  it('writes cost and tokens as the canvas does', () => {
+    expect(formatUsd(2.566)).toBe('$2.57')
+    expect(formatUsd(0.0048)).toBe('$0.0048')
+    expect(formatTokens(82_060_000)).toBe('82.1M')
+    expect(formatTokens(4_280_000)).toBe('4.28M')
+  })
+
   it('shows six figures and the partial note', () => {
     const metrics = {
       tests: [

@@ -1,6 +1,7 @@
 import { ChevronRight, ExternalLink } from 'lucide-react'
 import { type ReactNode, useId, useState } from 'react'
 import { StackPanel } from '@/components/execution/StackPanel'
+import { shortImage } from '@/components/execution/where-it-ran-model'
 import type { Stack } from '@/lib/dashboard-data-source'
 import { providerModel, suiteText } from '@/lib/execution-view'
 import type { PlanExecution } from '@/lib/plan-execution'
@@ -12,7 +13,7 @@ export function ExecutionOriginLink({
   source: PlanExecution['source']
 }) {
   if (source.kind === 'docker') return <>Docker · attempt {source.attempt}</>
-  if (source.kind !== 'github') return <>local</>
+  if (source.kind !== 'github') return <>This harness</>
   return (
     <a
       className="inline-flex items-center gap-1 text-ink"
@@ -50,7 +51,7 @@ export function ExecutionFacts({
       rows.push(
         ['Suite', suiteText(parameters.suite) ?? 'not recorded'],
         ['Model', providerModel(parameters)],
-        ['Profile', parameters.agent ?? 'default'],
+        ['Profile', parameters.agent ?? 'none'],
       )
     if (parameters?.stack)
       rows.push([
@@ -59,12 +60,24 @@ export function ExecutionFacts({
       ])
     else if (source.kind === 'github' && source.stack)
       rows.push(['Stack', source.stack])
+    // Long ids read short in the band, whole in their title.
     if (source.kind === 'docker' && source.image)
-      rows.push(['Image', source.image])
+      rows.push([
+        'Image',
+        <span key="image" title={source.image}>
+          {shortImage(source.image)}
+        </span>,
+      ])
     if (source.kind === 'github')
       rows.push([
         'Release Control',
-        source.release_control_execution_id ?? 'not reported',
+        source.release_control_execution_id ? (
+          <span key="rc" title={source.release_control_execution_id}>
+            {source.release_control_execution_id.slice(0, 8)}
+          </span>
+        ) : (
+          'not reported'
+        ),
       ])
     if (parameters && parameters.runs > 1)
       rows.push(['Runs', String(parameters.runs)])
