@@ -456,12 +456,12 @@
   cursor: pointer;
 }
 
-.st-step-button:hover:not(:disabled) {
+.st-step-button:hover:not([aria-disabled="true"]) {
   background: var(--color-surface-hover);
   color: var(--color-ink);
 }
 
-.st-step-button:disabled {
+.st-step-button[aria-disabled="true"] {
   cursor: not-allowed;
   opacity: 0.4;
 }

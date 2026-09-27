@@ -332,12 +332,14 @@ function AddTests({
   onAdd: (id: string) => void
 }) {
   const [query, setQuery] = useState('')
+  const field = useRef<HTMLInputElement>(null)
   const found = testSuggestions(query, catalog, draft)
   return (
     <div className="st-add">
       <label className="st-field st-add-field" htmlFor="st-add">
         <span className="st-field-label">Add tests</span>
         <Input
+          ref={field}
           id="st-add"
           type="text"
           value={query}
@@ -361,7 +363,11 @@ function AddTests({
                 className="st-suggestion"
                 aria-label={`Add ${id}`}
                 disabled={disabled}
-                onClick={() => onAdd(id)}
+                onClick={() => {
+                  onAdd(id)
+                  // The button goes with the suggestion: back to the search.
+                  field.current?.focus()
+                }}
               >
                 <Plus size={16} aria-hidden="true" />
                 {id}
@@ -404,13 +410,14 @@ function Stepper({
       <span className="st-field-label" id={`${id}-label`}>
         {label}
       </span>
+      {/* aria-disabled, not disabled: at a limit the button keeps focus. */}
       <div className="st-stepper">
         <button
           type="button"
           className="st-step-button"
           aria-label={`Fewer ${noun}`}
-          disabled={disabled || value <= min}
-          onClick={() => onChange(value - 1)}
+          aria-disabled={disabled || value <= min || undefined}
+          onClick={() => !disabled && value > min && onChange(value - 1)}
         >
           <Minus size={16} aria-hidden="true" />
         </button>
@@ -421,8 +428,8 @@ function Stepper({
           type="button"
           className="st-step-button"
           aria-label={`More ${noun}`}
-          disabled={disabled || value >= max}
-          onClick={() => onChange(value + 1)}
+          aria-disabled={disabled || value >= max || undefined}
+          onClick={() => !disabled && value < max && onChange(value + 1)}
         >
           <Plus size={16} aria-hidden="true" />
         </button>
@@ -824,11 +831,13 @@ function DeleteSuiteDialog({
   deleting,
   onCancel,
   onConfirm,
+  onCloseAutoFocus,
 }: {
   suite: Suite | null
   deleting: boolean
   onCancel: () => void
   onConfirm: () => void
+  onCloseAutoFocus: (event: Event) => void
 }) {
   // The suite stays named while the dialog animates out.
   const shown = useRef<Suite | null>(null)
@@ -845,6 +854,7 @@ function DeleteSuiteDialog({
         role="alertdialog"
         className="ex-dialog"
         aria-describedby="st-delete-body"
+        onCloseAutoFocus={onCloseAutoFocus}
       >
         <div className="ex-dialog-head">
           <span className="ex-dialog-icon" aria-hidden="true">
@@ -903,6 +913,8 @@ export function SuitesPage() {
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<Suite | null>(null)
+  // A deleted suite's button is gone: focus goes to the page's heading.
+  const deleted = useRef(false)
   // The drafts of suites being edited, mirrored from openDrafts.
   const [drafts, setDrafts] = useState<ReadonlyMap<string, SuiteDraft>>(
     () => new Map(openDrafts),
@@ -1095,6 +1107,7 @@ export function SuitesPage() {
     setActionError(null)
     try {
       await bridge.deleteSuite(suite.id)
+      deleted.current = true
       setDeleting(null)
       putDraft(suite.id, null)
       await load()
@@ -1140,7 +1153,9 @@ export function SuitesPage() {
         context={selected?.label}
       />
       <header className="ex-header">
-        <h1>Suites</h1>
+        <h1 id="st-heading" tabIndex={-1}>
+          Suites
+        </h1>
         {failedFirstLoad ? null : (
           <p>{suites ? suitesSummary(suites) : 'Loading the suites…'}</p>
         )}
@@ -1259,6 +1274,12 @@ export function SuitesPage() {
         deleting={busy}
         onCancel={() => setDeleting(null)}
         onConfirm={() => deleting && void remove(deleting)}
+        onCloseAutoFocus={(event) => {
+          if (!deleted.current) return
+          deleted.current = false
+          event.preventDefault()
+          document.getElementById('st-heading')?.focus()
+        }}
       />
       <LocalRunnerDialog
         key={opening}

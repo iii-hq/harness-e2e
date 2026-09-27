@@ -276,6 +276,9 @@ describe('editing a suite of this Console', () => {
     expect(html).toContain('Runs of each test')
     expect(html).toContain('Retries on crash')
     expect(html).toContain('aria-label="More runs"')
+    // At its limit a step keeps focus: aria-disabled, never disabled.
+    expect(html).toMatch(/aria-label="Fewer runs" aria-disabled="true"/)
+    expect(html).not.toMatch(/aria-label="Fewer runs"[^>]* disabled=""/)
     expect(html).toContain('Discard')
     expect(html).toContain('Save suite')
     expect(html).not.toContain('Run this suite')
@@ -334,7 +337,7 @@ describe('editing a suite of this Console', () => {
       /aria-label="Keep minimal_path in the suite"[^>]*disabled=""/,
     )
     expect(html).toMatch(/id="st-add"[^>]*disabled=""/)
-    expect(html).toMatch(/aria-label="More runs"[^>]*disabled=""/)
+    expect(html).toMatch(/aria-label="More runs" aria-disabled="true"/)
     expect(html).toContain('Saving…')
   })
 
