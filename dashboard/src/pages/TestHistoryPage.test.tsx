@@ -7,6 +7,7 @@ import {
   listedRuns,
   resultChoices,
   selectionHint,
+  unknownDefinition,
 } from '@/pages/TestHistoryPage'
 import { formFlow, history } from '@/test-fixtures/test-history'
 
@@ -81,5 +82,24 @@ describe('the runs toolbar', () => {
     expect(selectionHint([])).toBe('Tick two runs to compare them')
     expect(selectionHint(['x'])).toBe('A ticked · tick B')
     expect(selectionHint(['x', 'y'])).toBe('A and B ticked')
+  })
+})
+
+describe('links from older pages', () => {
+  it('maps the old result filter and drops a value it does not know', () => {
+    const result = (value: string) =>
+      historyStateFromParams(new URLSearchParams({ result: value })).filters
+        .result
+    expect(result('passed')).toBe('full')
+    expect(result('failed')).toBe('lost')
+    expect(result('none')).toBe('none')
+    expect(result('mystery')).toBe('')
+  })
+
+  it('knows the answer to a definition the history no longer holds', () => {
+    expect(
+      unknownDefinition("unknown test 'form_flow_build' version sha256:dead"),
+    ).toBe(true)
+    expect(unknownDefinition('history cursor is stale')).toBe(false)
   })
 })

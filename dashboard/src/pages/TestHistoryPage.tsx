@@ -66,6 +66,16 @@ export type HistoryFilters = {
   result: string
 }
 
+// Older links filtered by status; a value the page does not know is dropped,
+// so the result control always has one option on.
+const RESULT_PARAMS: Record<string, string> = {
+  full: 'full',
+  lost: 'lost',
+  none: 'none',
+  passed: 'full',
+  failed: 'lost',
+}
+
 /** Filters and the A/B ticks live in the hash, so a link reopens the page
  *  as it was. */
 export function historyStateFromParams(params: URLSearchParams) {
@@ -75,7 +85,7 @@ export function historyStateFromParams(params: URLSearchParams) {
       model: params.get('model') ?? '',
       system: params.get('system') ?? '',
       profile: params.get('profile') ?? '',
-      result: params.get('result') ?? '',
+      result: RESULT_PARAMS[params.get('result') ?? ''] ?? '',
     } satisfies HistoryFilters,
     selected: ['a', 'b']
       .map((slot) => params.get(slot))
@@ -131,6 +141,11 @@ export function resultChoices(observations: HistoryObservation[]) {
 export function modelPlaceholder(groups: HistoryResponse['subject_models']) {
   const models = groups.flatMap((group) => group.models)
   return models.length === 1 ? models[0] : `All models · ${models.length}`
+}
+
+/** The worker's answer to a definition it does not hold. */
+export function unknownDefinition(message: string) {
+  return /unknown test .* version/.test(message)
 }
 
 export function selectionHint(selected: string[]) {
@@ -256,6 +271,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   }>({ previous: null, next: null })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [definitionGone, setDefinitionGone] = useState(false)
   const [copied, setCopied] = useState(false)
   const [metric, setMetric] = useState<ChartMetric>('score')
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -282,8 +298,22 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         if (request.isCurrent()) setHistory(data as HistoryResponse)
       })
       .catch((cause) => {
-        if (request.isCurrent())
-          setError(cause instanceof Error ? cause.message : String(cause))
+        if (!request.isCurrent()) return
+        const message = cause instanceof Error ? cause.message : String(cause)
+        // A definition the history no longer holds (an old link): back to
+        // every definition, and say why.
+        if (
+          filters.definition !== ALL_DEFINITIONS &&
+          unknownDefinition(message)
+        ) {
+          setDefinitionGone(true)
+          setFilters((current) => ({
+            ...current,
+            definition: ALL_DEFINITIONS,
+          }))
+          return
+        }
+        setError(message)
       })
       .finally(() => {
         if (request.isCurrent()) setLoading(false)
@@ -454,7 +484,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         />
       ) : null}
 
-      {history && choices.length > 1 ? (
+      {history && choices.length > 0 ? (
         <section className="th-definitions" aria-labelledby="th-defs">
           <h2 id="th-defs" className="th-h2">
             Definition
@@ -466,6 +496,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             value={filters.definition}
             onChange={(value) => {
               setSelected([])
+              setDefinitionGone(false)
               setFilter('definition', value)
             }}
             options={[
@@ -492,7 +523,11 @@ export function TestHistoryPage({ testId }: { testId: string }) {
               })),
             ]}
           />
-          {filters.definition === ALL_DEFINITIONS ? (
+          {definitionGone ? (
+            <span className="th-faint" role="status" data-definition-gone>
+              That definition is no longer in this test’s history.
+            </span>
+          ) : filters.definition === ALL_DEFINITIONS ? (
             <span className="th-faint">
               Runs on different definitions answer different contracts; compare
               within one.

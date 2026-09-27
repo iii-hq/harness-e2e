@@ -47,6 +47,15 @@ const trigger = (name, request = {}) => {
   if (id === 'test-history-get') {
     requests.push(request)
     const source = request.test_id === 'shell_coder_sandbox' ? stale : formFlow
+    if (
+      request.test_version !== 'all' &&
+      !source.available_versions.some(
+        (item) => item.version === request.test_version,
+      )
+    )
+      throw new Error(
+        `unknown test '${request.test_id}' version ${request.test_version}`,
+      )
     const observations = source.observations.filter(
       (item) =>
         (request.test_version === 'all' ||
@@ -229,6 +238,30 @@ try {
   assert.match(
     await page.evaluate(() => location.hash),
     new RegExp(`definition=${encodeURIComponent(zero)}`),
+  )
+
+  // An older link: a definition the history no longer holds falls back to
+  // every definition and says so; the old result filter still filters.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/tests/form_flow_build?definition=sha256:${'de'.repeat(32)}&result=failed`,
+  )
+  await page.reload()
+  await page
+    .getByText('That definition is no longer in this test’s history.')
+    .waitFor()
+  assert.equal(
+    await definitions.getByRole('radio', { name: /^All/ }).isChecked(),
+    true,
+  )
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-run-key]').length === 3,
+  )
+  assert.equal(
+    await page
+      .getByRole('radiogroup', { name: 'Result' })
+      .getByRole('radio', { name: /^Lost points/ })
+      .isChecked(),
+    true,
   )
 
   // The current definition has not run: say so, and offer to run it.
