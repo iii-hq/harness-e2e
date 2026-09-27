@@ -1579,7 +1579,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           className="sticky bottom-0 z-10 bg-panel px-3 py-3 md:px-6"
           data-selection-bar
         >
-          <div className="mx-auto flex max-w-[1420px] flex-wrap items-center gap-3 font-mono text-xs">
+          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
             <span className="text-ink">
               {comparisonKeys.length} selected
               {baseline ? ` · a = ${formatDate(baseline.completed_at)}` : ''}

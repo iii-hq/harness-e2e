@@ -307,10 +307,11 @@
 }
 
 /* Content gutters: 24 on a wide pane, 16 below 720; top 20, 16 narrow.
-   Lists use the full width; detail pages cap at the host's content width
-   (1216) and stay left-aligned. Unlayered on purpose: the pages still carry
-   width utilities from before the redesign (Tailwind is imported with
-   `important`), and these must win. */
+   Every page, list or detail, uses the full pane width: no empty strip on
+   the right of a wide pane. Long prose keeps its own reading measure.
+   Unlayered on purpose: the pages still carry width utilities from before
+   the redesign (Tailwind is imported with `important`), and these must
+   win. */
 .harness-e2e-content .page-shell {
   width: auto !important;
   max-width: none !important;
@@ -318,16 +319,6 @@
   padding: 20px 24px 64px !important;
 }
 
-.harness-e2e-content[data-detail="true"] .page-shell {
-  max-width: calc(1216px + 48px) !important;
-}
-
 .harness-e2e-shell[data-narrow="true"] .harness-e2e-content .page-shell {
   padding: 16px 16px 64px !important;
-}
-
-.harness-e2e-shell[data-narrow="true"]
-  .harness-e2e-content[data-detail="true"]
-  .page-shell {
-  max-width: calc(1216px + 32px) !important;
 }
