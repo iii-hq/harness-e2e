@@ -522,6 +522,13 @@ describe('ScenarioMatrix', () => {
           available: false,
           error: 'compose::add failed: container state',
         },
+        {
+          subject_id: 'terra',
+          scenario_id: 'chess_engine_build',
+          available: false,
+          state: 'cancelled',
+          error: null,
+        },
       ],
     } as unknown as DashboardExecutionDetail
     const model = buildScenarioMatrix(live)
@@ -533,8 +540,17 @@ describe('ScenarioMatrix', () => {
       label: 'Queued',
     })
     expect(queued?.reason).toBeNull()
-    // Waiting is neither a failure nor a test that did not run.
-    expect(model.summary).toMatchObject({ running: 2, failed: 0 })
+    // Waiting, or stopped by the cancel, is neither a failure nor a test
+    // that did not run.
+    const stopped = model.items.find(
+      (item) => item.scenarioId === 'chess_engine_build',
+    )
+    expect(stopped?.objective).toMatchObject({
+      status: 'cancelled',
+      label: 'Cancelled',
+    })
+    expect(stopped?.reason).toBeNull()
+    expect(model.summary).toMatchObject({ running: 3, failed: 0 })
     const html = renderToStaticMarkup(
       <ScenarioMatrix
         detail={live}
@@ -544,6 +560,7 @@ describe('ScenarioMatrix', () => {
         notes={{
           timer_wake: 'Running in its container',
           minimal_path: 'Waiting for a slot · 2 groups at a time',
+          chess_engine_build: 'Stopped before it finished',
         }}
       />,
     )
@@ -551,12 +568,15 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Running in its container')
     expect(html).toContain('Waiting for a slot · 2 groups at a time')
     expect(html).toContain('data-row-state="queued"')
+    expect(html).toContain('data-row-state="cancelled"')
+    expect(html).toContain('Stopped before it finished')
     const notRun = model.items
       .filter((item) => matchesFilter(item, 'notrun'))
       .map((item) => item.scenarioId)
     expect(notRun).toContain('kanban_c7_live')
     expect(notRun).not.toContain('minimal_path')
     expect(notRun).not.toContain('timer_wake')
+    expect(notRun).not.toContain('chess_engine_build')
   })
 
   it('keeps incomplete outcomes and evidence access visible with secondary details collapsed', () => {

@@ -110,7 +110,7 @@ export function buildScenarioMatrix(
     if (item.objective.status === 'passed') summary.passed += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
     else if (item.objective.status === 'unavailable') summary.unavailable += 1
-    else if (yetToReport(item)) summary.running += 1
+    else if (unreported(item)) summary.running += 1
     else if (
       item.objective.status === 'incomplete' ||
       item.objective.status === 'cancelled' ||
@@ -279,9 +279,11 @@ function unavailableScenario(
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)
-  // A slot running, waiting to run again or waiting for its turn (queued)
-  // has no report yet.
-  const waiting = record?.state === 'running' || record?.state === 'queued'
+  // A slot running, waiting to run again, waiting for its turn (queued) or
+  // stopped before it ran while the rest still ends has no report yet.
+  const waiting = ['running', 'queued', 'cancelled', 'interrupted'].includes(
+    String(record?.state),
+  )
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
@@ -308,10 +310,13 @@ function unavailableScenario(
   }
 }
 
-/** Running or queued: its row fills in once it reports. */
-export function yetToReport(item: Pick<ScenarioMatrixItem, 'objective'>) {
+/** Running, queued, or stopped before it ran while the execution still
+ *  ends: no result, and no failure either. */
+export function unreported(item: Pick<ScenarioMatrixItem, 'objective'>) {
   return (
-    item.objective.status === 'running' || item.objective.status === 'queued'
+    item.objective.status === 'running' ||
+    item.objective.status === 'queued' ||
+    item.objective.status === 'cancelled'
   )
 }
 
@@ -416,6 +421,9 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
   }
   if (raw === 'cancelled') {
     return { status: 'cancelled', label: 'Cancelled', raw }
+  }
+  if (raw === 'interrupted') {
+    return { status: 'cancelled', label: 'Interrupted', raw }
   }
   if (raw === 'incomplete' || raw === 'pending' || raw === 'skipped') {
     return { status: 'incomplete', label: humanize(raw), raw }

@@ -2854,6 +2854,21 @@ mod tests {
         assert_eq!(replaced.slots[0].execution_id, native);
         assert!(runner.record(&native).await.is_some());
         assert_eq!(evidence(), bundled(2));
+
+        // Cancelled while the rest still ends: what the Console reads is the
+        // installed report, and the stopped group's tests as cancelled.
+        store
+            .update_docker(&id, |_, _, groups| groups[3].state = "cancelled".into())
+            .await
+            .unwrap();
+        let mut cancelling = store.read_execution(&id).await.unwrap();
+        (cancelling.state, cancelling.cancel_requested) = ("cancelling".into(), true);
+        store.write_execution(&cancelling).await.unwrap();
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["available"], true);
+        assert_eq!(reports[1]["state"], "running");
+        assert_eq!(reports[3]["state"], "cancelled");
     }
 
     #[test]

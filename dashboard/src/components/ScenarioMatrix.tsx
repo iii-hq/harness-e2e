@@ -33,7 +33,7 @@ import {
   previousAttempts,
   type ScenarioMatrixItem,
   stepSignals,
-  yetToReport,
+  unreported,
 } from '@/lib/scenario-matrix'
 import { screenshotsOf } from '@/lib/screenshots'
 
@@ -42,7 +42,7 @@ export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
 export function matchesFilter(item: ScenarioMatrixItem, filter: ResultFilter) {
   const score = itemScore(item)
   if (filter === 'lost') return score !== null && score < 100
-  if (filter === 'notrun') return item.runCount === 0 && !yetToReport(item)
+  if (filter === 'notrun') return item.runCount === 0 && !unreported(item)
   if (filter === 'passed')
     return item.objective.status === 'passed' && score === 100
   return true
@@ -431,7 +431,7 @@ function ScenarioResult({
   const criteria = runCriteria(item.primaryRun)
   const lost = criteria.filter((c) => c.awarded < c.possible)
   // Running or queued: nothing to open until it reports.
-  const waiting = yetToReport(item)
+  const waiting = unreported(item)
   const note = waiting ? (waitingNote ?? '') : rowNote(item)
   const definition = shortDefinition(item.behaviorSha256)
   const count = (value: number | null) =>

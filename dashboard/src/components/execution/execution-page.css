@@ -718,8 +718,9 @@
   cursor: default;
 }
 
-/* Waiting for its turn (canvas: Queued rows fade). */
-.ep-result-row[data-row-state="queued"] {
+/* Waiting for its turn or stopped before it ran (canvas: those rows fade). */
+.ep-result-row[data-row-state="queued"],
+.ep-result-row[data-row-state="cancelled"] {
   opacity: 0.6;
 }
 

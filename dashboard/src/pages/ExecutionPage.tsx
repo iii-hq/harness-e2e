@@ -25,8 +25,8 @@ import {
   WhereItRan,
 } from '@/components/execution/WhereItRan'
 import {
+  liveNotes,
   reportedLine,
-  waitingNotes,
   whereLine,
 } from '@/components/execution/where-it-ran-model'
 import { InvestigationAction } from '@/components/InvestigationAction'
@@ -1083,7 +1083,7 @@ export function ExecutionPage({
                 {...(docker && live && detail.plan_execution
                   ? {
                       liveNote: 'A group’s tests fill in as it finishes.',
-                      notes: waitingNotes(detail.plan_execution),
+                      notes: liveNotes(detail.plan_execution),
                     }
                   : {})}
                 onTranscript={(run) => {

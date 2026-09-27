@@ -141,6 +141,17 @@ impl PlanStore {
             } else if slot.state == "pending" {
                 // Waiting for its turn: queued, not missing.
                 current[0]["state"] = json!("queued");
+            } else if slot.state == "not_run"
+                && slot.execution_id.is_empty()
+                && matches!(execution.state.as_str(), "running" | "cancelling")
+            {
+                // Stopped before it ran while the rest still ends (a Docker
+                // group cancelled or interrupted): why, not missing.
+                current[0]["state"] = json!(if execution.cancel_requested {
+                    "cancelled"
+                } else {
+                    "interrupted"
+                });
             }
             reports.extend(current);
             // Earlier attempts are shown with their slot and counted nowhere:

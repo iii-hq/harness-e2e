@@ -127,11 +127,12 @@ export function testRows(
   })
 }
 
-/** The line under each test that has not reported yet, by test id. */
-export function waitingNotes(execution: PlanExecution): Record<string, string> {
+/** The line under each test without a result yet, by test id: running,
+ *  waiting, or stopped before it finished. */
+export function liveNotes(execution: PlanExecution): Record<string, string> {
   return Object.fromEntries(
     testRows(execution)
-      .filter((row) => row.state === 'running' || row.state === 'waiting')
+      .filter((row) => ['running', 'waiting', 'stopped'].includes(row.state))
       .map((row) => [row.id, row.detail]),
   )
 }
