@@ -274,6 +274,25 @@ export function failureReason(run: DashboardRunProjection | null) {
   return typeof message === 'string' && message.trim() ? message.trim() : null
 }
 
+/** Planned in the execution and never started: its plan slot says
+ *  `not_run` or holds no run. A slot that ran and left nothing (it finished
+ *  with an error, or was closed while running) is unavailable instead. */
+function neverStarted(
+  detail: DashboardExecutionDetail,
+  record: DashboardExecutionDetail['reports'][number] | undefined,
+) {
+  const round = (record as { round?: unknown } | undefined)?.round
+  const slots = (detail.plan_execution?.slots ?? []).filter(
+    (slot) =>
+      slot.scenario_id === record?.scenario_id &&
+      (round === undefined || slot.round === round),
+  )
+  return (
+    slots.length > 0 &&
+    slots.every((slot) => slot.state === 'not_run' || !slot.execution_id)
+  )
+}
+
 function unavailableScenario(
   detail: DashboardExecutionDetail,
   reportIndex: number,
@@ -301,7 +320,13 @@ function unavailableScenario(
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: objectiveStatus(waiting ? String(record?.state) : 'not_run'),
+    objective: objectiveStatus(
+      waiting
+        ? String(record?.state)
+        : neverStarted(detail, record)
+          ? 'not_run'
+          : 'unavailable',
+    ),
     durationMs: null,
     durationKind: null,
     runCount: 0,

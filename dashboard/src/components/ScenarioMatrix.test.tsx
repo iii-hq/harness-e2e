@@ -353,7 +353,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-status="incomplete"')
     expect(html).not.toContain('hard gate')
     expect(html).toContain('data-status="inconclusive"')
-    expect(html).toContain('data-status="not-run"')
+    expect(html).toContain('data-status="unavailable"')
     expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
