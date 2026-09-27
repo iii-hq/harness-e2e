@@ -168,6 +168,12 @@ export type StackComparison = {
   /** Workers on one side only, other than that side's own code. */
   onlyA: string[]
   onlyB: string[]
+  /** Every worker on both sides, the runner and checkouts included, that
+   *  ran a different build: version, commit (`commit:` pins too) or a
+   *  checkout's uncommitted changes. */
+  changed: ComparisonChange[]
+  /** Workers on both sides that ran the same build. */
+  same: string[]
 }
 
 /** The runner that measured each side, and the scenarios whose definition moved with it. */
@@ -799,7 +805,15 @@ function stackComparison(
 ): StackComparison {
   const stacks = { a: stackOf(left), b: stackOf(right) }
   const recorded = { a: stacks.a.length > 0, b: stacks.b.length > 0 }
-  const empty = { recorded, yourCode: [], versions: [], onlyA: [], onlyB: [] }
+  const empty = {
+    recorded,
+    yourCode: [],
+    versions: [],
+    onlyA: [],
+    onlyB: [],
+    changed: [],
+    same: [],
+  }
   if (!recorded.a || !recorded.b) return empty
   const yourCode: StackComparison['yourCode'] = []
   for (const side of SIDES)
@@ -853,6 +867,27 @@ function stackComparison(
     )
       .sort()
       .join(' | ')
+  // What a worker ran, whatever its source: a checkout by its commit and
+  // state, a package built from a commit by the commit, else its version.
+  const builds = (side: 'a' | 'b', name: string) =>
+    distinct(
+      stacks[side]
+        .filter((worker) => worker.name === name)
+        .map((worker) =>
+          worker.source === 'path'
+            ? worker.commit
+              ? `@${worker.commit.slice(0, 7)}${worker.dirty ? ' + changes' : ''}`
+              : 'checkout, commit not recorded'
+            : worker.commit
+              ? `@${worker.commit.slice(0, 7)}`
+              : (worker.observed ?? 'version not observed'),
+        ),
+    )
+      .sort()
+      .join(' | ')
+  const both = names('a')
+    .filter((name) => names('b').includes(name))
+    .sort()
   const fromCheckout = (name: string) =>
     [...stacks.a, ...stacks.b].some(
       (worker) => worker.name === name && worker.source === 'path',
@@ -873,7 +908,33 @@ function stackComparison(
       }),
     onlyA: only('a').filter((name) => !ownCode('a').includes(name)),
     onlyB: only('b').filter((name) => !ownCode('b').includes(name)),
+    changed: both.flatMap((name) => {
+      const a = builds('a', name)
+      const b = builds('b', name)
+      return a === b ? [] : [{ field: name, a, b }]
+    }),
+    same: both.filter((name) => builds('a', name) === builds('b', name)),
   }
+}
+
+/** What differs in the stack, in one line: "1 worker changed · 2 only in A";
+ *  null when both sides ran the same stack. */
+export function stackChanges(stack: StackComparison): string | null {
+  const unrecorded = SIDES.filter((side) => !stack.recorded[side])
+  if (unrecorded.length > 0)
+    return `no stack recorded for ${sidesLabel(unrecorded)}`
+  const parts = [
+    ...(stack.changed.length > 0
+      ? [
+          `${stack.changed.length} worker${stack.changed.length === 1 ? '' : 's'} changed`,
+        ]
+      : []),
+    ...SIDES.flatMap((side) => {
+      const count = onlyCount(stack, side)
+      return count > 0 ? [`${count} only in ${side.toUpperCase()}`] : []
+    }),
+  ]
+  return parts.length > 0 ? parts.join(' · ') : null
 }
 
 /** The workers of a your-code line, each one-side-only worker marked. */

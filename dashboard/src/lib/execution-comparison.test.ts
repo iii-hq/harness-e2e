@@ -14,6 +14,7 @@ import {
   rerunPhrase,
   runnerWarning,
   scenarioScore,
+  stackChanges,
   stackSummary,
   yourCodeWorkers,
 } from '@/lib/execution-comparison'
@@ -431,7 +432,13 @@ describe('comparing two executions', () => {
       // session-manager is your code: one line, marked, not listed again.
       onlyA: [],
       onlyB: [],
+      // A checkout is a different build from the package it replaces.
+      changed: [{ field: 'llm-router', a: '1.2.0', b: '@a1b2c3d + changes' }],
+      same: ['harness-e2e'],
     })
+    expect(stackChanges(comparison.stack)).toBe(
+      '1 worker changed · 1 only in B',
+    )
     expect(yourCodeWorkers(comparison.stack.yourCode[0])).toBe(
       'llm-router, session-manager (only in B)',
     )
@@ -620,6 +627,7 @@ describe('comparing two executions', () => {
     expect(comparison.b.subject).toBe('deepseek/pro')
     expect(comparison.stack.recorded).toEqual({ a: true, b: false })
     expect(stackSummary(comparison.stack)).toBe('no stack recorded for B')
+    expect(stackChanges(comparison.stack)).toBe('no stack recorded for B')
   })
 
   it('says why a scenario is out of the totals, in the runs’ own words', () => {
@@ -772,6 +780,11 @@ describe('comparing two executions', () => {
     expect(stackSummary(stack)).toBe(
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
     )
+    expect(stack.changed.map((change) => change.field)).toEqual([
+      'llm-router',
+      'state',
+    ])
+    expect(stack.same).toEqual(['harness-e2e', 'queue'])
   })
 
   it('compares a worker built from a commit by the commit, not its Cargo version', () => {
@@ -794,6 +807,10 @@ describe('comparing two executions', () => {
     const same = local()
     harness(same, '3f2a9c1dddddddddddddddddddddddddddddddd')
     expect(compareExecutions(a, same).stack.versions).toEqual([])
+    expect(
+      compareExecutions(a, same).stack.changed.map((change) => change.field),
+    ).toEqual(['llm-router'])
+    expect(stackChanges(compareExecutions(local(), local()).stack)).toBeNull()
   })
 })
 
