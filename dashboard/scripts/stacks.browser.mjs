@@ -596,7 +596,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; a failed copy's error left behind; provider credentials listed by name, imported, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, imported, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
   )
 } catch (error) {
   console.error(
