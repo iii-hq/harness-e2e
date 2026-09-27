@@ -20,6 +20,7 @@ import {
 } from 'react'
 import {
   DashboardPageActions,
+  dashboardHeaderActionClassName,
   type HeaderAction,
 } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
@@ -722,15 +723,16 @@ export function TestsCatalogPage() {
           >
             Save as suite…
           </Button>
-          <Button
+          {/* The page's ink primary: the host's primary Button loses its
+              text colour to the extension's scoped utilities in the pane. */}
+          <button
             type="button"
-            variant="primary"
-            size="sm"
+            className={dashboardHeaderActionClassName({ primary: true })}
             disabled={!bridge}
             onClick={() => setRunner(ticked)}
           >
             {bar.run}
-          </Button>
+          </button>
           <Button
             type="button"
             variant="icon"
