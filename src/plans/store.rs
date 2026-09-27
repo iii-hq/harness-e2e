@@ -670,9 +670,25 @@ impl PlanStore {
                 )
             }
             (None, Some(tests)) => {
+                // What an execution accepts: 1 to 256 ids of at most 100
+                // letters, digits, '_', '.' and '-'.
+                ensure!(
+                    tests.len() <= 256,
+                    "A suite holds at most 256 tests; {} were given.",
+                    tests.len()
+                );
+                ensure!(
+                    tests.iter().all(|id| id.len() <= 100
+                        && id
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b"_.-".contains(&b))),
+                    "Test ids hold at most 100 letters, digits, '_', '.' and '-'."
+                );
                 let (known, unknown): (Vec<_>, Vec<_>) = tests
                     .into_iter()
                     .partition(|id| id.parse::<crate::scenarios::ScenarioId>().is_ok());
+                // Each unknown test is said once.
+                let unknown = unknown.into_iter().collect::<BTreeSet<_>>();
                 warnings.extend(unknown.iter().map(|id| {
                     format!("This runner does not know the test '{id}'; the suite leaves it out.")
                 }));
@@ -2733,6 +2749,7 @@ pub(super) mod tests {
                     "minimal_path".into(),
                     "retired_scenario".into(),
                     "minimal_path".into(),
+                    "retired_scenario".into(),
                 ]),
                 label: " Picked ".into(),
                 repetitions: Some(3),
@@ -2797,6 +2814,30 @@ pub(super) mod tests {
                     ..SuiteCreateRequest::default()
                 },
                 "at least one test",
+            ),
+            (
+                SuiteCreateRequest {
+                    tests: Some(vec!["minimal_path".into(); 257]),
+                    label: "Too many".into(),
+                    ..SuiteCreateRequest::default()
+                },
+                "at most 256 tests",
+            ),
+            (
+                SuiteCreateRequest {
+                    tests: Some(vec!["../minimal_path".into()]),
+                    label: "Odd id".into(),
+                    ..SuiteCreateRequest::default()
+                },
+                "at most 100 letters",
+            ),
+            (
+                SuiteCreateRequest {
+                    tests: Some(vec!["x".repeat(101)]),
+                    label: "Long id".into(),
+                    ..SuiteCreateRequest::default()
+                },
+                "at most 100 letters",
             ),
         ] {
             let error = manager.create_suite(request).await.unwrap_err();
