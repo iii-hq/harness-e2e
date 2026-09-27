@@ -740,9 +740,12 @@
   white-space: nowrap;
 }
 
+/* The note under a test id is prose: sans 11/16, not the id's mono. */
 .ep-row-note {
   color: var(--color-ink-faint, var(--text-soft));
-  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: 1rem;
 }
 
 .ep-score {
