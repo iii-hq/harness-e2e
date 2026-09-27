@@ -4877,7 +4877,7 @@ pub(super) mod tests {
             root.path(),
             r#"echo "$*" >> "$(dirname "$0")/calls"
 case "$1" in
-  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","head_branch":"feat/executor-image","head_sha":"b406036c9f1e2d3a4b5c6d7e8f9012345678abcd","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
   run) echo "no valid artifacts found to download" >&2; exit 1 ;;
 esac"#,
         );
@@ -4890,6 +4890,11 @@ esac"#,
         assert_eq!(run["created_at"], "2026-09-20T10:00:00Z");
         assert_eq!(run["attempt_started_at"], "2026-09-21T09:00:00Z");
         assert_eq!(run["release_control_execution_id"], "366030b3-5f55");
+        // The branch and the whole commit; the Console shortens it.
+        assert_eq!(run["head_branch"], "feat/executor-image");
+        assert_eq!(run["head_sha"], "b406036c9f1e2d3a4b5c6d7e8f9012345678abcd");
+        assert_eq!(listed["total_count"], 1);
+        assert_eq!(listed["next_page"], Value::Null);
         assert_eq!(run["contract_pending"], true);
         assert_eq!(calls().lines().count(), 1, "only the list: {}", calls());
 
