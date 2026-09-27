@@ -953,8 +953,14 @@ impl PlanStore {
         // end reads the bundle again.
         let installed = async {
             link_tree(&bundle, &directory).await?;
-            self.install_group(runner, &directory, group.round, &group.group_id, &previous)
-                .await
+            self.install_group(
+                runner,
+                &directory,
+                (group.round, &group.group_id),
+                &previous,
+                Some(id),
+            )
+            .await
         }
         .await;
         let _ = tokio::task::spawn_blocking(move || drop(scratch)).await;
@@ -1931,10 +1937,27 @@ mod tests {
             .find(|entry| entry["id"] == group)
             .context("group")?["scenarios"]
             .clone();
+        let digest = |c: &str| format!("sha256:{}", c.repeat(64));
+        // As exact_stack_campaign.py writes it: the plan is the execution's.
+        let run_contract = json!({
+            "mode": {"environment": "demonstration", "decision": "observe_only"},
+            "target": {"application": "harness", "version": "1.8.0", "stack": {"mode": "source",
+                "workers_repository": "iii-hq/workers", "workers_revision": "0".repeat(40)}},
+            "plan": {"id": execution, "revision": "1", "sha256": digest("a"), "catalog_sha256": digest("b")},
+            "runner": {"name": "harness-e2e", "version": "0.17.0", "revision": "1".repeat(40)},
+            "attempt": 1,
+            "selected_cases": scenarios.as_array().context("scenarios")?.iter().enumerate()
+                .map(|(seed, scenario)| json!({"scenario_id": scenario, "behavior_sha256": digest("c"),
+                    "case_id": format!("{}:v1:seed-{seed}", scenario.as_str().unwrap_or_default()),
+                    "seed": seed, "inputs_sha256": digest("d"), "contract_sha256": digest("e")}))
+                .collect::<Vec<_>>(),
+            "correlation": {"system": "release-control", "deployment_id": "pr-r01", "operation_id": "pr-r01"},
+        });
         let request: RunRequest = serde_json::from_value(json!({
             "idempotency_key": format!("{execution}:{group}"), "label": group,
             "lane": "local", "model": "model", "provider": "provider",
             "scenarios": scenarios, "runs": 1, "technical_retries": 0,
+            "run_contract": run_contract,
         }))?;
         fs::create_dir_all(artifacts.join("stack"))?;
         let native = FakeRunner::new(artifacts.join("native")).native_record(request.clone())?;
@@ -2544,6 +2567,16 @@ mod tests {
         ));
         fs::create_dir_all(&partial).unwrap();
         fs::write(partial.join("failure.json"), r#"{"error": "stopped"}"#).unwrap();
+        // The stopped drive had moved the finished group's run in without
+        // recording it: the import at the end replaces it as its own.
+        copy_tree(
+            &artifacts.join(format!(
+                "e2e-observation-{id}-pr-r01-case-minimal-path-gh-1/native/{native}"
+            )),
+            &data.join(&native),
+        )
+        .await
+        .unwrap();
         let (mut prepared, _) = prepared_groups(&folder.join("checkout")).unwrap();
         (prepared[0].state, prepared[0].counted) = ("done".into(), 1);
         prepared[1].state = "running".into();
@@ -2803,6 +2836,41 @@ mod tests {
                     .join("results.json"),
             )
         };
+
+        // A drive that stopped once the run was moved in, before its slots
+        // were recorded, left it without them: this execution's own, it is
+        // replaced; under another execution's plan it is left untouched.
+        let runner_ref: Arc<dyn Runner> = runner.clone();
+        let moved_in = |owner: &'static str| {
+            let (store, runner, bundle) = (
+                store.clone(),
+                runner_ref.clone(),
+                bundle("case-minimal-path", 1),
+            );
+            async move {
+                let scratch = store.scratch().unwrap();
+                link_tree(&bundle, &scratch.path().join("group"))
+                    .await
+                    .unwrap();
+                store
+                    .install_group(
+                        &runner,
+                        &scratch.path().join("group"),
+                        (1, "case-minimal-path"),
+                        &BTreeSet::new(),
+                        Some(owner),
+                    )
+                    .await
+                    .map(drop)
+            }
+        };
+        moved_in("plan-grouped").await.unwrap();
+        assert!(data.join(&native).is_dir());
+        let refused = moved_in("plan-another").await.unwrap_err();
+        assert!(format!("{refused:#}").contains("already retained by another execution"));
+        assert!(store.read_execution(&id).await.unwrap().slots[0]
+            .execution_id
+            .is_empty());
 
         // Installed at once: its test reports, the Console hears of it, and
         // the other groups' slots still follow them.
