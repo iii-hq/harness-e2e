@@ -33,6 +33,7 @@ import {
   previousAttempts,
   type ScenarioMatrixItem,
   stepSignals,
+  yetToReport,
 } from '@/lib/scenario-matrix'
 import { screenshotsOf } from '@/lib/screenshots'
 
@@ -41,7 +42,7 @@ export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
 export function matchesFilter(item: ScenarioMatrixItem, filter: ResultFilter) {
   const score = itemScore(item)
   if (filter === 'lost') return score !== null && score < 100
-  if (filter === 'notrun') return item.runCount === 0
+  if (filter === 'notrun') return item.runCount === 0 && !yetToReport(item)
   if (filter === 'passed')
     return item.objective.status === 'passed' && score === 100
   return true
@@ -54,6 +55,8 @@ export function ScenarioMatrix({
   onRerun,
   openKey = null,
   running = false,
+  liveNote = 'Rows fill in as tests report.',
+  notes,
   heading,
 }: {
   detail: DashboardExecutionDetail
@@ -68,6 +71,10 @@ export function ScenarioMatrix({
   /** Run one scenario of the execution again. */
   onRerun?: (scenarioId: string) => void
   running?: boolean
+  /** What the bar says while it runs. */
+  liveNote?: string
+  /** The line under a test that has not reported yet, by test id. */
+  notes?: Record<string, string>
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
   const [filter, setFilter] = useState<ResultFilter>('all')
@@ -130,7 +137,7 @@ export function ScenarioMatrix({
         </fieldset>
         <span className="ep-faint">
           {running
-            ? 'Rows fill in as tests report.'
+            ? liveNote
             : 'Suite order. Open a test for its criteria, run and evidence.'}
         </span>
       </div>
@@ -171,6 +178,7 @@ export function ScenarioMatrix({
               onTranscript={onTranscript}
               onRerun={onRerun}
               open={openKey === item.key}
+              waitingNote={notes?.[item.scenarioId]}
             />
           ))}
         </tbody>
@@ -359,10 +367,13 @@ function ScenarioResult({
   onTranscript,
   onRerun,
   open = false,
+  waitingNote,
 }: {
   detail: DashboardExecutionDetail
   item: ScenarioMatrixItem
   open?: boolean
+  /** Its line while it has not reported yet. */
+  waitingNote?: string
   /** Attempts the last one replaced: listed, counted nowhere. */
   previous: PreviousAttempt[]
   executionId: string
@@ -419,7 +430,9 @@ function ScenarioResult({
   const primaryAssessment = assessmentRuns.find((run) => run.runId === runId)
   const criteria = runCriteria(item.primaryRun)
   const lost = criteria.filter((c) => c.awarded < c.possible)
-  const note = rowNote(item)
+  // Running or queued: nothing to open until it reports.
+  const waiting = yetToReport(item)
+  const note = waiting ? (waitingNote ?? '') : rowNote(item)
   const definition = shortDefinition(item.behaviorSha256)
   const count = (value: number | null) =>
     value === null
@@ -453,6 +466,7 @@ function ScenarioResult({
         ref={rowRef}
         data-scenario-row={item.key}
         className="ep-result-row"
+        data-row-state={waiting ? item.objective.status : undefined}
         aria-label={`${titleCase(item.scenarioId)} scenario result`}
       >
         <th scope="row" className="ep-cell ep-cell-test">
@@ -460,6 +474,7 @@ function ScenarioResult({
             type="button"
             aria-expanded={expanded}
             aria-controls={panelId}
+            disabled={waiting}
             onClick={() => setExpanded(!expanded)}
             className="ep-row-toggle"
           >
@@ -714,7 +729,7 @@ function ScenarioResult({
             {previous.length > 0 ? (
               <PreviousAttempts previous={previous} />
             ) : null}
-            {!item.available && item.objective.status !== 'running' ? (
+            {!item.available && !waiting ? (
               <p className="ep-faint">
                 The expected report for this scenario is unavailable. Runtime
                 and workflow data are intentionally not inferred.

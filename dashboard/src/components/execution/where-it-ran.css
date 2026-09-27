@@ -114,6 +114,8 @@
 .wr-jobs {
   max-height: 26rem;
   overflow: auto;
+  /* Scrolled, not squeezed: auto rows shrank to fit the max height. */
+  grid-auto-rows: max-content;
   border-radius: var(--ds-radius-sm, 6px);
   background: var(--color-panel, var(--surface));
 }

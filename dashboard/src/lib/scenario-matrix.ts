@@ -110,7 +110,7 @@ export function buildScenarioMatrix(
     if (item.objective.status === 'passed') summary.passed += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
     else if (item.objective.status === 'unavailable') summary.unavailable += 1
-    else if (item.objective.status === 'running') summary.running += 1
+    else if (yetToReport(item)) summary.running += 1
     else if (
       item.objective.status === 'incomplete' ||
       item.objective.status === 'cancelled' ||
@@ -279,12 +279,13 @@ function unavailableScenario(
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)
-  // A slot running, or waiting to run again, has no report yet.
-  const running = record?.state === 'running'
+  // A slot running, waiting to run again or waiting for its turn (queued)
+  // has no report yet.
+  const waiting = record?.state === 'running' || record?.state === 'queued'
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason: running
+    reason: waiting
       ? null
       : (nonEmptyString(record?.error) ??
         'The expected report for this scenario was not retained.'),
@@ -294,7 +295,7 @@ function unavailableScenario(
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: objectiveStatus(running ? 'running' : 'unavailable'),
+    objective: objectiveStatus(waiting ? String(record?.state) : 'unavailable'),
     durationMs: null,
     durationKind: null,
     runCount: 0,
@@ -305,6 +306,13 @@ function unavailableScenario(
     aggregate: null,
     primaryMetrics: primaryMetrics(null, [], { value: null, kind: null }),
   }
+}
+
+/** Running or queued: its row fills in once it reports. */
+export function yetToReport(item: Pick<ScenarioMatrixItem, 'objective'>) {
+  return (
+    item.objective.status === 'running' || item.objective.status === 'queued'
+  )
 }
 
 function scenarioObjective(
@@ -402,6 +410,7 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
     return { status: 'unavailable', label: 'Unavailable', raw }
   }
   if (raw === 'running') return { status: 'running', label: 'Running', raw }
+  if (raw === 'queued') return { status: 'queued', label: 'Queued', raw }
   if (raw === 'cancelling') {
     return { status: 'cancelling', label: 'Cancelling', raw }
   }

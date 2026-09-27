@@ -26,6 +26,7 @@ import {
 } from '@/components/execution/WhereItRan'
 import {
   reportedLine,
+  waitingNotes,
   whereLine,
 } from '@/components/execution/where-it-ran-model'
 import { InvestigationAction } from '@/components/InvestigationAction'
@@ -750,6 +751,8 @@ export function ExecutionPage({
     )
   }
   const scenarioSummary = scenarioMatrix?.summary ?? null
+  // In Docker a group's tests fill in as it ends: the table shows from the start.
+  const docker = detail.plan_execution?.source.kind === 'docker'
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
     : executionStatus(presentation)
@@ -1025,7 +1028,7 @@ export function ExecutionPage({
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
-        {!live && scenarioMatrix ? (
+        {(!live || docker) && scenarioMatrix ? (
           <NeedsAttention
             items={attentionItems(scenarioMatrix.items, [
               ...(detail.plan_execution?.error
@@ -1065,7 +1068,7 @@ export function ExecutionPage({
             />
           </section>
         ) : null}
-        {!noRun && (!live || rerunning) ? (
+        {!noRun && (!live || rerunning || docker) ? (
           <div className="execution-layers grid min-w-0">
             <section
               id="results"
@@ -1077,6 +1080,12 @@ export function ExecutionPage({
                 detail={detail}
                 openKey={openScenario}
                 running={live}
+                {...(docker && live && detail.plan_execution
+                  ? {
+                      liveNote: 'A group’s tests fill in as it finishes.',
+                      notes: waitingNotes(detail.plan_execution),
+                    }
+                  : {})}
                 onTranscript={(run) => {
                   window.location.hash = hashForExecution(
                     detail.id,

@@ -713,6 +713,16 @@
   cursor: pointer;
 }
 
+/* Running or queued: nothing to open until it reports. */
+.ep-row-toggle:disabled {
+  cursor: default;
+}
+
+/* Waiting for its turn (canvas: Queued rows fade). */
+.ep-result-row[data-row-state="queued"] {
+  opacity: 0.6;
+}
+
 .ep-chevron {
   flex: none;
   color: var(--color-ink-faint, var(--text-soft));

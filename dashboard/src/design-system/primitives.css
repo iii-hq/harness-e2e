@@ -170,7 +170,8 @@
   --ds-status-color: var(--accent);
 }
 
-.ds-status-cancelled {
+.ds-status-cancelled,
+.ds-status-queued {
   --ds-status-color: var(--text-muted);
 }
 

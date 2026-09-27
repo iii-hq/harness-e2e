@@ -33,16 +33,17 @@ export function elapsed(from: string | null | undefined, to?: string | null) {
 
 export type TestState =
   | 'reported'
+  | 'not-run'
   | 'running'
   | 'waiting'
   | 'stopped'
-  | 'at-import'
 
 export type TestRow = { id: string; state: TestState; detail: string }
 
 /** A live test list: what reported, what runs, what waits. A Docker group's
- *  tests wait for the import once the group finished; after a cancel what
- *  did not finish "stopped before it finished". */
+ *  tests report as it ends, its runs installed then; one that left no run
+ *  did not run. After a cancel what did not finish "stopped before it
+ *  finished". */
 export function testRows(
   execution: PlanExecution,
   dockerGroups = 2,
@@ -53,21 +54,31 @@ export function testRows(
   if (source.kind === 'docker') {
     const rows: TestRow[] = []
     for (const group of source.groups) {
+      const ended = group.state === 'done' || group.state === 'failed'
       for (const id of group.scenarios) {
-        const state: TestState =
-          group.state === 'done' || group.state === 'failed'
-            ? 'at-import'
-            : group.state === 'running'
-              ? 'running'
-              : group.state === 'queued' && !cancelled
-                ? 'waiting'
-                : 'stopped'
+        const installed = execution.slots.find(
+          (slot) =>
+            slot.round === group.round &&
+            slot.group_id === group.group_id &&
+            slot.scenario_id === id &&
+            slot.execution_id,
+        )
+        const state: TestState = ended
+          ? installed
+            ? 'reported'
+            : 'not-run'
+          : group.state === 'running'
+            ? 'running'
+            : group.state === 'queued' && !cancelled
+              ? 'waiting'
+              : 'stopped'
         rows.push({
           id,
           state,
-          detail:
-            state === 'at-import'
-              ? `${group.group_id} finished · results at import`
+          detail: installed
+            ? `${installed.passed}/${installed.completed || installed.observed} passed`
+            : state === 'not-run'
+              ? (group.error ?? 'Its group left no run')
               : state === 'running'
                 ? `Running in its container${group.attempt > 1 ? ` · attempt ${group.attempt}` : ''}`
                 : state === 'waiting'
@@ -116,6 +127,15 @@ export function testRows(
   })
 }
 
+/** The line under each test that has not reported yet, by test id. */
+export function waitingNotes(execution: PlanExecution): Record<string, string> {
+  return Object.fromEntries(
+    testRows(execution)
+      .filter((row) => row.state === 'running' || row.state === 'waiting')
+      .map((row) => [row.id, row.detail]),
+  )
+}
+
 /** "Running · on this harness · for 3m 40s" and the provisional count. */
 export function whereLine(execution: PlanExecution) {
   const source = execution.source
@@ -155,7 +175,7 @@ export function reportedLine(execution: PlanExecution) {
   }
   const rows = testRows(execution)
   const reported = rows.filter(
-    (row) => row.state === 'reported' || row.state === 'at-import',
+    (row) => row.state === 'reported' || row.state === 'not-run',
   ).length
   return `${reported} of ${plural(rows.length, 'test', 'tests')} reported · results are provisional`
 }
@@ -184,19 +204,27 @@ export const DOCKER_STEPS = [
 
 export type StepState = 'done' | 'current' | 'next' | 'stopped'
 
-export function dockerSteps(execution: PlanExecution, dockerGroups = 2) {
+export function dockerSteps(execution: PlanExecution) {
   const source = execution.source
   if (source.kind !== 'docker') return []
   const order = ['prepare', 'groups', 'finalize', 'import', 'done']
   const at = order.indexOf(source.phase)
-  const finished = source.groups.filter(
-    (group) => group.state === 'done' || group.state === 'failed',
-  ).length
+  const count = (...states: string[]) =>
+    source.groups.filter((group) => states.includes(group.state)).length
+  const finished = count('done', 'failed')
   const cancelled =
     execution.state === 'cancelled' || execution.state === 'cancelling'
-  const stoppedGroups = source.groups.some(
-    (group) => group.state === 'cancelled' || group.state === 'interrupted',
-  )
+  const stopped = count('cancelled', 'interrupted')
+  const stoppedGroups = stopped > 0
+  // "3 of 9 finished · 2 running · 4 waiting"
+  const groupsLine = [
+    `${finished} of ${source.groups.length} finished${cancelled ? ' before the cancel' : ''}`,
+    count('running') ? `${count('running')} running` : null,
+    count('queued') ? `${count('queued')} waiting` : null,
+    stopped ? `${stopped} stopped` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   return DOCKER_STEPS.map(([phase, label, detail], index) => {
     let state: StepState =
       index < at || source.phase === 'done'
@@ -215,10 +243,7 @@ export function dockerSteps(execution: PlanExecution, dockerGroups = 2) {
       phase,
       label,
       state,
-      detail:
-        phase === 'groups'
-          ? `${finished} of ${source.groups.length} finished · ${plural(dockerGroups, 'group', 'groups')} at a time`
-          : detail,
+      detail: phase === 'groups' ? groupsLine : detail,
     }
   })
 }
