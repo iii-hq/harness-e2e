@@ -1003,9 +1003,7 @@ export function ExecutionPage({
             </>
           }
         />
-        {detail.plan_execution?.source.kind === 'local' &&
-        live &&
-        status.status !== 'cancelling' ? (
+        {detail.plan_execution?.source.kind === 'local' && live ? (
           <HarnessProgress execution={detail.plan_execution} />
         ) : null}
         {!noRun || detail.plan_execution ? (
