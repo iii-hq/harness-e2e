@@ -274,12 +274,7 @@ impl Controller {
         for record in &mut records {
             if let Some(projection) = &mut record.dashboard_projection {
                 let available = record.result_path.as_ref().is_some_and(|path| {
-                    let path = self.runs_dir.join(path);
-                    let result = if path.is_dir() {
-                        path.join("results.json")
-                    } else {
-                        path
-                    };
+                    let result = super::run_sessions::results_file(self.runs_dir.join(path));
                     result.is_file()
                         && result
                             .parent()
@@ -304,7 +299,14 @@ impl Controller {
     ) -> Result<super::read_model::TestHistoryResponse> {
         let model = self.read_model().await?;
         let mut history = model.test_history(request)?;
-        let summaries = self.execution_summaries().await?;
+        // Without the plan store the runs still show, only unnamed.
+        let summaries = self.execution_summaries().await.unwrap_or_else(|error| {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "a test history shows its runs without execution names"
+            );
+            Arc::new(Vec::new())
+        });
         let runs_dir = self.runs_dir.clone();
         tokio::task::spawn_blocking(move || {
             model.attach_run_details(&mut history, &summaries, &runs_dir);

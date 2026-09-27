@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use serde_json::Value;
 
-use crate::report::{CompletionState, CriterionReport, RunStatus};
-use crate::wire::{SessionUsage, SessionUsageTotals};
+use crate::report::{CompletionState, RunStatus};
 
 /// One run of a history observation. Its status and totals come from the
 /// retained projection; `details` from the run's native results.
@@ -71,37 +71,57 @@ pub(super) struct WorkerCalls {
 #[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 pub(super) struct RunCriterion {
     pub id: String,
-    pub possible: u8,
+    pub possible: f64,
     /// Absent when nobody evaluated the criterion.
-    pub awarded: Option<u8>,
+    pub awarded: Option<f64>,
     pub reason: String,
 }
 
-// Only the parts of a native results.json the history reads.
+// Only the parts of a native results.json the history reads. Runs stay raw
+// until their scenario and case match, and each decodes on its own: a
+// malformed run leaves the others, and its execution, readable. Every field
+// has a default, so an older or partial report still yields what it has.
 #[derive(Deserialize)]
-struct NativeReport {
-    scenarios: Vec<NativeScenario>,
+struct NativeReport<'a> {
+    #[serde(borrow, default)]
+    scenarios: Vec<NativeScenario<'a>>,
 }
 
 #[derive(Deserialize)]
-struct NativeScenario {
+struct NativeScenario<'a> {
+    #[serde(default)]
     scenario_id: String,
     #[serde(default)]
     case_id: String,
-    #[serde(default)]
-    runs: Vec<NativeRun>,
+    #[serde(borrow, default)]
+    runs: Vec<&'a RawValue>,
 }
 
 #[derive(Deserialize)]
-struct NativeRun {
+struct NativeRun<'a> {
+    #[serde(default)]
     run_id: String,
+    #[serde(default)]
     attempt_id: String,
     #[serde(default)]
-    criteria: Vec<CriterionReport>,
-    #[serde(default)]
-    transcript: Option<Value>,
+    criteria: Vec<NativeCriterion>,
+    /// The root session's transcript, decoded only for a run the page shows.
+    #[serde(borrow, default)]
+    transcript: Option<&'a RawValue>,
     #[serde(default)]
     metrics: Option<NativeMetrics>,
+}
+
+#[derive(Deserialize)]
+struct NativeCriterion {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    possible: f64,
+    #[serde(default)]
+    awarded: Option<f64>,
+    #[serde(default)]
+    reason: String,
 }
 
 #[derive(Default, Deserialize)]
@@ -109,11 +129,53 @@ struct NativeMetrics {
     #[serde(default)]
     root_session_id: String,
     #[serde(default)]
-    by_session: Vec<SessionUsage>,
+    by_session: Vec<NativeSession>,
     #[serde(default)]
-    totals: Option<SessionUsageTotals>,
+    totals: Option<NativeTotals>,
     #[serde(default)]
-    traces: Option<Value>,
+    traces: Option<NativeTraces>,
+}
+
+#[derive(Deserialize)]
+struct NativeSession {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    parent_session_id: Option<String>,
+    #[serde(default)]
+    depth: u32,
+    #[serde(default)]
+    turns: u64,
+    #[serde(default)]
+    function_calls: u64,
+    #[serde(default)]
+    function_call_errors: u64,
+}
+
+#[derive(Deserialize)]
+struct NativeTotals {
+    #[serde(default)]
+    input_tokens: Option<u64>,
+    #[serde(default)]
+    output_tokens: Option<u64>,
+    #[serde(default)]
+    cache_read_tokens: Option<u64>,
+    #[serde(default)]
+    cache_write_tokens: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct NativeTraces {
+    #[serde(default)]
+    by_session: Vec<NativeTrace>,
+}
+
+#[derive(Deserialize)]
+struct NativeTrace {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    duration_ms: Option<u64>,
 }
 
 /// The results file an execution's result path points at: the file itself,
@@ -130,30 +192,63 @@ pub(super) fn results_file(path: PathBuf) -> PathBuf {
     }
 }
 
-/// The details of every run of one test case in a native results file, by
-/// `(run_id, attempt_id)`.
+/// `(case_id, run_id, attempt_id)`: where a run's details belong.
+pub(super) type RunKey = (String, String, String);
+
+/// The details of the runs of one test's cases in a native results file,
+/// read once for all of them. A run that does not decode is left out with a
+/// warning; the others are kept.
 pub(super) fn read_run_details(
     path: &Path,
     scenario_id: &str,
-    case_id: &str,
-) -> Result<BTreeMap<(String, String), RunDetails>> {
+    cases: &BTreeSet<&str>,
+) -> Result<BTreeMap<RunKey, RunDetails>> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let report: NativeReport = serde_json::from_slice(&bytes)
         .with_context(|| format!("decode the runs of {}", path.display()))?;
-    Ok(report
-        .scenarios
-        .into_iter()
-        .filter(|scenario| scenario.scenario_id == scenario_id && scenario.case_id == case_id)
-        .flat_map(|scenario| scenario.runs)
-        .map(|run| ((run.run_id.clone(), run.attempt_id.clone()), details(run)))
-        .collect())
+    let mut found = BTreeMap::new();
+    for scenario in report.scenarios {
+        if scenario.scenario_id != scenario_id || !cases.contains(scenario.case_id.as_str()) {
+            continue;
+        }
+        for (index, raw) in scenario.runs.into_iter().enumerate() {
+            match decode_run(raw) {
+                Ok((run, transcript)) => {
+                    found.insert(
+                        (
+                            scenario.case_id.clone(),
+                            run.run_id.clone(),
+                            run.attempt_id.clone(),
+                        ),
+                        details(run, transcript.as_ref()),
+                    );
+                }
+                Err(error) => tracing::warn!(
+                    path = %path.display(),
+                    scenario_id,
+                    case_id = %scenario.case_id,
+                    run = index,
+                    %error,
+                    "a run's native results do not decode; its history row shows no sessions"
+                ),
+            }
+        }
+    }
+    Ok(found)
 }
 
-fn details(run: NativeRun) -> RunDetails {
-    let metrics = run.metrics.unwrap_or_default();
-    let calls = run
+fn decode_run(raw: &RawValue) -> serde_json::Result<(NativeRun<'_>, Option<Value>)> {
+    let run: NativeRun = serde_json::from_str(raw.get())?;
+    let transcript = run
         .transcript
-        .as_ref()
+        .map(|transcript| serde_json::from_str(transcript.get()))
+        .transpose()?;
+    Ok((run, transcript))
+}
+
+fn details(run: NativeRun, transcript: Option<&Value>) -> RunDetails {
+    let metrics = run.metrics.unwrap_or_default();
+    let calls = transcript
         .map(crate::scenarios::common::function_calls)
         .unwrap_or_default();
     // A child's profile, as the root named it when it spawned the child.
@@ -169,17 +264,9 @@ fn details(run: NativeRun) -> RunDetails {
         .collect::<BTreeMap<_, _>>();
     let durations = metrics
         .traces
-        .as_ref()
-        .and_then(|traces| traces.get("by_session"))
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|session| {
-            Some((
-                session.get("session_id")?.as_str()?.to_string(),
-                session.get("duration_ms")?.as_u64()?,
-            ))
-        })
+        .iter()
+        .flat_map(|traces| &traces.by_session)
+        .filter_map(|trace| Some((trace.session_id.clone(), trace.duration_ms?)))
         .collect::<BTreeMap<_, _>>();
     let mut by_worker = BTreeMap::<String, u64>::new();
     for call in &calls {
@@ -273,6 +360,61 @@ fn in_tree_order(sessions: Vec<HistorySession>) -> Vec<HistorySession> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_malformed_run_leaves_the_other_runs_of_its_file_readable() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("results.json");
+        fs::write(
+            &path,
+            serde_json::to_vec(&serde_json::json!({
+                "execution": {"execution_id": "e1"},
+                "scenarios": [
+                    {"scenario_id": "other", "case_id": "c1", "runs": [
+                        {"run_id": "x", "attempt_id": "x1",
+                         "transcript": {"messages": "never decoded"}}
+                    ]},
+                    {"scenario_id": "direct_answer", "case_id": "c1", "runs": [
+                        {"run_id": "bad", "attempt_id": "b1",
+                         "metrics": {"by_session": "not a list"}},
+                        // A partial report: no attempt, no depth, no totals,
+                        // a criterion without points.
+                        {"run_id": "good",
+                         "criteria": [{"id": "answer", "possible": 7.5, "reason": "partly"}],
+                         "metrics": {"root_session_id": "e2e_ab", "by_session": [
+                             {"session_id": "e2e_ab", "turns": 3}
+                         ]}}
+                    ]},
+                    {"scenario_id": "direct_answer", "case_id": "c2", "runs": [
+                        {"run_id": "other-case", "attempt_id": "o1"}
+                    ]}
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let details = read_run_details(&path, "direct_answer", &BTreeSet::from(["c1"])).unwrap();
+        assert_eq!(
+            details.keys().cloned().collect::<Vec<_>>(),
+            [("c1".to_string(), "good".to_string(), String::new())]
+        );
+        let good = details.values().next().unwrap();
+        assert_eq!(good.sessions[0].turns, 3);
+        assert_eq!(good.sessions[0].depth, 0);
+        assert_eq!(good.criteria[0].possible, 7.5);
+        assert_eq!(good.criteria[0].awarded, None);
+
+        // A file that is missing or does not parse is an error the caller
+        // warns about; it never panics.
+        assert!(read_run_details(
+            &root.path().join("gone.json"),
+            "direct_answer",
+            &BTreeSet::new()
+        )
+        .is_err());
+        fs::write(&path, b"{\"scenarios\": [").unwrap();
+        assert!(read_run_details(&path, "direct_answer", &BTreeSet::from(["c1"])).is_err());
+    }
 
     #[test]
     fn run_scoped_workers_keep_their_plain_name() {

@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::assessment_projection::{
     assessment_profile_sha256, contracts_for_scenario, summarize, AssessmentSummary,
@@ -1070,7 +1070,8 @@ impl DashboardReadModel {
                 .filter(|text| !text.is_empty())
                 .map(str::to_string)
         };
-        for observation in &mut history.observations {
+        let mut files = BTreeMap::<PathBuf, Vec<usize>>::new();
+        for (index, observation) in history.observations.iter_mut().enumerate() {
             let native = summary(&observation.execution_id);
             let plan = native
                 .and_then(|native| native["parent_plan_execution_id"].as_str())
@@ -1081,7 +1082,6 @@ impl DashboardReadModel {
                 .into_iter()
                 .chain(plan)
                 .find_map(|value| text(&value["parameters"]["agent"]));
-
             let path = results_file(
                 runs_dir.join(
                     self.result_paths
@@ -1089,17 +1089,34 @@ impl DashboardReadModel {
                         .unwrap_or(&observation.execution_id),
                 ),
             );
-            match read_run_details(&path, &history.test_id, &observation.case_id) {
-                Ok(mut details) => {
-                    for run in &mut observation.runs {
-                        run.details = details.remove(&(run.run_id.clone(), run.attempt_id.clone()));
-                    }
+            files.entry(path).or_default().push(index);
+        }
+        // Each file is read once, for every case of the test it holds.
+        for (path, indices) in files {
+            let cases = indices
+                .iter()
+                .map(|index| history.observations[*index].case_id.as_str())
+                .collect::<BTreeSet<_>>();
+            let mut details = match read_run_details(&path, &history.test_id, &cases) {
+                Ok(details) => details,
+                Err(error) => {
+                    tracing::warn!(
+                        path = %path.display(),
+                        error = %format!("{error:#}"),
+                        "a history page has no readable native results for an execution"
+                    );
+                    continue;
                 }
-                Err(error) => tracing::debug!(
-                    execution_id = %observation.execution_id,
-                    error = %format!("{error:#}"),
-                    "a history run has no readable native results"
-                ),
+            };
+            for index in indices {
+                let observation = &mut history.observations[index];
+                for run in &mut observation.runs {
+                    run.details = details.remove(&(
+                        observation.case_id.clone(),
+                        run.run_id.clone(),
+                        run.attempt_id.clone(),
+                    ));
+                }
             }
         }
     }

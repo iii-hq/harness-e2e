@@ -849,8 +849,8 @@ pub(crate) mod tests {
                 "cache_read_tokens": 17_075_530,
                 "cache_write_tokens": 531_575,
                 "criteria": [
-                    {"id": "answer", "possible": 90, "awarded": 90, "reason": "matches"},
-                    {"id": "runtime_contract", "possible": 10, "awarded": 0,
+                    {"id": "answer", "possible": 90.0, "awarded": 90.0, "reason": "matches"},
+                    {"id": "runtime_contract", "possible": 10.0, "awarded": 0.0,
                      "reason": "function_surface=false"}
                 ]
             })
