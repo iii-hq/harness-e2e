@@ -35,6 +35,7 @@ export function Picker({
   disabled = false,
   onPick,
   describedBy,
+  labelledBy,
   icon,
   children,
 }: {
@@ -51,6 +52,9 @@ export function Picker({
   disabled?: boolean
   onPick: (value: string) => void
   describedBy?: string
+  /** Names the trigger with this label and then its value, so both are
+   *  announced (a visible label only names it). */
+  labelledBy?: string
   /** Leads the trigger, before the value. */
   icon?: ReactNode
   children?: ReactNode
@@ -116,6 +120,9 @@ export function Picker({
         aria-expanded={open}
         aria-controls={open ? listId : undefined}
         aria-describedby={describedBy}
+        aria-labelledby={
+          labelledBy ? `${labelledBy} ${listId}-value` : undefined
+        }
         data-open={open || undefined}
         data-value={value}
         disabled={disabled}
@@ -129,6 +136,7 @@ export function Picker({
       >
         {icon}
         <span
+          id={`${listId}-value`}
           className="rd-trigger-value"
           data-placeholder={placeholder || undefined}
           title={valueLabel}

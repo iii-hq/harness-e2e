@@ -634,7 +634,7 @@ try {
     ['102', '101'],
   )
   assert.ok(
-    (await importDialog.getByLabel('Reading the run’s contract').count()) > 0,
+    (await importDialog.getByText('Reading the run’s contract').count()) > 0,
   )
   const failedRun = importDialog.locator('[data-github-run="102"]')
   await failedRun.getByText('feat/executor-image', { exact: true }).waitFor()
@@ -648,7 +648,7 @@ try {
   releaseContracts()
   await importDialog.getByText('Regression', { exact: true }).waitFor()
   assert.equal(
-    await importDialog.getByLabel('Reading the run’s contract').count(),
+    await importDialog.getByText('Reading the run’s contract').count(),
     0,
   )
   assert.equal(await importDialog.getByText(/runner 0\.11\.28/).count(), 2)
@@ -672,7 +672,9 @@ try {
   await importDialog
     .getByText('1 was imported before. Importing again replaces its evidence.')
     .waitFor()
-  await importDialog.getByRole('checkbox', { name: 'Import run 103' }).uncheck()
+  await importDialog
+    .getByRole('checkbox', { name: 'Import run 103 again' })
+    .uncheck()
   await importDialog
     .getByRole('button', { name: 'Import 2 runs', exact: true })
     .click()

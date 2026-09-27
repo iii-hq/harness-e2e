@@ -289,8 +289,10 @@ describe('GitHub run row', () => {
     const pending = row(
       run({ run_id: 1, contract_pending: true, suite_label: null }),
     )
+    // The row is busy; its placeholders are hidden, not live regions.
     expect(pending).toContain('aria-busy="true"')
-    expect(pending).toContain('aria-label="Reading the run’s contract"')
+    expect(pending).not.toContain('role="status"')
+    expect(text(pending)).toContain('Reading the run’s contract')
     const missing = text(
       row(
         run({
@@ -312,6 +314,11 @@ describe('GitHub run row', () => {
     )
     expect(text(imported)).toContain('Imported')
     expect(imported).toContain('href="#/ext/harness-e2e/execution/plan-a"')
+    // Its box says it imports again, described by the run's line.
+    expect(imported).toContain('aria-label="Import run 1 again"')
+    const described = /aria-describedby="([^"]+)"/.exec(imported)?.[1]
+    expect(described).toBeTruthy()
+    expect(imported).toContain(`class="gi-line" id="${described}"`)
     const importing = row(run({ run_id: 2 }), { starting: true })
     expect(text(importing)).toContain('Importing…')
     expect(importing).toMatch(/<input[^>]*disabled/)
@@ -346,9 +353,19 @@ describe('GitHub import dialog', () => {
     const words = text(html)
     expect(words).toContain('Import from GitHub')
     expect(words).toContain('exact-stack-e2e.yml')
-    expect(html).toContain('aria-label="Loading runs"')
+    expect(html).toMatch(/class="rd-tests-list rd-scroll" aria-busy="true"/)
+    expect(html).toContain('class="gi-loading" aria-hidden="true"')
     expect(words).toContain('Asking GitHub for completed runs…')
     expect(words).toContain('Runs appear as soon as GitHub answers.')
-    expect(html).toMatch(/<button[^>]*class="rd-primary"[^>]*disabled/)
+    // Waiting buttons keep their focus: aria-disabled, not disabled.
+    expect(html).toMatch(/class="rd-primary" aria-disabled="true"/)
+    expect(html).toMatch(/aria-label="Refresh runs" aria-disabled="true"/)
+    // The branch picker is named by its label and its value.
+    const branch = /aria-labelledby="([^" ]+) ([^"]+)"/.exec(html)
+    expect(branch).not.toBeNull()
+    expect(html).toContain(
+      `id="${branch?.[1]}" class="ds-visually-hidden">Branch<`,
+    )
+    expect(html).toContain(`id="${branch?.[2]}" class="rd-trigger-value"`)
   })
 })

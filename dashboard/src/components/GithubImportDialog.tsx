@@ -321,6 +321,7 @@ export function GithubRunRow({
   const suite = run.suite_label || run.suite
   const conclusion = conclusionOf(run.conclusion)
   const rc = run.release_control_execution_id
+  const lineId = useId()
   return (
     <div
       className="gi-row"
@@ -332,18 +333,23 @@ export function GithubRunRow({
       <label className="gi-main">
         <Box
           state={selected ? 'on' : 'off'}
-          label={`Import run ${run.run_id}`}
+          label={`Import run ${run.run_id}${run.execution_id ? ' again' : ''}`}
+          describedBy={lineId}
           disabled={action === 'importing'}
           onToggle={onToggle}
         />
         <span className="gi-text">
-          <span className="gi-line">
+          <span className="gi-line" id={lineId}>
             {pending ? (
-              <span
-                className="rd-skel gi-skel gi-skel-title"
-                role="status"
-                aria-label="Reading the run’s contract"
-              />
+              <>
+                <span
+                  className="rd-skel gi-skel gi-skel-title"
+                  aria-hidden="true"
+                />
+                <span className="ds-visually-hidden">
+                  Reading the run’s contract
+                </span>
+              </>
             ) : (
               <span
                 className={suite ? 'gi-suite rd-ellipsis' : 'rd-faint'}
@@ -376,7 +382,10 @@ export function GithubRunRow({
             ) : null}
           </span>
           {pending ? (
-            <span className="rd-skel gi-skel gi-skel-detail" />
+            <span
+              className="rd-skel gi-skel gi-skel-detail"
+              aria-hidden="true"
+            />
           ) : run.contract_error ? (
             <span className="rd-hint rd-warning gi-warning">
               <TriangleAlert size={16} aria-hidden="true" />
@@ -526,6 +535,9 @@ export function GithubImportDialog({
   // What the change handler reads: the rows as last rendered.
   const runsRef = useRef(runs)
   runsRef.current = runs
+  // Load older leaves with the last page: its focus goes to the status line.
+  const olderRef = useRef<HTMLButtonElement>(null)
+  const statusRef = useRef<HTMLSpanElement>(null)
 
   const checkGithub = useCallback(() => {
     bridge?.getGithubStatus().then(setGithub, () => setGithub(null))
@@ -565,6 +577,12 @@ export function GithubImportDialog({
           return sortGithubRuns([...known, ...added])
         })
         setPhase('ready')
+        if (
+          !response.next_page &&
+          olderRef.current &&
+          document.activeElement === olderRef.current
+        )
+          statusRef.current?.focus()
         pending = response.runs.filter((run) => run.contract_pending)
       } catch (cause) {
         if (!current()) return
@@ -802,8 +820,10 @@ export function GithubImportDialog({
             <button
               type="button"
               className="rd-primary"
-              disabled={!ready || selected.length === 0}
-              onClick={() => void importSelected()}
+              aria-disabled={!ready || selected.length === 0 || undefined}
+              onClick={() => {
+                if (ready && selected.length > 0) void importSelected()
+              }}
             >
               {selected.length
                 ? `Import ${plural(selected.length, 'run', 'runs')}`
@@ -840,12 +860,13 @@ export function GithubImportDialog({
             ) : null}
           </div>
           <div className="gi-branches">
-            <label htmlFor={`${id}-branch`} className="ds-visually-hidden">
+            <span id={`${id}-branch-label`} className="ds-visually-hidden">
               Branch
-            </label>
+            </span>
             <Picker
               id={`${id}-branch`}
               label="Branches"
+              labelledBy={`${id}-branch-label`}
               icon={
                 <GitBranch size={16} aria-hidden="true" className="rd-faint" />
               }
@@ -924,7 +945,10 @@ export function GithubImportDialog({
           </button>
         </div>
 
-        <div className="rd-tests-list rd-scroll">
+        <div
+          className="rd-tests-list rd-scroll"
+          aria-busy={phase === 'loading' || undefined}
+        >
           {runDays(visible).map((day) => (
             // biome-ignore lint/a11y/useSemanticElements: a day of runs, not a fieldset
             <div
@@ -1000,10 +1024,13 @@ export function GithubImportDialog({
           ) : ready && nextPage ? (
             <button
               type="button"
+              ref={olderRef}
               className="rd-ghost gi-older"
-              disabled={loadingOlder}
+              aria-disabled={loadingOlder || undefined}
               aria-busy={loadingOlder || undefined}
-              onClick={() => void load(nextPage)}
+              onClick={() => {
+                if (!loadingOlder) void load(nextPage)
+              }}
             >
               {loadingOlder
                 ? 'Loading older runs…'
@@ -1014,12 +1041,7 @@ export function GithubImportDialog({
           ) : null}
 
           {phase === 'loading' ? (
-            <div
-              className="gi-loading"
-              role="status"
-              aria-busy="true"
-              aria-label="Loading runs"
-            >
+            <div className="gi-loading" aria-hidden="true">
               <div className="gi-loading-head">
                 <span className="rd-skel gi-skel" style={{ width: 120 }} />
               </div>
@@ -1054,15 +1076,22 @@ export function GithubImportDialog({
 
         <div className="rd-catalog">
           <span className="rd-dot" data-status={phase} aria-hidden="true" />
-          <span role="status" className="rd-ellipsis rd-grow">
+          <span
+            ref={statusRef}
+            role="status"
+            tabIndex={-1}
+            className="rd-ellipsis rd-grow"
+          >
             {listStatus(phase, runs.length, total, repo)}
           </span>
           <button
             type="button"
             className="rd-ghost rd-icon-button"
             aria-label="Refresh runs"
-            disabled={phase === 'loading' || loadingOlder}
-            onClick={() => retry(1)}
+            aria-disabled={phase === 'loading' || loadingOlder || undefined}
+            onClick={() => {
+              if (phase !== 'loading' && !loadingOlder) retry(1)
+            }}
           >
             <RefreshCw size={16} aria-hidden="true" />
           </button>

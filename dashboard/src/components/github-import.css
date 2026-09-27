@@ -26,6 +26,20 @@
   font-size: 0.75rem;
 }
 
+/* Buttons that wait keep their focus (aria-disabled) and read as off. */
+.gi-dialog button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.gi-dialog .rd-ghost[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.gi-dialog .rd-primary[aria-disabled="true"]:hover {
+  opacity: 0.4;
+}
+
 /* Controls that wait for GitHub, and rows being imported, read as off. */
 .gi-dialog .rd-input:disabled,
 .gi-dialog .rd-box-input:disabled + .rd-box-face {
