@@ -1,0 +1,291 @@
+/* The Tests page as the redesign canvas draws it (TestsCatalog.dc.html). It
+   shares the list recipes of executions-page.css (header, toolbar, search,
+   selection bar, dialogs); these are its own: the family blocks and the
+   rows' cells. Host token names only; every branch written out (no
+   matches-any groups, which the bundle's scoping would re-weigh). */
+
+.tc-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+}
+
+.tc-head .ex-header {
+  flex: 1 1 26rem;
+  min-width: 0;
+}
+
+.tc-revision {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  height: calc(var(--spacing) * 6.5);
+  padding: 0 calc(var(--spacing) * 2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  cursor: pointer;
+}
+
+.tc-revision:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-ink);
+}
+
+.ex-toolbar .tc-sort {
+  width: auto;
+  min-width: 0;
+}
+
+/* Over the list, where the ticks are; it stays in view while scrolling. */
+.ex-selection.tc-selection {
+  top: calc(var(--spacing) * 2);
+  bottom: auto;
+  align-self: stretch;
+}
+
+.tc-warnings {
+  margin: 0;
+  padding-inline-start: calc(var(--spacing) * 4);
+}
+
+/* The table: a header row, then one block per family. Laid out as a grid
+   so each family is a block of its own; legacy.css styles bare table
+   elements, so each of them is reset here. */
+.tc-table {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  border-collapse: separate;
+  font-size: var(--ds-text-sm, 0.8125rem);
+}
+
+.tc-table thead,
+.tc-table tbody {
+  display: block;
+}
+
+.tc-table th,
+.tc-table td {
+  display: block;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: inherit;
+  font-weight: inherit;
+  letter-spacing: normal;
+  text-align: start;
+  text-transform: none;
+  white-space: normal;
+}
+
+.tc-table .tc-row {
+  display: grid;
+  grid-template-columns:
+    calc(var(--spacing) * 4.5) minmax(0, 1.8fr) calc(var(--spacing) * 45)
+    calc(var(--spacing) * 20) calc(var(--spacing) * 16) minmax(0, 1fr)
+    calc(var(--spacing) * 7);
+  align-items: center;
+  column-gap: calc(var(--spacing) * 3.5);
+}
+
+.tc-table[data-narrow] .tc-row {
+  grid-template-columns:
+    calc(var(--spacing) * 4.5) minmax(0, 1fr) calc(var(--spacing) * 33)
+    calc(var(--spacing) * 7);
+}
+
+.tc-table .tc-columns {
+  min-height: calc(var(--spacing) * 8);
+  padding: 0 calc(var(--spacing) * 3) 0 calc(var(--spacing) * 4);
+}
+
+.tc-table .tc-columns th {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
+.tc-table .tc-group {
+  margin-bottom: calc(var(--spacing) * 2);
+  padding: 0 var(--spacing) var(--spacing);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+/* The family's heading stays on top of its rows while they scroll by. */
+.tc-table .tc-group-head,
+.tc-table .tc-group-head:hover {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: block;
+  margin: 0 calc(var(--spacing) * -1) calc(var(--spacing) * 0.5);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: color-mix(in srgb, var(--color-ink) 6%, var(--color-panel));
+}
+
+.tc-table .tc-group-head th {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5);
+  min-height: calc(var(--spacing) * 9);
+  padding: 0 calc(var(--spacing) * 3) 0 calc(var(--spacing) * 4);
+}
+
+.tc-group-label {
+  font-weight: 600;
+}
+
+.tc-group-label[data-mono] {
+  font-family: var(--font-mono);
+}
+
+.tc-group-note {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+}
+
+.tc-group-count {
+  display: inline-flex;
+  align-items: center;
+  height: calc(var(--spacing) * 5);
+  margin-inline-start: auto;
+  padding: 0 calc(var(--spacing) * 1.75);
+  border-radius: 9999px;
+  background: var(--color-surface-selected);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-weight: 500;
+}
+
+.tc-table .tc-test {
+  min-height: calc(var(--spacing) * 12);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2)
+    calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.tc-table .tc-test:hover {
+  background: var(--color-surface-hover);
+}
+
+.tc-table .tc-test[data-selected],
+.tc-table .tc-test[data-selected]:hover {
+  background: var(--color-surface-selected);
+}
+
+.tc-table .tc-test[data-highlighted] {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+}
+
+.tc-table .tc-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Ran only on an earlier definition: it does not count as current. */
+.tc-table .tc-stack[data-older] {
+  opacity: 0.5;
+}
+
+.tc-id {
+  min-width: 0;
+  overflow: hidden;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-id:hover {
+  text-decoration: underline;
+}
+
+.tc-sub {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-result {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.tc-score {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Recent scores: a bar per run, as tall as its score out of 100. */
+.tc-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: calc(var(--spacing) * 0.75);
+  height: calc(var(--spacing) * 5);
+}
+
+.tc-spark > span {
+  width: calc(var(--spacing) * 1.25);
+  height: max(2px, calc(var(--spacing) * 5 * var(--tc-score, 0)));
+  border-radius: 2px;
+  background: var(--color-ink);
+}
+
+.tc-spark > span[data-empty] {
+  height: 2px;
+  background: var(--color-ink-ghost);
+}
+
+.tc-table .tc-num {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tc-table .tc-columns .tc-num {
+  font-family: var(--font-sans);
+}
+
+.tc-table .tc-suites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing);
+}
+
+.tc-suites > span {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  height: calc(var(--spacing) * 5);
+  padding: 0 calc(var(--spacing) * 1.5);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: var(--ds-text-label, 0.6875rem);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -77,6 +77,10 @@ function row(
             to_observations: [],
           }
         : null,
+    last_run: null,
+    recent_scores: [],
+    runs_current: 0,
+    runs_total: 0,
     ...overrides,
   }
 }

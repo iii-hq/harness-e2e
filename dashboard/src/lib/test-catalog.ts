@@ -4,6 +4,7 @@ import type {
   AssessmentResult,
   AssessmentSummary,
 } from '@/lib/assessment-contract'
+import type { CompletionState } from '@/lib/dashboard-data-source'
 
 export type CohortDescriptor = {
   id: string
@@ -240,6 +241,26 @@ export type TestCatalogRow = {
   }>
   selected_version: string | null
   result: TestVersionResult | null
+  /** The most recent retained run, on any definition. */
+  last_run: CatalogLastRun | null
+  /** The scores of the last runs (up to 8), oldest first; null where a run
+   *  has none. */
+  recent_scores: Array<number | null>
+  /** Runs retained on the current definition. */
+  runs_current: number
+  /** Runs retained on every definition. */
+  runs_total: number
+}
+
+export type CatalogLastRun = {
+  /** When its execution completed. */
+  at: string
+  score: number | null
+  /** The run's system status (`passed`, `hard_gate_failed`, …). */
+  status: string
+  completion: CompletionState
+  /** Whether it ran the current definition. */
+  definition: 'current' | 'previous'
 }
 
 export type TestsListResponse = {
