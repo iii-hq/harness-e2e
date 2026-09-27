@@ -12,6 +12,12 @@ import {
   suiteText,
 } from '@/lib/execution-view'
 import {
+  formatCost,
+  formatCount,
+  formatDuration,
+  formatTokens,
+} from '@/lib/format'
+import {
   comparisonMetric,
   formatMetricDelta,
   formatMetricValue,
@@ -113,6 +119,8 @@ export type ScenarioSide = {
 
 export type CriterionChange = {
   key: string
+  /** The criterion's id; `label` is its description when it has one. */
+  id: string
   label: string
   possible: number
   /** Mean points over the slots both sides scored. */
@@ -133,6 +141,8 @@ export type ScenarioComparison = {
   metrics: ComparedMetric[]
   /** Only the criteria whose points moved. */
   criteria: CriterionChange[]
+  /** Criteria short of their points by the same amount on both sides. */
+  lostOnBoth: CriterionChange[]
   /** Anything moved: presence, a run's state, a metric or a criterion. */
   differs: boolean
   sides: { a: ScenarioSide; b: ScenarioSide }
@@ -177,6 +187,8 @@ export type ComparisonSide = {
   subject: string
   /** Null when the execution recorded no parameters. */
   profile: string | null
+  /** The suite by name and digest; null when not recorded. */
+  suite: string | null
 }
 
 export type ExecutionComparison = {
@@ -602,11 +614,12 @@ function criteriaOf(run: LedgerRun): Criterion[] {
   })
 }
 
-/** Criteria whose mean points moved over the slots both sides scored. */
+/** Criteria whose mean points moved over the slots both sides scored, and
+ *  those that did not move but fell short of their points on both. */
 function criterionChanges(
   left: LedgerRun[],
   right: LedgerRun[],
-): CriterionChange[] {
+): { changed: CriterionChange[]; lostOnBoth: CriterionChange[] } {
   const pairs = [...new Set(left.map((run) => run.slotId))].flatMap(
     (slotId) => {
       const other = right.filter((run) => run.slotId === slotId)
@@ -623,6 +636,7 @@ function criterionChanges(
       for (const criterion of criteriaOf(run))
         known.set(keyOf(criterion), criterion)
   const changes: CriterionChange[] = []
+  const lostOnBoth: CriterionChange[] = []
   for (const [key, criterion] of known) {
     const before: Criterion[] = []
     const after: Criterion[] = []
@@ -646,9 +660,13 @@ function criterionChanges(
           entries.length
     const a = mean(before)
     const b = mean(after)
-    if (a === null || b === null || Math.abs(b - a) < 1e-9) continue
-    changes.push({
+    if (a === null || b === null) continue
+    const same = Math.abs(b - a) < 1e-9
+    if (same && a >= criterion.possible) continue
+    const list = same ? lostOnBoth : changes
+    list.push({
       key,
+      id: criterion.id,
       label: criterion.label,
       possible: criterion.possible,
       a,
@@ -660,7 +678,9 @@ function criterionChanges(
       },
     })
   }
-  return changes.sort((one, two) => one.key.localeCompare(two.key))
+  const byKey = (one: CriterionChange, two: CriterionChange) =>
+    one.key.localeCompare(two.key)
+  return { changed: changes.sort(byKey), lostOnBoth: lostOnBoth.sort(byKey) }
 }
 
 function stackOf(detail: DashboardExecutionDetail): StackWorker[] {
@@ -725,6 +745,7 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
     origin: parts.join(' · '),
     subject: providerModel(parameters),
     profile: parameters.profile,
+    suite: parameters.suite,
   }
 }
 
@@ -1035,7 +1056,7 @@ export function compareExecutions(
     const exclusion =
       exclusions.find((entry) => entry.scenario_id === id) ?? null
     const metrics = metricRows(measure('a', [id]), measure('b', [id]))
-    const criteria = criterionChanges(
+    const { changed: criteria, lostOnBoth } = criterionChanges(
       runs.a.filter((run) => run.scenarioId === id),
       runs.b.filter((run) => run.scenarioId === id),
     )
@@ -1058,6 +1079,7 @@ export function compareExecutions(
       leftOut: exclude.has(id),
       metrics,
       criteria,
+      lostOnBoth,
       differs:
         present('a') !== present('b') ||
         stateOf('a', id) !== stateOf('b', id) ||
@@ -1201,6 +1223,159 @@ export function scenarioScore(
   const side = which === 'a' ? 'baseline' : 'candidate'
   if (score[side] !== null) return comparedValue(score, side)
   return scenario.sides[which].state ?? '—'
+}
+
+/** One observed difference worth reading first. */
+export type Highlight = {
+  /** The test it is about, to open; null for the comparison as a whole. */
+  test: string | null
+  /** Which way B's figure moved: a direction, never a verdict. */
+  direction: 'up' | 'down' | 'same'
+  text: string
+}
+
+export type ComparisonHighlights = {
+  /** "B scored 4.4 points lower", or why there is no score to compare. */
+  headline: string
+  detail: string
+  items: Highlight[]
+}
+
+/** How a test's figure is said to have moved in B, per metric. */
+const MOVES: Array<[MetricId, (more: boolean, amount: string) => string]> = [
+  ['tokens', (more, n) => `used ${n} ${more ? 'more' : 'fewer'} tokens`],
+  ['duration', (more, n) => `took ${n} ${more ? 'longer' : 'less time'}`],
+  ['turns', (more, n) => `took ${n} ${more ? 'more' : 'fewer'} turns`],
+  [
+    'function_calls',
+    (more, n) => `made ${n} ${more ? 'more' : 'fewer'} function calls`,
+  ],
+  [
+    'function_errors',
+    (more, n) => `had ${n} ${more ? 'more' : 'fewer'} function call errors`,
+  ],
+  ['cost', (more, n) => `cost ${n} ${more ? 'more' : 'less'}`],
+]
+
+/** A relative change smaller than this is not a highlight. */
+const NOTABLE_PERCENT = 10
+
+function points(value: number) {
+  return String(Number(Math.abs(value).toFixed(1)))
+}
+
+/** A figure as the highlights write it. */
+export function metricFigure(format: MetricFormat, value: number): string {
+  if (format === 'tokens') return formatTokens(value)
+  if (format === 'seconds') return formatDuration(value * 1000)
+  if (format === 'usd') return formatCost(value)
+  if (format === 'percent_points') return `${points(value)}%`
+  if (format === 'score') return String(Number(value.toFixed(1)))
+  return formatCount(value)
+}
+
+/**
+ * What changed most, over the counted tests: the tests whose score moved
+ * (largest first, with the criterion that moved most), then for each metric
+ * the test whose figure moved most, then how many kept their score. Every
+ * line states a difference; none says which side is better.
+ */
+export function comparisonHighlights(
+  comparison: ExecutionComparison,
+): ComparisonHighlights {
+  const counted = comparison.scenarios.filter((scenario) => scenario.counted)
+  const metric = (scenario: ScenarioComparison, id: MetricId) =>
+    scenario.metrics.find((entry) => entry.id === id)
+  const score = comparison.totals.find((entry) => entry.id === 'score')
+  const completed = comparison.totals.find((entry) => entry.id === 'completed')
+  const runs = (which: 'a' | 'b') =>
+    counted.reduce((total, scenario) => total + scenario.sides[which].runs, 0)
+  const headline =
+    counted.length === 0
+      ? 'No test is counted'
+      : !score || score.delta === null
+        ? 'No score to compare'
+        : Math.abs(score.delta) < 0.05
+          ? 'B scored the same as A'
+          : `B scored ${points(score.delta)} ${Math.abs(score.delta) === 1 ? 'point' : 'points'} ${score.delta < 0 ? 'lower' : 'higher'}`
+  const detail =
+    counted.length === 0
+      ? 'Count at least one test to compare.'
+      : !score || score.delta === null
+        ? 'A side has no score or is short of runs: its figures are shown, and no difference is taken from them.'
+        : `A completed ${completed?.baseline ?? 0} of ${runs('a')} runs; B completed ${completed?.candidate ?? 0} of ${runs('b')}. These are observed differences, not a verdict.`
+
+  const moved = counted
+    .flatMap((scenario) => {
+      const delta = metric(scenario, 'score')?.delta
+      return delta == null || Math.abs(delta) < 1e-9
+        ? []
+        : [{ scenario, delta }]
+    })
+    .sort((one, two) => Math.abs(two.delta) - Math.abs(one.delta))
+  const items: Highlight[] = moved.slice(0, 3).map(({ scenario, delta }) => {
+    const [criterion, ...others] = [...scenario.criteria].sort(
+      (one, two) => Math.abs(two.delta) - Math.abs(one.delta),
+    )
+    const why = criterion
+      ? `: ${criterion.id} went from ${points(criterion.a)}/${criterion.possible} to ${points(criterion.b)}/${criterion.possible}${others.length > 0 ? `, and ${others.length} more ${others.length === 1 ? 'criterion' : 'criteria'} moved` : ''}`
+      : ''
+    return {
+      test: scenario.id,
+      direction: delta < 0 ? 'down' : 'up',
+      text: `${delta < 0 ? 'lost' : 'gained'} ${points(delta)} ${Math.abs(delta) === 1 ? 'point' : 'points'} in B${why}.`,
+    }
+  })
+  if (moved.length > 3)
+    items.push({
+      test: null,
+      direction: 'same',
+      text: `${moved.length - 3} more ${moved.length - 3 === 1 ? 'test' : 'tests'} changed score.`,
+    })
+
+  const moves = MOVES.flatMap(([id, phrase]) => {
+    const [top] = counted
+      .flatMap((scenario) => {
+        const entry = metric(scenario, id)
+        if (!entry || entry.delta === null || Math.abs(entry.delta) < 1e-9)
+          return []
+        const size =
+          entry.delta_percent === null ? 100 : Math.abs(entry.delta_percent)
+        return size < NOTABLE_PERCENT ? [] : [{ scenario, entry, size }]
+      })
+      .sort((one, two) => two.size - one.size)
+    return top ? [{ ...top, phrase }] : []
+  })
+    .sort((one, two) => two.size - one.size)
+    .slice(0, 3)
+  for (const { scenario, entry, phrase } of moves) {
+    const delta = entry.delta ?? 0
+    const amount =
+      entry.id === 'function_errors' || entry.delta_percent === null
+        ? metricFigure(entry.format, Math.abs(delta))
+        : `${Math.round(Math.abs(entry.delta_percent))}%`
+    items.push({
+      test: scenario.id,
+      direction: delta < 0 ? 'down' : 'up',
+      text: `${phrase(delta > 0, amount)} in B (${metricFigure(entry.format, entry.baseline ?? 0)} → ${metricFigure(entry.format, entry.candidate ?? 0)}).`,
+    })
+  }
+
+  const kept = counted.filter(
+    (scenario) => metric(scenario, 'score')?.delta === 0,
+  ).length
+  if (kept > 0)
+    items.push({
+      test: null,
+      direction: 'same',
+      text:
+        moved.length > 0
+          ? `The other ${kept} ${kept === 1 ? 'test kept its score' : 'tests kept their scores'}.`
+          : kept === 1
+            ? 'The counted test kept its score.'
+            : `All ${kept} counted tests kept their scores.`,
+    })
+  return { headline, detail, items }
 }
 
 /** A pull-request-ready summary of the same comparison, without a verdict. */

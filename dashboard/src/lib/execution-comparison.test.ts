@@ -8,6 +8,7 @@ import {
   comparedValue,
   compareExecutions,
   compareRuns,
+  comparisonHighlights,
   comparisonMarkdown,
   exclusionPhrase,
   rerunPhrase,
@@ -483,6 +484,7 @@ describe('comparing two executions', () => {
     expect(byId.minimal_path).toEqual([
       {
         key: 'cites_source:20',
+        id: 'cites_source',
         label: 'answer cites the source',
         possible: 20,
         a: 8,
@@ -496,6 +498,67 @@ describe('comparing two executions', () => {
         key: 'state_after_restart:50',
         delta: -38,
         reasons: { a: ['read back'], b: ['state lost on restart'] },
+      },
+    ])
+    // Short of its points by the same amount on both sides: not a change,
+    // but listed apart.
+    const minimal = comparison.scenarios.find(
+      (scenario) => scenario.id === 'minimal_path',
+    )
+    expect(minimal?.lostOnBoth).toMatchObject([
+      { id: 'answer', a: 74, b: 74, possible: 80, delta: 0 },
+    ])
+    expect(
+      comparison.scenarios.find(
+        (scenario) => scenario.id === 'persistent_state',
+      )?.lostOnBoth,
+    ).toEqual([])
+  })
+
+  it('highlights the largest differences by test and metric, without a verdict', () => {
+    const comparison = compareExecutions(imported(), local())
+    const highlights = comparisonHighlights(comparison)
+    expect(highlights.headline).toBe('B scored 13 points lower')
+    expect(highlights.detail).toBe(
+      'A completed 2 of 2 runs; B completed 2 of 2. These are observed differences, not a verdict.',
+    )
+    expect(highlights.items).toEqual([
+      {
+        test: 'persistent_state',
+        direction: 'down',
+        text: 'lost 38 points in B: state_after_restart went from 50/50 to 12/50.',
+      },
+      {
+        test: 'minimal_path',
+        direction: 'up',
+        text: 'gained 12 points in B: cites_source went from 8/20 to 20/20.',
+      },
+      {
+        test: 'minimal_path',
+        direction: 'down',
+        text: 'used 17% fewer tokens in B (1.2K → 1K).',
+      },
+    ])
+    expect(JSON.stringify(highlights)).not.toMatch(
+      /better|worse|improv|regress|winner/i,
+    )
+    // With every test out, nothing is compared.
+    const none = compareExecutions(imported(), local(), {
+      exclude: ['minimal_path', 'persistent_state'],
+    })
+    expect(comparisonHighlights(none)).toEqual({
+      headline: 'No test is counted',
+      detail: 'Count at least one test to compare.',
+      items: [],
+    })
+    // The same executions on both sides: every test kept its score.
+    const same = comparisonHighlights(compareExecutions(local(), local()))
+    expect(same.headline).toBe('B scored the same as A')
+    expect(same.items).toEqual([
+      {
+        test: null,
+        direction: 'same',
+        text: 'All 3 counted tests kept their scores.',
       },
     ])
   })
