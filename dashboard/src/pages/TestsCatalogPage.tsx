@@ -441,7 +441,7 @@ function SaveSuiteDialog({
   )
 }
 
-type Saved = { label: string; count: number; warnings: string[] }
+type Saved = { id: string; label: string; count: number; warnings: string[] }
 
 /** Creates the suite, then lists the suites again for the chips and the
  *  filter. Once it is created, a list that fails to load only leaves the
@@ -459,6 +459,7 @@ export async function saveTestsAsSuite(
     .catch(() => null)
   return {
     saved: {
+      id: suite.id,
       label: suite.label,
       count: suite.scenarios.length,
       warnings: suite.warnings ?? [],
@@ -751,7 +752,7 @@ export function TestsCatalogPage() {
             <Check size={16} aria-hidden="true" />
             <span>
               Saved “{saved.label}” with {plural(saved.count, 'test')}.{' '}
-              <a href={hashForSuites()}>Open Suites</a>
+              <a href={hashForSuites(saved.id)}>Open it in Suites</a>
             </span>
             <button
               className="ex-icon-button"

@@ -76,6 +76,23 @@ function suiteParam() {
     : routeParams(window.location.hash).get('suite')
 }
 
+/** The section's actions in the Console header: New suite, which is made
+ *  by ticking tests in the catalog and saving them, and, once the worker
+ *  answers, Run tests. */
+export function suitesHeaderActions(onRun?: () => void): HeaderAction[] {
+  return [
+    {
+      id: 'new',
+      label: 'New suite',
+      href: hashForTests(),
+      title: 'Tick tests in the catalog, then save them as a suite',
+    },
+    ...(onRun
+      ? [{ id: 'run', label: 'Run tests', primary: true, onSelect: onRun }]
+      : []),
+  ]
+}
+
 /** The two blocks of the list: the repository's suites, read-only, then this
  *  Console's, which say how to make one while there are none. */
 export function SuiteList({
@@ -885,18 +902,8 @@ export function SuitesPage() {
   const selected = named ?? (narrow ? null : (suites?.[0] ?? null))
   const failedFirstLoad = Boolean(error) && suites === null
 
-  const headerActions = useMemo<HeaderAction[]>(
-    () =>
-      bridge
-        ? [
-            {
-              id: 'run',
-              label: 'Run tests',
-              primary: true,
-              onSelect: () => openRunner(''),
-            },
-          ]
-        : [],
+  const headerActions = useMemo(
+    () => suitesHeaderActions(bridge ? () => openRunner('') : undefined),
     [bridge, openRunner],
   )
 

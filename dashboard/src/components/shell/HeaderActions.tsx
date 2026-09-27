@@ -13,6 +13,8 @@ export type HeaderAction = {
   /** The section's one primary action. */
   primary?: boolean
   disabled?: boolean
+  /** A tooltip saying what the action leads to. */
+  title?: string
   /** A link, or … */
   href?: string
   /** … a command. */
@@ -29,7 +31,12 @@ function ActionButton({ action }: { action: HeaderAction }) {
     ? 'harness-e2e-header-action harness-e2e-header-action-primary'
     : 'harness-e2e-header-action harness-e2e-header-action-secondary'
   return action.href && !action.disabled ? (
-    <a className={className} href={action.href} onClick={action.onSelect}>
+    <a
+      className={className}
+      href={action.href}
+      title={action.title}
+      onClick={action.onSelect}
+    >
       {action.label}
     </a>
   ) : (
@@ -37,6 +44,7 @@ function ActionButton({ action }: { action: HeaderAction }) {
       type="button"
       className={className}
       disabled={action.disabled}
+      title={action.title}
       onClick={action.onSelect}
     >
       {action.label}

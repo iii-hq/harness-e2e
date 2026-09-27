@@ -14,6 +14,7 @@ import {
   SuiteDetail,
   type SuiteDetailProps,
   SuiteList,
+  suitesHeaderActions,
 } from '@/pages/SuitesPage'
 
 function suite(id: string, facts: Partial<Suite> = {}): Suite {
@@ -296,5 +297,18 @@ describe('editing a suite of this Console', () => {
     expect(html).toContain('Unsaved changes')
     expect(html).toMatch(/data-test-id="minimal_path" data-off="true"/)
     expect(html).toContain('2 tests · 1 run each · 1 retry')
+  })
+})
+
+describe('the Suites header', () => {
+  it('leads New suite to the catalog, and adds Run tests once the worker answers', () => {
+    expect(suitesHeaderActions().map((action) => action.id)).toEqual(['new'])
+    const [create, run] = suitesHeaderActions(() => {})
+    expect(create).toMatchObject({
+      label: 'New suite',
+      href: hashForTests(),
+      title: 'Tick tests in the catalog, then save them as a suite',
+    })
+    expect(run).toMatchObject({ label: 'Run tests', primary: true })
   })
 })

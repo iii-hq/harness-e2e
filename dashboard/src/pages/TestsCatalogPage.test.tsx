@@ -223,6 +223,7 @@ describe('save as suite', () => {
     )
     expect(done).toEqual({
       saved: {
+        id: created.id,
         label: 'Picked',
         count: 2,
         warnings: ['The whole group was added.'],
