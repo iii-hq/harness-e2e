@@ -612,12 +612,19 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page.getByText('No executions retained yet').waitFor()
   const empty = page.locator('main, body').first()
-  for (const action of ['run tests', 'import from GitHub'])
-    await empty.getByRole('button', { name: action, exact: true }).waitFor()
+  // The header's and the empty state's, by the same names.
+  for (const action of ['Run tests', 'Import from GitHub'])
+    assert.equal(
+      await empty.getByRole('button', { name: action, exact: true }).count(),
+      2,
+    )
   assert.equal(await empty.getByText(/new plan/i).count(), 0)
 
   // Without an earlier execution Run tests picks no model for the user.
-  await empty.getByRole('button', { name: 'Run tests', exact: true }).click()
+  await empty
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
   const fresh = page.getByRole('dialog', { name: 'Run tests' })
   await fresh.getByText('catalog ready').waitFor()
   await fresh
@@ -634,6 +641,7 @@ try {
   githubDown = true
   await empty
     .getByRole('button', { name: 'Import from GitHub', exact: true })
+    .first()
     .click()
   const importDialog = page.getByRole('dialog', { name: 'Import from GitHub' })
   const githubError = importDialog.getByRole('alert')
@@ -919,7 +927,14 @@ try {
     .locator('[data-where-line]')
     .getByText('Running · on this harness', { exact: false })
     .waitFor()
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
+  // While it runs the header cancels it; Run again waits for the end.
+  assert.equal(
+    await page.getByRole('button', { name: 'Run again', exact: true }).count(),
+    0,
+  )
+  await page
+    .getByRole('button', { name: 'Cancel execution', exact: true })
+    .click()
   const confirmCancel = page.getByRole('dialog', {
     name: 'Cancel this execution?',
   })

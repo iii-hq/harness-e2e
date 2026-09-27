@@ -1,4 +1,4 @@
-import { GitCompare, RotateCcw } from 'lucide-react'
+import { GitCompare, RotateCcw, Square } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -365,14 +365,10 @@ function ProvenanceSection({
 function LiveState({
   presentation,
   status,
-  onCancel,
-  cancelling,
   hasProgress,
 }: {
   presentation: ExecutionPresentation
   status: { status: OperationalStatus; label: string }
-  onCancel?: () => void
-  cancelling: boolean
   hasProgress: boolean
 }) {
   const running =
@@ -404,20 +400,6 @@ function LiveState({
             .filter(Boolean)
             .join(' · ') || 'no progress reported yet'}
         </span>
-        {running && onCancel ? (
-          <button
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-              className: 'ms-auto',
-            })}
-            type="button"
-            onClick={onCancel}
-            disabled={cancelling}
-          >
-            {cancelling ? 'Cancelling…' : 'Cancel execution'}
-          </button>
-        ) : null}
       </div>
       <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
         {running
@@ -795,6 +777,11 @@ export function ExecutionPage({
     ['Id', `${detail.id.slice(0, 9)}…${detail.id.slice(-6)}`],
   ]
   const ready = Boolean(bridge)
+  const canCancel =
+    live &&
+    !importing &&
+    presentation.attention !== 'cancelling' &&
+    detail.plan_execution?.state !== 'cancelling'
   const cancelRun = async () => {
     if (!bridge) return
     setCancelling(true)
@@ -896,8 +883,31 @@ export function ExecutionPage({
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
+              {/* While it runs the header cancels it (canvas: Execution
+                  detail · running); once cancelling, nothing to do but wait. */}
+              {ready && canCancel ? (
+                <button
+                  className={buttonClassName({ variant: 'secondary' })}
+                  type="button"
+                  disabled={cancelling}
+                  aria-busy={cancelling || undefined}
+                  onClick={() =>
+                    detail.plan_execution
+                      ? setCancelOpen(true)
+                      : void cancelRun()
+                  }
+                  data-cancel-execution
+                >
+                  <Square size={15} aria-hidden="true" />
+                  {cancelling
+                    ? 'Cancelling…'
+                    : detail.plan_execution?.source.kind === 'github'
+                      ? 'Cancel run'
+                      : 'Cancel execution'}
+                </button>
+              ) : null}
               {/* The page's one primary action (canvas: Execution detail). */}
-              {ready ? (
+              {ready && !live ? (
                 <button
                   className={buttonClassName({ variant: 'primary' })}
                   type="button"
@@ -987,9 +997,7 @@ export function ExecutionPage({
           <LiveState
             presentation={presentation}
             status={status}
-            cancelling={cancelling}
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
-            onCancel={ready && !importing ? () => void cancelRun() : undefined}
           />
         ) : null}
         {detail.plan_execution && (live || importing) ? (
@@ -1001,19 +1009,6 @@ export function ExecutionPage({
               <span className="wr-faint">
                 {reportedLine(detail.plan_execution)}
               </span>
-            ) : null}
-            {ready && live && detail.plan_execution.state !== 'cancelling' ? (
-              <button
-                type="button"
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                  className: 'ms-auto',
-                })}
-                onClick={() => setCancelOpen(true)}
-              >
-                Cancel
-              </button>
             ) : null}
           </div>
         ) : null}
