@@ -1812,11 +1812,6 @@ tr.ep-detail-row:hover {
   color: var(--color-ink-faint, var(--text-soft));
 }
 
-/* The dot keeps the status colour; the word is ink (canvas header). */
-.execution-header .ds-status-badge .ds-status-dot {
-  background: var(--ds-status-color);
-}
-
 /* Stack panel (canvas: Execution detail · Stack) */
 .ep-act.ep-fact-stack[data-selected="true"] {
   background: var(--color-surface-selected, var(--surface-selected));

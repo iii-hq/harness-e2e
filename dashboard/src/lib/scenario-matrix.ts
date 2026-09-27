@@ -109,7 +109,11 @@ export function buildScenarioMatrix(
   for (const item of items) {
     if (item.objective.status === 'passed') summary.passed += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
-    else if (item.objective.status === 'unavailable') summary.unavailable += 1
+    else if (
+      item.objective.status === 'not-run' ||
+      item.objective.status === 'unavailable'
+    )
+      summary.unavailable += 1
     else if (unreported(item)) summary.running += 1
     else if (
       item.objective.status === 'incomplete' ||
@@ -297,7 +301,7 @@ function unavailableScenario(
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: objectiveStatus(waiting ? String(record?.state) : 'unavailable'),
+    objective: objectiveStatus(waiting ? String(record?.state) : 'not_run'),
     durationMs: null,
     durationKind: null,
     runCount: 0,
@@ -419,6 +423,8 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
   if (raw === 'unavailable' || raw === 'not_evaluated') {
     return { status: 'unavailable', label: 'Unavailable', raw }
   }
+  // Planned in this execution and never started (LyOverlays: a ring).
+  if (raw === 'not_run') return { status: 'not-run', label: 'Not run', raw }
   if (raw === 'running') return { status: 'running', label: 'Running', raw }
   if (raw === 'queued') return { status: 'queued', label: 'Queued', raw }
   if (raw === 'cancelling') {

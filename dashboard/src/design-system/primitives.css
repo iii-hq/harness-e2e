@@ -127,7 +127,7 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--ds-status-color);
+  color: var(--text);
   font-family: var(--font-sans);
   font-size: 0.75rem;
   font-weight: 500;
@@ -141,7 +141,20 @@
   height: 6px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: currentColor;
+  background: var(--ds-status-color);
+}
+
+/* A ring means there is no result, yet or ever (LyOverlays · state
+   vocabulary); inert states read faint. The word is never coloured. */
+.ds-status-not-run .ds-status-dot {
+  background: transparent;
+  outline: 1px solid var(--ds-status-color);
+  outline-offset: -1px;
+}
+
+.ds-status-cancelled,
+.ds-status-queued {
+  color: var(--text-soft);
 }
 
 .ds-status-passed {
@@ -158,6 +171,10 @@
 
 .ds-status-unavailable {
   --ds-status-color: var(--text-muted);
+}
+
+.ds-status-not-run {
+  --ds-status-color: var(--danger);
 }
 
 .ds-status-recommendation {

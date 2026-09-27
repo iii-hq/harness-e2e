@@ -9,6 +9,7 @@ import { Check, ExternalLink, Square } from 'lucide-react'
 import { useState } from 'react'
 import { Callout } from '@/design-system'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
+import { sentenceCase } from '@/lib/format'
 import { type PlanExecution, running } from '@/lib/plan-execution'
 import './where-it-ran.css'
 import {
@@ -354,7 +355,7 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
                   ) : null}
                 </span>
                 <span className="wr-state" data-group-state>
-                  {group.state}
+                  {sentenceCase(group.state)}
                 </span>
                 <span className="wr-mono wr-faint">
                   attempt {group.attempt}

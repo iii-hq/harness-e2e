@@ -72,6 +72,7 @@ function testAttention(
       ? reason
       : null
   switch (item.objective.status) {
+    case 'not-run':
     case 'unavailable':
       return reason
         ? { tone: 'error', summary: `left no run${because(reason)}`, detail }
