@@ -231,4 +231,31 @@ describe('screenshot viewer', () => {
     expect(html).toContain('aria-label="Screenshots of this run"')
     expect(html).toContain('aria-label="Download form filled"')
   })
+
+  it('is always dark and keeps Close in the top row', () => {
+    const html = renderToStaticMarkup(
+      <ScreenshotViewer
+        screenshots={[
+          {
+            key: 'a',
+            executionId: 'e',
+            runId: 'r',
+            path: 'p',
+            pointer: '/0',
+            caption: 'form filled',
+          },
+        ]}
+        images={{ a: { source: 'data:image/png;base64,AA==' } }}
+        index={0}
+        onIndex={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toMatch(/role="dialog"[^>]*data-theme="dark"/)
+    // Zoom and the evidence link wrap to their own row on a phone; the
+    // title, Download and Close stay together on the first one.
+    expect(html).toMatch(
+      /class="ep-viewer-tools">.*aria-label="Zoom out".*<\/div><a[^>]*aria-label="Download form filled".*aria-label="Close"/,
+    )
+  })
 })

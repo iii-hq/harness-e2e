@@ -153,6 +153,9 @@
   inset: 0;
   z-index: 45;
   display: grid;
+  /* One column no wider than the screen: an auto track grew to the
+     thumbnail strip and pushed Download and Close off a phone. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--color-bg, var(--bg));
   color: var(--color-ink, var(--text));
@@ -165,10 +168,15 @@
 .ep-viewer-bar {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--color-panel, var(--surface));
-  font-size: 0.8125rem;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-2) var(--ds-space-3) var(--ds-space-2)
+    var(--ds-space-4);
+  background: var(--color-panel-raised, var(--surface-raised));
+  font-size: var(--ds-text-sm);
+}
+
+.ep-viewer-bar > .ep-viewer-button {
+  color: var(--color-ink-faint, var(--text-soft));
 }
 
 .ep-viewer-title {
@@ -224,7 +232,14 @@
 }
 
 .ep-viewer-foot {
+  /* The legacy page footer (a centred column with a rule) stays out. */
+  width: auto;
+  flex-direction: row;
   justify-content: center;
+  margin: 0;
+  border-top: 0;
+  color: inherit;
+  font-size: var(--ds-text-sm);
 }
 
 /* Transcript */
@@ -1247,19 +1262,40 @@ ol.ep-events {
 .ep-viewer-heading .ep-viewer-title {
   margin: 0;
   overflow: hidden;
-  font-size: 0.875rem;
+  font-family: var(--font-sans);
+  font-size: var(--ds-text-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.ep-viewer-heading > .ep-faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ep-viewer-position {
+  flex: none;
+  white-space: nowrap;
+}
+
+.ep-viewer-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ds-space-3);
+}
+
 .ep-viewer-zoom {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--ds-space-1);
   margin: 0;
-  padding: 0;
+  padding: 0.125rem;
   border: 0;
+  border-radius: var(--ds-radius-sm, 6px);
+  background: var(--color-surface, var(--surface-fill));
 }
 
 .ep-viewer-pct {
@@ -1281,6 +1317,9 @@ ol.ep-events {
 .ep-viewer-next {
   position: absolute;
   top: 50%;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  background: var(--color-surface, var(--surface-fill));
   transform: translateY(-50%);
 }
 
@@ -1362,6 +1401,40 @@ ol.ep-events {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   text-align: center;
+}
+
+/* A phone: the title, the position, Download and Close share the first row;
+   zoom and the evidence link take their own, so Close never leaves the
+   screen. The viewer covers the viewport, so the viewport decides. */
+@media (max-width: 639px) {
+  .ep-viewer-bar {
+    flex-wrap: wrap;
+    row-gap: var(--ds-space-1);
+    padding-inline: var(--ds-space-3) var(--ds-space-1);
+  }
+
+  .ep-viewer-heading {
+    flex: 1 1 0;
+  }
+
+  .ep-viewer-bar > .ep-viewer-button {
+    min-width: 3rem;
+    height: 3rem;
+  }
+
+  .ep-viewer-tools {
+    order: 1;
+    flex-basis: 100%;
+    justify-content: space-between;
+    padding-inline-end: var(--ds-space-2);
+  }
+
+  .ep-viewer-tools .ep-viewer-button,
+  .ep-viewer-prev,
+  .ep-viewer-next {
+    min-width: 2.75rem;
+    height: 2.75rem;
+  }
 }
 
 @container harness (max-width: 720px) {
