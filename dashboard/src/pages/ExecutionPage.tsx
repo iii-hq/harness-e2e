@@ -25,6 +25,7 @@ import {
   WhereItRan,
 } from '@/components/execution/WhereItRan'
 import {
+  liveNotes,
   reportedLine,
   whereLine,
 } from '@/components/execution/where-it-ran-model'
@@ -115,6 +116,16 @@ function summaryFromDetail(
     status: detail.status || fallback?.status || 'incomplete',
     subjects: detail.subjects ?? fallback?.subjects ?? [],
   }
+}
+
+/** Running one test again is offered once the execution finished: a Docker
+ *  execution shows its tests, and what needs attention, while it still runs. */
+export function testRerunOffered(
+  detail: Pick<DashboardExecutionDetail, 'plan_execution'>,
+  ready: boolean,
+  live: boolean,
+) {
+  return ready && !live && Boolean(detail.plan_execution)
 }
 
 /** What running an execution again starts from: its recorded parameters (a
@@ -687,7 +698,7 @@ export function ExecutionPage({
             backHref={backHref}
             transcriptHref={transcriptHref}
             onRerun={
-              bridge && detail.plan_execution
+              testRerunOffered(detail, Boolean(bridge), live)
                 ? () => setScenarioRerun(evidenceRun.scenarioId)
                 : undefined
             }
@@ -750,6 +761,8 @@ export function ExecutionPage({
     )
   }
   const scenarioSummary = scenarioMatrix?.summary ?? null
+  // In Docker a group's tests fill in as it ends: the table shows from the start.
+  const docker = detail.plan_execution?.source.kind === 'docker'
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
     : executionStatus(presentation)
@@ -1025,7 +1038,7 @@ export function ExecutionPage({
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
-        {!live && scenarioMatrix ? (
+        {(!live || docker) && scenarioMatrix ? (
           <NeedsAttention
             items={attentionItems(scenarioMatrix.items, [
               ...(detail.plan_execution?.error
@@ -1034,7 +1047,9 @@ export function ExecutionPage({
               ...(detail.plan_execution?.warnings ?? []),
             ])}
             onRerun={
-              ready && detail.plan_execution ? setScenarioRerun : undefined
+              testRerunOffered(detail, ready, live)
+                ? setScenarioRerun
+                : undefined
             }
             onShow={(key) => {
               setOpenScenario(key)
@@ -1065,7 +1080,7 @@ export function ExecutionPage({
             />
           </section>
         ) : null}
-        {!noRun && (!live || rerunning) ? (
+        {!noRun && (!live || rerunning || docker) ? (
           <div className="execution-layers grid min-w-0">
             <section
               id="results"
@@ -1077,6 +1092,12 @@ export function ExecutionPage({
                 detail={detail}
                 openKey={openScenario}
                 running={live}
+                {...(docker && live && detail.plan_execution
+                  ? {
+                      liveNote: 'A group’s tests fill in as it finishes.',
+                      notes: liveNotes(detail.plan_execution),
+                    }
+                  : {})}
                 onTranscript={(run) => {
                   window.location.hash = hashForExecution(
                     detail.id,
@@ -1086,9 +1107,8 @@ export function ExecutionPage({
                   )
                 }}
                 showContract={false}
-                // Offered once finished.
                 onRerun={
-                  ready && !live && detail.plan_execution
+                  testRerunOffered(detail, ready, live)
                     ? setScenarioRerun
                     : undefined
                 }

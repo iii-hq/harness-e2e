@@ -172,29 +172,116 @@ const dockered = {
     },
   },
 }
-const dockerGroup = (group_id, state) => ({
+const dockerGroup = (scenario, state) => ({
   round: 1,
   campaign_id: 'pr-r01',
-  group_id,
-  scenarios: [group_id],
+  group_id: `case-${scenario.replace(/_/g, '-')}`,
+  scenarios: [scenario],
   state,
   attempt: 1,
   error: null,
 })
-/** Running in Docker: its groups, and where each is. */
+/** What a finished run reports for a test that passed at 100. */
+const passedReport = (scenario_id) => ({
+  subject_id: 'terra',
+  scenario_id,
+  native_execution_id: `native-${scenario_id}`,
+  round: 1,
+  available: true,
+  report: {
+    report_state: 'complete',
+    objective_outcome: 'passed',
+    result_contract_sha256: 'sha256:0000',
+    assessment_contract: { runs: [] },
+    assessment_summary: {},
+    scenarios: [
+      {
+        scenario_id,
+        passed: true,
+        aggregate: {
+          planned_runs: 1,
+          observed_runs: 1,
+          deferred_runs: 0,
+          completed_runs: 1,
+          task_incomplete_runs: 0,
+          undetermined_runs: 0,
+          technical_valid_runs: 1,
+          technical_invalid_runs: 0,
+          execution_reliability: 1,
+          completion_evidence_coverage: 1,
+          completion_rate: 1,
+          scored_runs: 1,
+          mean_score: 100,
+          total_tokens_consumed: 1200,
+          tokens_completed_p50: 1200,
+          failed_attempt_tokens: 0,
+          tokens_per_completion: 1200,
+          technical_failures: 0,
+        },
+        runs: [
+          {
+            run_id: `run-${scenario_id}`,
+            attempt_id: `attempt-${scenario_id}`,
+            status: 'passed',
+            completion: 'completed',
+            technical: 'valid',
+            evaluators: { completion: 'available' },
+            score: 100,
+            wall_time_ms: 3_000,
+            assessment: { system_status: 'passed', assessments: [] },
+          },
+        ],
+      },
+    ],
+  },
+})
+/** Running in Docker: its groups and where each is; the group that ended
+ *  is installed, its test reported, while the others run and wait. */
 const dockerRunning = {
   ...running('plan-55555555555555555555555555555555'),
+  reports: [
+    passedReport('minimal_path'),
+    {
+      subject_id: 'terra',
+      scenario_id: 'persistent_state',
+      available: false,
+      state: 'running',
+    },
+    {
+      subject_id: 'terra',
+      scenario_id: 'shell_coder_sandbox',
+      available: false,
+      state: 'queued',
+    },
+  ],
   plan_execution: {
     ...running('plan-55555555555555555555555555555555').plan_execution,
+    slots: [
+      {
+        ...slot('minimal_path', 'finished'),
+        group_id: 'case-minimal-path',
+        passed: 1,
+      },
+      {
+        ...slot('persistent_state', 'running'),
+        group_id: 'case-persistent-state',
+        execution_id: '',
+      },
+      {
+        ...slot('shell_coder_sandbox', 'pending'),
+        group_id: 'case-shell-coder-sandbox',
+        execution_id: '',
+      },
+    ],
     source: {
       kind: 'docker',
       attempt: 1,
       phase: 'groups',
       image: null,
       groups: [
-        dockerGroup('case-minimal-path', 'done'),
-        dockerGroup('case-persistent-state', 'running'),
-        dockerGroup('case-shell-coder-sandbox', 'queued'),
+        dockerGroup('minimal_path', 'done'),
+        dockerGroup('persistent_state', 'running'),
+        dockerGroup('shell_coder_sandbox', 'queued'),
       ],
     },
   },
@@ -778,6 +865,32 @@ try {
     .locator('[data-docker-group="case-persistent-state"] [data-group-state]')
     .getByText('running', { exact: true })
     .waitFor()
+  await page
+    .locator('[data-step-state="current"]')
+    .getByText('1 of 3 finished · 1 running · 1 waiting', { exact: true })
+    .waitFor()
+  // The group that ended reports its test at once; the others fill in.
+  await page
+    .locator('[data-where-line]')
+    .getByText('1 of 3 tests reported · results are provisional')
+    .waitFor()
+  const result = (scenario) =>
+    page
+      .getByRole('table', { name: 'Scenario results' })
+      .locator('tr.ep-result-row', { hasText: scenario })
+  await result('minimal_path').getByText('Passed', { exact: true }).waitFor()
+  await result('minimal_path').getByText('100', { exact: true }).waitFor()
+  await result('persistent_state')
+    .getByText('Running in its container')
+    .waitFor()
+  await result('shell_coder_sandbox')
+    .getByText('Waiting for a slot', { exact: true })
+    .waitFor()
+  assert.equal(
+    await result('shell_coder_sandbox').getAttribute('data-row-state'),
+    'queued',
+  )
+  await page.getByText('A group’s tests fill in as it finishes.').waitFor()
 
   // A finished one says where it ran and runs again there, on its stack as
   // recorded.
@@ -829,7 +942,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running with the ended group’s results in, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

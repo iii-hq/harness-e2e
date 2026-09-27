@@ -2199,10 +2199,12 @@ pub(super) mod tests {
                         sha256: digest,
                     }],
                 },
-                observation_contract: None,
+                // As the runner does: the run contract it was asked to run under.
+                observation_contract: request.run_contract.clone(),
                 worker_contracts: Vec::new(),
             };
             let mut report = E2eReport::new(execution, system, subject, None, scenarios);
+            report.observation_contract = request.run_contract.clone();
             let output = self.root.join(&id);
             fs::create_dir_all(&output)?;
             let path = report.write_to(&output, &manifest)?;

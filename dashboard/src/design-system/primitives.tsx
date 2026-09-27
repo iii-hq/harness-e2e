@@ -110,6 +110,8 @@ export type OperationalStatus =
   | 'cancelling'
   | 'cancelled'
   | 'incomplete'
+  /** Waiting for its turn: neither run nor missing yet. */
+  | 'queued'
 
 const statusLabels: Record<OperationalStatus, string> = {
   passed: 'Passed',
@@ -121,6 +123,7 @@ const statusLabels: Record<OperationalStatus, string> = {
   cancelling: 'Cancelling',
   cancelled: 'Cancelled',
   incomplete: 'Incomplete',
+  queued: 'Queued',
 }
 
 export type StatusBadgeProps = HTMLAttributes<HTMLSpanElement> & {

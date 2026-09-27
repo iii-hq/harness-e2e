@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from 'react'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
-import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
+import { type ScenarioMatrixItem, unreported } from '@/lib/scenario-matrix'
 import './execution-page.css'
 
 const full = new Intl.NumberFormat('en-US')
@@ -85,7 +85,9 @@ export function ExecutionTotals({
   const cacheWrite = metricNumber(m.cacheWrite)
   const duration = metricNumber(m.durationMs)
   const cost = metricNumber(m.costUsd)
-  const reported = items.filter((item) => item.runCount > 0).length
+  // Reported: every test but those running or queued; one that did not run
+  // reported so.
+  const reported = items.filter((item) => !unreported(item)).length
   const partial = scores.length < total
   const kpis: Array<{
     label: string

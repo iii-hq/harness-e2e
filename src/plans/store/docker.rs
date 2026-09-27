@@ -28,12 +28,13 @@
 //!
 //! `prepare` (resolve, build when the stack pins a commit, materialize,
 //! assemble, fixtures), one `group` container per
-//! group, `docker_parallel_groups` at a time across executions, each packaged,
-//! then `finalize`, whose root bundle is imported once every group ended.
-//! Running a scenario again runs its groups as the next attempt, finalizes
-//! again and imports again: the last attempt counts, as a re-run job's does
-//! on GitHub.
-use std::collections::{BTreeMap, HashMap};
+//! group, `docker_parallel_groups` at a time across executions, each packaged
+//! and its native runs installed as soon as it ended, then `finalize`, whose
+//! root bundle is imported once every group ended, installing them again with
+//! what only the root knows. Running a scenario again runs its groups as the
+//! next attempt, installed as each ends, finalizes again and imports again:
+//! the last attempt counts, as a re-run job's does on GitHub.
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -911,6 +912,15 @@ impl PlanStore {
             )
         };
         let ended = matches!(state, "done" | "failed");
+        // Its slot and the Kanban turn go to the next group while its runs
+        // are installed, before it reads as ended: a group that ended always
+        // shows its results.
+        drop((_kanban, _permit));
+        if ended {
+            if let Err(error) = self.import_group(id, &group).await {
+                tracing::warn!(execution_id = %id, group_id = %group.group_id, error = %format!("{error:#}"), "cannot install a Docker group's runs; the import at the end tries again");
+            }
+        }
         self.update_docker(id, |_, _, groups| {
             let current = &mut groups[index];
             (current.state, current.error) = (state.into(), error);
@@ -920,6 +930,87 @@ impl PlanStore {
         })
         .await
         .map(drop)
+    }
+
+    /// Install an attempt of a group that ended, as the import at the end
+    /// installs it again: its tests report while the other groups run, and
+    /// an attempt run again replaces the one before. A group that left no
+    /// readable run is left to that import, which says why.
+    async fn import_group(&self, id: &str, group: &DockerGroup) -> Result<()> {
+        let runner = self.runner()?;
+        let execution = self.read_execution(id).await?;
+        let bundle = self.docker_artifacts(id).join(format!(
+            "e2e-observation-{id}-{}-{}-gh-{}",
+            group.campaign_id, group.group_id, group.attempt
+        ));
+        // A group that left no run (its failure.json says why) has nothing to
+        // install: the import at the end says so.
+        if directories(&bundle.join("native"))
+            .unwrap_or_default()
+            .is_empty()
+        {
+            tracing::info!(execution_id = %id, group_id = %group.group_id, "a Docker group left no run to install");
+            return Ok(());
+        }
+        let previous = execution
+            .slots
+            .iter()
+            .map(|slot| slot.execution_id.clone())
+            .filter(|id| !id.is_empty())
+            .collect::<BTreeSet<_>>();
+        let scratch = self.scratch()?;
+        let directory = scratch.path().join("group");
+        // Linked: installing moves its native run out, and the import at the
+        // end reads the bundle again.
+        let installed = async {
+            link_tree(&bundle, &directory).await?;
+            self.install_group(
+                runner,
+                &directory,
+                (group.round, &group.group_id),
+                &previous,
+                Some(id),
+            )
+            .await
+        }
+        .await;
+        let _ = tokio::task::spawn_blocking(move || drop(scratch)).await;
+        let (slots, _, _) = installed?;
+        let own = |slot: &Slot| slot.round == group.round && slot.group_id == group.group_id;
+        let replaced = {
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            let replaced = execution
+                .slots
+                .iter()
+                .filter(|slot| own(slot) && !slot.execution_id.is_empty())
+                .map(|slot| slot.execution_id.clone())
+                .collect::<BTreeSet<_>>();
+            let at = execution
+                .slots
+                .iter()
+                .position(own)
+                .unwrap_or(execution.slots.len());
+            execution.slots.retain(|slot| !own(slot));
+            execution.slots.splice(at..at, slots);
+            execution.updated_at = now();
+            self.write_execution(&execution).await?;
+            replaced
+                .into_iter()
+                .filter(|native| {
+                    execution
+                        .slots
+                        .iter()
+                        .all(|slot| &slot.execution_id != native)
+                })
+                .collect::<Vec<_>>()
+        };
+        for native in replaced {
+            if let Err(error) = runner.remove(&native).await {
+                tracing::warn!(execution_id = %id, native_id = %native, error = %format!("{error:#}"), "cannot remove a run its group's next attempt replaced");
+            }
+        }
+        Ok(())
     }
 
     /// For a subscription provider, the access token of this machine's login:
@@ -1214,10 +1305,8 @@ impl PlanStore {
                 .into();
             }
             *phase = "done".into();
-            if placeholders(&execution.slots) {
-                execution.slots = group_slots(groups);
-            }
         }
+        follow_groups(&mut execution);
         finish(&mut execution, reason, &self.root)?;
         self.write_execution(&execution).await
     }
@@ -1242,9 +1331,7 @@ impl PlanStore {
         };
         change(attempt, phase, groups);
         let answer = (*attempt, groups.clone());
-        if placeholders(&execution.slots) {
-            execution.slots = group_slots(&answer.1);
-        }
+        follow_groups(&mut execution);
         execution.updated_at = now();
         self.write_execution(&execution).await?;
         Ok(answer)
@@ -1559,6 +1646,39 @@ fn group_bundles(artifacts: &Path, id: &str) -> bool {
         })
 }
 
+/// Until an execution's first import, and while nothing is installed, its
+/// slots follow its groups: a group's installed runs, else one slot per
+/// scenario in the group's state. A scenario run again keeps what the last
+/// import said until its group's next attempt is installed.
+fn follow_groups(execution: &mut PlanExecution) {
+    let ExecutionSource::Docker { groups, .. } = &execution.source else {
+        return;
+    };
+    if execution.rerun.is_some() && !placeholders(&execution.slots) {
+        return;
+    }
+    execution.slots = groups
+        .iter()
+        .flat_map(|group| {
+            let installed = execution
+                .slots
+                .iter()
+                .filter(|slot| {
+                    slot.round == group.round
+                        && slot.group_id == group.group_id
+                        && !slot.execution_id.is_empty()
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if installed.is_empty() {
+                group_slots(std::slice::from_ref(group))
+            } else {
+                installed
+            }
+        })
+        .collect();
+}
+
 /// Nothing was imported yet: the slots stand for the groups.
 fn placeholders(slots: &[Slot]) -> bool {
     slots.iter().all(|slot| slot.execution_id.is_empty())
@@ -1828,10 +1948,27 @@ mod tests {
             .find(|entry| entry["id"] == group)
             .context("group")?["scenarios"]
             .clone();
+        let digest = |c: &str| format!("sha256:{}", c.repeat(64));
+        // As exact_stack_campaign.py writes it: the plan is the execution's.
+        let run_contract = json!({
+            "mode": {"environment": "demonstration", "decision": "observe_only"},
+            "target": {"application": "harness", "version": "1.8.0", "stack": {"mode": "source",
+                "workers_repository": "iii-hq/workers", "workers_revision": "0".repeat(40)}},
+            "plan": {"id": execution, "revision": "1", "sha256": digest("a"), "catalog_sha256": digest("b")},
+            "runner": {"name": "harness-e2e", "version": "0.17.0", "revision": "1".repeat(40)},
+            "attempt": 1,
+            "selected_cases": scenarios.as_array().context("scenarios")?.iter().enumerate()
+                .map(|(seed, scenario)| json!({"scenario_id": scenario, "behavior_sha256": digest("c"),
+                    "case_id": format!("{}:v1:seed-{seed}", scenario.as_str().unwrap_or_default()),
+                    "seed": seed, "inputs_sha256": digest("d"), "contract_sha256": digest("e")}))
+                .collect::<Vec<_>>(),
+            "correlation": {"system": "release-control", "deployment_id": "pr-r01", "operation_id": "pr-r01"},
+        });
         let request: RunRequest = serde_json::from_value(json!({
             "idempotency_key": format!("{execution}:{group}"), "label": group,
             "lane": "local", "model": "model", "provider": "provider",
             "scenarios": scenarios, "runs": 1, "technical_retries": 0,
+            "run_contract": run_contract,
         }))?;
         fs::create_dir_all(artifacts.join("stack"))?;
         let native = FakeRunner::new(artifacts.join("native")).native_record(request.clone())?;
@@ -2313,9 +2450,10 @@ mod tests {
             .lock()
             .unwrap()
             .insert("case-persistent-state".into());
+        let runner = Arc::new(FakeRunner::new(data.clone()));
         let store = docker_store(
             &data,
-            Arc::new(FakeRunner::new(data.clone())),
+            runner.clone(),
             launcher.clone(),
             DockerSettings {
                 parallel_groups: 1,
@@ -2331,11 +2469,28 @@ mod tests {
             groups(execution)
                 .iter()
                 .any(|(group, state, _)| group == "case-persistent-state" && state == "running")
+                && !execution.slots[0].execution_id.is_empty()
         })
         .await;
-        // While it runs, its slots follow its groups.
+        // While it runs, its slots follow its groups; the group that ended
+        // is installed already, long before anything is finalized.
+        let native = running.slots[0].execution_id.clone();
         assert_eq!(running.slots[0].state, "finished");
+        assert_eq!(running.slots[0].observed, 1);
+        assert!(runner.record(&native).await.is_some());
+        assert!(launcher.calls("finalize").is_empty());
         assert_eq!(running.slots[1].state, "running");
+        assert!(running.slots[1].execution_id.is_empty());
+        // What the Console reads: the ended group's report, the running
+        // one's and the queued ones' states.
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["available"], true);
+        assert_eq!(reports[0]["native_execution_id"], native.as_str());
+        assert_eq!(reports[1]["state"], "running");
+        assert!(reports[2..]
+            .iter()
+            .all(|report| report["state"] == "queued" && report["available"] == false));
         store.cancel(&id).await.unwrap();
         let cancelled = until(&store, &id, settled).await;
         assert_eq!(cancelled.state, "cancelled");
@@ -2351,9 +2506,13 @@ mod tests {
         let [finished, stopped, never, _] = cancelled.slots.as_slice() else {
             panic!("{:?}", cancelled.slots);
         };
+        // What it installed before the cancel stays, the import at the end
+        // installing it again under the same id.
         assert_eq!(finished.state, "finished");
-        assert!(!finished.execution_id.is_empty());
+        assert_eq!(finished.execution_id, native);
+        assert!(runner.record(&native).await.is_some());
         assert_eq!(stopped.error.as_deref(), Some("stopped"));
+        assert!(stopped.execution_id.is_empty());
         assert_eq!(
             never.error.as_deref(),
             Some("group observation artifact was not available")
@@ -2419,6 +2578,16 @@ mod tests {
         ));
         fs::create_dir_all(&partial).unwrap();
         fs::write(partial.join("failure.json"), r#"{"error": "stopped"}"#).unwrap();
+        // The stopped drive had moved the finished group's run in without
+        // recording it: the import at the end replaces it as its own.
+        copy_tree(
+            &artifacts.join(format!(
+                "e2e-observation-{id}-pr-r01-case-minimal-path-gh-1/native/{native}"
+            )),
+            &data.join(&native),
+        )
+        .await
+        .unwrap();
         let (mut prepared, _) = prepared_groups(&folder.join("checkout")).unwrap();
         (prepared[0].state, prepared[0].counted) = ("done".into(), 1);
         prepared[1].state = "running".into();
@@ -2593,6 +2762,281 @@ mod tests {
         assert_eq!(
             (stack.name.as_str(), stack.yaml.as_str()),
             ("default", "iii: 0.24.1\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_group_is_installed_from_its_counted_attempt_and_its_next_one_replaces_it() {
+        use std::os::unix::fs::MetadataExt;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let store = docker_store(
+            &data,
+            runner.clone(),
+            Arc::new(FakeLauncher::default()),
+            DockerSettings::default(),
+        );
+        let id = "plan-grouped".to_owned();
+        let checkout = store.docker_folder(&id).join("checkout");
+        let contracts = checkout.join("target/harness-e2e-contract");
+        let snapshot =
+            serde_json::to_value(test_plan::embedded().unwrap().materialize("pr").unwrap())
+                .unwrap();
+        write_contracts(&contracts, &snapshot).unwrap();
+        let artifacts = store.docker_artifacts(&id);
+        let bundle = |group: &str, attempt: u32| {
+            artifacts.join(format!("e2e-observation-{id}-pr-r01-{group}-gh-{attempt}"))
+        };
+        let mut natives = Vec::new();
+        for attempt in [1, 2] {
+            natives.push(
+                write_group_bundle(
+                    &bundle("case-minimal-path", attempt),
+                    &contracts.join("contracts/pr-r01.json"),
+                    &id,
+                    "case-minimal-path",
+                )
+                .unwrap(),
+            );
+        }
+        let native = natives[0].clone();
+        assert_eq!(natives[1], native);
+        let (mut prepared, _) = prepared_groups(&checkout).unwrap();
+        prepared[0].state = "running".into();
+        prepared[1].state = "running".into();
+        let group = |index: usize, attempt: u32| DockerGroup {
+            attempt,
+            ..prepared[index].clone()
+        };
+        let (first, failed, again) = (group(0, 1), group(1, 1), group(0, 2));
+        store
+            .write_execution(&PlanExecution {
+                id: id.clone(),
+                idempotency_key: "execution:grouped".into(),
+                label: None,
+                parameters: Some(docker_parameters("pr")),
+                slots: group_slots(&prepared),
+                source: ExecutionSource::Docker {
+                    attempt: 1,
+                    phase: "groups".into(),
+                    image: None,
+                    groups: prepared,
+                },
+                stack: Vec::new(),
+                warnings: Vec::new(),
+                state: "running".into(),
+                started_at: now(),
+                updated_at: now(),
+                finished_at: None,
+                cancel_requested: false,
+                error: None,
+                measurements: None,
+                system_under_test: None,
+                rerun: None,
+            })
+            .await
+            .unwrap();
+        let inode = |path: PathBuf| fs::metadata(path).unwrap().ino();
+        let evidence = || inode(data.join(&native).join("results.json"));
+        let bundled = |attempt| {
+            inode(
+                bundle("case-minimal-path", attempt)
+                    .join("native")
+                    .join(&native)
+                    .join("results.json"),
+            )
+        };
+
+        // A drive that stopped once the run was moved in, before its slots
+        // were recorded, left it without them: this execution's own, it is
+        // replaced; under another execution's plan it is left untouched.
+        let runner_ref: Arc<dyn Runner> = runner.clone();
+        let moved_in = |owner: &'static str| {
+            let (store, runner, bundle) = (
+                store.clone(),
+                runner_ref.clone(),
+                bundle("case-minimal-path", 1),
+            );
+            async move {
+                let scratch = store.scratch().unwrap();
+                link_tree(&bundle, &scratch.path().join("group"))
+                    .await
+                    .unwrap();
+                store
+                    .install_group(
+                        &runner,
+                        &scratch.path().join("group"),
+                        (1, "case-minimal-path"),
+                        &BTreeSet::new(),
+                        Some(owner),
+                    )
+                    .await
+                    .map(drop)
+            }
+        };
+        moved_in("plan-grouped").await.unwrap();
+        assert!(data.join(&native).is_dir());
+        let refused = moved_in("plan-another").await.unwrap_err();
+        assert!(format!("{refused:#}").contains("already retained by another execution"));
+        assert!(store.read_execution(&id).await.unwrap().slots[0]
+            .execution_id
+            .is_empty());
+
+        // Installed at once: its test reports, the Console hears of it, and
+        // the other groups' slots still follow them.
+        let mut changes = store.changes();
+        store.import_group(&id, &first).await.unwrap();
+        assert_eq!(changes.try_recv().unwrap(), id);
+        let installed = store.read_execution(&id).await.unwrap();
+        assert_eq!(installed.slots.len(), 4);
+        let slot = &installed.slots[0];
+        assert_eq!(
+            (
+                slot.execution_id.as_str(),
+                slot.state.as_str(),
+                slot.observed
+            ),
+            (native.as_str(), "finished", 1)
+        );
+        assert!(runner.record(&native).await.is_some());
+        assert_eq!(evidence(), bundled(1));
+        assert_eq!(installed.slots[1].state, "running");
+        assert!(installed.slots[1].execution_id.is_empty());
+        let moved = store
+            .update_docker(&id, |_, _, groups| groups[2].state = "running".into())
+            .await
+            .unwrap();
+        assert_eq!(moved.1[2].state, "running");
+        let moved = store.read_execution(&id).await.unwrap();
+        assert_eq!(moved.slots[0].execution_id, native);
+        assert_eq!(moved.slots[2].state, "running");
+
+        // A group that left no run has nothing to install: the import at
+        // the end says why.
+        let left = bundle("case-persistent-state", 1);
+        fs::create_dir_all(&left).unwrap();
+        fs::write(
+            left.join("failure.json"),
+            r#"{"error": "compose::add failed"}"#,
+        )
+        .unwrap();
+        store.import_group(&id, &failed).await.unwrap();
+        let kept = store.read_execution(&id).await.unwrap();
+        assert!(kept.slots[1].execution_id.is_empty());
+        // One whose run cannot be read is an error (logged as a warning).
+        fs::create_dir_all(left.join("native/0123")).unwrap();
+        let unreadable = store.import_group(&id, &failed).await.unwrap_err();
+        assert!(format!("{unreadable:#}").contains("is not an E2E execution id"));
+        assert!(store.read_execution(&id).await.unwrap().slots[1]
+            .execution_id
+            .is_empty());
+
+        // Run again, its next attempt replaces the one before under the
+        // same id, without another slot.
+        store.import_group(&id, &again).await.unwrap();
+        let replaced = store.read_execution(&id).await.unwrap();
+        assert_eq!(replaced.slots.len(), 4);
+        assert_eq!(replaced.slots[0].execution_id, native);
+        assert!(runner.record(&native).await.is_some());
+        assert_eq!(evidence(), bundled(2));
+
+        // Cancelled while the rest still ends: what the Console reads is the
+        // installed report, and the stopped group's tests as cancelled.
+        store
+            .update_docker(&id, |_, _, groups| groups[3].state = "cancelled".into())
+            .await
+            .unwrap();
+        let mut cancelling = store.read_execution(&id).await.unwrap();
+        (cancelling.state, cancelling.cancel_requested) = ("cancelling".into(), true);
+        store.write_execution(&cancelling).await.unwrap();
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["available"], true);
+        assert_eq!(reports[1]["state"], "running");
+        assert_eq!(reports[3]["state"], "cancelled");
+    }
+
+    #[tokio::test]
+    async fn running_a_scenario_again_leaves_what_the_last_import_said_of_the_other_groups() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            Arc::new(FakeLauncher::default()),
+            DockerSettings::default(),
+        );
+        let id = "plan-again".to_owned();
+        let checkout = store.docker_folder(&id).join("checkout");
+        let snapshot =
+            serde_json::to_value(test_plan::embedded().unwrap().materialize("pr").unwrap())
+                .unwrap();
+        write_contracts(&checkout.join("target/harness-e2e-contract"), &snapshot).unwrap();
+        let (mut groups, _) = prepared_groups(&checkout).unwrap();
+        // The last import: the first group left no run (failed), the second
+        // was cancelled before it ran, both said so as not run; the last two
+        // ran.
+        let mut slots = group_slots(&groups);
+        for (index, state) in [(0, "failed"), (1, "cancelled"), (2, "done"), (3, "done")] {
+            groups[index].state = state.into();
+        }
+        for slot in &mut slots[..2] {
+            (slot.state, slot.error) = ("not_run".into(), Some("compose::add failed".into()));
+        }
+        for slot in &mut slots[2..] {
+            (slot.state, slot.execution_id) =
+                ("finished".into(), format!("native-{}", slot.group_id));
+        }
+        // Now the third group's scenario runs again, and was cancelled
+        // before it ran; the fourth is the one it runs again after.
+        groups[2].state = "cancelled".into();
+        let again = groups[2].scenarios.clone();
+        let execution = PlanExecution {
+            id: id.clone(),
+            idempotency_key: "execution:again".into(),
+            label: None,
+            parameters: Some(docker_parameters("pr")),
+            slots,
+            source: ExecutionSource::Docker {
+                attempt: 2,
+                phase: "groups".into(),
+                image: None,
+                groups,
+            },
+            stack: Vec::new(),
+            warnings: Vec::new(),
+            state: "cancelling".into(),
+            started_at: now(),
+            updated_at: now(),
+            finished_at: None,
+            cancel_requested: true,
+            error: None,
+            measurements: None,
+            system_under_test: None,
+            rerun: Some(Rerun {
+                scenarios: again,
+                runs: Vec::new(),
+                started_at: now(),
+                state: "completed".into(),
+                error: None,
+                finished_at: None,
+            }),
+        };
+        store.write_execution(&execution).await.unwrap();
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        // Neither the group that left no run nor the one an earlier cancel
+        // stopped reads as stopped by this one: what the import said stays.
+        for report in &reports[..2] {
+            assert!(report.get("state").is_none(), "{report}");
+            assert_eq!(report["error"], "compose::add failed");
+        }
+        // The one running again keeps its last attempt's run.
+        assert!(reports[2].get("state").is_none(), "{}", reports[2]);
+        assert_eq!(
+            reports[2]["native_execution_id"],
+            "native-case-tool-contract-recovery"
         );
     }
 

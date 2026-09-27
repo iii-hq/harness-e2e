@@ -500,7 +500,7 @@ impl PlanStore {
 
     /// A temporary directory inside the data directory: bundles are large and
     /// never go through memory or the system temporary directory.
-    fn scratch(&self) -> Result<tempfile::TempDir> {
+    pub(super) fn scratch(&self) -> Result<tempfile::TempDir> {
         tempfile::Builder::new()
             .prefix("import-")
             .tempdir_in(self.imports_dir()?)
@@ -546,6 +546,9 @@ impl PlanStore {
             .map(|slot| slot.execution_id.clone())
             .filter(|id| !id.is_empty())
             .collect::<BTreeSet<_>>();
+        // A Docker execution's own runs carry its id as their plan's.
+        let owner = matches!(execution.source, ExecutionSource::Docker { .. })
+            .then(|| execution.id.clone());
 
         let mut slots = Vec::new();
         let mut scenarios = Vec::new();
@@ -580,7 +583,13 @@ impl PlanStore {
             for (group_id, declared) in groups {
                 let directory = campaign.join("groups").join(&group_id);
                 match self
-                    .install_group(runner, &directory, round, &group_id, &previous)
+                    .install_group(
+                        runner,
+                        &directory,
+                        (round, &group_id),
+                        &previous,
+                        owner.as_deref(),
+                    )
                     .await
                 {
                     Ok((group_slots, request, stack)) => {
@@ -715,19 +724,23 @@ impl PlanStore {
 
     /// Move one group's native run into the data directory, retain it, and
     /// return the group's slots. Evidence another execution retains under the
-    /// same id is never replaced.
-    async fn install_group(
+    /// same id is never replaced. `owner` names the execution whose runs carry
+    /// it as their plan's (a Docker execution's): one of them left in the data
+    /// directory without its slots (the drive stopped between moving it in
+    /// and recording it) is its own to replace.
+    pub(super) async fn install_group(
         &self,
         runner: &std::sync::Arc<dyn Runner>,
         directory: &Path,
-        round: u32,
-        group_id: &str,
+        (round, group_id): (u32, &str),
         previous: &BTreeSet<String>,
+        owner: Option<&str>,
     ) -> Result<(Vec<Slot>, RunRequest, Vec<StackWorker>)> {
         let root = self.root.clone();
         let directory = directory.to_owned();
         let group_id = group_id.to_owned();
         let replaceable = previous.clone();
+        let owner = owner.map(str::to_owned);
         let (record, slots, request, stack) = tokio::task::spawn_blocking(move || {
             let natives = directories(&directory.join("native")).unwrap_or_default();
             if natives.is_empty() {
@@ -751,8 +764,16 @@ impl PlanStore {
                 "The group's native run '{id}' is not an E2E execution id"
             );
             let target = root.join(&id);
+            let ours = || {
+                owner.as_deref().is_some_and(|owner| {
+                    E2eReport::read_from(&target)
+                        .ok()
+                        .and_then(|(report, _)| report.observation_contract)
+                        .is_some_and(|contract| contract.plan.id == owner)
+                })
+            };
             ensure!(
-                !target.exists() || replaceable.contains(&id),
+                !target.exists() || replaceable.contains(&id) || ours(),
                 "Native run {id} is already retained by another execution; its evidence was left untouched"
             );
             let request_value = read_json(&directory.join("run-request.json"))?;

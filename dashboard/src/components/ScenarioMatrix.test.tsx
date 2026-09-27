@@ -1,6 +1,10 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { contractScent, ScenarioMatrix } from '@/components/ScenarioMatrix'
+import {
+  contractScent,
+  matchesFilter,
+  ScenarioMatrix,
+} from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { compareRuns } from '@/lib/execution-comparison'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
@@ -491,6 +495,88 @@ describe('ScenarioMatrix', () => {
       <ScenarioMatrix detail={running} onTranscript={() => {}} />,
     )
     expect(html).not.toContain('The expected report for this scenario')
+  })
+
+  it('fills a live Docker execution in as its groups end: queued and running rows wait, with their notes', () => {
+    const live = {
+      ...detail,
+      reports: [
+        ...detail.reports,
+        {
+          subject_id: 'terra',
+          scenario_id: 'timer_wake',
+          available: false,
+          state: 'running',
+          error: null,
+        },
+        {
+          subject_id: 'terra',
+          scenario_id: 'minimal_path',
+          available: false,
+          state: 'queued',
+          error: null,
+        },
+        {
+          subject_id: 'terra',
+          scenario_id: 'kanban_c7_live',
+          available: false,
+          error: 'compose::add failed: container state',
+        },
+        {
+          subject_id: 'terra',
+          scenario_id: 'chess_engine_build',
+          available: false,
+          state: 'cancelled',
+          error: null,
+        },
+      ],
+    } as unknown as DashboardExecutionDetail
+    const model = buildScenarioMatrix(live)
+    const queued = model.items.find(
+      (item) => item.scenarioId === 'minimal_path',
+    )
+    expect(queued?.objective).toMatchObject({
+      status: 'queued',
+      label: 'Queued',
+    })
+    expect(queued?.reason).toBeNull()
+    // Waiting, or stopped by the cancel, is neither a failure nor a test
+    // that did not run.
+    const stopped = model.items.find(
+      (item) => item.scenarioId === 'chess_engine_build',
+    )
+    expect(stopped?.objective).toMatchObject({
+      status: 'cancelled',
+      label: 'Cancelled',
+    })
+    expect(stopped?.reason).toBeNull()
+    expect(model.summary).toMatchObject({ running: 3, failed: 0 })
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix
+        detail={live}
+        onTranscript={() => {}}
+        running
+        liveNote="A group’s tests fill in as it finishes."
+        notes={{
+          '1:timer_wake': 'Running in its container',
+          '1:minimal_path': 'Waiting for a slot',
+          '1:chess_engine_build': 'Stopped before it finished',
+        }}
+      />,
+    )
+    expect(html).toContain('A group’s tests fill in as it finishes.')
+    expect(html).toContain('Running in its container')
+    expect(html).toContain('Waiting for a slot')
+    expect(html).toContain('data-row-state="queued"')
+    expect(html).toContain('data-row-state="cancelled"')
+    expect(html).toContain('Stopped before it finished')
+    const notRun = model.items
+      .filter((item) => matchesFilter(item, 'notrun'))
+      .map((item) => item.scenarioId)
+    expect(notRun).toContain('kanban_c7_live')
+    expect(notRun).not.toContain('minimal_path')
+    expect(notRun).not.toContain('timer_wake')
+    expect(notRun).not.toContain('chess_engine_build')
   })
 
   it('keeps incomplete outcomes and evidence access visible with secondary details collapsed', () => {

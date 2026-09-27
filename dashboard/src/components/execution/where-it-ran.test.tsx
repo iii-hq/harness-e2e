@@ -7,6 +7,7 @@ import {
   dockerSteps,
   jobLabel,
   jobTests,
+  liveNotes,
   reportedLine,
   testRows,
   whereLine,
@@ -57,6 +58,16 @@ const harness = {
 
 const docker = {
   ...base,
+  // Its finished group installed; the others' slots follow their groups.
+  slots: [
+    {
+      ...slot('minimal_path', 'finished', 'case-minimal-path'),
+      execution_id: 'native-minimal',
+    },
+    slot('timer_wake', 'running', 'case-timer-wake'),
+    slot('registry_implementation', 'pending', 'case-registry-implementation'),
+    slot('registry_verification', 'pending', 'case-registry-implementation'),
+  ],
   source: {
     kind: 'docker',
     attempt: 1,
@@ -144,7 +155,7 @@ describe('where it ran · model', () => {
     )
   })
 
-  it('reads a Docker execution’s steps and groups; finished groups wait for the import', () => {
+  it('reads a Docker execution’s steps and groups; a finished group’s tests report at once', () => {
     const steps = dockerSteps(docker)
     expect(steps.map((step) => step.state)).toEqual([
       'done',
@@ -152,12 +163,53 @@ describe('where it ran · model', () => {
       'next',
       'next',
     ])
-    expect(steps[1].detail).toBe('1 of 3 finished · 2 groups at a time')
+    expect(steps[1].detail).toBe('1 of 3 finished · 1 running · 1 waiting')
     const rows = testRows(docker)
-    expect(rows[0]).toMatchObject({ id: 'minimal_path', state: 'at-import' })
-    expect(rows[0].detail).toContain('results at import')
-    expect(rows[1].state).toBe('running')
-    expect(rows[2].detail).toBe('Waiting for a slot · 2 groups at a time')
+    expect(rows[0]).toEqual({
+      id: 'minimal_path',
+      round: 1,
+      state: 'reported',
+      detail: '1/1 passed',
+    })
+    expect(rows[1]).toMatchObject({
+      state: 'running',
+      detail: 'Running in its container',
+    })
+    // How many groups run at once is the worker's; the line does not guess.
+    expect(rows[2].detail).toBe('Waiting for a slot')
+    expect(reportedLine(docker)).toBe(
+      '1 of 4 tests reported · results are provisional',
+    )
+    // A group that ended without a run: its tests did not run, and say why.
+    const failed = {
+      ...docker,
+      slots: [slot('minimal_path', 'finished', 'case-minimal-path')],
+      source: {
+        ...(docker.source as object),
+        groups: [
+          {
+            round: 1,
+            campaign_id: '',
+            group_id: 'case-minimal-path',
+            scenarios: ['minimal_path'],
+            state: 'failed',
+            attempt: 1,
+            error: 'compose::add failed',
+          },
+        ],
+      },
+    } as unknown as PlanExecution
+    expect(testRows(failed)).toEqual([
+      {
+        id: 'minimal_path',
+        round: 1,
+        state: 'not-run',
+        detail: 'compose::add failed',
+      },
+    ])
+    expect(reportedLine(failed)).toBe(
+      '1 of 1 test reported · results are provisional',
+    )
     const cancelled = { ...docker, state: 'cancelled' } as PlanExecution
     const stopped = {
       ...cancelled,
@@ -182,6 +234,9 @@ describe('where it ran · model', () => {
       'next',
       'next',
     ])
+    expect(dockerSteps(stopped)[1].detail).toBe(
+      '0 of 1 finished before the cancel · 1 stopped',
+    )
     expect(testRows(cancelled)[2].detail).toBe('Stopped before it finished')
   })
 
@@ -230,6 +285,29 @@ describe('where it ran · model', () => {
 })
 
 describe('where it ran · rounds', () => {
+  it('keys each Docker test’s line by its round', () => {
+    const group = (round: number, state: string) => ({
+      round,
+      campaign_id: `pr-r0${round}`,
+      group_id: 'case-minimal-path',
+      scenarios: ['minimal_path'],
+      state,
+      attempt: 1,
+    })
+    const rounds = {
+      ...docker,
+      slots: [],
+      source: {
+        ...(docker.source as object),
+        groups: [group(1, 'queued'), group(2, 'running')],
+      },
+    } as unknown as PlanExecution
+    expect(liveNotes(rounds)).toEqual({
+      '1:minimal_path': 'Waiting for a slot',
+      '2:minimal_path': 'Running in its container',
+    })
+  })
+
   it('keeps a test running until all its rounds report', () => {
     const rounds = {
       ...harness,
@@ -261,7 +339,9 @@ describe('where it ran · card', () => {
     expect(html).toContain('Suite materialized, stack assembled and locked')
     expect(html).toContain('data-docker-group="case-timer-wake"')
     expect(html).toContain('tools-d9a8b54a2c85')
-    expect(html).toContain('results at import')
+    // Its tests are in the results table, filled in as each group ends.
+    expect(html).not.toContain('aria-label="Tests"')
+    expect(html).not.toContain('results at import')
   })
 
   it('lists the harness tests while it runs', () => {

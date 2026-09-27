@@ -17,10 +17,10 @@ import {
 
 const STATE_LABEL: Record<TestRow['state'], string> = {
   reported: 'Reported',
+  'not-run': 'Not run',
   running: 'Running',
   waiting: 'Waiting',
   stopped: 'Stopped',
-  'at-import': 'Finished',
 }
 
 function Dot({ tone }: { tone: 'ok' | 'live' | 'idle' | 'alert' }) {
@@ -37,9 +37,11 @@ function TestList({ rows }: { rows: TestRow[] }) {
             tone={
               row.state === 'running'
                 ? 'live'
-                : row.state === 'reported' || row.state === 'at-import'
+                : row.state === 'reported'
                   ? 'ok'
-                  : 'idle'
+                  : row.state === 'not-run'
+                    ? 'alert'
+                    : 'idle'
             }
           />
           <span className="wr-mono wr-ellipsis" title={row.id}>
@@ -57,13 +59,7 @@ function TestList({ rows }: { rows: TestRow[] }) {
 
 /** Where the execution runs and what happens there: this harness, Docker
  *  (steps and groups) or GitHub (run, ref and group jobs). */
-export function WhereItRan({
-  execution,
-  dockerGroups = 2,
-}: {
-  execution: PlanExecution
-  dockerGroups?: number
-}) {
+export function WhereItRan({ execution }: { execution: PlanExecution }) {
   const source = execution.source
   const live = running(execution.state) || execution.state === 'importing'
   const place = placeOf(execution)
@@ -210,7 +206,7 @@ export function WhereItRan({
       {source.kind === 'docker' ? (
         <>
           <ol className="wr-steps" aria-label="Steps">
-            {dockerSteps(execution, dockerGroups).map((step) => (
+            {dockerSteps(execution).map((step) => (
               <li
                 key={step.phase}
                 className="wr-step"
@@ -297,8 +293,10 @@ export function WhereItRan({
         </dl>
       ) : null}
 
-      {live && source.kind !== 'github' ? (
-        <TestList rows={testRows(execution, dockerGroups)} />
+      {/* A Docker execution's tests are in the results table, filled in as
+          each group ends. */}
+      {live && source.kind === 'local' ? (
+        <TestList rows={testRows(execution)} />
       ) : null}
     </section>
   )

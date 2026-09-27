@@ -110,7 +110,7 @@ export function buildScenarioMatrix(
     if (item.objective.status === 'passed') summary.passed += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
     else if (item.objective.status === 'unavailable') summary.unavailable += 1
-    else if (item.objective.status === 'running') summary.running += 1
+    else if (unreported(item)) summary.running += 1
     else if (
       item.objective.status === 'incomplete' ||
       item.objective.status === 'cancelled' ||
@@ -279,12 +279,15 @@ function unavailableScenario(
   const summary = detail.subjects
     .find((subject) => subject.id === record?.subject_id)
     ?.scenarios.find((scenario) => scenario.id === scenarioId)
-  // A slot running, or waiting to run again, has no report yet.
-  const running = record?.state === 'running'
+  // A slot running, waiting to run again, waiting for its turn (queued) or
+  // stopped before it ran while the rest still ends has no report yet.
+  const waiting = ['running', 'queued', 'cancelled', 'interrupted'].includes(
+    String(record?.state),
+  )
 
   return {
     key: `${record?.subject_id ?? 'unknown'}:${scenarioId}:unavailable:${reportIndex}`,
-    reason: running
+    reason: waiting
       ? null
       : (nonEmptyString(record?.error) ??
         'The expected report for this scenario was not retained.'),
@@ -294,7 +297,7 @@ function unavailableScenario(
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: objectiveStatus(running ? 'running' : 'unavailable'),
+    objective: objectiveStatus(waiting ? String(record?.state) : 'unavailable'),
     durationMs: null,
     durationKind: null,
     runCount: 0,
@@ -305,6 +308,21 @@ function unavailableScenario(
     aggregate: null,
     primaryMetrics: primaryMetrics(null, [], { value: null, kind: null }),
   }
+}
+
+/** A test's key within its round: tests repeat across rounds. */
+export function roundKey(round: unknown, scenarioId: string) {
+  return `${String(round ?? 1)}:${scenarioId}`
+}
+
+/** Running, queued, or stopped before it ran while the execution still
+ *  ends: no result, and no failure either. */
+export function unreported(item: Pick<ScenarioMatrixItem, 'objective'>) {
+  return (
+    item.objective.status === 'running' ||
+    item.objective.status === 'queued' ||
+    item.objective.status === 'cancelled'
+  )
 }
 
 function scenarioObjective(
@@ -402,11 +420,15 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
     return { status: 'unavailable', label: 'Unavailable', raw }
   }
   if (raw === 'running') return { status: 'running', label: 'Running', raw }
+  if (raw === 'queued') return { status: 'queued', label: 'Queued', raw }
   if (raw === 'cancelling') {
     return { status: 'cancelling', label: 'Cancelling', raw }
   }
   if (raw === 'cancelled') {
     return { status: 'cancelled', label: 'Cancelled', raw }
+  }
+  if (raw === 'interrupted') {
+    return { status: 'cancelled', label: 'Interrupted', raw }
   }
   if (raw === 'incomplete' || raw === 'pending' || raw === 'skipped') {
     return { status: 'incomplete', label: humanize(raw), raw }
