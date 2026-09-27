@@ -582,7 +582,7 @@ export function ExecutionPage({
 
   if (error && !detail)
     return (
-      <div className="ds-root min-h-dvh bg-canvas text-ink">
+      <div className="ds-root min-h-dvh text-ink">
         <DashboardPageActions active="executions" />
         <div className="page-shell">
           <EmptyState
@@ -624,7 +624,7 @@ export function ExecutionPage({
   // Audit ED-22: the skeleton keeps the chrome, so nothing jumps on arrival.
   if (!detail || !presentation)
     return (
-      <div className="ds-root min-h-dvh bg-canvas text-ink">
+      <div className="ds-root min-h-dvh text-ink">
         <DashboardPageActions active="executions" />
         <div className="page-shell" aria-busy="true" role="status">
           <span className="ds-visually-hidden">Loading execution report</span>
@@ -841,7 +841,7 @@ export function ExecutionPage({
   }
 
   return (
-    <div className="ds-root execution-page bg-canvas text-ink">
+    <div className="ds-root execution-page text-ink">
       <DashboardPageActions active="executions" context={title} />
       <div className="page-shell">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
