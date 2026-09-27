@@ -912,11 +912,13 @@ impl PlanStore {
             )
         };
         let ended = matches!(state, "done" | "failed");
-        // Installed before it reads as ended, so a group that ended always
+        // Its slot and the Kanban turn go to the next group while its runs
+        // are installed, before it reads as ended: a group that ended always
         // shows its results.
+        drop((_kanban, _permit));
         if ended {
             if let Err(error) = self.import_group(id, &group).await {
-                tracing::info!(execution_id = %id, group_id = %group.group_id, error = %format!("{error:#}"), "a Docker group's runs are left to the import at the end");
+                tracing::warn!(execution_id = %id, group_id = %group.group_id, error = %format!("{error:#}"), "cannot install a Docker group's runs; the import at the end tries again");
             }
         }
         self.update_docker(id, |_, _, groups| {
@@ -941,6 +943,15 @@ impl PlanStore {
             "e2e-observation-{id}-{}-{}-gh-{}",
             group.campaign_id, group.group_id, group.attempt
         ));
+        // A group that left no run (its failure.json says why) has nothing to
+        // install: the import at the end says so.
+        if directories(&bundle.join("native"))
+            .unwrap_or_default()
+            .is_empty()
+        {
+            tracing::info!(execution_id = %id, group_id = %group.group_id, "a Docker group left no run to install");
+            return Ok(());
+        }
         let previous = execution
             .slots
             .iter()
@@ -2901,7 +2912,8 @@ mod tests {
         assert_eq!(moved.slots[0].execution_id, native);
         assert_eq!(moved.slots[2].state, "running");
 
-        // A group that left no run is left to the import at the end.
+        // A group that left no run has nothing to install: the import at
+        // the end says why.
         let left = bundle("case-persistent-state", 1);
         fs::create_dir_all(&left).unwrap();
         fs::write(
@@ -2909,10 +2921,16 @@ mod tests {
             r#"{"error": "compose::add failed"}"#,
         )
         .unwrap();
-        let error = store.import_group(&id, &failed).await.unwrap_err();
-        assert!(format!("{error:#}").contains("compose::add failed"));
+        store.import_group(&id, &failed).await.unwrap();
         let kept = store.read_execution(&id).await.unwrap();
         assert!(kept.slots[1].execution_id.is_empty());
+        // One whose run cannot be read is an error (logged as a warning).
+        fs::create_dir_all(left.join("native/0123")).unwrap();
+        let unreadable = store.import_group(&id, &failed).await.unwrap_err();
+        assert!(format!("{unreadable:#}").contains("is not an E2E execution id"));
+        assert!(store.read_execution(&id).await.unwrap().slots[1]
+            .execution_id
+            .is_empty());
 
         // Run again, its next attempt replaces the one before under the
         // same id, without another slot.
