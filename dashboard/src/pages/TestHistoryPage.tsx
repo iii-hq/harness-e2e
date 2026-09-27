@@ -39,6 +39,8 @@ import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
   type ChartMetric,
+  copiedText,
+  copyText,
   definitionChoices,
   findRun,
   type HistoryObservation,
@@ -163,10 +165,12 @@ function parseModel(value: string) {
 
 function MoreMenu({
   onCopyLink,
+  onCopyDigest,
   neighbours,
   definition,
 }: {
   onCopyLink: () => void
+  onCopyDigest: (digest: string) => void
   neighbours: { previous: string | null; next: string | null }
   definition: string | null
 }) {
@@ -187,9 +191,7 @@ function MoreMenu({
       <DropdownMenuContent align="end">
         <DropdownMenuItem onSelect={onCopyLink}>Copy link</DropdownMenuItem>
         {definition ? (
-          <DropdownMenuItem
-            onSelect={() => void navigator.clipboard?.writeText(definition)}
-          >
+          <DropdownMenuItem onSelect={() => onCopyDigest(definition)}>
             Copy the current definition digest
           </DropdownMenuItem>
         ) : null}
@@ -272,7 +274,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [definitionGone, setDefinitionGone] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
   const [metric, setMetric] = useState<ChartMetric>('score')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const narrow = useDashboardChrome()?.narrow ?? false
@@ -379,11 +381,14 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   const total = choices.reduce((sum, choice) => sum + choice.runs, 0)
   const runThisTest = () => requestQuickExecution([testId])
 
-  const copyLink = () => {
-    void navigator.clipboard?.writeText(window.location.href).then(() => {
-      setCopied(true)
-      window.setTimeout(() => setCopied(false), 1500)
+  const copy = (text: string, what: string) =>
+    void copyText(text).then((ok) => {
+      setCopied(copiedText(what, ok))
+      window.setTimeout(() => setCopied(null), 2500)
     })
+
+  const copyLink = () => {
+    copy(window.location.href, 'Link')
   }
 
   return (
@@ -409,7 +414,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
           <>
             {copied ? (
               <span className="th-faint" role="status">
-                Link copied
+                {copied}
               </span>
             ) : null}
             {selected.length === 2 ? (
@@ -448,6 +453,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
             </a>
             <MoreMenu
               onCopyLink={copyLink}
+              onCopyDigest={(digest) => copy(digest, 'Digest')}
               neighbours={neighbours}
               definition={
                 history?.current_version ?? row?.current_version ?? null
@@ -539,7 +545,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       {observations.length > 0 ? (
         <>
           <section className="th-kpis" aria-label="Summary">
-            {summaryFigures(observations).map((figure) => (
+            {summaryFigures(observations, history?.total).map((figure) => (
               <div className="th-kpi" key={figure.label}>
                 <span className="th-kpi-label">{figure.label}</span>
                 <span className="th-kpi-value">{figure.value}</span>

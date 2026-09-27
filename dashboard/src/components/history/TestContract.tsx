@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { plural } from '@/lib/format'
 import type { TestSpec } from '@/lib/test-catalog'
+import { copyText } from '@/lib/test-history'
 import '@/pages/test-history.css'
 
 /** `Budget per run: 256 turns · 65,536 output tokens · …`. */
@@ -25,7 +26,7 @@ export function budgetLine(execution: TestSpec['execution']) {
 /** What the subject receives and how it is scored, side by side. */
 export function TestContract({ spec }: { spec: TestSpec }) {
   const [open, setOpen] = useState(false)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
   const lines = spec.prompt.split('\n').length
   const points = spec.criteria.reduce((total, item) => total + item.weight, 0)
   const caption = `${plural(spec.criteria.length, 'criterion', 'criteria')} · ${points} points`
@@ -41,13 +42,13 @@ export function TestContract({ spec }: { spec: TestSpec }) {
             type="button"
             className="th-act th-push"
             onClick={() =>
-              void navigator.clipboard?.writeText(spec.prompt).then(() => {
-                setCopied(true)
-                window.setTimeout(() => setCopied(false), 1500)
+              void copyText(spec.prompt).then((ok) => {
+                setCopied(ok ? 'Copied' : 'Not copied')
+                window.setTimeout(() => setCopied(null), 2500)
               })
             }
           >
-            {copied ? 'Copied' : 'Copy'}
+            {copied ?? 'Copy'}
           </button>
         </div>
         <pre className="th-prompt" data-open={open || undefined}>

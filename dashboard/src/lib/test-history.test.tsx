@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
   axisTop,
+  copiedText,
+  copyText,
   definitionChoices,
   differenceText,
   findRun,
@@ -187,5 +189,33 @@ describe('run keys', () => {
     expect(findRun(runs, runKey(second))).toBe(second)
     expect(findRun(runs, second.execution_id)).toBe(first)
     expect(findRun(runs, `${second.execution_id}:gone`)).toBeUndefined()
+  })
+})
+
+describe('counts and copies', () => {
+  it('counts the rows a definition lists, and says when the page is partial', () => {
+    const counted = history({
+      available_versions: formFlow.available_versions.map((item) => ({
+        ...item,
+        observation_count: item.execution_count * 2,
+      })),
+    })
+    expect(definitionChoices(counted).map((choice) => choice.runs)).toEqual([
+      2, 8, 2,
+    ])
+    const figures = summaryFigures(formFlow.observations, 240)
+    expect(figures[0].sub).toBe('over the latest 6 of 240 runs')
+    expect(figures[2]).toMatchObject({
+      value: '240',
+      sub: 'the latest 6 summed up here',
+    })
+  })
+
+  it('says when the browser refused to copy', async () => {
+    expect(await copyText('x')).toBe(false)
+    expect(copiedText('Link', true)).toBe('Link copied')
+    expect(copiedText('Link', false)).toBe(
+      'Could not copy: the browser refused the clipboard.',
+    )
   })
 })

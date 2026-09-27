@@ -8,19 +8,22 @@
         "version": "sha256:6831b6286831b6286831b6286831b6286831b6286831b6286831b6286831b628",
         "execution_count": 1,
         "run_count": 1,
-        "last_seen": "2026-09-24T06:56:00Z"
+        "last_seen": "2026-09-24T06:56:00Z",
+        "observation_count": 1
       },
       {
         "version": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
         "execution_count": 4,
         "run_count": 4,
-        "last_seen": "2026-09-24T13:01:00Z"
+        "last_seen": "2026-09-24T13:01:00Z",
+        "observation_count": 4
       },
       {
         "version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
         "execution_count": 1,
         "run_count": 1,
-        "last_seen": "2026-09-24T18:29:00Z"
+        "last_seen": "2026-09-24T18:29:00Z",
+        "observation_count": 1
       }
     ],
     "cases": ["form_flow_build:seed-1"],

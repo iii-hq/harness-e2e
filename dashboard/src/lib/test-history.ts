@@ -25,6 +25,23 @@ import type {
 /** Asks the worker for the runs of every definition at once. */
 export const ALL_DEFINITIONS = 'all'
 
+/** Copies text to the clipboard; false when the browser refused. */
+export async function copyText(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** What a copy action says after it ran. */
+export function copiedText(what: string, ok: boolean) {
+  return ok
+    ? `${what} copied`
+    : 'Could not copy: the browser refused the clipboard.'
+}
+
 export type HistorySession = {
   session_id: string
   parent_session_id: string | null
@@ -263,7 +280,7 @@ export function definitionChoices(
     .map((item) => ({
       version: item.version,
       label: shortDefinition(item.version) ?? item.version,
-      runs: item.run_count,
+      runs: item.observation_count ?? item.run_count,
       current: item.version === current,
     }))
 }
@@ -377,7 +394,12 @@ export type Summary = {
 }
 
 /** The five figures over the runs in scope. */
-export function summaryFigures(observations: HistoryObservation[]): Summary[] {
+export function summaryFigures(
+  observations: HistoryObservation[],
+  /** Every run in scope, when the page holds only the latest of them. */
+  total = observations.length,
+): Summary[] {
+  const partial = total > observations.length
   const scored = known(observations.map((item) => item.mean_score))
   const full = scored.filter((score) => score >= 100).length
   const durations = known(
@@ -398,7 +420,9 @@ export function summaryFigures(observations: HistoryObservation[]): Summary[] {
     {
       label: 'Mean score',
       value: mean === null ? NOT_REPORTED : String(Math.round(mean)),
-      sub: `over ${plural(scored.length, 'scored run')}`,
+      sub: partial
+        ? `over the latest ${observations.length} of ${plural(total, 'run')}`
+        : `over ${plural(scored.length, 'scored run')}`,
     },
     {
       label: 'Full marks',
@@ -410,8 +434,12 @@ export function summaryFigures(observations: HistoryObservation[]): Summary[] {
     },
     {
       label: 'Runs',
-      value: String(observations.length),
-      sub: unscored ? `${unscored} without a score` : 'all scored',
+      value: String(total),
+      sub: partial
+        ? `the latest ${observations.length} summed up here`
+        : unscored
+          ? `${unscored} without a score`
+          : 'all scored',
     },
     {
       label: 'Median duration',

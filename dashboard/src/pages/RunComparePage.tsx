@@ -33,6 +33,8 @@ import {
 import type { TestSpec } from '@/lib/test-catalog'
 import {
   ALL_DEFINITIONS,
+  copiedText,
+  copyText,
   differenceText,
   findRun,
   type HistoryObservation,
@@ -615,7 +617,7 @@ export function RunComparePage({ testId }: { testId: string }) {
   } | null>(null)
   const [spec, setSpec] = useState<TestSpec | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState<boolean | null>(null)
+  const [copied, setCopied] = useState<string | null>(null)
   const beginRequest = useLatestRequest()
   // Swapping A and B asks for nothing new.
   const wanted = [...new Set(pair.filter(Boolean).map(keyExecution))]
@@ -733,19 +735,17 @@ export function RunComparePage({ testId }: { testId: string }) {
         <>
           {copied ? (
             <span className="cmp-faint" role="status">
-              Link copied
+              {copied}
             </span>
           ) : null}
           <button
             type="button"
             className={buttonClassName({ variant: 'secondary' })}
             onClick={() =>
-              void navigator.clipboard
-                ?.writeText(window.location.href)
-                .then(() => {
-                  setCopied(true)
-                  window.setTimeout(() => setCopied(false), 1500)
-                })
+              void copyText(window.location.href).then((ok) => {
+                setCopied(copiedText('Link', ok))
+                window.setTimeout(() => setCopied(null), 2500)
+              })
             }
           >
             <Link2 size={16} aria-hidden="true" />

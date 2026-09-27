@@ -238,6 +238,8 @@ export type TestCatalogRow = {
   available_versions: Array<{
     version: string
     execution_count: number
+    /** The runs a test history lists: one per execution and case. */
+    observation_count?: number
     run_count: number
     last_seen: string | null
   }>

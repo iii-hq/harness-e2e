@@ -112,6 +112,8 @@ pub(super) struct EvaluatedVersionsResponse {
 pub(super) struct VersionDescriptor {
     pub version: String,
     pub execution_count: usize,
+    /// The runs a test history lists: one per execution and case.
+    pub observation_count: usize,
     pub run_count: usize,
     pub last_seen: Option<String>,
 }
@@ -1471,6 +1473,7 @@ fn version_descriptor(
             .map(|observation| observation.execution_id.as_str())
             .collect::<BTreeSet<_>>()
             .len(),
+        observation_count: observations.len(),
         run_count: observations
             .iter()
             .map(|observation| observation.runs.len())
