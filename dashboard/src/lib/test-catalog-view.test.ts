@@ -350,3 +350,77 @@ describe('tests catalog', () => {
     expect(catalogFiltersToParams(CATALOG_DEFAULT_FILTERS).toString()).toBe('')
   })
 })
+
+describe('retired tests', () => {
+  const now = new Date('2026-09-27T12:00:00Z')
+  const base = (
+    id: string,
+    facts: Partial<TestCatalogRow>,
+  ): TestCatalogRow => ({
+    ...row(id, 'missing_side', null, null),
+    result: null,
+    ...facts,
+  })
+  const retired = catalogRowView(
+    base('kanban_c0_legacy', {
+      lifecycle: 'retired',
+      current_version: null,
+      last_run: {
+        at: '2026-08-01T10:00:00Z',
+        score: 60,
+        status: 'passed',
+        completion: 'completed',
+        definition: 'previous',
+      },
+      recent_scores: [60],
+      runs_total: 1,
+    }),
+    [],
+    now,
+  )
+  const moved = catalogRowView(
+    base('kanban_c2_persistence', {
+      last_run: {
+        at: '2026-09-08T10:00:00Z',
+        score: 100,
+        status: 'passed',
+        completion: 'completed',
+        definition: 'previous',
+      },
+      runs_total: 1,
+    }),
+    [],
+    now,
+  )
+
+  it('stand apart: Retired, faded, not tickable, only under All', () => {
+    expect(retired).toMatchObject({
+      kind: 'retired',
+      result: 'retired',
+      score: '60',
+      when: 'Aug 1 · last run',
+      older: true,
+      selectable: false,
+    })
+    expect(moved.selectable).toBe(true)
+    const views = [retired, moved]
+    const ids = (filter: 'all' | 'current' | 'changed' | 'never') =>
+      filterCatalog(views, { ...CATALOG_DEFAULT_FILTERS, filter }).map(
+        (view) => view.id,
+      )
+    expect(ids('all')).toEqual(['kanban_c0_legacy', 'kanban_c2_persistence'])
+    expect(ids('changed')).toEqual(['kanban_c2_persistence'])
+    expect(ids('never')).toEqual([])
+    expect(
+      catalogSegments(views).map((segment) => [segment.label, segment.count]),
+    ).toEqual([
+      ['All', 2],
+      ['Current', 0],
+      ['Definition changed', 1],
+      ['Never run', 0],
+    ])
+    expect(catalogSummary(views)).toBe(
+      '2 tests · 0 with a current result · 1 changed since they last ran · 0 never run · 1 retired',
+    )
+  })
+})

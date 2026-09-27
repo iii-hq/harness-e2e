@@ -190,7 +190,9 @@ export function CatalogTable({
   highlightId = null,
 }: CatalogTableProps) {
   const groups = groupCatalog(all, shown)
-  const shownIds = shown.map((view) => view.id)
+  const selectable = (views: CatalogRowView[]) =>
+    views.filter((view) => view.selectable).map((view) => view.id)
+  const shownIds = selectable(shown)
   const every = shownSelection(selected, shownIds)
   const open = (id: string) => (event: MouseEvent<HTMLTableRowElement>) => {
     if (!isInteractiveTarget(event.target))
@@ -230,7 +232,7 @@ export function CatalogTable({
         </tr>
       </thead>
       {groups.map((group) => {
-        const ids = group.rows.map((view) => view.id)
+        const ids = selectable(group.rows)
         const state = shownSelection(selected, ids)
         return (
           <tbody
@@ -245,6 +247,7 @@ export function CatalogTable({
                   aria-label={`Select every test in ${group.label}`}
                   checked={state === 'all'}
                   indeterminate={state === 'some'}
+                  disabled={ids.length === 0}
                   onChange={() => onSelect(toggleShown(selected, ids))}
                 />
                 <span
@@ -276,13 +279,15 @@ export function CatalogTable({
                   onClick={open(view.id)}
                 >
                   <td>
-                    <Checkbox
-                      aria-label={`Select ${view.id}`}
-                      checked={ticked}
-                      onChange={() =>
-                        onSelect(toggleSelection(selected, view.id))
-                      }
-                    />
+                    {view.selectable ? (
+                      <Checkbox
+                        aria-label={`Select ${view.id}`}
+                        checked={ticked}
+                        onChange={() =>
+                          onSelect(toggleSelection(selected, view.id))
+                        }
+                      />
+                    ) : null}
                   </td>
                   <td className="tc-stack">
                     <a className="tc-id" href={history}>
@@ -568,7 +573,9 @@ export function TestsCatalogPage() {
   ) => setFilters((current) => ({ ...current, [key]: value }))
   const filtered = catalogFiltersToParams(filters).toString() !== ''
   // A tick outlives a reload only while its test is still listed.
-  const ticked = selected.filter((id) => views.some((view) => view.id === id))
+  const ticked = selected.filter((id) =>
+    views.some((view) => view.id === id && view.selectable),
+  )
   const bar = catalogSelection(ticked.length)
   const failedFirstLoad = Boolean(error) && rows.length === 0
   const suiteOptions = suites.filter((suite) => suite.scenarios.length > 0)

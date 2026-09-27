@@ -58,6 +58,19 @@ const views = [
     runs_total: 1,
   }),
   row('minimal_path'),
+  row('kanban_c0_legacy', {
+    lifecycle: 'retired',
+    current_version: null,
+    last_run: {
+      at: '2026-08-01T10:00:00Z',
+      score: 60,
+      status: 'passed',
+      completion: 'completed',
+      definition: 'previous',
+    },
+    recent_scores: [60],
+    runs_total: 1,
+  }),
 ].map((entry) =>
   catalogRowView(
     entry,
@@ -88,10 +101,10 @@ describe('tests catalog table', () => {
       html.indexOf('data-catalog-group=":standalone"'),
     )
     expect(html).toContain('<tbody class="tc-group" aria-label="kanban"')
-    expect(html).toContain('1 of 2 current')
+    expect(html).toContain('1 of 3 current')
     expect(html).toContain('>Standalone<')
     expect(html).toContain('none current')
-    expect(html).toContain('aria-label="Tests, 3 of 3"')
+    expect(html).toContain('aria-label="Tests, 4 of 4"')
   })
 
   it('writes each row: the result, score, date, runs, spark and suites', () => {
@@ -118,10 +131,16 @@ describe('tests catalog table', () => {
     expect(ticked(one, 'Select kanban_c1_foundation')).toBe(true)
     expect(ticked(one, 'Select every test in kanban')).toBe(false)
     expect(one).toContain('data-selected="true"')
+    // A retired test has no box and does not count in its family's.
+    expect(one).not.toContain('aria-label="Select kanban_c0_legacy"')
+    expect(one).toContain('data-state="retired"')
+    expect(one).toContain('Aug 1 · last run')
     const family = render(['kanban_c1_foundation', 'kanban_c2_persistence'])
     expect(ticked(family, 'Select every test in kanban')).toBe(true)
     expect(ticked(family, 'Select every test shown')).toBe(false)
-    const every = render(views.map((view) => view.id))
+    const every = render(
+      views.filter((view) => view.selectable).map((view) => view.id),
+    )
     expect(ticked(every, 'Select every test shown')).toBe(true)
   })
 

@@ -171,15 +171,18 @@ export function isMoreUsefulComparison(
 // runs and suites.
 
 /** Where a test stands: a run on its current definition, runs only on an
- *  earlier one, or no run retained. */
-export type CatalogKind = 'current' | 'changed' | 'never'
+ *  earlier one, or no run retained. A retired test, out of the catalog but
+ *  with runs retained, stands apart: it cannot run any more. */
+export type CatalogKind = 'current' | 'changed' | 'never' | 'retired'
 
 export function catalogKind(row: TestCatalogRow): CatalogKind {
+  if (row.lifecycle === 'retired') return 'retired'
   if (row.runs_current > 0) return 'current'
   return row.runs_total > 0 ? 'changed' : 'never'
 }
 
-export type CatalogFilter = 'all' | CatalogKind
+/** Retired tests show only under All. */
+export type CatalogFilter = 'all' | 'current' | 'changed' | 'never'
 export type CatalogSort = 'name' | 'last_run' | 'runs'
 
 export type CatalogFilters = {
@@ -245,6 +248,8 @@ export type CatalogRowView = {
   whenTitle: string | null
   /** Its last run belongs to an earlier definition: shown faded. */
   older: boolean
+  /** It can be ticked, to run or to save as a suite: not a retired test. */
+  selectable: boolean
   /** Fractions of 100, oldest first; null where a run had no score. */
   spark: Array<number | null>
   sparkLabel: string
@@ -277,11 +282,13 @@ export function catalogRowView(
   const last = row.last_run
   const criteria = row.spec?.criteria.length
   const summary = row.spec?.summary?.trim()
-  const older = last?.definition === 'previous'
+  const kind = catalogKind(row)
+  const retired = kind === 'retired'
+  const older = retired || last?.definition === 'previous'
   const scores = row.recent_scores
   return {
     id: row.test_id,
-    kind: catalogKind(row),
+    kind,
     sub:
       summary ||
       [
@@ -292,17 +299,18 @@ export function catalogRowView(
       ]
         .filter(Boolean)
         .join(' · '),
-    result: last ? runResultState(last) : 'never_run',
+    result: retired ? 'retired' : last ? runResultState(last) : 'never_run',
     score: last
       ? typeof last.score === 'number'
         ? scoreText(last.score)
         : NOT_REPORTED
       : null,
     when: last
-      ? `${formatDay(last.at, now)}${older ? ' · older definition' : ''}`
+      ? `${formatDay(last.at, now)}${retired ? ' · last run' : older ? ' · older definition' : ''}`
       : 'No run retained',
     whenTitle: last ? formatDateTime(last.at, now) : null,
     older,
+    selectable: !retired,
     spark: scores.map((score) => (score === null ? null : score / 100)),
     sparkLabel: scores.length
       ? `Recent scores: ${scores.map((score) => (score === null ? 'none' : scoreText(score))).join(', ')}`
@@ -400,7 +408,7 @@ export function groupCatalog(
 }
 
 /** The lifecycle filter: All, Current, Definition changed, Never run, each
- *  with its count over the whole catalog. */
+ *  with its count over the whole catalog (retired tests count in All). */
 export function catalogSegments(views: CatalogRowView[]) {
   const count = (kind: CatalogKind) =>
     views.filter((view) => view.kind === kind).length
@@ -428,15 +436,19 @@ export function catalogSegments(views: CatalogRowView[]) {
 }
 
 /** `59 tests · 24 with a current result · 31 changed since they last ran ·
- *  4 never run`. */
+ *  4 never run`, and `· 1 retired` when there are any. */
 export function catalogSummary(views: CatalogRowView[]) {
   const [, current, changed, never] = catalogSegments(views)
+  const retired = views.filter((view) => view.kind === 'retired').length
   return [
     plural(views.length, 'test'),
     `${current.count} with a current result`,
     `${changed.count} changed since they last ran`,
     `${never.count} never run`,
-  ].join(' · ')
+    retired ? `${retired} retired` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /** Suite membership by test id, in the order the suites are listed. */
