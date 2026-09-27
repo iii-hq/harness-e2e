@@ -916,8 +916,12 @@ export function StacksPage() {
       setBusy(false)
     }
   }
+  // A delete in flight: a second confirmation of it is ignored.
+  const removing = useRef(false)
   const remove = async (stack: Stack) => {
-    if (!bridge) return
+    if (!bridge || removing.current) return
+    removing.current = true
+    setDeleting(null)
     setBusy(true)
     setActionError(null)
     try {
@@ -931,6 +935,7 @@ export function StacksPage() {
     } catch (cause) {
       setActionError(errorText(cause))
     } finally {
+      removing.current = false
       setBusy(false)
     }
   }

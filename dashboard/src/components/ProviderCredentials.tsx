@@ -6,7 +6,7 @@ import {
   DialogTitle,
 } from '@iii-dev/console-ui'
 import { Download, Plus, Trash2 } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   Credential,
   CredentialsImport,
@@ -242,14 +242,23 @@ export function ProviderCredentials({
       setCredentials(result.credentials)
       setNotice(importSummary(result))
     })
-  const remove = (credential: Credential) =>
-    act(async () => {
-      if (!bridge) return
-      setCredentials(
-        (await bridge.deleteCredential(credential.name)).credentials,
-      )
-      setNotice(`${credential.name} deleted.`)
-    })
+  // A delete in flight: a second confirmation of it is ignored.
+  const removing = useRef(false)
+  const remove = async (credential: Credential) => {
+    if (!bridge || removing.current) return
+    removing.current = true
+    setDeleting(null)
+    try {
+      await act(async () => {
+        setCredentials(
+          (await bridge.deleteCredential(credential.name)).credentials,
+        )
+        setNotice(`${credential.name} deleted.`)
+      })
+    } finally {
+      removing.current = false
+    }
+  }
 
   return (
     <section

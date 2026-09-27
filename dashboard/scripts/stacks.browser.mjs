@@ -173,6 +173,13 @@ const trigger = (name, request = {}) => {
   throw new Error(`Unexpected RPC ${name}`)
 }
 
+/** Two clicks in one task, before the page renders again: a confirmation
+ *  the host does not close at once. */
+const twice = (button) => {
+  button.click()
+  button.click()
+}
+
 const server = await createConsoleTestHost()
 const browser = await chromium.launch({ headless: true })
 try {
@@ -403,9 +410,10 @@ try {
   await confirm.getByRole('button', { name: 'Cancel', exact: true }).click()
   assert.deepEqual(calls.remove, [])
   await row.getByRole('button', { name: 'Delete Mine' }).click()
+  // Confirmed twice before the dialog goes: deleted once.
   await confirm
     .getByRole('button', { name: 'Delete stack', exact: true })
-    .click()
+    .evaluate(twice)
   await row.waitFor({ state: 'detached' })
   assert.deepEqual(calls.remove, [{ stack_id: 'stack-2' }])
   assert.equal(
@@ -503,14 +511,14 @@ try {
   await page
     .getByRole('alertdialog', { name: 'Delete MY_GATEWAY_TOKEN?' })
     .getByRole('button', { name: 'Delete credential', exact: true })
-    .click()
+    .evaluate(twice)
   await section
     .locator('[data-credential="MY_GATEWAY_TOKEN"]')
     .waitFor({ state: 'detached' })
-  assert.deepEqual(calls.credentials.at(-1), [
-    'delete',
-    { name: 'MY_GATEWAY_TOKEN' },
-  ])
+  assert.deepEqual(
+    calls.credentials.filter(([kind]) => kind === 'delete'),
+    [['delete', { name: 'MY_GATEWAY_TOKEN' }]],
+  )
   const visible = await page.locator('body').innerText()
   for (const secret of ['sk-imported-4d2e', 'sk-typed-7c1b', 'gw-secret-5a9f'])
     assert.equal(visible.includes(secret), false, `${secret} is shown`)
