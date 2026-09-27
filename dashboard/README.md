@@ -205,6 +205,19 @@ pnpm screenshots
 Captures and a typography census (`census.json`) land in
 `dashboard/.screenshots/`, which is ignored by git.
 
+## Tests
+
+**Tests** lists every test of the catalog once, grouped by family (the part of
+its id before the first `_` when two or more tests share it; the rest are
+Standalone). A row reads its last run (result, score and date), the scores of
+its last eight runs, its runs on the current definition and the suites that
+hold it: `e2e::dashboard::tests-list` carries `last_run`, `recent_scores`,
+`runs_current` and `runs_total`, read from the same observations as the test
+history. **Current** has a run on the current definition; **Definition
+changed** ran only on an earlier one, and its last result shows faded as an
+older definition's; **Never run** has no run retained. Ticked tests (one by one
+or a family at a time) open Run tests with them ticked, or become a suite.
+
 ## Suites
 
 A suite is only what to test: its scenarios, how many times each runs and how
@@ -213,7 +226,11 @@ are chosen when it runs. **Suites** lists the master plan's suites
 (`config/test-plan.json`, read-only) and this Console's. **copy** makes a suite
 of this Console from any suite and opens it to edit its name, tests, runs and
 retries; **delete** removes one. Executions that ran a suite keep its name and
-digest after it changes or goes.
+digest after it changes or goes. **Save as suite…**, on the tests ticked in
+**Tests**, makes a suite of this Console that holds them, one run and one
+retry each (`e2e::dashboard::suite-create` with `tests` instead of `from`,
+exactly one of the two): a test of a sequential group brings its whole group
+and a test this runner does not know is left out, each said once it is saved.
 
 An execution records its suite in its parameters: the id, the name and the
 digest of the snapshot it materialized to (`profile_sha256`). A suite of the

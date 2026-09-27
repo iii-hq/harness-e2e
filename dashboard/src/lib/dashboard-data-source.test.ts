@@ -39,6 +39,11 @@ describe('live dashboard transport', () => {
       from: 'regression',
       label: '',
     })
+    await live.createSuiteOfTests(['minimal_path'], 'Picked')
+    expect(trigger).toHaveBeenCalledWith('suite-create', {
+      tests: ['minimal_path'],
+      label: 'Picked',
+    })
     await live.updateSuite('suite-1', { repetitions: 2 })
     expect(trigger).toHaveBeenCalledWith('suite-update', {
       suite_id: 'suite-1',

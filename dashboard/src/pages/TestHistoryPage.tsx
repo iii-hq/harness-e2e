@@ -71,11 +71,11 @@ import type {
   TestObservation,
   TestSpec,
 } from '@/lib/test-catalog'
+import { catalogRealismPresentation } from '@/lib/test-catalog-view'
 import {
   compareTestObservations,
   testObservationKey,
 } from '@/lib/test-history-comparison'
-import { catalogRealismPresentation } from '@/pages/TestsCatalogPage'
 
 /* ---------------------------------------------------------------- helpers */
 

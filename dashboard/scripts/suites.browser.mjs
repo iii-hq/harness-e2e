@@ -29,7 +29,38 @@ const repository = master.suites.map((suite) => ({
 }))
 const local = []
 const calls = { create: [], update: [], remove: [], start: [] }
+// A refusal the next suite-create answers with, once.
+let refuseCreate = null
 const executions = new Map()
+
+// The catalog: every test the master plan runs, one with a current run, one
+// whose definition changed since its run, the rest never run.
+const catalogRows = [...new Set(repository.flatMap((suite) => suite.scenarios))]
+  .sort()
+  .map((id) => {
+    const ran = id === 'minimal_path' || id === 'kanban_c1_foundation'
+    const current = id === 'minimal_path'
+    return {
+      test_id: id,
+      lifecycle: 'active',
+      current_version: `sha256:${id}`,
+      available_versions: [],
+      selected_version: null,
+      result: null,
+      last_run: ran
+        ? {
+            at: current ? '2026-09-24T10:00:00Z' : '2026-09-08T10:00:00Z',
+            score: current ? 80 : 100,
+            status: 'passed',
+            completion: 'completed',
+            definition: current ? 'current' : 'previous',
+          }
+        : null,
+      recent_scores: ran ? [100, null, current ? 80 : 100] : [],
+      runs_current: current ? 3 : 0,
+      runs_total: ran ? 3 : 0,
+    }
+  })
 
 /** What the runner records for a start: the suite with the digest it
  *  materialized (the reviewed one for a master plan suite as it is). */
@@ -89,10 +120,16 @@ const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   if (id === 'suites-list') return { suites: [...repository, ...local] }
   if (id === 'suite-create') {
+    if (refuseCreate) {
+      const message = refuseCreate
+      refuseCreate = null
+      throw new Error(message)
+    }
     calls.create.push(request)
-    const from = [...repository, ...local].find(
-      (suite) => suite.id === request.from,
-    )
+    // A copy of a suite, or the tests given (one run, one retry each).
+    const from = request.tests
+      ? { scenarios: request.tests, repetitions: 1, technical_retries: 1 }
+      : [...repository, ...local].find((suite) => suite.id === request.from)
     const suite = {
       ...from,
       id: `suite-${local.length + 1}`,
@@ -103,8 +140,20 @@ const trigger = (name, request = {}) => {
       updated_at: '2026-09-24T09:00:00Z',
     }
     local.push(suite)
-    return suite
+    return request.tests
+      ? {
+          ...suite,
+          warnings: ['This runner does not know the test; it was left out.'],
+        }
+      : suite
   }
+  if (id === 'tests-list')
+    return {
+      revision: 'catalog-r1',
+      rows: catalogRows,
+      total: catalogRows.length,
+      next_cursor: null,
+    }
   if (id === 'suite-update') {
     calls.update.push(request)
     const suite = local.find((entry) => entry.id === request.suite_id)
@@ -349,6 +398,115 @@ try {
   await copy.waitFor({ state: 'detached' })
   assert.deepEqual(calls.remove, [{ suite_id: 'suite-1' }])
 
+  // The Tests catalog: families as blocks, ticks by family or test, and the
+  // ticked tests saved as a suite of this Console or run.
+  await page.goto(`${server.url}#/ext/harness-e2e/tests`)
+  await page.locator('[data-catalog-rows]').waitFor()
+  const kanban = page.locator('[data-catalog-group="kanban"]')
+  await kanban.getByText('none current', { exact: true }).waitFor()
+  await page
+    .locator('[data-test-id="kanban_c1_foundation"]')
+    .getByText('Sep 8 · older definition')
+    .waitFor()
+  await page
+    .getByRole('checkbox', { name: 'Select every test in registry' })
+    .check()
+  await page.getByRole('checkbox', { name: 'Select minimal_path' }).check()
+  const selection = page.getByRole('toolbar', { name: 'Selected tests' })
+  await selection.getByText('3 tests selected', { exact: true }).waitFor()
+  await selection
+    .getByRole('button', { name: 'Save as suite…', exact: true })
+    .click()
+  const name = page.getByRole('dialog', { name: 'Save as suite' })
+  await name.getByRole('button', { name: 'Save suite', exact: true }).click()
+  await name.getByText('Name the suite.').waitFor()
+  const nameField = name.getByRole('textbox', { name: 'Suite name' })
+  assert.equal(await nameField.getAttribute('aria-invalid'), 'true')
+  assert.equal(
+    await name
+      .locator(`#${await nameField.getAttribute('aria-describedby')}`)
+      .textContent(),
+    'Name the suite.',
+  )
+  await name.getByRole('textbox', { name: 'Suite name' }).fill('Picked')
+  // The worker's refusal is said in the dialog, which stays open.
+  refuseCreate = 'The suite store is read-only.'
+  await name.getByRole('button', { name: 'Save suite', exact: true }).click()
+  await name.getByText('The suite store is read-only.').waitFor()
+  await name.getByRole('button', { name: 'Save suite', exact: true }).click()
+  await name.waitFor({ state: 'hidden' })
+  assert.equal(local.filter((suite) => suite.label === 'Picked').length, 1)
+  assert.deepEqual(calls.create.at(-1), {
+    tests: ['registry_implementation', 'registry_verification', 'minimal_path'],
+    label: 'Picked',
+  })
+  // Read out as it appears: the save and what it changed.
+  const said = page.locator('[aria-live="polite"]').filter({ hasText: 'Saved' })
+  await said.getByText('Saved “Picked” with 3 tests.').waitFor()
+  await said.getByText('it was left out').waitFor()
+  // The new suite is a chip on its tests and a filter.
+  await page
+    .locator('[data-test-id="minimal_path"]')
+    .getByText('Picked', { exact: true })
+    .waitFor()
+  await page.getByLabel('Filter by suite').selectOption({ label: 'Picked' })
+  assert.equal(await page.locator('tr[data-test-id]').count(), 3)
+  await page.getByLabel('Filter by suite').selectOption('all')
+  await page.getByRole('radio', { name: /^Definition changed/ }).click()
+  await page
+    .getByText('These tests ran, but their definition changed')
+    .waitFor()
+  assert.deepEqual(
+    await page
+      .locator('tr[data-test-id]')
+      .evaluateAll((rows) => rows.map((row) => row.dataset.testId)),
+    ['kanban_c1_foundation'],
+  )
+  await page.getByRole('radio', { name: /^All/ }).click()
+  // Run 3 tests opens Run tests with them ticked.
+  await selection
+    .getByRole('button', { name: 'Run 3 tests', exact: true })
+    .click()
+  const fromCatalog = page.getByRole('dialog', { name: 'Run tests' })
+  await fromCatalog.getByText('catalog ready').waitFor()
+  for (const scenario of [
+    'registry_implementation',
+    'registry_verification',
+    'minimal_path',
+  ])
+    assert.ok(
+      await fromCatalog
+        .getByRole('checkbox', { name: scenario, exact: true })
+        .isChecked(),
+    )
+  await page.keyboard.press('Escape')
+  await fromCatalog.waitFor({ state: 'hidden' })
+  // Each opening starts from its own ticks: another selection replaces the
+  // last one, and Run tests in the header opens with none.
+  const tickedIn = (dialog) =>
+    dialog
+      .locator('input[type="checkbox"]:checked')
+      .evaluateAll((boxes) =>
+        boxes.map((box) => box.getAttribute('aria-label')).sort(),
+      )
+  await selection.getByRole('button', { name: 'Clear selection' }).click()
+  await page.getByRole('checkbox', { name: 'Select timer_wake' }).check()
+  await selection
+    .getByRole('button', { name: 'Run 1 test', exact: true })
+    .click()
+  await fromCatalog.getByText('catalog ready').waitFor()
+  assert.deepEqual(await tickedIn(fromCatalog), ['timer_wake'])
+  await page.keyboard.press('Escape')
+  await fromCatalog.waitFor({ state: 'hidden' })
+  await page
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
+  await fromCatalog.getByText('catalog ready').waitFor()
+  assert.deepEqual(await tickedIn(fromCatalog), [])
+  await page.keyboard.press('Escape')
+  await fromCatalog.waitFor({ state: 'hidden' })
+
   // Narrow: the suites table fits.
   await page.goto(`${server.url}#/ext/harness-e2e/suites`)
   await page.locator('[data-suites]').waitFor()
@@ -359,9 +517,18 @@ try {
     ),
     true,
   )
+  // Narrow: the catalog keeps the test and its last result, and fits.
+  await page.goto(`${server.url}#/ext/harness-e2e/tests`)
+  await page.locator('[data-catalog-rows][data-narrow]').waitFor()
+  assert.equal(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+    true,
+  )
   assert.deepEqual(errors, [])
   console.log(
-    'Suites browser flow passed: repository suites listed read-only, copy, edit and delete a suite of this Console, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, even after its suite was edited (as recorded), narrow viewport.',
+    'Suites browser flow passed: repository suites listed read-only, copy, edit and delete a suite of this Console, Run tests from a suite (changed makes it unnamed), the suite in the execution header, Run again keeps it, even after its suite was edited (as recorded), the Tests catalog saves ticked tests as a suite and runs them, narrow viewport.',
   )
 } catch (error) {
   console.error(

@@ -13,6 +13,7 @@ export type ResultState =
   | 'failed_gate'
   | 'not_run'
   | 'never_run'
+  | 'retired'
   | 'running'
   | 'waiting'
   | 'queued'
@@ -44,6 +45,7 @@ export const RESULT_STATES: Record<ResultState, ResultPresentation> = {
   failed_gate: state('Failed a gate', 'alert'),
   not_run: state('Not run', 'alert'),
   never_run: state('Never run', 'ghost'),
+  retired: state('Retired', 'ghost'),
   running: state('Running', 'accent', true),
   waiting: state('Waiting for a slot', 'ghost'),
   queued: state('Queued', 'ghost'),

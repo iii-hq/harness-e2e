@@ -23,6 +23,7 @@ describe('result states', () => {
       failed_gate: 'Failed a gate · alert',
       not_run: 'Not run · alert',
       never_run: 'Never run · ghost',
+      retired: 'Retired · ghost',
       running: 'Running · accent',
       waiting: 'Waiting for a slot · ghost',
       queued: 'Queued · ghost',
