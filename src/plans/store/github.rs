@@ -500,7 +500,7 @@ impl PlanStore {
 
     /// A temporary directory inside the data directory: bundles are large and
     /// never go through memory or the system temporary directory.
-    fn scratch(&self) -> Result<tempfile::TempDir> {
+    pub(super) fn scratch(&self) -> Result<tempfile::TempDir> {
         tempfile::Builder::new()
             .prefix("import-")
             .tempdir_in(self.imports_dir()?)
@@ -716,7 +716,7 @@ impl PlanStore {
     /// Move one group's native run into the data directory, retain it, and
     /// return the group's slots. Evidence another execution retains under the
     /// same id is never replaced.
-    async fn install_group(
+    pub(super) async fn install_group(
         &self,
         runner: &std::sync::Arc<dyn Runner>,
         directory: &Path,
