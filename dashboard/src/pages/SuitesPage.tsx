@@ -491,7 +491,11 @@ export type SuiteDetailProps = {
   suite: Suite
   runs: SuiteRun[]
   views: ReadonlyMap<string, CatalogRowView>
-  groups: string[][]
+  /** Which tests run whole, in order; null until the catalog answers. */
+  groups: string[][] | null
+  /** Why the catalog did not answer, to try again. */
+  groupsError?: string | null
+  onRetryGroups?: () => void
   narrow: boolean
   /** The bridge answered: the actions can run. */
   ready: boolean
@@ -514,6 +518,8 @@ export function SuiteDetail({
   runs,
   views,
   groups,
+  groupsError = null,
+  onRetryGroups,
   narrow,
   ready,
   busy,
@@ -530,12 +536,15 @@ export function SuiteDetail({
   const tests = draft ? draft.tests : suite.scenarios
   const changed = changedTests(tests, views).length
   const dirty = draft ? draftDirty(draft, suite) : false
-  // While it saves, what it sends cannot change under it.
+  // While it saves, what it sends cannot change under it; without the
+  // groups, a tick could split one.
   const locked = Boolean(editing?.saving)
+  const known = groups ?? []
+  const waiting = groups === null
   const update = (patch: Partial<SuiteDraft>) =>
     draft && editing?.onChange({ ...draft, ...patch })
   const tick = (id: string, on: boolean) =>
-    draft && editing?.onChange(tickDraft(draft, id, on, groups))
+    draft && groups && editing?.onChange(tickDraft(draft, id, on, groups))
 
   // Into the name when editing starts (a copy opens editing); back to Edit
   // when it ends.
@@ -631,7 +640,12 @@ export function SuiteDetail({
               id="st-edit"
               type="button"
               className={dashboardHeaderActionClassName()}
-              disabled={!ready || busy}
+              disabled={!ready || busy || (waiting && !groupsError)}
+              title={
+                waiting && !groupsError
+                  ? 'Waiting for the catalog, which says which tests run together'
+                  : undefined
+              }
               onClick={onEdit}
             >
               Edit
@@ -650,8 +664,9 @@ export function SuiteDetail({
               <button
                 type="button"
                 className={dashboardHeaderActionClassName({ primary: true })}
-                disabled={editing.saving}
+                disabled={editing.saving || waiting}
                 aria-busy={editing.saving || undefined}
+                aria-describedby={waiting ? 'st-save-blocked' : undefined}
                 onClick={editing.onSave}
               >
                 {editing.saving ? 'Saving…' : 'Save suite'}
@@ -720,6 +735,36 @@ export function SuiteDetail({
           </span>
         </div>
       ) : null}
+      {draft && waiting ? (
+        groupsError ? (
+          <Callout
+            tone="danger"
+            title="Which tests run together could not be read"
+          >
+            <span className="ex-callout-line">
+              <span id="st-save-blocked">
+                {groupsError}. Save waits for it, so that no sequential group is
+                split.
+              </span>
+              <button
+                className={buttonClassName({
+                  variant: 'secondary',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={onRetryGroups}
+              >
+                Try again
+              </button>
+            </span>
+          </Callout>
+        ) : (
+          <p className="st-section-note" id="st-save-blocked" role="status">
+            Reading which tests run together, so that none is split. Save waits
+            for it.
+          </p>
+        )
+      ) : null}
       {changed > 0 ? (
         <Callout tone="warning" icon={<Info size={16} />}>
           {changedWarning(changed, tests.length)}
@@ -728,17 +773,19 @@ export function SuiteDetail({
       <SuiteTests
         ids={draft ? draft.shown : suite.scenarios}
         views={views}
-        groups={groups}
+        groups={known}
         narrow={narrow}
         edit={
-          draft ? { tests: draft.tests, disabled: locked, onTick: tick } : null
+          draft
+            ? { tests: draft.tests, disabled: locked || waiting, onTick: tick }
+            : null
         }
       />
       {draft && editing ? (
         <AddTests
           catalog={editing.catalog}
           draft={draft}
-          disabled={locked}
+          disabled={locked || waiting}
           onAdd={(id) => tick(id, true)}
         />
       ) : null}
@@ -822,7 +869,10 @@ export function SuitesPage() {
   const [suites, setSuites] = useState<Suite[] | null>(null)
   const [rows, setRows] = useState<TestCatalogRow[]>([])
   const [executions, setExecutions] = useState<DashboardExecutionSummary[]>([])
-  const [groups, setGroups] = useState<string[][]>([])
+  // Which tests run whole, in order: the runner's catalog says it. Editing
+  // waits for it; its failure is said in the editor.
+  const [groups, setGroups] = useState<string[][] | null>(null)
+  const [groupsError, setGroupsError] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [param, setParam] = useState<string | null>(suiteParam)
   const [busy, setBusy] = useState(false)
@@ -880,21 +930,17 @@ export function SuitesPage() {
     void load()
   }, [load])
 
-  // Which tests run whole, in order: the runner's catalog says it, when its
-  // Harness answers; without it the steps are not numbered.
-  useEffect(() => {
-    if (!bridge) return
-    let cancelled = false
-    bridge
-      .getCatalog()
-      .then((raw) => {
-        if (!cancelled) setGroups(asCatalog(raw).groups)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
+  const loadGroups = useCallback(async (from: DashboardDataBridge) => {
+    setGroupsError(null)
+    try {
+      setGroups(asCatalog(await from.getCatalog()).groups)
+    } catch (cause) {
+      setGroupsError(errorText(cause))
     }
-  }, [bridge])
+  }, [])
+  useEffect(() => {
+    if (bridge) void loadGroups(bridge)
+  }, [bridge, loadGroups])
 
   // A finished run changes a suite's last execution and its tests' results.
   useEffect(() => {
@@ -1139,6 +1185,8 @@ export function SuitesPage() {
               runs={runsBySuite.get(selected.id) ?? []}
               views={views}
               groups={groups}
+              groupsError={groupsError}
+              onRetryGroups={() => bridge && void loadGroups(bridge)}
               narrow={narrow}
               ready={Boolean(bridge)}
               busy={busy}

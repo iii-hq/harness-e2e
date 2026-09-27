@@ -286,6 +286,41 @@ describe('editing a suite of this Console', () => {
     expect(html).toContain('Add tests')
   })
 
+  it('waits for the catalog to edit and to save, and says so', () => {
+    expect(detail({ suite: quick, groups: null })).toMatch(
+      /id="st-edit"[^>]*disabled=""/,
+    )
+    const html = detail({
+      suite: quick,
+      views,
+      groups: null,
+      editing: editing(),
+    })
+    expect(html).toContain('Reading which tests run together')
+    expect(html).toMatch(/disabled=""[^>]*aria-describedby="st-save-blocked"/)
+    expect(html).toMatch(
+      /aria-label="Keep minimal_path in the suite"[^>]*disabled=""/,
+    )
+  })
+
+  it('says in the editor why the catalog failed, with Try again, and Save waits', () => {
+    const html = detail({
+      suite: quick,
+      views,
+      groups: null,
+      groupsError: 'the running Harness has no registered models',
+      editing: editing(),
+    })
+    expect(html).toContain('Which tests run together could not be read')
+    expect(html).toContain('the running Harness has no registered models.')
+    expect(html).toContain('Try again')
+    expect(html).toMatch(/disabled=""[^>]*aria-describedby="st-save-blocked"/)
+    // The failure lets the editor open, to say it.
+    expect(
+      detail({ suite: quick, groups: null, groupsError: 'x' }),
+    ).not.toMatch(/id="st-edit"[^>]*disabled=""/)
+  })
+
   it('holds every control still while it saves', () => {
     const html = detail({
       suite: quick,
