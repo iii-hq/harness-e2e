@@ -76,6 +76,8 @@ const local = []
 const calls = { create: [], update: [], remove: [], credentials: [] }
 // The first read fails: the page says so and tries again.
 let failList = true
+// Set to make the next copy fail.
+let failCreate = false
 
 // The worker's credentials: names only ever leave it.
 const known = {
@@ -114,6 +116,10 @@ const trigger = (name, request = {}) => {
     return { stacks: [...repository, ...local] }
   }
   if (id === 'stack-create') {
+    if (failCreate) {
+      failCreate = false
+      throw new Error('The runner could not copy it.')
+    }
     calls.create.push(request)
     const from = [...repository, ...local].find(
       (stack) => stack.id === request.from,
@@ -233,11 +239,27 @@ try {
   await mine.getByText(/^None yet\. /).waitFor()
   const fallback = repository[0]
 
+  // A copy that fails says so on the page; opening another stack does not
+  // carry it along.
+  failCreate = true
+  await repo
+    .getByRole('button', { name: 'Copy harness-template', exact: true })
+    .click()
+  await page
+    .getByText('The runner could not copy it.', { exact: true })
+    .waitFor()
+
   // A repository stack opens read-only: what it installs, its workers with
   // the worker each runs, and its YAML exactly as stacks/ writes it.
   await page.getByRole('button', { name: 'View default', exact: true }).click()
   const viewer = page.getByRole('dialog', { name: 'default', exact: true })
   await viewer.getByText('Repository · read-only', { exact: true }).waitFor()
+  await viewer
+    .getByText('Read-only. Copies you make appear under This Console.', {
+      exact: true,
+    })
+    .waitFor()
+  assert.equal(await page.getByText('The runner could not copy it.').count(), 0)
   const shownYaml = await viewer
     .locator('.sk-line .sk-text')
     .evaluateAll((lines) => lines.map((line) => line.textContent).join('\n'))

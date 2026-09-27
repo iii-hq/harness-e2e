@@ -1032,12 +1032,14 @@ export function StacksPage() {
           stacks={stacks}
           ready={Boolean(bridge)}
           busy={busy}
-          onOpen={(stack) =>
+          onOpen={(stack) => {
+            // What an earlier action said belongs to that action.
+            setActionError(null)
             setSheet({
               id: stack.id,
               mode: stack.source === 'local' ? 'edit' : 'view',
             })
-          }
+          }}
           onCopy={(stack) => void copy(stack)}
           onDelete={setDeleting}
           onNew={openNew}
