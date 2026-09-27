@@ -558,15 +558,15 @@ describe('ScenarioMatrix', () => {
         running
         liveNote="A group’s tests fill in as it finishes."
         notes={{
-          timer_wake: 'Running in its container',
-          minimal_path: 'Waiting for a slot · 2 groups at a time',
-          chess_engine_build: 'Stopped before it finished',
+          '1:timer_wake': 'Running in its container',
+          '1:minimal_path': 'Waiting for a slot',
+          '1:chess_engine_build': 'Stopped before it finished',
         }}
       />,
     )
     expect(html).toContain('A group’s tests fill in as it finishes.')
     expect(html).toContain('Running in its container')
-    expect(html).toContain('Waiting for a slot · 2 groups at a time')
+    expect(html).toContain('Waiting for a slot')
     expect(html).toContain('data-row-state="queued"')
     expect(html).toContain('data-row-state="cancelled"')
     expect(html).toContain('Stopped before it finished')

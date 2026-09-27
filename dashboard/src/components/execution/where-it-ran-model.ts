@@ -1,5 +1,6 @@
 import type { GithubJob } from '@/lib/dashboard-data-source'
 import { type PlanExecution, running } from '@/lib/plan-execution'
+import { roundKey } from '@/lib/scenario-matrix'
 
 /** Where an execution runs, and what is happening there, as the page's
  *  "Where it ran" card and the line under the title read it. */
@@ -38,16 +39,19 @@ export type TestState =
   | 'waiting'
   | 'stopped'
 
-export type TestRow = { id: string; state: TestState; detail: string }
+export type TestRow = {
+  id: string
+  state: TestState
+  detail: string
+  /** A Docker group's round; a test here stands for all its rounds. */
+  round?: number
+}
 
 /** A live test list: what reported, what runs, what waits. A Docker group's
  *  tests report as it ends, its runs installed then; one that left no run
  *  did not run. After a cancel what did not finish "stopped before it
  *  finished". */
-export function testRows(
-  execution: PlanExecution,
-  dockerGroups = 2,
-): TestRow[] {
+export function testRows(execution: PlanExecution): TestRow[] {
   const cancelled =
     execution.state === 'cancelled' || execution.state === 'cancelling'
   const source = execution.source
@@ -74,6 +78,7 @@ export function testRows(
               : 'stopped'
         rows.push({
           id,
+          round: group.round,
           state,
           detail: installed
             ? `${installed.passed}/${installed.completed || installed.observed} passed`
@@ -82,7 +87,7 @@ export function testRows(
               : state === 'running'
                 ? `Running in its container${group.attempt > 1 ? ` · attempt ${group.attempt}` : ''}`
                 : state === 'waiting'
-                  ? `Waiting for a slot · ${plural(dockerGroups, 'group', 'groups')} at a time`
+                  ? 'Waiting for a slot'
                   : 'Stopped before it finished',
         })
       }
@@ -127,13 +132,13 @@ export function testRows(
   })
 }
 
-/** The line under each test without a result yet, by test id: running,
- *  waiting, or stopped before it finished. */
+/** The line under each test without a result yet (running, waiting, or
+ *  stopped before it finished), by round and test (`roundKey`). */
 export function liveNotes(execution: PlanExecution): Record<string, string> {
   return Object.fromEntries(
     testRows(execution)
       .filter((row) => ['running', 'waiting', 'stopped'].includes(row.state))
-      .map((row) => [row.id, row.detail]),
+      .map((row) => [roundKey(row.round, row.id), row.detail]),
   )
 }
 

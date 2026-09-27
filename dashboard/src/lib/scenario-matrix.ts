@@ -310,6 +310,11 @@ function unavailableScenario(
   }
 }
 
+/** A test's key within its round: tests repeat across rounds. */
+export function roundKey(round: unknown, scenarioId: string) {
+  return `${String(round ?? 1)}:${scenarioId}`
+}
+
 /** Running, queued, or stopped before it ran while the execution still
  *  ends: no result, and no failure either. */
 export function unreported(item: Pick<ScenarioMatrixItem, 'objective'>) {

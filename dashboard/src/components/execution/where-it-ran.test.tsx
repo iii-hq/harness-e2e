@@ -7,6 +7,7 @@ import {
   dockerSteps,
   jobLabel,
   jobTests,
+  liveNotes,
   reportedLine,
   testRows,
   whereLine,
@@ -166,6 +167,7 @@ describe('where it ran · model', () => {
     const rows = testRows(docker)
     expect(rows[0]).toEqual({
       id: 'minimal_path',
+      round: 1,
       state: 'reported',
       detail: '1/1 passed',
     })
@@ -173,7 +175,8 @@ describe('where it ran · model', () => {
       state: 'running',
       detail: 'Running in its container',
     })
-    expect(rows[2].detail).toBe('Waiting for a slot · 2 groups at a time')
+    // How many groups run at once is the worker's; the line does not guess.
+    expect(rows[2].detail).toBe('Waiting for a slot')
     expect(reportedLine(docker)).toBe(
       '1 of 4 tests reported · results are provisional',
     )
@@ -197,7 +200,12 @@ describe('where it ran · model', () => {
       },
     } as unknown as PlanExecution
     expect(testRows(failed)).toEqual([
-      { id: 'minimal_path', state: 'not-run', detail: 'compose::add failed' },
+      {
+        id: 'minimal_path',
+        round: 1,
+        state: 'not-run',
+        detail: 'compose::add failed',
+      },
     ])
     expect(reportedLine(failed)).toBe(
       '1 of 1 test reported · results are provisional',
@@ -277,6 +285,29 @@ describe('where it ran · model', () => {
 })
 
 describe('where it ran · rounds', () => {
+  it('keys each Docker test’s line by its round', () => {
+    const group = (round: number, state: string) => ({
+      round,
+      campaign_id: `pr-r0${round}`,
+      group_id: 'case-minimal-path',
+      scenarios: ['minimal_path'],
+      state,
+      attempt: 1,
+    })
+    const rounds = {
+      ...docker,
+      slots: [],
+      source: {
+        ...(docker.source as object),
+        groups: [group(1, 'queued'), group(2, 'running')],
+      },
+    } as unknown as PlanExecution
+    expect(liveNotes(rounds)).toEqual({
+      '1:minimal_path': 'Waiting for a slot',
+      '2:minimal_path': 'Running in its container',
+    })
+  })
+
   it('keeps a test running until all its rounds report', () => {
     const rounds = {
       ...harness,

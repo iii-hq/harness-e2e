@@ -884,7 +884,7 @@ try {
     .getByText('Running in its container')
     .waitFor()
   await result('shell_coder_sandbox')
-    .getByText('Waiting for a slot · 2 groups at a time')
+    .getByText('Waiting for a slot', { exact: true })
     .waitFor()
   assert.equal(
     await result('shell_coder_sandbox').getAttribute('data-row-state'),

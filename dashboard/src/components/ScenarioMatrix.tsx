@@ -31,6 +31,7 @@ import {
   formatScenarioDuration,
   type PreviousAttempt,
   previousAttempts,
+  roundKey,
   type ScenarioMatrixItem,
   stepSignals,
   unreported,
@@ -73,7 +74,7 @@ export function ScenarioMatrix({
   running?: boolean
   /** What the bar says while it runs. */
   liveNote?: string
-  /** The line under a test that has not reported yet, by test id. */
+  /** The line under a test that has not reported yet, by `roundKey`. */
   notes?: Record<string, string>
 }) {
   const model = useMemo(() => buildScenarioMatrix(detail), [detail])
@@ -178,7 +179,14 @@ export function ScenarioMatrix({
               onTranscript={onTranscript}
               onRerun={onRerun}
               open={openKey === item.key}
-              waitingNote={notes?.[item.scenarioId]}
+              waitingNote={
+                notes?.[
+                  roundKey(
+                    detail.reports[item.reportIndex]?.round,
+                    item.scenarioId,
+                  )
+                ]
+              }
             />
           ))}
         </tbody>
