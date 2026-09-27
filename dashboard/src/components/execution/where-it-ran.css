@@ -273,6 +273,12 @@
   font-size: 0.75rem;
 }
 
+/* Live, GitHub's group jobs are the page's table: no inner scroll. */
+.wr-progress .wr-jobs {
+  max-height: none;
+  overflow: visible;
+}
+
 /* A harness execution's share of tests reported, under its title. */
 .wr-bar-line {
   display: flex;
