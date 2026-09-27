@@ -438,20 +438,6 @@
 .harness-e2e-shell .execution-header .ds-page-actions {
   padding-block: 4px;
 }
-.harness-e2e-shell .execution-identity {
-  display: grid;
-  grid-template-columns: 2fr 1.5fr 1fr 1fr;
-  gap: 16px 24px;
-  margin: 24px 0 0;
-  padding: 20px;
-  border-radius: 6px;
-  background: var(--surface-fill);
-  font-family: var(--font-mono);
-  font-size: 12px;
-}
-.harness-e2e-shell .execution-identity dd {
-  overflow-wrap: anywhere;
-}
 .execution-efficiency-values {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -552,14 +538,8 @@
   .harness-e2e-shell .execution-header .ds-page-actions {
     justify-content: flex-start;
   }
-  .harness-e2e-shell .execution-identity {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 @container harness (max-width: 480px) {
-  .harness-e2e-shell .execution-identity {
-    padding: 16px;
-  }
   .harness-e2e-shell .execution-layers summary {
     flex-wrap: wrap;
   }
