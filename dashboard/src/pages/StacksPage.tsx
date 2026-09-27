@@ -1,23 +1,43 @@
-import { useCallback, useEffect, useState } from 'react'
-import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { ConfirmDialog } from '@iii-dev/console-ui'
+import { Copy, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  DashboardPageActions,
+  dashboardHeaderActionClassName,
+  type HeaderAction,
+} from '@/components/DashboardPageActions'
+import { useDashboardChrome } from '@/components/DashboardShell'
+import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { ProviderCredentials } from '@/components/ProviderCredentials'
 import {
   buttonClassName,
   Callout,
-  DataTable,
   Dialog,
   EmptyState,
+  FactChip,
+  FactList,
   Field,
   fieldDescribedBy,
   Input,
-  PageHeader,
   Textarea,
 } from '@/design-system'
+import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
   type DashboardDataBridge,
   getDashboardDataBridge,
   type Stack,
 } from '@/lib/dashboard-data-source'
+import {
+  BASE_STACK,
+  pinOf,
+  stackDiff,
+  stackSub,
+  stacksSummary,
+  warningsTitle,
+} from '@/lib/stacks-view'
+import '@/design-system/styles.css'
+import './executions-page.css'
+import './stacks-page.css'
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
@@ -25,30 +45,6 @@ function errorText(cause: unknown) {
 
 function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`
-}
-
-/** What a stack installs, in one line. */
-function stackScope(stack: Stack) {
-  return [
-    `iii ${stack.iii ?? '—'}`,
-    stack.template ? `template ${stack.template}` : null,
-    plural(stack.containers.length, 'container', 'containers'),
-  ]
-    .filter(Boolean)
-    .join(' · ')
-}
-
-/** Its containers with the version or commit each pins. */
-function containerPins(stack: Stack) {
-  return stack.containers
-    .map(({ name, version, commit }) =>
-      commit
-        ? `${name} @${commit.slice(0, 12)}`
-        : version
-          ? `${name} ${version}`
-          : name,
-    )
-    .join(', ')
 }
 
 function Warnings({ warnings }: { warnings: string[] }) {
@@ -223,217 +219,358 @@ function StackEditor({
   )
 }
 
-/** Stacks: the repository's, read-only, and this Console's. Any stack can
- *  be copied into one of this Console to edit. Below them, the provider
+/** The section's actions in the Console header: New stack and, once the
+ *  worker answers, Run tests. */
+export function stacksHeaderActions(
+  onNew?: () => void,
+  onRun?: () => void,
+): HeaderAction[] {
+  return [
+    {
+      id: 'new',
+      label: 'New stack',
+      disabled: !onNew,
+      title: 'A stack of this Console, as a copy of another',
+      onSelect: onNew,
+    },
+    ...(onRun
+      ? [{ id: 'run', label: 'Run tests', primary: true, onSelect: onRun }]
+      : []),
+  ]
+}
+
+export type StackListProps = {
+  stacks: Stack[]
+  ready: boolean
+  busy: boolean
+  onOpen: (stack: Stack) => void
+  onCopy: (stack: Stack) => void
+  onDelete: (stack: Stack) => void
+  onNew: () => void
+}
+
+/** One stack: its name and file or id, what it installs and pins, how it
+ *  differs from the default, its warnings, and what can be done with it. */
+function StackRow({
+  stack,
+  base,
+  ready,
+  busy,
+  onOpen,
+  onCopy,
+  onDelete,
+}: Omit<StackListProps, 'stacks' | 'onNew'> & {
+  stack: Stack
+  base: Stack | undefined
+}) {
+  const local = stack.source === 'local'
+  const diff = stackDiff(stack, base)
+  const warned = stack.warnings.length > 0
+  return (
+    <div className="sk-row" data-stack={stack.id}>
+      <div className="sk-row-name">
+        <button
+          type="button"
+          className="sk-name"
+          disabled={!ready}
+          onClick={() => onOpen(stack)}
+        >
+          {stack.label}
+        </button>
+        <span className="sk-sub">{stackSub(stack)}</span>
+      </div>
+      <div className="sk-row-decl">
+        <FactList aria-label="Installs">
+          <FactChip label="iii" value={stack.iii ?? '—'} />
+          <FactChip
+            label="template"
+            value={stack.template ?? 'none'}
+            className={stack.template ? undefined : 'sk-fact-none'}
+          />
+          <FactChip label="workers" value={String(stack.containers.length)} />
+        </FactList>
+        {stack.containers.length ? (
+          // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+          <ul role="list" className="sk-pins" aria-label="Pins">
+            {stack.containers.map((container) => (
+              <li
+                key={container.name}
+                data-commit={container.commit ? true : undefined}
+              >
+                <span>{container.name}</span>
+                <span className="sk-pin">{pinOf(container)}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {diff ? <p className="sk-diff">{diff}</p> : null}
+      </div>
+      <div className="sk-row-warn" data-stack-warnings={warned || undefined}>
+        <span className="sk-warn-title">
+          <span className="sk-dot" data-tone={warned ? 'warn' : 'ok'} />
+          {warningsTitle(stack.warnings.length)}
+        </span>
+        {warned ? (
+          // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+          <ul role="list" className="sk-warnings">
+            {stack.warnings.map((warning, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
+              <li key={index}>{warning}</li>
+            ))}
+          </ul>
+        ) : null}
+      </div>
+      <div className="sk-row-actions">
+        <button
+          type="button"
+          className={dashboardHeaderActionClassName()}
+          aria-label={`${local ? 'Edit' : 'View'} ${stack.label}`}
+          disabled={!ready}
+          onClick={() => onOpen(stack)}
+        >
+          {local ? 'Edit' : 'View'}
+        </button>
+        <button
+          type="button"
+          className={dashboardHeaderActionClassName({
+            className: 'harness-e2e-header-action-icon',
+          })}
+          aria-label={`Copy ${stack.label}`}
+          title="Copy into this Console"
+          disabled={!ready || busy}
+          onClick={() => onCopy(stack)}
+        >
+          <Copy size={16} aria-hidden="true" />
+        </button>
+        {local ? (
+          <button
+            type="button"
+            className={dashboardHeaderActionClassName({
+              className: 'harness-e2e-header-action-icon',
+            })}
+            aria-label={`Delete ${stack.label}`}
+            title="Delete stack"
+            disabled={!ready || busy}
+            onClick={() => onDelete(stack)}
+          >
+            <Trash2 size={16} aria-hidden="true" />
+          </button>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** The repository's stacks, read-only, then this Console's, which say how
+ *  to make one while there are none. */
+export function StackList({ stacks, onNew, ...row }: StackListProps) {
+  const base = stacks.find(
+    (stack) => stack.id === BASE_STACK && stack.source !== 'local',
+  )
+  const local = stacks.filter((stack) => stack.source === 'local')
+  const groups = [
+    {
+      key: 'repository',
+      label: 'Repository',
+      note: 'read-only · stacks/*.yaml, built into this runner',
+      stacks: stacks.filter((stack) => stack.source !== 'local'),
+    },
+    {
+      key: 'local',
+      label: 'This Console',
+      note: 'editable · copies of another stack',
+      stacks: local,
+    },
+  ]
+  return groups.map((group) => (
+    <section
+      key={group.key}
+      className="sk-block"
+      aria-labelledby={`sk-group-${group.key}`}
+      data-stack-group={group.key}
+    >
+      <div className="sk-block-head">
+        <h2 className="ds-label" id={`sk-group-${group.key}`}>
+          {group.label}
+        </h2>
+        <span className="sk-block-note">{group.note}</span>
+      </div>
+      {group.stacks.map((stack) => (
+        <StackRow key={stack.id} stack={stack} base={base} {...row} />
+      ))}
+      {group.key === 'local' && local.length === 0 ? (
+        <div className="sk-empty">
+          <p>
+            None yet. Copy a repository stack to change a version or a worker.
+          </p>
+          <button
+            type="button"
+            className={dashboardHeaderActionClassName()}
+            disabled={!row.ready}
+            onClick={onNew}
+          >
+            New stack
+          </button>
+        </div>
+      ) : null}
+    </section>
+  ))
+}
+
+/** Stacks: the repository's, read-only, and this Console's. Any stack is
+ *  copied into one of this Console to edit it. Below them, the provider
  *  credentials a Docker execution's stack receives. */
 export function StacksPage() {
+  const narrow = useDashboardChrome()?.narrow ?? false
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [stacks, setStacks] = useState<Stack[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [editing, setEditing] = useState<Stack | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
+  const [, setCreating] = useState(false)
+  const [running, setRunning] = useState(false)
+  const beginRequest = useLatestRequest()
 
   const load = useCallback(async () => {
+    const request = beginRequest()
+    setError(null)
     try {
       const next = await getDashboardDataBridge()
+      if (!request.isCurrent()) return
       setBridge(next)
-      setStacks((await next.listStacks()).stacks)
-      setError(null)
+      const listed = await next.listStacks()
+      if (request.isCurrent()) setStacks(listed.stacks)
     } catch (cause) {
-      setError(errorText(cause))
+      if (request.isCurrent()) setError(errorText(cause))
     }
-  }, [])
+  }, [beginRequest])
   useEffect(() => {
     void load()
   }, [load])
 
+  const headerActions = useMemo(
+    () =>
+      stacksHeaderActions(
+        bridge ? () => setCreating(true) : undefined,
+        bridge ? () => setRunning(true) : undefined,
+      ),
+    [bridge],
+  )
+
   const copy = async (stack: Stack) => {
     if (!bridge) return
-    setBusy(stack.id)
-    setError(null)
+    setBusy(true)
+    setActionError(null)
     try {
       const created = await bridge.createStack(stack.id)
-      await load()
+      setStacks((current) => [...(current ?? []), created])
       setEditing(created)
+      void load()
     } catch (cause) {
-      setError(errorText(cause))
+      setActionError(errorText(cause))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
   const remove = async (stack: Stack) => {
     if (!bridge) return
-    setBusy(stack.id)
-    setError(null)
+    setBusy(true)
+    setActionError(null)
     try {
       await bridge.deleteStack(stack.id)
-      setDeleting(null)
-      await load()
+      // Its row is gone: focus goes to the page's heading.
+      setStacks(
+        (current) => current?.filter((entry) => entry.id !== stack.id) ?? null,
+      )
+      document.getElementById('sk-heading')?.focus()
+      void load()
     } catch (cause) {
-      setError(errorText(cause))
+      setActionError(errorText(cause))
     } finally {
-      setBusy(null)
+      setBusy(false)
     }
   }
 
+  const failedFirstLoad = Boolean(error) && stacks === null
   return (
-    <div className="ds-root min-h-dvh bg-canvas text-ink">
-      <DashboardPageActions active="stacks" />
-      <div className="page-shell">
-        <PageHeader
-          variant="list"
-          title="Stacks"
-          summary="Where a suite runs: an iii Compose project, the iii release and an optional template. The repository's stacks are read-only; copy one to edit it here."
-        />
-        {error ? (
-          <p className="mt-4 text-sm text-danger" role="alert">
-            {error}
-          </p>
-        ) : null}
-        {stacks === null ? (
-          error ? (
-            <EmptyState
-              className="mt-6"
-              tone="error"
-              title="Stacks could not be loaded"
-              description={error}
-              actions={
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => void load()}
-                >
-                  try again
-                </button>
-              }
-            />
-          ) : (
-            <div className="mt-6 grid gap-2" aria-busy="true" role="status">
-              <span className="ds-visually-hidden">Loading stacks</span>
-              {['first', 'second', 'third'].map((placeholder) => (
-                <div
-                  key={placeholder}
-                  className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-                />
-              ))}
-            </div>
-          )
-        ) : (
-          <div className="mt-6" data-stacks>
-            <DataTable caption="Stacks" collapse minWidth="52rem">
-              <thead>
-                <tr>
-                  <th scope="col">Stack</th>
-                  <th scope="col">Source</th>
-                  <th scope="col">Declares</th>
-                  <th scope="col">Warnings</th>
-                  <th scope="col">
-                    <span className="ds-visually-hidden">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {stacks.map((stack) => (
-                  <tr key={stack.id} data-stack={stack.id}>
-                    <td data-label="Stack">
-                      <span className="grid gap-0.5">
-                        <strong className="text-sm font-semibold text-ink">
-                          {stack.label}
-                        </strong>
-                        <span className="font-mono text-xs text-ink-muted">
-                          {stack.id}
-                        </span>
-                      </span>
-                    </td>
-                    <td data-label="Source" className="text-xs text-ink-soft">
-                      {stack.source === 'local' ? 'this Console' : 'repository'}
-                    </td>
-                    <td data-label="Declares" className="text-xs text-ink">
-                      <span className="grid gap-0.5">
-                        <span>{stackScope(stack)}</span>
-                        <span className="max-w-[32rem] font-mono text-ink-muted">
-                          {containerPins(stack)}
-                        </span>
-                      </span>
-                    </td>
-                    <td data-label="Warnings" className="text-xs">
-                      {stack.warnings.length ? (
-                        <ul className="m-0 grid max-w-[28rem] list-none gap-1 p-0 text-warning">
-                          {stack.warnings.map((warning, index) => (
-                            // biome-ignore lint/suspicious/noArrayIndexKey: warnings repeat and never reorder
-                            <li key={index}>{warning}</li>
-                          ))}
-                        </ul>
-                      ) : (
-                        <span className="text-ink-muted">—</span>
-                      )}
-                    </td>
-                    <td className="text-right">
-                      <span className="inline-flex flex-wrap justify-end gap-2">
-                        <button
-                          className={buttonClassName({
-                            variant: 'secondary',
-                            size: 'compact',
-                          })}
-                          type="button"
-                          aria-label={`Copy ${stack.label}`}
-                          disabled={!bridge || busy !== null}
-                          onClick={() => void copy(stack)}
-                        >
-                          copy
-                        </button>
-                        {stack.source === 'repository' ? (
-                          <button
-                            className={buttonClassName({
-                              variant: 'secondary',
-                              size: 'compact',
-                            })}
-                            type="button"
-                            aria-label={`View ${stack.label}`}
-                            disabled={!bridge || busy !== null}
-                            onClick={() => setEditing(stack)}
-                          >
-                            view
-                          </button>
-                        ) : (
-                          <>
-                            <button
-                              className={buttonClassName({
-                                variant: 'secondary',
-                                size: 'compact',
-                              })}
-                              type="button"
-                              aria-label={`Edit ${stack.label}`}
-                              disabled={!bridge || busy !== null}
-                              onClick={() => setEditing(stack)}
-                            >
-                              edit
-                            </button>
-                            <button
-                              className={buttonClassName({
-                                variant: 'quiet',
-                                size: 'compact',
-                              })}
-                              type="button"
-                              aria-label={`Delete ${stack.label}`}
-                              disabled={!bridge || busy !== null}
-                              onClick={() => setDeleting(stack)}
-                            >
-                              delete
-                            </button>
-                          </>
-                        )}
-                      </span>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </DataTable>
-          </div>
+    <div className="ds-root ex-page sk-page" data-narrow={narrow || undefined}>
+      <DashboardPageActions
+        active="stacks"
+        actionsLabel="Stack actions"
+        actions={headerActions}
+      />
+      <header className="ex-header">
+        <h1 id="sk-heading" tabIndex={-1}>
+          Stacks
+        </h1>
+        {failedFirstLoad ? null : (
+          <p>{stacks ? stacksSummary(stacks) : 'Loading the stacks…'}</p>
         )}
-        <ProviderCredentials bridge={bridge} />
-      </div>
+      </header>
+
+      {error && !failedFirstLoad ? (
+        <Callout tone="danger" title="The stacks could not be reloaded">
+          <span className="ex-callout-line">
+            {error}
+            <button
+              className={buttonClassName({
+                variant: 'secondary',
+                size: 'compact',
+              })}
+              type="button"
+              onClick={() => void load()}
+            >
+              try again
+            </button>
+          </span>
+        </Callout>
+      ) : null}
+      {actionError ? (
+        <Callout tone="danger" title="That did not go through">
+          {actionError}
+        </Callout>
+      ) : null}
+
+      {stacks === null ? (
+        failedFirstLoad ? (
+          <EmptyState
+            tone="error"
+            title="Stacks could not be loaded"
+            description={error}
+            actions={
+              <button
+                className={buttonClassName({ variant: 'secondary' })}
+                type="button"
+                onClick={() => void load()}
+              >
+                try again
+              </button>
+            }
+          />
+        ) : (
+          <div className="ex-loading" aria-busy="true" role="status">
+            <span className="ds-visually-hidden">Loading the stacks</span>
+            {Array.from({ length: 4 }, (_, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
+              <div key={index} />
+            ))}
+          </div>
+        )
+      ) : (
+        <StackList
+          stacks={stacks}
+          ready={Boolean(bridge)}
+          busy={busy}
+          onOpen={setEditing}
+          onCopy={(stack) => void copy(stack)}
+          onDelete={setDeleting}
+          onNew={() => setCreating(true)}
+        />
+      )}
+      <ProviderCredentials bridge={bridge} />
+
       {editing && bridge ? (
         <StackEditor
           key={editing.id}
@@ -443,33 +580,21 @@ export function StacksPage() {
           onSaved={() => void load()}
         />
       ) : null}
-      <Dialog
+      <ConfirmDialog
         open={deleting !== null}
-        onClose={() => busy === null && setDeleting(null)}
-        size="sm"
-        title={`Delete ${deleting?.label ?? 'stack'}?`}
-        description="Only this Console's copy goes; the repository's stacks stay."
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={busy !== null}
-              onClick={() => setDeleting(null)}
-            >
-              cancel
-            </button>
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={busy !== null}
-              aria-busy={busy !== null}
-              onClick={() => deleting && void remove(deleting)}
-            >
-              {busy !== null ? 'deleting…' : 'delete stack'}
-            </button>
-          </div>
-        }
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
+        title={`Delete “${deleting?.label ?? 'this stack'}”?`}
+        description="Only this Console’s copy goes, YAML and all. The repository’s stacks stay, and so does what past executions recorded about the stack they ran on. This can’t be undone."
+        confirmLabel="Delete stack"
+        tone="danger"
+        onConfirm={() => deleting && void remove(deleting)}
+      />
+      <LocalRunnerDialog
+        bridge={bridge}
+        open={running}
+        onClose={() => setRunning(false)}
       />
     </div>
   )

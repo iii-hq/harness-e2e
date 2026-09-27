@@ -1,0 +1,240 @@
+/* The Stacks page as the redesign canvas draws it (Stacks.dc.html): the
+   repository's stacks and this Console's in two blocks, each stack with what
+   it installs, its pins and its warnings; below them, the provider
+   credentials. It shares the header, loading and dialog recipes of
+   executions-page.css. Host token names only; the sheet and the dialogs
+   render in a portal outside .harness-e2e-shell, where the --ds-* scale is
+   not defined, so extension sizes carry their value as a fallback. Every
+   branch written out (no matches-any groups, which the bundle's scoping
+   would re-weigh). */
+
+.sk-page .ex-header p {
+  max-width: calc(var(--spacing) * 205);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+/* A block: the repository's, this Console's, the credentials. */
+.sk-block {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+  background: var(--color-panel-raised);
+}
+
+.sk-block-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--spacing) calc(var(--spacing) * 2.5);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3.5);
+  background: var(--color-surface);
+}
+
+.sk-block-head h2 {
+  margin: 0;
+  color: var(--color-ink);
+}
+
+.sk-block-note {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}
+
+/* A stack: name, what it declares, warnings, actions. */
+.sk-row {
+  display: grid;
+  grid-template-columns:
+    minmax(calc(var(--spacing) * 45), calc(var(--spacing) * 60))
+    minmax(0, 1fr) calc(var(--spacing) * 70) auto;
+  align-items: start;
+  gap: calc(var(--spacing) * 2.5) calc(var(--spacing) * 6);
+  padding: calc(var(--spacing) * 3.5);
+  border-top: 1px solid var(--color-edge);
+}
+
+.sk-page[data-narrow] .sk-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.sk-page[data-narrow] .sk-row-actions {
+  order: 1;
+}
+
+.sk-page[data-narrow] .sk-row-decl {
+  order: 2;
+  grid-column: 1 / -1;
+}
+
+.sk-page[data-narrow] .sk-row-warn {
+  order: 3;
+  grid-column: 1 / -1;
+}
+
+.sk-row-name {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.5);
+  min-width: 0;
+}
+
+.sk-name {
+  align-self: flex-start;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: calc(var(--spacing) * 5);
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.sk-name:hover {
+  text-decoration: underline;
+}
+
+.sk-sub {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+  overflow-wrap: anywhere;
+}
+
+.sk-row-decl {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+  min-width: 0;
+}
+
+.sk-fact-none .ds-fact-value {
+  color: var(--color-ink-faint);
+}
+
+/* A container and its pin, outlined: what the stack pins, at a glance. */
+.sk-pins {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing) calc(var(--spacing) * 1.5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sk-pins > li {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.25);
+  height: calc(var(--spacing) * 5);
+  padding: 0 calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  white-space: nowrap;
+}
+
+.sk-pin {
+  color: var(--color-ink-faint);
+}
+
+.sk-pins > li[data-commit] .sk-pin {
+  color: var(--color-ink);
+}
+
+.sk-diff {
+  margin: 0;
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sk-row-warn {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  min-width: 0;
+}
+
+.sk-warn-title {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sk-dot {
+  flex: none;
+  width: calc(var(--spacing) * 1.5);
+  height: calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-full);
+  background: var(--color-ink-ghost);
+}
+
+.sk-dot[data-tone="ok"] {
+  background: var(--color-ok);
+}
+
+.sk-dot[data-tone="warn"] {
+  background: var(--color-warn);
+}
+
+/* Warn text: the host's warn, darkened toward ink to read on the panel. */
+.sk-warnings {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  margin: 0;
+  padding: 0;
+  color: color-mix(in srgb, var(--color-warn) 75%, var(--color-ink));
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+  list-style: none;
+}
+
+.sk-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing);
+}
+
+.sk-row-actions .harness-e2e-header-action-icon {
+  color: var(--color-ink-faint);
+}
+
+.sk-empty {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5) calc(var(--spacing) * 4);
+  padding: calc(var(--spacing) * 4) calc(var(--spacing) * 3.5);
+  border-top: 1px solid var(--color-edge);
+}
+
+.sk-empty p {
+  flex: 1 1 calc(var(--spacing) * 90);
+  margin: 0;
+  color: var(--color-ink-faint);
+  line-height: calc(var(--spacing) * 5);
+}
+
+.sk-empty .harness-e2e-header-action {
+  background: var(--color-surface);
+}
+
+.sk-empty .harness-e2e-header-action:hover {
+  background: var(--color-surface-hover);
+}
