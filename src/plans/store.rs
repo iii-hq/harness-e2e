@@ -2126,7 +2126,7 @@ pub(crate) fn execution_summary(execution: &PlanExecution) -> Value {
 }
 
 #[cfg(test)]
-pub(super) mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::control::{ExecutionPhase, LaneBudget};
     use crate::identity::{ExecutionIdentity, StackIdentity, SystemUnderTestIdentity};
@@ -2135,7 +2135,7 @@ pub(super) mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-    pub(super) struct FakeRunner {
+    pub(crate) struct FakeRunner {
         root: PathBuf,
         owner: Mutex<Option<String>>,
         records: Mutex<HashMap<String, ExecutionRecord>>,
@@ -2156,7 +2156,7 @@ pub(super) mod tests {
         dirty: AtomicBool,
     }
     impl FakeRunner {
-        pub(super) fn new(root: PathBuf) -> Self {
+        pub(crate) fn new(root: PathBuf) -> Self {
             Self {
                 root,
                 owner: Mutex::new(None),
@@ -2442,7 +2442,7 @@ pub(super) mod tests {
     fn manager(root: &Path, runner: Arc<FakeRunner>) -> Arc<PlanStore> {
         manager_with_gh(root, runner, github::GithubCli::default())
     }
-    fn manager_with_gh(
+    pub(crate) fn manager_with_gh(
         root: &Path,
         runner: Arc<FakeRunner>,
         github: github::GithubCli,
@@ -2462,7 +2462,7 @@ pub(super) mod tests {
         })
     }
     /// A stand-in `gh`: a shell script, with a short deadline.
-    fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
+    pub(crate) fn fake_gh(directory: &Path, script: &str) -> github::GithubCli {
         use std::os::unix::fs::PermissionsExt;
         let program = directory.join("gh");
         fs::write(&program, format!("#!/bin/sh\n{script}\n")).unwrap();
@@ -3413,11 +3413,12 @@ pub(super) mod tests {
     async fn a_run_being_imported_is_not_imported_twice_and_a_failed_download_fails_it() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
-        // Every call answers with the run; its artifact list then holds no
-        // contract, so the download fails after the import began.
+        // Every call answers with the run (and the list with it); its
+        // artifact list then holds no contract, so the download fails after
+        // the import began.
         let gh = fake_gh(
             root.path(),
-            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","run_started_at":"2026-09-20T10:00:00Z"}'"#,
+            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","run_started_at":"2026-09-20T10:00:00Z","total_count":1,"workflow_runs":[{"id":42,"run_attempt":1}]}'"#,
         );
         let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
         let (first, started) = manager.begin_github_import("o/r", 42).await.unwrap();
@@ -3436,6 +3437,13 @@ pub(super) mod tests {
             .as_deref()
             .unwrap()
             .contains("no e2e-contract artifact"));
+        // The list says so, with why, so the Console offers it again.
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        assert_eq!(listed["runs"][0]["execution_state"], "failed");
+        assert_eq!(
+            listed["runs"][0]["execution_error"].as_str(),
+            failed.error.as_deref()
+        );
         // A failed import can be started again.
         assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
     }
@@ -4877,7 +4885,7 @@ pub(super) mod tests {
             root.path(),
             r#"echo "$*" >> "$(dirname "$0")/calls"
 case "$1" in
-  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  api) printf '%s' '{"total_count":1,"workflow_runs":[{"id":41,"run_attempt":2,"display_title":"E2E · 366030b3-5f55","created_at":"2026-09-20T10:00:00Z","run_started_at":"2026-09-21T09:00:00Z","conclusion":"failure","head_branch":"feat/executor-image","head_sha":"b406036c9f1e2d3a4b5c6d7e8f9012345678abcd","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
   run) echo "no valid artifacts found to download" >&2; exit 1 ;;
 esac"#,
         );
@@ -4890,6 +4898,11 @@ esac"#,
         assert_eq!(run["created_at"], "2026-09-20T10:00:00Z");
         assert_eq!(run["attempt_started_at"], "2026-09-21T09:00:00Z");
         assert_eq!(run["release_control_execution_id"], "366030b3-5f55");
+        // The branch and the whole commit; the Console shortens it.
+        assert_eq!(run["head_branch"], "feat/executor-image");
+        assert_eq!(run["head_sha"], "b406036c9f1e2d3a4b5c6d7e8f9012345678abcd");
+        assert_eq!(listed["total_count"], 1);
+        assert_eq!(listed["next_page"], Value::Null);
         assert_eq!(run["contract_pending"], true);
         assert_eq!(calls().lines().count(), 1, "only the list: {}", calls());
 
@@ -4923,6 +4936,27 @@ esac"#,
                 .count(),
             1
         );
+    }
+
+    #[tokio::test]
+    async fn runs_pages_end_at_the_count_or_at_an_empty_page() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        // 45 counted; page 1 holds a run, page 3 none.
+        let gh = fake_gh(
+            root.path(),
+            r#"case "$*" in
+  *page=1*) printf '%s' '{"total_count":45,"workflow_runs":[{"id":41,"run_attempt":1,"display_title":"E2E","created_at":"2026-09-20T10:00:00Z","conclusion":"success","html_url":"https://github.com/o/r/actions/runs/41"}]}' ;;
+  *) printf '%s' '{"total_count":45,"workflow_runs":[]}' ;;
+esac"#,
+        );
+        let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
+        let first = manager.github_runs("o/r", 1).await.unwrap();
+        assert_eq!(first["next_page"], 2);
+        assert_eq!(first["total_count"], 45);
+        let empty = manager.github_runs("o/r", 3).await.unwrap();
+        assert_eq!(empty["runs"], json!([]));
+        assert_eq!(empty["next_page"], Value::Null);
     }
 
     /// A stand-in `gh` for a GitHub start: signed in as octo, dispatches run

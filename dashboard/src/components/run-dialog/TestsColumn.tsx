@@ -22,14 +22,16 @@ export type CatalogStatus = 'loading' | 'failed' | 'ready'
 
 const SKELETON = [180, 140, 210, 160, 120, 190, 150, 200, 130, 170, 110, 185]
 
-function Box({
+export function Box({
   state,
   label,
+  describedBy,
   disabled,
   onToggle,
 }: {
   state: CheckState
   label?: string
+  describedBy?: string
   disabled?: boolean
   onToggle: () => void
 }) {
@@ -39,6 +41,7 @@ function Box({
         type="checkbox"
         className="rd-box-input"
         aria-label={label}
+        aria-describedby={describedBy}
         checked={state === 'on'}
         disabled={disabled}
         ref={(element) => {

@@ -204,19 +204,22 @@ impl PlanStore {
         for run in &runs {
             rows.push(self.run_row(repository, run).await);
         }
-        let more = response["total_count"]
-            .as_u64()
-            .is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
+        let total = response["total_count"].as_u64();
+        // An empty page ends the list even when the count says more: GitHub
+        // counts runs its pages no longer reach.
+        let more = !runs.is_empty()
+            && total.is_some_and(|total| total > u64::from(page) * PAGE_SIZE as u64);
         Ok(json!({
             "repository": repository,
             "page": page,
             "runs": rows,
             "next_page": more.then_some(page + 1),
+            "total_count": total,
         }))
     }
 
     /// A run as listed: dated by its creation, with the start of its latest
-    /// attempt apart.
+    /// attempt apart, and the branch and whole commit it ran on.
     async fn run_row(&self, repository: &str, run: &Value) -> Value {
         let run_id = run["id"].as_u64().unwrap_or_default();
         let attempt = run["run_attempt"].as_u64().unwrap_or(1);
@@ -228,10 +231,13 @@ impl PlanStore {
             "created_at": run["created_at"].as_str().or(run["run_started_at"].as_str()),
             "attempt_started_at": run["run_started_at"],
             "conclusion": run["conclusion"],
+            "head_branch": run["head_branch"],
+            "head_sha": run["head_sha"],
             "url": run["html_url"],
             "release_control_execution_id": title.strip_prefix("E2E · "),
             "execution_id": null,
             "execution_state": null,
+            "execution_error": null,
         });
         match self.cached_contract(repository, run_id, attempt) {
             Some(summary) => merge(&mut row, &summary),
@@ -240,6 +246,7 @@ impl PlanStore {
         if let Ok(execution) = self.read_execution(&import_id(repository, run_id)).await {
             row["execution_id"] = json!(execution.id);
             row["execution_state"] = json!(execution.state);
+            row["execution_error"] = json!(execution.error);
         }
         row
     }

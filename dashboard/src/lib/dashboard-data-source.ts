@@ -209,6 +209,9 @@ export type GithubRun = {
   /** When its latest attempt started. */
   attempt_started_at?: string | null
   conclusion: string | null
+  head_branch?: string | null
+  /** The whole commit; the dialog shortens it. */
+  head_sha?: string | null
   url: string
   release_control_execution_id: string | null
   suite?: string | null
@@ -217,11 +220,14 @@ export type GithubRun = {
   provider?: string | null
   agent?: string | null
   runner_version?: string | null
+  stack?: string | null
   contract_error?: string
   /** Listed before its contract was read; the dialog reads it next. */
   contract_pending?: boolean
   execution_id: string | null
   execution_state: string | null
+  /** Why the execution holding it failed, as its last import said. */
+  execution_error?: string | null
 }
 
 export type GithubRunsResponse = {
@@ -229,6 +235,8 @@ export type GithubRunsResponse = {
   page: number
   runs: GithubRun[]
   next_page: number | null
+  /** Completed runs of the workflow on GitHub, over every page. */
+  total_count?: number | null
 }
 
 export type ExecutionTotals = JsonObject & {

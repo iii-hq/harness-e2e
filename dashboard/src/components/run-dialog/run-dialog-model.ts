@@ -54,13 +54,13 @@ export function visibleTests(
   )
 }
 
-export function checkState(ids: string[], selected: string[]): CheckState {
+export function checkState<T>(ids: T[], selected: T[]): CheckState {
   const ticked = ids.filter((id) => selected.includes(id)).length
   return ticked === 0 ? 'off' : ticked === ids.length ? 'on' : 'some'
 }
 
 /** Ticks every id, or unticks them all when they are all ticked. */
-export function toggleAll(ids: string[], selected: string[]) {
+export function toggleAll<T>(ids: T[], selected: T[]) {
   return checkState(ids, selected) === 'on'
     ? selected.filter((id) => !ids.includes(id))
     : [...selected, ...ids.filter((id) => !selected.includes(id))]

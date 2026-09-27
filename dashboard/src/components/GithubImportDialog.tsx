@@ -1,28 +1,65 @@
-import { ExternalLink } from 'lucide-react'
-import { useCallback, useEffect, useState } from 'react'
 import {
-  buttonClassName,
-  Callout,
-  DataTable,
-  Dialog,
-  StatusBadge,
-} from '@/design-system'
+  AlertCircle,
+  ArrowRight,
+  ArrowUpRight,
+  Check,
+  ExternalLink,
+  GitBranch,
+  LoaderCircle,
+  RefreshCw,
+  Search,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react'
+import { Picker } from '@/components/run-dialog/Picker'
+import {
+  checkState,
+  plural,
+  selectionText,
+  toggleAll,
+} from '@/components/run-dialog/run-dialog-model'
+import { Box } from '@/components/run-dialog/TestsColumn'
+import '@/components/run-dialog/run-dialog.css'
+import '@/components/github-import.css'
+import { Dialog, StatusLabel } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   GithubRun,
+  GithubStatus,
 } from '@/lib/dashboard-data-source'
-import { formatDate } from '@/lib/execution-view'
+import { formatDay, formatDayLabel, formatTime } from '@/lib/format'
+import type { ResultState } from '@/lib/result-status'
+
+const WORKFLOW = 'exact-stack-e2e.yml'
+/** Runs GitHub answers per page (`github_runs`). */
+const PAGE_SIZE = 20
+const SKELETON = [
+  [220, 320],
+  [180, 290],
+  [240, 330],
+  [160, 270],
+  [210, 300],
+  [190, 310],
+  [230, 280],
+]
+
+export type Phase = 'loading' | 'failed' | 'ready'
+export type Show = 'all' | 'new' | 'imported'
+export type Filters = { query: string; branch: string; show: Show }
+
+const NO_FILTERS: Filters = { query: '', branch: '', show: 'all' }
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
-}
-
-function conclusionStatus(conclusion: string | null) {
-  if (conclusion === 'success') return 'passed' as const
-  if (conclusion === 'cancelled') return 'cancelled' as const
-  if (conclusion === 'failure') return 'failed' as const
-  return 'unavailable' as const
 }
 
 /** Newest run first, by when the run was created (a re-run attempt does not
@@ -35,16 +72,23 @@ export function sortGithubRuns(runs: GithubRun[]): GithubRun[] {
   )
 }
 
-/** Runs with what their contracts said merged in; a run the answer left out
- *  stops waiting and says its contract could not be read. */
+type RunAttempt = Pick<GithubRun, 'run_id' | 'run_attempt'>
+
+const sameAttempt = (left: Partial<RunAttempt>, right: RunAttempt) =>
+  left.run_id === right.run_id &&
+  (left.run_attempt ?? right.run_attempt) === right.run_attempt
+
+/** Runs with what their contracts said merged in, by run and attempt (a
+ *  re-run's row waits for its own); a run the answer left out stops waiting
+ *  and says its contract could not be read. */
 export function withContracts(
   runs: GithubRun[],
   read: Array<Partial<GithubRun> & { run_id: number }>,
-  asked: number[],
+  asked: RunAttempt[],
 ): GithubRun[] {
   return runs.map((run) => {
-    if (!asked.includes(run.run_id)) return run
-    const contract = read.find((entry) => entry.run_id === run.run_id)
+    if (!asked.some((entry) => sameAttempt(entry, run))) return run
+    const contract = read.find((entry) => sameAttempt(entry, run))
     return {
       ...run,
       ...contract,
@@ -56,17 +100,456 @@ export function withContracts(
   })
 }
 
-/** What the row offers: import, follow an import in progress, or open (and
- *  import again) an execution this worker already has. */
-export function githubRunAction(run: GithubRun) {
-  if (run.execution_state === 'importing') return 'importing'
+export type RunAction = 'import' | 'importing' | 'imported' | 'failed'
+
+/** Where a run stands here: not imported, being imported (this dialog is
+ *  starting it, or the worker is downloading it), held by an execution, or
+ *  its last import failed and it can be imported again. */
+export function githubRunAction(run: GithubRun, starting = false): RunAction {
+  if (starting || run.execution_state === 'importing') return 'importing'
+  if (run.execution_state === 'failed') return 'failed'
   return run.execution_id ? 'imported' : 'import'
 }
 
-/** Completed exact-stack workflow runs, newest first, each importable as an
- *  execution. The list comes from one quick `gh api` call; each run's suite,
- *  model, profile and runner fill in once its contract is read. `gh` errors
- *  are shown as they come. */
+export type ImportStart = {
+  run_id: number
+  /** The execution the worker began, answered at once as `importing`. */
+  execution?: { execution_id: string; state: string }
+  /** Why the worker refused to begin it. */
+  error?: string
+}
+
+/** Asks the worker to import each run at once; one refused does not stop
+ *  the others. */
+export function startImports(
+  importRun: (
+    runId: number,
+  ) => Promise<{ execution_id: string; state: string }>,
+  ids: number[],
+): Promise<ImportStart[]> {
+  return Promise.all(
+    ids.map((run_id) =>
+      importRun(run_id).then(
+        (execution) => ({ run_id, execution }),
+        (cause) => ({ run_id, error: errorText(cause) }),
+      ),
+    ),
+  )
+}
+
+/** The rows with the executions their imports began. */
+export function withImports(
+  runs: GithubRun[],
+  starts: ImportStart[],
+): GithubRun[] {
+  return runs.map((run) => {
+    const execution = starts.find(
+      (start) => start.run_id === run.run_id,
+    )?.execution
+    return execution
+      ? {
+          ...run,
+          execution_id: execution.execution_id,
+          execution_state: execution.state,
+          execution_error: null,
+        }
+      : run
+  })
+}
+
+/** The rows an execution holds, at the state the worker says it ended in. */
+export function withExecutionState(
+  runs: GithubRun[],
+  executionId: string,
+  state: string,
+  error: string | null,
+): GithubRun[] {
+  return runs.map((run) =>
+    run.execution_id === executionId
+      ? { ...run, execution_state: state, execution_error: error }
+      : run,
+  )
+}
+
+export function shortSha(sha: string | null | undefined) {
+  return sha ? sha.slice(0, 7) : ''
+}
+
+/** What the run's contract says it ran, in one line. */
+export function contractDetail(run: GithubRun) {
+  return [
+    [run.provider, run.model].filter(Boolean).join('/'),
+    `profile ${run.agent || 'default'}`,
+    run.stack ? `stack ${run.stack}` : '',
+    run.runner_version ? `runner ${run.runner_version}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/** Whether a run shows under the text filter, the branch and All / Not
+ *  imported / Imported. */
+export function runMatches(
+  run: GithubRun,
+  { query, branch, show }: Filters,
+  starting = false,
+) {
+  const q = query.trim().toLowerCase()
+  const text = [
+    run.run_id,
+    run.suite_label,
+    run.suite,
+    run.title,
+    run.head_branch,
+    run.head_sha,
+    run.model,
+    run.agent,
+    run.stack,
+    run.runner_version,
+    run.release_control_execution_id,
+  ]
+    .filter(Boolean)
+    .join(' ')
+    .toLowerCase()
+  const action = githubRunAction(run, starting)
+  const imported = action === 'imported' || action === 'importing'
+  return (
+    (!q || text.includes(q)) &&
+    (!branch || run.head_branch === branch) &&
+    (show === 'all' || (show === 'imported') === imported)
+  )
+}
+
+export type RunDay = {
+  key: string
+  label: string
+  /** The day under a relative label (`Sep 24` under `Today`), else empty. */
+  date: string
+  runs: GithubRun[]
+}
+
+/** Runs by the local day they were created, in the order given. */
+export function runDays(runs: GithubRun[], now = new Date()): RunDay[] {
+  const days: RunDay[] = []
+  for (const run of runs) {
+    const created = new Date(run.created_at ?? '')
+    const dated = !Number.isNaN(created.getTime())
+    const key = dated ? created.toDateString() : 'undated'
+    let day = days.find((entry) => entry.key === key)
+    if (!day) {
+      const label = dated ? formatDayLabel(created, now) : 'Date not reported'
+      const date = dated ? formatDay(created, now) : ''
+      day = { key, label, date: date === label ? '' : date, runs: [] }
+      days.push(day)
+    }
+    day.runs.push(run)
+  }
+  return days
+}
+
+/** The footer's two lines: what is selected, what is importing, or why
+ *  nothing can be yet. */
+export function importSummary({
+  phase,
+  selected,
+  again,
+  started,
+}: {
+  phase: Phase
+  selected: number
+  /** Selected runs this worker already imported. */
+  again: number
+  /** Imports this dialog started. */
+  started: number
+}) {
+  if (selected > 0)
+    return {
+      title: `${plural(selected, 'run', 'runs')} selected`,
+      detail: again
+        ? `${again === 1 ? '1 was' : `${again} were`} imported before. Importing again replaces ${again === 1 ? 'its' : 'their'} evidence.`
+        : 'Evidence downloads in the background. You can keep working.',
+      busy: false,
+    }
+  if (started > 0)
+    return {
+      title: `Importing ${plural(started, 'run', 'runs')} in the background`,
+      detail:
+        'You can close this dialog. Each run shows up in Executions as soon as its evidence is in.',
+      busy: true,
+    }
+  return {
+    title: 'No runs selected',
+    detail:
+      phase === 'loading'
+        ? 'Runs appear as soon as GitHub answers.'
+        : phase === 'failed'
+          ? 'Nothing can be imported until GitHub answers.'
+          : 'Tick the runs to import.',
+    busy: false,
+  }
+}
+
+/** The selection kept by a fresh first page: only runs it still lists. */
+export function keepListed(selected: number[], runs: GithubRun[]) {
+  return selected.filter((runId) => runs.some((run) => run.run_id === runId))
+}
+
+/** The line under the list: asking, unavailable, or how many are loaded. */
+export function listStatus(
+  phase: Phase,
+  loaded: number,
+  total: number | null,
+  repository: string | null,
+) {
+  if (phase === 'loading') return 'Asking GitHub for completed runs…'
+  if (phase === 'failed') return 'GitHub unavailable'
+  const count =
+    total === null
+      ? `${plural(loaded, 'run', 'runs')} loaded`
+      : `${loaded} of ${plural(total, 'run', 'runs')} loaded`
+  return repository ? `${count} · ${repository}` : count
+}
+
+function conclusionOf(conclusion: string | null): {
+  state: ResultState
+  label: string
+} {
+  if (conclusion === 'success') return { state: 'passed', label: 'Succeeded' }
+  if (conclusion === 'failure') return { state: 'failed', label: 'Failed' }
+  if (conclusion === 'timed_out') return { state: 'failed', label: 'Timed out' }
+  const label = (conclusion ?? 'unknown').replace(/_/g, ' ')
+  return {
+    state: 'cancelled',
+    label: label.charAt(0).toUpperCase() + label.slice(1),
+  }
+}
+
+/** `gh` text with its `commands` set in mono. */
+function withCode(text: string): ReactNode {
+  return text.split('`').map((part, index) =>
+    index % 2 ? (
+      // biome-ignore lint/suspicious/noArrayIndexKey: fixed pieces of one message
+      <code key={index} className="gi-code">
+        {part}
+      </code>
+    ) : (
+      part
+    ),
+  )
+}
+
+/** One run: what it ran (from its contract), where and when, and whether
+ *  this worker holds it. */
+export function GithubRunRow({
+  run,
+  selected,
+  starting,
+  failure,
+  onToggle,
+  onOpen,
+}: {
+  run: GithubRun
+  selected: boolean
+  /** This dialog is asking the worker to import it. */
+  starting: boolean
+  /** Why the import this dialog asked for did not start. */
+  failure: string | null
+  onToggle: () => void
+  onOpen?: () => void
+}) {
+  const action = githubRunAction(run, starting)
+  const pending = Boolean(run.contract_pending)
+  const problem = failure
+    ? `The import didn’t start: ${failure}`
+    : action === 'failed'
+      ? `The import failed${run.execution_error ? `: ${run.execution_error}` : '.'}`
+      : null
+  const suite = run.suite_label || run.suite
+  const conclusion = conclusionOf(run.conclusion)
+  const rc = run.release_control_execution_id
+  const lineId = useId()
+  return (
+    <div
+      className="gi-row"
+      data-github-run={run.run_id}
+      data-selected={selected || undefined}
+      aria-busy={pending || undefined}
+    >
+      {/* biome-ignore lint/a11y/noLabelWithoutControl: the checkbox is inside Box */}
+      <label className="gi-main">
+        <Box
+          state={selected ? 'on' : 'off'}
+          label={`Import run ${run.run_id}${run.execution_id ? ' again' : ''}`}
+          describedBy={lineId}
+          disabled={action === 'importing'}
+          onToggle={onToggle}
+        />
+        <span className="gi-text">
+          <span className="gi-line" id={lineId}>
+            {pending ? (
+              <>
+                <span
+                  className="rd-skel gi-skel gi-skel-title"
+                  aria-hidden="true"
+                />
+                <span className="ds-visually-hidden">
+                  Reading the run’s contract
+                </span>
+              </>
+            ) : (
+              <span
+                className={suite ? 'gi-suite rd-ellipsis' : 'rd-faint'}
+                title={suite ? undefined : run.title}
+              >
+                {suite || run.title}
+              </span>
+            )}
+            {run.head_branch ? (
+              <span className="gi-branch" title={run.head_branch}>
+                {run.head_branch}
+              </span>
+            ) : null}
+            {run.head_sha ? (
+              <span className="rd-meta" title={run.head_sha}>
+                {shortSha(run.head_sha)}
+              </span>
+            ) : null}
+            {run.run_attempt > 1 ? (
+              <span className="gi-note">attempt {run.run_attempt}</span>
+            ) : null}
+            {rc ? (
+              <span
+                className="gi-note"
+                title={`Dispatched by Release Control, execution ${rc}`}
+              >
+                Release Control{' '}
+                <span className="rd-mono">{rc.slice(0, 8)}</span>
+              </span>
+            ) : null}
+          </span>
+          {pending ? (
+            <span
+              className="rd-skel gi-skel gi-skel-detail"
+              aria-hidden="true"
+            />
+          ) : run.contract_error ? (
+            <span className="rd-hint rd-warning gi-warning">
+              <TriangleAlert size={16} aria-hidden="true" />
+              <span className="rd-ellipsis" title={run.contract_error}>
+                {run.contract_error}
+              </span>
+            </span>
+          ) : (
+            <span className="gi-detail rd-ellipsis">{contractDetail(run)}</span>
+          )}
+          {problem ? (
+            <span
+              className="rd-hint rd-warning gi-warning"
+              data-tone="alert"
+              role="alert"
+            >
+              <AlertCircle size={16} aria-hidden="true" />
+              <span className="rd-ellipsis" title={problem}>
+                {problem}
+              </span>
+            </span>
+          ) : null}
+        </span>
+      </label>
+      <div className="gi-meta">
+        <span className="gi-conclusion">
+          <StatusLabel
+            state={conclusion.state}
+            label={conclusion.label}
+            tinted
+          />
+          <span className="rd-meta">{formatTime(run.created_at)}</span>
+        </span>
+        <a
+          className="gi-run-link rd-meta"
+          href={run.url}
+          target="_blank"
+          rel="noreferrer"
+          aria-label={`Run ${run.run_id} on GitHub`}
+        >
+          #{run.run_id}
+          <ArrowUpRight size={16} aria-hidden="true" />
+        </a>
+      </div>
+      <div className="gi-state">
+        {action === 'imported' ? (
+          <span className="gi-state-label">
+            <Check size={16} aria-hidden="true" className="gi-ok" />
+            Imported
+          </span>
+        ) : null}
+        {action === 'failed' ? (
+          <span className="gi-state-label">
+            <AlertCircle size={16} aria-hidden="true" className="gi-alert" />
+            Import failed
+          </span>
+        ) : null}
+        {action === 'importing' ? (
+          <span className="gi-state-label" role="status">
+            <LoaderCircle size={16} aria-hidden="true" className="gi-spin" />
+            Importing…
+          </span>
+        ) : null}
+        {run.execution_id ? (
+          <a
+            className="rd-ghost rd-small rd-link-button"
+            href={hashForExecution(run.execution_id)}
+            onClick={onOpen}
+          >
+            Open
+            <ArrowRight size={16} aria-hidden="true" />
+          </a>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+function ListError({
+  message,
+  status,
+  onRetry,
+}: {
+  message: string
+  status: GithubStatus | null
+  onRetry: () => void
+}) {
+  return (
+    <div role="alert" className="rd-alert gi-error" data-tone="alert">
+      <AlertCircle size={16} aria-hidden="true" className="rd-alert-icon" />
+      <div className="rd-grow gi-error-body">
+        <p className="rd-strong">GitHub didn’t answer</p>
+        <p className="rd-faint">
+          {status && !status.ready && status.message ? (
+            withCode(status.message)
+          ) : (
+            <>
+              The worker lists runs with the GitHub CLI. Check{' '}
+              <code className="gi-code">gh auth status</code> on the machine
+              that runs it, then retry.
+            </>
+          )}
+        </p>
+        <pre className="gi-pre">{message}</pre>
+      </div>
+      <button type="button" className="rd-ghost rd-button" onClick={onRetry}>
+        <RefreshCw size={16} aria-hidden="true" />
+        Retry
+      </button>
+    </div>
+  )
+}
+
+/** Completed runs of the exact-stack workflow, newest first by day, to
+ *  import as executions, several at once. The list comes from one quick
+ *  `gh api` call a page at a time; each run's suite and subject fill in once
+ *  its contract is read. Importing continues on the worker in the
+ *  background. */
 export function GithubImportDialog({
   bridge,
   open,
@@ -76,77 +559,239 @@ export function GithubImportDialog({
   bridge: DashboardDataBridge | null
   open: boolean
   onClose: () => void
-  onImported: (executionId: string) => void
+  /** Some import started; the executions list has a new row. */
+  onImported: () => void
 }) {
+  const id = useId()
   const [runs, setRuns] = useState<GithubRun[]>([])
   const [repository, setRepository] = useState<string | null>(null)
+  const [github, setGithub] = useState<GithubStatus | null>(null)
+  const [total, setTotal] = useState<number | null>(null)
   const [nextPage, setNextPage] = useState<number | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [importing, setImporting] = useState<number | null>(null)
+  const [phase, setPhase] = useState<Phase>('loading')
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [error, setError] = useState<{ page: number; message: string } | null>(
+    null,
+  )
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS)
+  const [selected, setSelected] = useState<number[]>([])
+  const [starting, setStarting] = useState<number[]>([])
+  const [started, setStarted] = useState<number[]>([])
+  const [failures, setFailures] = useState<Record<number, string>>({})
+  // What the change handler reads: the rows as last rendered.
+  const runsRef = useRef(runs)
+  runsRef.current = runs
+  // Load older leaves with the last page: its focus goes to the status line.
+  const olderRef = useRef<HTMLButtonElement>(null)
+  const statusRef = useRef<HTMLSpanElement>(null)
+
+  const checkGithub = useCallback(() => {
+    bridge?.getGithubStatus().then(setGithub, () => setGithub(null))
+  }, [bridge])
+
+  // Each first page (opening, Refresh, Retry) takes a new turn; answers of
+  // an older turn, a page of older runs included, are dropped.
+  const generation = useRef(0)
 
   const load = useCallback(
     async (page: number) => {
       if (!bridge) return
-      setLoading(true)
+      if (page === 1) generation.current += 1
+      const turn = generation.current
+      const current = () => turn === generation.current
       setError(null)
+      if (page === 1) {
+        setPhase('loading')
+        setLoadingOlder(false)
+        setRuns([])
+      } else setLoadingOlder(true)
       let pending: GithubRun[] = []
       try {
         const response = await bridge.listGithubRuns(page)
+        if (!current()) return
         setRepository(response.repository)
-        setRuns((current) =>
-          sortGithubRuns(
-            page === 1 ? response.runs : [...current, ...response.runs],
-          ),
-        )
+        setTotal(response.total_count ?? null)
         setNextPage(response.next_page)
+        if (page === 1)
+          setSelected((current) => keepListed(current, response.runs))
+        setRuns((current) => {
+          const known = page === 1 ? [] : current
+          // A run created meanwhile shifts the pages by one.
+          const added = response.runs.filter(
+            (run) => !known.some((entry) => entry.run_id === run.run_id),
+          )
+          return sortGithubRuns([...known, ...added])
+        })
+        setPhase('ready')
+        if (
+          !response.next_page &&
+          olderRef.current &&
+          document.activeElement === olderRef.current
+        )
+          statusRef.current?.focus()
         pending = response.runs.filter((run) => run.contract_pending)
       } catch (cause) {
-        setError(errorText(cause))
+        if (!current()) return
+        setError({ page, message: errorText(cause) })
+        if (page === 1) setPhase('failed')
       } finally {
-        setLoading(false)
+        if (current()) setLoadingOlder(false)
       }
       if (pending.length === 0) return
-      const asked = pending.map((run) => run.run_id)
+      const asked = pending.map(({ run_id, run_attempt }) => ({
+        run_id,
+        run_attempt,
+      }))
       const read = await bridge
         .readGithubRunContracts(pending)
         .then((answer) => answer.runs)
         .catch((cause) =>
-          asked.map((run_id) => ({ run_id, contract_error: errorText(cause) })),
+          asked.map((entry) => ({
+            ...entry,
+            contract_error: errorText(cause),
+          })),
         )
-      setRuns((current) => withContracts(current, read, asked))
+      if (!current()) return
+      setRuns((rows) => withContracts(rows, read, asked))
     },
     [bridge],
   )
 
   useEffect(() => {
-    if (open) void load(1)
-  }, [open, load])
+    if (!open) return
+    setFilters(NO_FILTERS)
+    setSelected([])
+    setStarted([])
+    setFailures({})
+    checkGithub()
+    void load(1)
+  }, [open, load, checkGithub])
 
-  const importRun = async (run: GithubRun) => {
-    if (!bridge) return
-    setImporting(run.run_id)
-    setError(null)
-    try {
-      const accepted = await bridge.importGithubRun(run.run_id)
-      setRuns((current) =>
-        current.map((entry) =>
-          entry.run_id === run.run_id
-            ? {
-                ...entry,
-                execution_id: accepted.execution_id,
-                execution_state: accepted.state,
-              }
-            : entry,
-        ),
-      )
-      onImported(accepted.execution_id)
-    } catch (cause) {
-      setError(errorText(cause))
-    } finally {
-      setImporting(null)
+  // An import the worker ended moves its row to Imported or Failed.
+  useEffect(() => {
+    if (!open || !bridge) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    bridge
+      .subscribeRunChanges((payload) => {
+        const executionId = String(payload.execution_id ?? '')
+        if (payload.kind !== 'finished') return
+        const held = runsRef.current.filter(
+          (run) => run.execution_id === executionId,
+        )
+        if (held.length === 0) return
+        void bridge
+          .getExecution(executionId)
+          .then((detail) => {
+            if (cancelled) return
+            const execution = detail.plan_execution
+            setRuns((current) =>
+              withExecutionState(
+                current,
+                executionId,
+                execution?.state ?? 'completed',
+                execution?.error ?? null,
+              ),
+            )
+            setStarted((current) =>
+              current.filter(
+                (runId) => !held.some((run) => run.run_id === runId),
+              ),
+            )
+          })
+          .catch(() => undefined)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      dispose?.()
     }
+  }, [open, bridge])
+
+  const retry = (page: number) => {
+    if (page === 1) checkGithub()
+    void load(page)
   }
+
+  const importSelected = async () => {
+    if (!bridge || selected.length === 0) return
+    const ids = selected
+    setSelected([])
+    setStarting((current) => [...current, ...ids])
+    setStarted((current) => [
+      ...current,
+      ...ids.filter((runId) => !current.includes(runId)),
+    ])
+    setFailures((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([runId]) => !ids.includes(+runId)),
+      ),
+    )
+    const starts = await startImports(
+      (runId) => bridge.importGithubRun(runId),
+      ids,
+    )
+    const refused = starts.filter((start) => start.error !== undefined)
+    setRuns((current) => withImports(current, starts))
+    setFailures((current) => ({
+      ...current,
+      ...Object.fromEntries(
+        refused.map((start) => [start.run_id, start.error]),
+      ),
+    }))
+    setStarted((current) =>
+      current.filter(
+        (runId) => !refused.some((start) => start.run_id === runId),
+      ),
+    )
+    setStarting((current) => current.filter((runId) => !ids.includes(runId)))
+    if (refused.length < starts.length) onImported()
+  }
+
+  const ready = phase === 'ready'
+  const repo = repository ?? github?.repository ?? null
+  const isStarting = (run: GithubRun) => starting.includes(run.run_id)
+  const visible = runs.filter((run) =>
+    runMatches(run, filters, isStarting(run)),
+  )
+  const selectable = visible
+    .filter((run) => githubRunAction(run, isStarting(run)) !== 'importing')
+    .map((run) => run.run_id)
+  const shown = checkState(selectable, selected)
+  const hidden = selected.filter(
+    (runId) => !visible.some((run) => run.run_id === runId),
+  ).length
+  const imported = runs.filter((run) =>
+    runMatches(run, { ...NO_FILTERS, show: 'imported' }, isStarting(run)),
+  ).length
+  const again = runs.filter(
+    (run) =>
+      selected.includes(run.run_id) && githubRunAction(run) === 'imported',
+  ).length
+  const branches = new Map<string, number>()
+  for (const run of runs)
+    if (run.head_branch)
+      branches.set(run.head_branch, (branches.get(run.head_branch) ?? 0) + 1)
+  const summary = importSummary({
+    phase,
+    selected: selected.length,
+    again,
+    started: started.length,
+  })
+  const older = total === null ? null : Math.min(PAGE_SIZE, total - runs.length)
+  const filtered =
+    filters.query.trim() !== '' ||
+    filters.branch !== '' ||
+    filters.show !== 'all'
+  const segments: Array<[Show, string, number]> = [
+    ['all', 'All', runs.length],
+    ['new', 'Not imported', runs.length - imported],
+    ['imported', 'Imported', imported],
+  ]
 
   return (
     <Dialog
@@ -154,207 +799,343 @@ export function GithubImportDialog({
       onClose={onClose}
       size="xl"
       tall
-      bodyPadding
       title="Import from GitHub"
-      description={`Completed exact-stack runs${repository ? ` of ${repository}` : ''}. Importing downloads the run's evidence into this worker; importing again replaces it.`}
-      data-github-import
+      description={
+        <>
+          Completed runs of <span className="rd-mono gi-ink">{WORKFLOW}</span>
+          {repo ? (
+            <>
+              {' '}
+              in <span className="rd-mono gi-ink">{repo}</span>
+            </>
+          ) : null}
+          . Importing copies a run’s evidence into this worker.
+        </>
+      }
+      actions={
+        repo ? (
+          <a
+            className="ds-dialog-close"
+            href={`https://github.com/${repo}/actions/workflows/${WORKFLOW}`}
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Open the workflow on GitHub"
+            title="Open the workflow on GitHub"
+          >
+            <ExternalLink size={16} aria-hidden="true" />
+          </a>
+        ) : null
+      }
+      closeLabel="Close"
+      className="ds-root rd-dialog gi-dialog"
+      bodyClassName="rd-body"
+      footer={
+        <div className="rd-footer">
+          <div className="gi-summary rd-grow" aria-live="polite">
+            {summary.busy ? (
+              <LoaderCircle size={16} aria-hidden="true" className="gi-spin" />
+            ) : null}
+            <div className="rd-summary">
+              <p className="rd-summary-counts">{summary.title}</p>
+              <p className="rd-summary-line rd-faint">{summary.detail}</p>
+            </div>
+          </div>
+          <div className="rd-actions">
+            {hidden > 0 ? (
+              <span
+                className="rd-meta"
+                title="Selected runs the filters hide are imported too"
+              >
+                {hidden} hidden
+              </span>
+            ) : null}
+            <button
+              type="button"
+              className="rd-ghost rd-button rd-cancel"
+              onClick={onClose}
+            >
+              {summary.busy ? 'Close' : 'Cancel'}
+            </button>
+            <button
+              type="button"
+              className="rd-primary"
+              aria-disabled={!ready || selected.length === 0 || undefined}
+              onClick={() => {
+                if (ready && selected.length > 0) void importSelected()
+              }}
+            >
+              {selected.length
+                ? `Import ${plural(selected.length, 'run', 'runs')}`
+                : 'Import runs'}
+            </button>
+          </div>
+        </div>
+      }
     >
-      <div className="grid gap-4">
-        {error ? (
-          <Callout tone="danger" title="GitHub request failed">
-            <span className="whitespace-pre-wrap break-words font-mono text-xs">
-              {error}
+      <section className="rd-tests gi-runs" aria-label="Runs">
+        <div className="rd-tests-toolbar">
+          <div className="rd-search">
+            <Search size={16} aria-hidden="true" className="rd-search-icon" />
+            <input
+              type="text"
+              className="rd-control rd-input rd-search-input"
+              aria-label="Filter runs"
+              placeholder="Filter by suite, branch, commit or run"
+              value={filters.query}
+              disabled={!ready}
+              onChange={(event) =>
+                setFilters({ ...filters, query: event.target.value })
+              }
+            />
+            {filters.query ? (
+              <button
+                type="button"
+                className="rd-ghost rd-search-clear"
+                aria-label="Clear filter"
+                onClick={() => setFilters({ ...filters, query: '' })}
+              >
+                <X size={16} aria-hidden="true" />
+              </button>
+            ) : null}
+          </div>
+          <div className="gi-branches">
+            <span id={`${id}-branch-label`} className="ds-visually-hidden">
+              Branch
             </span>
-          </Callout>
-        ) : null}
-        {runs.length === 0 && loading ? (
-          <p className="m-0 font-mono text-xs text-ink-muted" role="status">
-            loading runs from GitHub…
-          </p>
-        ) : runs.length === 0 && !error ? (
-          <p className="m-0 text-sm text-ink-soft">
-            No completed exact-stack runs found.
-          </p>
-        ) : null}
-        {runs.length > 0 ? (
-          <GithubRunsTable
-            runs={runs}
-            importing={importing}
-            onImport={(run) => void importRun(run)}
-            onOpen={onClose}
-          />
-        ) : null}
-        {nextPage ? (
+            <Picker
+              id={`${id}-branch`}
+              label="Branches"
+              labelledBy={`${id}-branch-label`}
+              icon={
+                <GitBranch size={16} aria-hidden="true" className="rd-faint" />
+              }
+              groups={[
+                {
+                  label: null,
+                  options: [
+                    {
+                      value: '',
+                      label: 'All branches',
+                      meta: String(runs.length),
+                    },
+                    ...[...branches].map(([branch, count]) => ({
+                      value: branch,
+                      label: branch,
+                      meta: String(count),
+                    })),
+                  ],
+                },
+              ]}
+              value={filters.branch}
+              valueLabel={filters.branch || 'All branches'}
+              disabled={!ready}
+              onPick={(branch) => setFilters({ ...filters, branch })}
+            />
+          </div>
+          {/* biome-ignore lint/a11y/useSemanticElements: a toggle group, not a fieldset */}
+          <div
+            role="group"
+            aria-label="Show"
+            className="rd-control rd-segments"
+          >
+            {segments.map(([value, label, count]) => (
+              <button
+                key={value}
+                type="button"
+                className="rd-segment"
+                aria-pressed={filters.show === value}
+                disabled={!ready}
+                onClick={() => setFilters({ ...filters, show: value })}
+              >
+                {label} <span className="rd-meta">{ready ? count : '–'}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="rd-tests-head">
+          {/* biome-ignore lint/a11y/noLabelWithoutControl: the checkbox is inside Box */}
+          <label className="rd-tests-all">
+            <Box
+              state={shown}
+              label="Select every run shown"
+              disabled={!ready || selectable.length === 0}
+              onToggle={() => setSelected(toggleAll(selectable, selected))}
+            />
+            <span className="rd-strong">Runs</span>
+            <span className="rd-meta">
+              {!ready
+                ? ''
+                : visible.length === runs.length
+                  ? `${runs.length} loaded`
+                  : `${visible.length} of ${runs.length} loaded`}
+            </span>
+          </label>
+          <span className="rd-meta rd-push">
+            {selectionText(selected.length, hidden)}
+          </span>
           <button
             type="button"
-            className={buttonClassName({
-              variant: 'secondary',
-              className: 'justify-self-start',
-            })}
-            disabled={loading}
-            aria-busy={loading}
-            onClick={() => void load(nextPage)}
+            className="rd-ghost rd-small"
+            disabled={selected.length === 0}
+            onClick={() => setSelected([])}
           >
-            {loading ? 'loading…' : 'load older runs'}
+            Clear
           </button>
-        ) : null}
-      </div>
-    </Dialog>
-  )
-}
+        </div>
 
-/** One row per run: suite, subject, profile, conclusion, and the import
- *  action or the execution that already holds it. */
-export function GithubRunsTable({
-  runs,
-  importing,
-  onImport,
-  onOpen,
-}: {
-  runs: GithubRun[]
-  importing: number | null
-  onImport: (run: GithubRun) => void
-  onOpen?: () => void
-}) {
-  return (
-    <DataTable
-      caption={`GitHub runs, ${runs.length} loaded`}
-      collapse
-      minWidth="52rem"
-    >
-      <thead>
-        <tr>
-          <th scope="col">run</th>
-          <th scope="col">suite</th>
-          <th scope="col">model</th>
-          <th scope="col">profile</th>
-          <th scope="col">runner</th>
-          <th scope="col">conclusion</th>
-          <th scope="col">
-            <span className="ds-visually-hidden">Import</span>
-          </th>
-        </tr>
-      </thead>
-      <tbody>
-        {runs.map((run) => {
-          const action = githubRunAction(run)
-          const pending = Boolean(run.contract_pending)
-          // Until the contract is read, its cells say so instead of "—".
-          const contract = (value: string | null | undefined, empty = '—') =>
-            pending ? (
-              <span className="text-ink-muted" role="status">
-                reading…
-              </span>
-            ) : (
-              value || empty
-            )
-          return (
-            <tr
-              key={run.run_id}
-              data-github-run={run.run_id}
-              aria-busy={pending || undefined}
+        <div
+          className="rd-tests-list rd-scroll"
+          aria-busy={phase === 'loading' || undefined}
+        >
+          {runDays(visible).map((day) => (
+            // biome-ignore lint/a11y/useSemanticElements: a day of runs, not a fieldset
+            <div
+              key={day.key}
+              role="group"
+              aria-label={day.label}
+              className="rd-family"
             >
-              <td data-label="run">
-                <a
-                  className="inline-flex items-center gap-1 font-mono text-xs text-ink"
-                  href={run.url}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  #{run.run_id}
-                  <ExternalLink size={12} aria-hidden="true" />
-                </a>
-                <span className="block font-mono text-label text-ink-muted">
-                  {run.created_at ? formatDate(run.created_at) : '—'}
-                </span>
-                {run.run_attempt > 1 ? (
-                  <span className="block font-mono text-label text-ink-muted">
-                    attempt {run.run_attempt}
-                    {run.attempt_started_at
-                      ? ` · ${formatDate(run.attempt_started_at)}`
-                      : ''}
-                  </span>
+              <div className="rd-family-head">
+                <span className="rd-family-name">{day.label}</span>
+                {day.date ? (
+                  <span className="rd-faint gi-date">{day.date}</span>
                 ) : null}
-                {run.release_control_execution_id ? (
-                  <span
-                    className="block font-mono text-label text-ink-muted"
-                    title={`Release Control execution ${run.release_control_execution_id}`}
-                  >
-                    RC {run.release_control_execution_id.slice(0, 8)}
-                  </span>
-                ) : null}
-              </td>
-              <td data-label="suite" className="font-mono text-xs">
-                {contract(run.suite_label || run.suite)}
-                {run.contract_error ? (
-                  <span
-                    className="block text-label text-warning"
-                    title={run.contract_error}
-                  >
-                    contract unavailable
-                  </span>
-                ) : null}
-              </td>
-              <td data-label="model" className="font-mono text-xs">
-                {contract(run.model)}
-                <span className="block text-label text-ink-muted">
-                  {pending ? '' : (run.provider ?? '')}
-                </span>
-              </td>
-              <td data-label="profile" className="font-mono text-xs">
-                {contract(run.agent, run.contract_error ? '—' : 'default')}
-              </td>
-              <td data-label="runner" className="font-mono text-xs">
-                {contract(run.runner_version)}
-              </td>
-              <td data-label="conclusion">
-                <StatusBadge
-                  status={conclusionStatus(run.conclusion)}
-                  label={run.conclusion ?? 'unknown'}
+                <span className="rd-count">{day.runs.length}</span>
+              </div>
+              {day.runs.map((run) => (
+                <GithubRunRow
+                  key={run.run_id}
+                  run={run}
+                  selected={selected.includes(run.run_id)}
+                  starting={isStarting(run)}
+                  failure={failures[run.run_id] ?? null}
+                  onToggle={() =>
+                    setSelected(
+                      selected.includes(run.run_id)
+                        ? selected.filter((entry) => entry !== run.run_id)
+                        : [...selected, run.run_id],
+                    )
+                  }
+                  onOpen={onClose}
                 />
-              </td>
-              <td className="text-right">
-                <span className="inline-flex flex-wrap items-center justify-end gap-2">
-                  {action === 'imported' ? (
-                    <span className="font-mono text-label text-ink-muted">
-                      imported
-                    </span>
-                  ) : null}
-                  {run.execution_id ? (
-                    <a
-                      className={buttonClassName({
-                        variant: 'quiet',
-                        size: 'compact',
-                        className: 'no-underline',
-                      })}
-                      href={hashForExecution(run.execution_id)}
-                      onClick={onOpen}
-                    >
-                      {action === 'importing' ? 'importing…' : 'open'}
-                    </a>
-                  ) : null}
+              ))}
+            </div>
+          ))}
+
+          {ready && visible.length === 0 ? (
+            <div className="rd-empty">
+              <Search size={16} aria-hidden="true" className="rd-faint" />
+              {filtered ? (
+                <>
+                  <p className="rd-strong">No loaded run matches.</p>
+                  <p className="rd-faint">
+                    {nextPage
+                      ? 'Older runs may. Clear the filters or load older runs.'
+                      : 'Clear the filters to see every run.'}
+                  </p>
                   <button
                     type="button"
-                    className={buttonClassName({
-                      variant: action === 'import' ? 'secondary' : 'quiet',
-                      size: 'compact',
-                    })}
-                    disabled={importing !== null || action === 'importing'}
-                    aria-busy={importing === run.run_id}
-                    onClick={() => onImport(run)}
+                    className="rd-control rd-button"
+                    onClick={() => setFilters(NO_FILTERS)}
                   >
-                    {importing === run.run_id
-                      ? 'importing…'
-                      : action === 'import'
-                        ? 'import'
-                        : 'import again'}
+                    Clear filters
                   </button>
-                </span>
-              </td>
-            </tr>
-          )
-        })}
-      </tbody>
-    </DataTable>
+                </>
+              ) : (
+                <>
+                  <p className="rd-strong">No completed runs yet.</p>
+                  <p className="rd-faint">
+                    Runs of {WORKFLOW} show up here once they complete on
+                    GitHub.
+                  </p>
+                </>
+              )}
+            </div>
+          ) : null}
+
+          {error && error.page > 1 ? (
+            <ListError
+              message={error.message}
+              status={github}
+              onRetry={() => retry(error.page)}
+            />
+          ) : ready && nextPage ? (
+            <button
+              type="button"
+              ref={olderRef}
+              className="rd-ghost gi-older"
+              aria-disabled={loadingOlder || undefined}
+              aria-busy={loadingOlder || undefined}
+              onClick={() => {
+                if (!loadingOlder) void load(nextPage)
+              }}
+            >
+              {loadingOlder
+                ? 'Loading older runs…'
+                : older === null
+                  ? 'Load older runs'
+                  : `Load ${plural(older, 'older run', 'older runs')}`}
+            </button>
+          ) : null}
+
+          {phase === 'loading' ? (
+            <div className="gi-loading" aria-hidden="true">
+              <div className="gi-loading-head">
+                <span className="rd-skel gi-skel" style={{ width: 120 }} />
+              </div>
+              {SKELETON.map(([first, second], index) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: fixed placeholder rows
+                <div key={index} className="gi-loading-row">
+                  <span className="rd-skel rd-skel-box" />
+                  <span className="gi-loading-lines">
+                    <span
+                      className="rd-skel gi-skel"
+                      style={{ width: first }}
+                    />
+                    <span
+                      className="rd-skel gi-skel gi-skel-thin"
+                      style={{ width: second }}
+                    />
+                  </span>
+                  <span className="rd-skel gi-skel" style={{ width: 90 }} />
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {phase === 'failed' && error ? (
+            <ListError
+              message={error.message}
+              status={github}
+              onRetry={() => retry(1)}
+            />
+          ) : null}
+        </div>
+
+        <div className="rd-catalog">
+          <span className="rd-dot" data-status={phase} aria-hidden="true" />
+          <span
+            ref={statusRef}
+            role="status"
+            tabIndex={-1}
+            className="rd-ellipsis rd-grow"
+          >
+            {listStatus(phase, runs.length, total, repo)}
+          </span>
+          <button
+            type="button"
+            className="rd-ghost rd-icon-button"
+            aria-label="Refresh runs"
+            aria-disabled={phase === 'loading' || loadingOlder || undefined}
+            onClick={() => {
+              if (phase !== 'loading' && !loadingOlder) retry(1)
+            }}
+          >
+            <RefreshCw size={16} aria-hidden="true" />
+          </button>
+        </div>
+      </section>
+    </Dialog>
   )
 }

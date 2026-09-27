@@ -401,6 +401,8 @@ const githubRuns = [
     created_at: '2026-09-18T10:00:00Z',
     attempt_started_at: '2026-09-18T10:00:00Z',
     conclusion: 'success',
+    head_branch: 'main',
+    head_sha: '7a16130c9f1e2d3a4b5c6d7e8f9012345678abcd',
     url: 'https://github.com/iii-hq/harness-e2e/actions/runs/101',
     release_control_execution_id: 'aaaa1111-2222',
     execution_id: null,
@@ -414,6 +416,8 @@ const githubRuns = [
     created_at: '2026-09-20T10:00:00Z',
     attempt_started_at: '2026-09-22T09:00:00Z',
     conclusion: 'failure',
+    head_branch: 'feat/executor-image',
+    head_sha: 'b406036c9f1e2d3a4b5c6d7e8f9012345678abcd',
     url: 'https://github.com/iii-hq/harness-e2e/actions/runs/102',
     release_control_execution_id: 'bbbb3333-4444',
     execution_id: null,
@@ -421,6 +425,34 @@ const githubRuns = [
     contract_pending: true,
   },
 ]
+// The older page: a run this worker imported before.
+const olderGithubRun = {
+  run_id: 103,
+  run_attempt: 1,
+  title: 'E2E · cccc5555-6666',
+  created_at: '2026-09-10T10:00:00Z',
+  attempt_started_at: '2026-09-10T10:00:00Z',
+  conclusion: 'success',
+  head_branch: 'main',
+  head_sha: 'ea1e226c9f1e2d3a4b5c6d7e8f9012345678abcd',
+  url: 'https://github.com/iii-hq/harness-e2e/actions/runs/103',
+  release_control_execution_id: 'cccc5555-6666',
+  suite_label: 'Nightly',
+  model: 'gpt-5.6-terra',
+  provider: 'openai-codex',
+  agent: null,
+  runner_version: '0.11.27',
+  execution_id: 'plan-gh-103',
+  execution_state: 'completed',
+}
+const githubImported = []
+let githubDown = false
+// How the worker ended each GitHub import, read on its finished change.
+const githubEnded = {}
+// Runs a first page leaves out (they went away on GitHub).
+let githubGone = []
+// A first page held back and answered after a newer one.
+let staleGithubList = null
 const started = []
 const deleted = []
 const cancelled = []
@@ -464,6 +496,13 @@ const trigger = async (name, request = {}) => {
       : executions
     return { executions: listed, total: listed.length }
   }
+  if (id === 'execution-get' && githubEnded[request.execution_id])
+    return {
+      detail: {
+        id: request.execution_id,
+        plan_execution: githubEnded[request.execution_id],
+      },
+    }
   if (id === 'execution-get')
     return {
       detail:
@@ -512,13 +551,38 @@ const trigger = async (name, request = {}) => {
     deleted.push(request.execution_id)
     return {}
   }
-  if (id === 'github-runs-list')
+  if (id === 'github-status-get')
+    return {
+      ready: !githubDown,
+      repository: 'iii-hq/harness-e2e',
+      account: githubDown ? null : 'octo',
+      message: githubDown
+        ? "`gh` is not signed in on the worker's machine. Run `gh auth login` there, then reopen this dialog."
+        : null,
+    }
+  if (id === 'github-runs-list') {
+    if (githubDown) throw new Error('gh: HTTP 401: Bad credentials')
+    if (staleGithubList) {
+      const held = staleGithubList
+      staleGithubList = null
+      await held.released
+      return held.answer
+    }
+    const first = (request.page ?? 1) === 1
     return {
       repository: 'iii-hq/harness-e2e',
-      page: 1,
-      runs: githubRuns,
-      next_page: null,
+      page: request.page ?? 1,
+      runs: first
+        ? githubRuns.filter((run) => !githubGone.includes(run.run_id))
+        : [olderGithubRun],
+      next_page: first ? 2 : null,
+      total_count: 3,
     }
+  }
+  if (id === 'github-run-import') {
+    githubImported.push(request.run_id)
+    return { execution_id: `plan-gh-${request.run_id}`, state: 'importing' }
+  }
   if (id === 'github-run-contracts') {
     await contractsRead
     return {
@@ -565,12 +629,24 @@ try {
   )
   await page.keyboard.press('Escape')
 
-  // Import from GitHub: the runs show at once, oldest creation last, and
-  // each row fills in when its contract is read.
+  // Import from GitHub while gh is signed out: the dialog says what to run
+  // on the worker's machine, and Retry lists the runs once it is fixed.
+  githubDown = true
   await empty
     .getByRole('button', { name: 'import from GitHub', exact: true })
     .click()
   const importDialog = page.getByRole('dialog', { name: 'Import from GitHub' })
+  const githubError = importDialog.getByRole('alert')
+  await githubError.getByText('GitHub didn’t answer').waitFor()
+  await githubError.getByText('gh auth login', { exact: true }).waitFor()
+  await githubError.getByText('gh: HTTP 401: Bad credentials').waitFor()
+  await importDialog.getByText('GitHub unavailable', { exact: true }).waitFor()
+  await importDialog.getByText('iii-hq/harness-e2e', { exact: true }).waitFor()
+  githubDown = false
+  await githubError.getByRole('button', { name: 'Retry' }).click()
+  // The runs show at once, oldest creation last, each with its branch, short
+  // commit, attempt and Release Control execution; each fills in when its
+  // contract is read.
   await importDialog.locator('[data-github-run]').first().waitFor()
   assert.deepEqual(
     await importDialog
@@ -578,15 +654,141 @@ try {
       .evaluateAll((rows) => rows.map((row) => row.dataset.githubRun)),
     ['102', '101'],
   )
-  assert.ok((await importDialog.getByText('reading…').count()) > 0)
+  assert.ok(
+    (await importDialog.getByText('Reading the run’s contract').count()) > 0,
+  )
+  const failedRun = importDialog.locator('[data-github-run="102"]')
+  await failedRun.getByText('feat/executor-image', { exact: true }).waitFor()
+  await failedRun.getByText('b406036', { exact: true }).waitFor()
+  await failedRun.getByText('attempt 2', { exact: true }).waitFor()
+  await failedRun.getByText('bbbb3333', { exact: true }).waitFor()
+  await failedRun.getByText('Failed', { exact: true }).waitFor()
   await importDialog
-    .getByText('attempt 2 · Sep 22, 2026', { exact: false })
+    .getByText('2 of 3 runs loaded · iii-hq/harness-e2e', { exact: true })
     .waitFor()
-  await importDialog.getByText('RC bbbb3333', { exact: true }).waitFor()
   releaseContracts()
   await importDialog.getByText('Regression', { exact: true }).waitFor()
-  assert.equal(await importDialog.getByText('reading…').count(), 0)
-  assert.equal(await importDialog.getByText('0.11.28').count(), 2)
+  assert.equal(
+    await importDialog.getByText('Reading the run’s contract').count(),
+    0,
+  )
+  assert.equal(await importDialog.getByText(/runner 0\.11\.28/).count(), 2)
+  // The older page holds a run imported before: it links its execution.
+  await importDialog
+    .getByRole('button', { name: 'Load 1 older run', exact: true })
+    .click()
+  const importedRun = importDialog.locator('[data-github-run="103"]')
+  await importedRun.getByText('Imported', { exact: true }).waitFor()
+  assert.equal(
+    await importedRun.getByRole('link', { name: 'Open' }).getAttribute('href'),
+    '#/ext/harness-e2e/execution/plan-gh-103',
+  )
+  await importDialog
+    .getByText('3 of 3 runs loaded · iii-hq/harness-e2e', { exact: true })
+    .waitFor()
+  // Several at once: every run shown, less the one imported before.
+  await importDialog
+    .getByRole('checkbox', { name: 'Select every run shown' })
+    .check()
+  await importDialog
+    .getByText('1 was imported before. Importing again replaces its evidence.')
+    .waitFor()
+  await importDialog
+    .getByRole('checkbox', { name: 'Import run 103 again' })
+    .uncheck()
+  await importDialog
+    .getByRole('button', { name: 'Import 2 runs', exact: true })
+    .click()
+  // Each row follows its import; the worker goes on in the background.
+  await importDialog.getByText('Importing 2 runs in the background').waitFor()
+  await settled(
+    () => importDialog.getByText('Importing…', { exact: true }).count(),
+    2,
+  )
+  assert.deepEqual(
+    githubImported.sort((left, right) => left - right),
+    [101, 102],
+  )
+  assert.equal(
+    await importDialog
+      .locator('[data-github-run="101"]')
+      .getByRole('link', { name: 'Open' })
+      .getAttribute('href'),
+    '#/ext/harness-e2e/execution/plan-gh-101',
+  )
+  // The worker ends them: one imported, one failed with why. The failed one
+  // does not read as imported and can be ticked to try again.
+  githubEnded['plan-gh-101'] = { state: 'completed', error: null }
+  githubEnded['plan-gh-102'] = {
+    state: 'failed',
+    error: 'gh: HTTP 410: artifact expired',
+  }
+  await page.evaluate(() => {
+    for (const execution_id of ['plan-gh-101', 'plan-gh-102'])
+      for (const handler of window.__changeHandlers ?? [])
+        handler({ kind: 'finished', execution_id })
+  })
+  const importedNow = importDialog.locator('[data-github-run="101"]')
+  const failedNow = importDialog.locator('[data-github-run="102"]')
+  await importedNow.getByText('Imported', { exact: true }).waitFor()
+  await failedNow.getByText('Import failed', { exact: true }).waitFor()
+  await failedNow
+    .getByText('The import failed: gh: HTTP 410: artifact expired')
+    .waitFor()
+  assert.equal(
+    await failedNow.getByText('Imported', { exact: true }).count(),
+    0,
+  )
+  await settled(
+    () => importDialog.getByText('Importing 2 runs in the background').count(),
+    0,
+  )
+  const retryBox = importDialog.getByRole('checkbox', {
+    name: 'Import run 102 again',
+  })
+  assert.ok(await retryBox.isEnabled())
+  // A refresh keeps only the ticked runs it still lists.
+  await retryBox.check()
+  await importDialog.getByText('1 run selected', { exact: true }).waitFor()
+  githubGone = [102]
+  await importDialog.getByRole('button', { name: 'Refresh runs' }).click()
+  await importDialog.getByText('No runs selected', { exact: true }).waitFor()
+  assert.equal(await importDialog.locator('[data-github-run="102"]').count(), 0)
+  githubGone = []
+  await page.keyboard.press('Escape')
+
+  // An answer of an older load is dropped: the dialog opened, closed and
+  // opened again shows the newer list, whatever the first answers late.
+  let releaseStale
+  staleGithubList = {
+    released: new Promise((resolve) => {
+      releaseStale = resolve
+    }),
+    answer: {
+      repository: 'iii-hq/harness-e2e',
+      page: 1,
+      runs: [{ ...githubRuns[0], run_id: 999, title: 'E2E · stale' }],
+      next_page: null,
+      total_count: 1,
+    },
+  }
+  const openImport = () =>
+    empty
+      .getByRole('button', { name: 'import from GitHub', exact: true })
+      .click()
+  await openImport()
+  await importDialog
+    .getByText('Asking GitHub for completed runs…', { exact: true })
+    .waitFor()
+  await page.keyboard.press('Escape')
+  await openImport()
+  await importDialog.locator('[data-github-run="102"]').waitFor()
+  releaseStale()
+  await page.waitForTimeout(300)
+  assert.equal(await importDialog.locator('[data-github-run="999"]').count(), 0)
+  await importDialog
+    .getByText('2 of 3 runs loaded · iii-hq/harness-e2e', { exact: true })
+    .waitFor()
   await page.keyboard.press('Escape')
 
   // One execution: ticked alone, there is nothing to compare it with.
@@ -942,7 +1144,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running with the ended group’s results in, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, GitHub import that says to run gh auth login and retries, rows with branch, short commit, attempt and Release Control, contracts read per row, an older page with a run imported before, several runs imported at once with per-row progress, an import the worker ended as Imported or Failed, a refresh that keeps only listed runs ticked, an older load’s late answer dropped, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running with the ended group’s results in, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()
