@@ -393,9 +393,9 @@ export function SuiteExecutions({
   local: boolean
 }) {
   return (
-    <section className="st-section" aria-labelledby="st-runs">
+    <section className="st-section" aria-labelledby="st-executions">
       <div className="st-section-head">
-        <h3 id="st-runs">Executions of this suite</h3>
+        <h3 id="st-executions">Executions of this suite</h3>
       </div>
       {runs.length === 0 ? (
         <p className="st-note">
@@ -489,8 +489,9 @@ export function SuiteDetail({
   const tick = (id: string, on: boolean) =>
     draft && editing?.onChange(tickDraft(draft, id, on, groups))
 
-  // Into the name when editing starts; back to Edit when it ends.
-  const wasEditing = useRef(Boolean(editing))
+  // Into the name when editing starts (a copy opens editing); back to Edit
+  // when it ends.
+  const wasEditing = useRef(false)
   useEffect(() => {
     if (editing && !wasEditing.current)
       document.getElementById('st-name')?.focus()
