@@ -309,16 +309,15 @@
 /* Content gutters: 24 on a wide pane, 16 below 720; top 20, 16 narrow.
    Every page, list or detail, uses the full pane width: no empty strip on
    the right of a wide pane. Long prose keeps its own reading measure.
-   Unlayered on purpose: the pages still carry width utilities from before
-   the redesign (Tailwind is imported with `important`), and these must
-   win. */
+   Unlayered, so it wins over legacy.css's centred .page-shell; the pages
+   carry no width or padding utilities of their own. */
 .harness-e2e-content .page-shell {
-  width: auto !important;
-  max-width: none !important;
-  margin: 0 !important;
-  padding: 20px 24px 64px !important;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  padding: 20px 24px 64px;
 }
 
 .harness-e2e-shell[data-narrow="true"] .harness-e2e-content .page-shell {
-  padding: 16px 16px 64px !important;
+  padding: 16px 16px 64px;
 }

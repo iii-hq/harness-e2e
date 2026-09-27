@@ -281,7 +281,7 @@ export function SuitesPage() {
   return (
     <div className="ds-root min-h-dvh bg-canvas text-ink">
       <DashboardPageActions active="suites" />
-      <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+      <div className="page-shell">
         <PageHeader
           variant="list"
           title="Suites"

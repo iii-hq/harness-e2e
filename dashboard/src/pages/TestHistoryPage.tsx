@@ -1053,7 +1053,7 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   return (
     <>
       <DashboardPageActions active="tests" context={testId} />
-      <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-24 md:w-[calc(100%_-_3rem)]">
+      <div className="ds-root page-shell">
         <PageHeader
           variant="detail"
           mono

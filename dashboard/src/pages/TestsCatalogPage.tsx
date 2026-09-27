@@ -724,7 +724,7 @@ export function TestsCatalogPage() {
           },
         ]}
       />
-      <div className="ds-root page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+      <div className="ds-root page-shell">
         <PageHeader
           variant="list"
           title="Tests"

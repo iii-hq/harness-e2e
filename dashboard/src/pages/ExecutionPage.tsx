@@ -594,7 +594,7 @@ export function ExecutionPage({
     return (
       <div className="ds-root min-h-dvh bg-canvas text-ink">
         <DashboardPageActions active="executions" />
-        <div className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]">
+        <div className="page-shell">
           <EmptyState
             tone="error"
             title={
@@ -636,11 +636,7 @@ export function ExecutionPage({
     return (
       <div className="ds-root min-h-dvh bg-canvas text-ink">
         <DashboardPageActions active="executions" />
-        <div
-          className="page-shell w-[calc(100%_-_1.5rem)] max-w-[1420px] pt-5 pb-16 md:w-[calc(100%_-_3rem)]"
-          aria-busy="true"
-          role="status"
-        >
+        <div className="page-shell" aria-busy="true" role="status">
           <span className="ds-visually-hidden">Loading execution report</span>
           <div className="grid gap-4">
             <div className="h-12 w-72 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none" />
@@ -824,7 +820,7 @@ export function ExecutionPage({
   return (
     <div className="ds-root execution-page bg-canvas text-ink">
       <DashboardPageActions active="executions" context={title} />
-      <div className="page-shell max-w-[1420px]">
+      <div className="page-shell">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
         <PageHeader
           variant="detail"
@@ -1069,7 +1065,7 @@ export function ExecutionPage({
           </section>
         ) : null}
         {!noRun && (!live || rerunning) ? (
-          <div className="execution-layers mt-6 grid min-w-0 gap-3">
+          <div className="execution-layers grid min-w-0">
             <section
               id="results"
               className="min-w-0 scroll-mt-24"

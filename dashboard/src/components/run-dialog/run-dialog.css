@@ -337,8 +337,8 @@
   flex: 1 1 auto;
   padding: 0 0.875rem;
   border-radius: var(--ds-radius-sm, 6px);
-  background: var(--color-ink, var(--text)) !important;
-  color: var(--color-panel, var(--surface)) !important;
+  background: var(--color-ink, var(--text));
+  color: var(--color-panel, var(--surface));
   font-weight: 500;
   white-space: nowrap;
 }
@@ -827,7 +827,7 @@
   width: 6px;
   height: 6px;
   flex: 0 0 auto;
-  border-radius: 9999px;
+  border-radius: 50%;
   background: var(--rd-ok);
 }
 

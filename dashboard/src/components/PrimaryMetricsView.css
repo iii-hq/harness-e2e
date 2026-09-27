@@ -419,10 +419,6 @@
 .harness-e2e-shell .execution-page {
   min-width: 0;
 }
-.harness-e2e-shell .execution-page > .page-shell {
-  width: 100%;
-  padding: 28px 24px 40px;
-}
 .harness-e2e-shell .execution-header {
   align-items: start;
   gap: 20px 32px;
@@ -561,9 +557,6 @@
   }
 }
 @container harness (max-width: 480px) {
-  .harness-e2e-shell .execution-page > .page-shell {
-    padding: 20px 16px 32px;
-  }
   .harness-e2e-shell .execution-identity {
     padding: 16px;
   }
