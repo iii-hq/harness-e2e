@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   choiceValue,
+  describeStartError,
   executionStartRequest,
   formOnSuite,
   lastUsedModel,
@@ -15,6 +16,7 @@ import {
   withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
 import type {
+  DashboardDataBridge,
   DashboardExecutionSummary,
   ExecutionParameters,
   Stack,
@@ -327,6 +329,30 @@ describe('Run tests from scratch', () => {
       ),
     ).toBe('0123456789abcdef0123456789abcdef')
     expect(runningExecutionId('Select an execution model.')).toBeNull()
+  })
+
+  it('says a busy harness once, in the alert, not again as an error', async () => {
+    const message =
+      'handler error: "Nightly" (plan-0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.'
+    const bridge = {
+      getExecution: async () => ({
+        id: 'plan-0123456789abcdef0123456789abcdef',
+        label: 'Nightly',
+        status: 'running',
+        availability: 'full',
+        subjects: [],
+        reports: [],
+      }),
+    } as unknown as DashboardDataBridge
+    const described = await describeStartError(bridge, new Error(message))
+    expect(described.running).toEqual({
+      id: 'plan-0123456789abcdef0123456789abcdef',
+      title: 'Nightly',
+    })
+    // The alert names what runs; an error beside it is something else.
+    expect(described.error).toBeNull()
+    const other = await describeStartError(bridge, new Error('stack missing'))
+    expect(other).toEqual({ error: 'stack missing', running: null })
   })
 
   it('ticks and unticks a sequential group whole', () => {

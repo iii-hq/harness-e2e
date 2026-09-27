@@ -421,16 +421,19 @@ function errorMessage(cause: unknown) {
 export async function describeStartError(
   bridge: DashboardDataBridge,
   cause: unknown,
-): Promise<{ error: string; running: { id: string; title: string } | null }> {
+): Promise<{
+  error: string | null
+  running: { id: string; title: string } | null
+}> {
   const message = errorMessage(cause)
   const id = runningExecutionId(message)
   const detail = id ? await bridge.getExecution(id).catch(() => null) : null
   if (!id || !detail) return { error: message, running: null }
   const { title } = executionTitle(buildExecutionPresentation(detail))
-  return {
-    error: `"${title}" is still running. Wait for it to finish or cancel it.`,
-    running: { id, title },
-  }
+  // The busy alert is the refusal, in words; the error is kept for anything
+  // else, which then shows under the alert instead of being hidden by it.
+  // Switching Where drops the refusal with the alert.
+  return { error: null, running: { id, title } }
 }
 
 const SUITE_SOURCE: Record<string, string> = {
@@ -846,6 +849,9 @@ export function LocalRunnerDialog({
                   This harness runs one execution at a time. Docker and GitHub
                   don’t wait for it.
                 </p>
+                {error ? (
+                  <p className="rd-alert-message rd-faint">{error}</p>
+                ) : null}
               </div>
               <button
                 type="button"

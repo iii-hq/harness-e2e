@@ -545,6 +545,14 @@
   background: color-mix(in srgb, var(--rd-warn) 12%, transparent);
 }
 
+/* The server's own words under an alert (LyOverlays: mono 11). */
+.rd-alert-message {
+  margin-top: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  overflow-wrap: anywhere;
+}
+
 .rd-alert-icon {
   flex: 0 0 auto;
   margin-top: 0.0625rem;
