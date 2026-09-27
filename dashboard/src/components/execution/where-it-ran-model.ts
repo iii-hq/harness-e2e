@@ -254,8 +254,9 @@ export function githubSteps(execution: PlanExecution) {
       list.every((job) => job.completed_at) ? ends.sort().at(-1) : null,
     )
   }
+  // A job run again comes after a prepare that already happened.
   const prepareState: StepState =
-    prepare?.status === 'completed' || groups.length > 0
+    prepare?.status === 'completed' || groups.length > 0 || execution.rerun
       ? 'done'
       : jobState(prepare, !importing)
   let groupsState: StepState = groupsDone

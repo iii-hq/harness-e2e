@@ -466,6 +466,31 @@ export function EvidenceBundleUnavailable({
   )
 }
 
+/** What a live execution's page shows, one progress at a time. On GitHub
+ *  the steps and group jobs stand in for the results until the import,
+ *  never over results already there (a test run again, a reimport). The
+ *  legacy live panel is for executions without a plan. */
+export function liveView(
+  detail: Pick<DashboardExecutionDetail, 'plan_execution'>,
+  {
+    live,
+    importing,
+    hasResults,
+  }: {
+    live: boolean
+    importing: boolean
+    hasResults: boolean
+  },
+) {
+  const plan = detail.plan_execution
+  const moving = live || importing
+  return {
+    githubLive:
+      plan?.source.kind === 'github' && moving && !plan.rerun && !hasResults,
+    legacyPanel: !(plan && moving),
+  }
+}
+
 /** Where the execution ran, as the status line says it. */
 function statusWhere(detail: DashboardExecutionDetail) {
   const kind = detail.plan_execution?.source.kind
@@ -744,8 +769,13 @@ export function ExecutionPage({
   const docker = detail.plan_execution?.source.kind === 'docker'
   // On GitHub the results arrive with the import: until then the page shows
   // the run's steps and group jobs, not totals of nothing.
-  const githubLive =
-    detail.plan_execution?.source.kind === 'github' && (live || importing)
+  const { githubLive, legacyPanel } = liveView(detail, {
+    live,
+    importing,
+    hasResults: Boolean(
+      scenarioMatrix?.items.some((item) => item.runCount > 0),
+    ),
+  })
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
     : detail.plan_execution?.state === 'cancelling'
@@ -1002,9 +1032,7 @@ export function ExecutionPage({
             failed. {detail.persistence_errors.join(' · ')}
           </p>
         ) : null}
-        {!detail.evidence_error &&
-        (noRun || live) &&
-        !(detail.plan_execution && live && !importing) ? (
+        {!detail.evidence_error && (noRun || live) && legacyPanel ? (
           <LiveState
             presentation={presentation}
             status={status}
