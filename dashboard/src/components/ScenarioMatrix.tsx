@@ -345,10 +345,11 @@ export function itemScore(item: ScenarioMatrixItem): number | null {
   )
 }
 
+/** The reason's first clause, as the data wrote it: its case is left alone
+ *  (it may start with an id or an acronym). */
 function firstClause(text: string) {
   const clause = text.split(/\.\s|\n|:\s/)[0].trim()
-  const short = clause.length > 64 ? `${clause.slice(0, 63)}…` : clause
-  return short.charAt(0).toUpperCase() + short.slice(1)
+  return clause.length > 64 ? `${clause.slice(0, 63)}…` : clause
 }
 
 /** One line under the test id, in the result's terms: why it lost points,
@@ -359,7 +360,7 @@ export function rowNote(item: ScenarioMatrixItem): string {
     if (!reason) return 'No run retained'
     const clause = firstClause(reason)
     return item.objective.status === 'not-run' && !/^Didn’t start/.test(clause)
-      ? `Didn’t start · ${clause.charAt(0).toLowerCase()}${clause.slice(1)}`
+      ? `Didn’t start · ${clause}`
       : clause
   }
   const lost = runCriteria(item.primaryRun).filter(

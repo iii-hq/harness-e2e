@@ -74,7 +74,7 @@ describe('results by test (canvas)', () => {
       reason:
         "scenario 'alertmanager_route_match': cleanup failed after the run: exit 1",
     })
-    expect(rowNote(inconclusive)).toBe('Cleanup failed after the run')
+    expect(rowNote(inconclusive)).toBe('cleanup failed after the run')
     const neverStarted = item({
       scenarioId: 'kanban_c7_live',
       runCount: 0,
@@ -83,6 +83,35 @@ describe('results by test (canvas)', () => {
         "kanban_c7_live: compose::add failed: container 'state': could not download",
     })
     expect(rowNote(neverStarted)).toBe('Didn’t start · compose::add failed')
+  })
+
+  it('leaves the case of a reason as the data wrote it', () => {
+    const acronym = item({
+      scenarioId: 'kanban_c7_live',
+      runCount: 0,
+      objective: { status: 'not-run', label: 'Not run', raw: 'not_run' },
+      reason: 'HTTP 502 from the release download: retry later',
+    })
+    expect(rowNote(acronym)).toBe(
+      'Didn’t start · HTTP 502 from the release download',
+    )
+    const byId = item({
+      scenarioId: 'kanban_c4',
+      objective: { status: 'failed', label: 'Failed', raw: 'failed' },
+      reason: 'kanban_c4: ticket_details missing after reload',
+    })
+    expect(rowNote(byId)).toBe('ticket_details missing after reload')
+    const unavailable = item({
+      scenarioId: 'kanban_c9',
+      runCount: 0,
+      objective: {
+        status: 'unavailable',
+        label: 'Unavailable',
+        raw: 'unavailable',
+      },
+      reason: 'The native run ended without results.',
+    })
+    expect(rowNote(unavailable)).toBe('The native run ended without results.')
   })
 
   it('filters by lost points, not run and full marks', () => {
