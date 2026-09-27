@@ -22,7 +22,7 @@ export type CatalogStatus = 'loading' | 'failed' | 'ready'
 
 const SKELETON = [180, 140, 210, 160, 120, 190, 150, 200, 130, 170, 110, 185]
 
-function Box({
+export function Box({
   state,
   label,
   disabled,

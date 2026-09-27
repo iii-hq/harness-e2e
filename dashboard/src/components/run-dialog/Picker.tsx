@@ -35,6 +35,7 @@ export function Picker({
   disabled = false,
   onPick,
   describedBy,
+  icon,
   children,
 }: {
   id: string
@@ -50,6 +51,8 @@ export function Picker({
   disabled?: boolean
   onPick: (value: string) => void
   describedBy?: string
+  /** Leads the trigger, before the value. */
+  icon?: ReactNode
   children?: ReactNode
 }) {
   const [open, setOpen] = useState(false)
@@ -124,6 +127,7 @@ export function Picker({
           }
         }}
       >
+        {icon}
         <span
           className="rd-trigger-value"
           data-placeholder={placeholder || undefined}
