@@ -105,7 +105,7 @@ export type OperationalStatus =
   | 'failed'
   | 'inconclusive'
   | 'unavailable'
-  /** Planned and never started: a ring in the alert tone. */
+  /** Planned and never started: an open dot in the alert tone. */
   | 'not-run'
   | 'recommendation'
   | 'running'

@@ -433,7 +433,7 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
   if (raw === 'unavailable' || raw === 'not_evaluated') {
     return { status: 'unavailable', label: 'Unavailable', raw }
   }
-  // Planned in this execution and never started (LyOverlays: a ring).
+  // Planned in this execution and never started (LyOverlays: an open dot).
   if (raw === 'not_run') return { status: 'not-run', label: 'Not run', raw }
   if (raw === 'running') return { status: 'running', label: 'Running', raw }
   if (raw === 'queued') return { status: 'queued', label: 'Queued', raw }
