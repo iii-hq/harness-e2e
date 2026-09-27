@@ -296,6 +296,24 @@ impl Controller {
         Ok(model)
     }
 
+    /// A page of a test's history, with each run's sessions read from its
+    /// native results.
+    pub(super) async fn test_history(
+        &self,
+        request: super::read_model::TestHistoryRequest,
+    ) -> Result<super::read_model::TestHistoryResponse> {
+        let model = self.read_model().await?;
+        let mut history = model.test_history(request)?;
+        let summaries = self.execution_summaries().await?;
+        let runs_dir = self.runs_dir.clone();
+        tokio::task::spawn_blocking(move || {
+            model.attach_run_details(&mut history, &summaries, &runs_dir);
+            history
+        })
+        .await
+        .context("read the runs of a test history")
+    }
+
     async fn invalidate_summaries(&self) {
         self.read_model.write().await.take();
     }

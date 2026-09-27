@@ -3,13 +3,13 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-#[cfg(test)]
 use std::path::Path;
 
 use super::assessment_projection::{
     assessment_profile_sha256, contracts_for_scenario, summarize, AssessmentSummary,
 };
 use super::presenter::{stored_execution_summary, MAX_EXECUTIONS};
+use super::run_sessions::{read_run_details, results_file, HistoryRun};
 #[cfg(test)]
 use super::store::load_runs;
 use super::store::StoredRun;
@@ -184,6 +184,14 @@ pub(super) struct TestObservation {
     pub median_function_calls: Option<f64>,
     pub median_function_call_errors: Option<f64>,
     pub median_turns: Option<f64>,
+    pub runs: Vec<HistoryRun>,
+    /// The execution as the Executions list shows it: the plan execution the
+    /// run belongs to, when it has one. Only a history page carries it.
+    pub plan_execution_id: Option<String>,
+    /// That execution's name, when it has one.
+    pub execution_label: Option<String>,
+    /// The agent profile the subject ran with, when it had one.
+    pub agent_profile: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -464,6 +472,9 @@ pub(crate) struct DashboardReadModel {
     cohorts: BTreeMap<String, CohortDescriptor>,
     evaluated_versions: BTreeMap<(String, String), EvaluatedVersionDescriptor>,
     tests: BTreeMap<String, TestEntry>,
+    /// Where each execution's native results are, relative to the runs
+    /// directory. An execution missing here is read from its own directory.
+    result_paths: BTreeMap<String, String>,
 }
 
 impl DashboardReadModel {
@@ -473,7 +484,7 @@ impl DashboardReadModel {
         records: Vec<ExecutionRecord>,
         discarded: &BTreeSet<String>,
     ) -> Result<Self> {
-        Self::indexed(
+        let mut model = Self::indexed(
             records
                 .iter()
                 .map(|record| match record.dashboard_projection.as_ref() {
@@ -483,7 +494,12 @@ impl DashboardReadModel {
                 })
                 .collect::<Result<Vec<_>>>()?,
             discarded,
-        )
+        )?;
+        model.result_paths = records
+            .into_iter()
+            .filter_map(|record| Some((record.execution_id, record.result_path?)))
+            .collect();
+        Ok(model)
     }
 
     #[cfg(test)]
@@ -544,6 +560,7 @@ impl DashboardReadModel {
             cohorts: BTreeMap::new(),
             evaluated_versions: BTreeMap::new(),
             tests: current_tests()?,
+            result_paths: BTreeMap::new(),
         };
         for projection in projections {
             if projection.summary["id"]
@@ -928,6 +945,7 @@ impl DashboardReadModel {
             .tests
             .get(&request.test_id)
             .with_context(|| format!("unknown test '{}'", request.test_id))?;
+        let all = request.test_version.as_deref() == Some(ALL_DEFINITIONS);
         let test_version = request
             .test_version
             .clone()
@@ -943,12 +961,19 @@ impl DashboardReadModel {
             .or_else(|| entry.current_version.clone())
             .or_else(|| entry.versions.keys().next().cloned())
             .context("test has no version")?;
-        let version = entry.versions.get(&test_version).with_context(|| {
-            format!("unknown test '{}' version {test_version}", request.test_id)
-        })?;
-        let mut observations = version
-            .observations
-            .iter()
+        let versions = if all {
+            entry.versions.values().collect::<Vec<_>>()
+        } else {
+            vec![entry.versions.get(&test_version).with_context(|| {
+                format!("unknown test '{}' version {test_version}", request.test_id)
+            })?]
+        };
+        let in_scope = || {
+            versions
+                .iter()
+                .flat_map(|version| version.observations.iter())
+        };
+        let mut observations = in_scope()
             .filter(|observation| history_matches(observation, &request))
             .collect::<Vec<_>>();
         observations.sort_by(|left, right| {
@@ -979,15 +1004,13 @@ impl DashboardReadModel {
             .into_iter()
             .map(|(id, observations)| history_series(id, &observations))
             .collect();
-        let mut cases = version
-            .observations
-            .iter()
+        let mut cases = in_scope()
             .map(|observation| observation.case_id.clone())
             .collect::<BTreeSet<_>>();
         let mut subjects = BTreeSet::new();
         let mut subject_models = BTreeMap::<String, BTreeSet<String>>::new();
         let mut systems = BTreeMap::new();
-        for observation in &version.observations {
+        for observation in in_scope() {
             if history_matches(observation, &request) {
                 cases.insert(observation.case_id.clone());
                 subjects.insert(format!(
@@ -1028,6 +1051,57 @@ impl DashboardReadModel {
             total,
             next_cursor: (end < total).then(|| format!("{}:{end}", self.revision)),
         })
+    }
+
+    /// Completes a history page with what only the runs' native results and
+    /// the listed executions hold: each run's sessions, calls and
+    /// criteria, and the execution each observation is listed under.
+    pub(super) fn attach_run_details(
+        &self,
+        history: &mut TestHistoryResponse,
+        summaries: &[Value],
+        runs_dir: &Path,
+    ) {
+        let summary = |id: &str| summaries.iter().find(|summary| summary["id"] == id);
+        let text = |value: &Value| {
+            value
+                .as_str()
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .map(str::to_string)
+        };
+        for observation in &mut history.observations {
+            let native = summary(&observation.execution_id);
+            let plan = native
+                .and_then(|native| native["parent_plan_execution_id"].as_str())
+                .and_then(summary);
+            observation.plan_execution_id = plan.and_then(|plan| text(&plan["id"]));
+            observation.execution_label = plan.or(native).and_then(|value| text(&value["label"]));
+            observation.agent_profile = native
+                .into_iter()
+                .chain(plan)
+                .find_map(|value| text(&value["parameters"]["agent"]));
+
+            let path = results_file(
+                runs_dir.join(
+                    self.result_paths
+                        .get(&observation.execution_id)
+                        .unwrap_or(&observation.execution_id),
+                ),
+            );
+            match read_run_details(&path, &history.test_id, &observation.case_id) {
+                Ok(mut details) => {
+                    for run in &mut observation.runs {
+                        run.details = details.remove(&(run.run_id.clone(), run.attempt_id.clone()));
+                    }
+                }
+                Err(error) => tracing::debug!(
+                    execution_id = %observation.execution_id,
+                    error = %format!("{error:#}"),
+                    "a history run has no readable native results"
+                ),
+            }
+        }
     }
 
     fn validate_comparison_context(
@@ -1267,6 +1341,9 @@ fn evaluated_version(
 /// whose case never materialized has no definition digest and is grouped
 /// under this marker instead of being merged into a real definition.
 pub(super) const UNMATERIALIZED_DEFINITION: &str = "unmaterialized";
+
+/// Asks the history for the executions of every definition at once.
+pub(super) const ALL_DEFINITIONS: &str = "all";
 
 fn definition_key(scenario: &E2eScenarioReport) -> String {
     scenario
@@ -1653,6 +1730,24 @@ fn public_observation(observation: &&Observation) -> TestObservation {
         median_function_calls: median(function_calls),
         median_function_call_errors: median(function_call_errors),
         median_turns: median(turns),
+        runs: observation
+            .runs
+            .iter()
+            .map(|run| HistoryRun {
+                run_id: run.assessment.run_id.clone(),
+                attempt_id: run.assessment.attempt_id.clone(),
+                status: run.status,
+                completion: run.completion,
+                score: run.score,
+                turns: run.turns,
+                function_calls: run.function_calls,
+                function_call_errors: run.function_call_errors,
+                details: None,
+            })
+            .collect(),
+        plan_execution_id: None,
+        execution_label: None,
+        agent_profile: None,
     }
 }
 
