@@ -7,8 +7,8 @@
 //
 // It opens the worker's standalone page (#/worker/harness-e2e), never the
 // e2e tab, and sets the dashboard's route before the bundle mounts, so the
-// Console's saved layout is left alone. Calls that change state (start,
-// cancel, delete, rename, save, import) are refused.
+// Console's saved layout is left alone. Only the reads the pages make go
+// through (READS below); any other function is refused.
 //
 //   node scripts/preview-bundle.mjs executions tests suites stacks
 //   node scripts/preview-bundle.mjs --dist dist-console --out /tmp/shots executions
@@ -48,17 +48,35 @@ const bundle = {
   'page-real.js': readFileSync(path.join(distDir, 'page.js')),
   'styles.css': readFileSync(path.join(distDir, 'styles.css')),
 }
+// The functions the dashboard only reads through (console-entry.tsx):
+// lists, gets, evidence and GitHub contracts. Anything else, and anything
+// outside e2e::dashboard::, is refused.
+const READS = [
+  'executions-list',
+  'execution-get',
+  'evidence-read',
+  'github-runs-list',
+  'github-run-contracts',
+  'github-status-get',
+  'evaluated-versions-list',
+  'tests-list',
+  'test-version-get',
+  'test-history-get',
+  'catalog-get',
+  'suites-list',
+  'stacks-list',
+  'credentials-list',
+].map((name) => `e2e::dashboard::${name}`)
 // The Console loads page.js; this one sets the route and guards the calls,
 // then hands over to the bundle.
 const wrapper = `import setup from './page-real.js'
+const READS = new Set(${JSON.stringify(READS)})
 export default function (host) {
   if (window.__previewRoute) history.replaceState(null, '', window.__previewRoute)
-  const trigger = (id, payload, options) => {
-    const name = String(id).replace('e2e::dashboard::', '')
-    if (/start|cancel|delete|rename|create|update|rerun|import|save|set/.test(name))
-      return Promise.reject(new Error('preview refuses ' + name))
-    return host.iii.trigger(id, payload, options)
-  }
+  const trigger = (id, payload, options) =>
+    READS.has(String(id))
+      ? host.iii.trigger(id, payload, options)
+      : Promise.reject(new Error('preview refuses ' + id))
   // The host's client is frozen: a copy of its own members, trigger guarded.
   return setup({ ...host, iii: { ...host.iii, trigger } })
 }`
