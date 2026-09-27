@@ -255,7 +255,6 @@ export type CatalogRowView = {
   sparkLabel: string
   runs: number
   runsTitle: string
-  runsTotal: number
   lastAt: string | null
   suites: CatalogSuite[]
   search: string
@@ -317,7 +316,6 @@ export function catalogRowView(
       : 'No scores',
     runs: row.runs_current,
     runsTitle: `${row.runs_current} on the current definition · ${row.runs_total} retained in all`,
-    runsTotal: row.runs_total,
     lastAt: last?.at ?? null,
     suites,
     search: [row.test_id, summary, ...suites.map((suite) => suite.label)]
@@ -349,7 +347,8 @@ export function filterCatalog(
     name: byName,
     last_run: (a, b) =>
       (b.lastAt ?? '').localeCompare(a.lastAt ?? '') || byName(a, b),
-    runs: (a, b) => b.runsTotal - a.runsTotal || byName(a, b),
+    // What the Runs column shows: runs on the current definition.
+    runs: (a, b) => b.runs - a.runs || byName(a, b),
   }
   return [...matched].sort(by[filters.sort])
 }

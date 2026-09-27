@@ -215,7 +215,7 @@ describe('tests catalog', () => {
       definition: 'previous',
     },
     recent_scores: [100],
-    runs_total: 1,
+    runs_total: 9,
   })
   const never = test('minimal_path')
   const suites = suitesByTest([
@@ -306,7 +306,12 @@ describe('tests catalog', () => {
       'kanban_c2_persistence',
       'minimal_path',
     ])
-    expect(ids({ sort: 'runs' })[0]).toBe('kanban_c1_foundation')
+    // By the runs the column shows (3, 0, 0), not all retained (5, 9, 0).
+    expect(ids({ sort: 'runs' })).toEqual([
+      'kanban_c1_foundation',
+      'kanban_c2_persistence',
+      'minimal_path',
+    ])
   })
 
   it('groups by family, Standalone last, noting how much of it is current', () => {
