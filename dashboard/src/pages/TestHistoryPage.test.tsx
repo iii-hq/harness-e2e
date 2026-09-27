@@ -4,8 +4,11 @@ import {
   historyFacts,
   historyStateFromParams,
   historyStateToParams,
+  listedRuns,
+  resultChoices,
+  selectionHint,
 } from '@/pages/TestHistoryPage'
-import { history } from '@/test-fixtures/test-history'
+import { formFlow, history } from '@/test-fixtures/test-history'
 
 const A = `sha256:${'a1'.repeat(32)}`
 const C = `sha256:${'c3'.repeat(32)}`
@@ -51,5 +54,32 @@ describe('test history page state', () => {
       { label: 'Scored on', value: '2 criteria · 100 points' },
     ])
     expect(historyFacts(null, null)).toEqual([])
+  })
+})
+
+describe('the runs toolbar', () => {
+  it('counts the results and filters by result and profile', () => {
+    expect(resultChoices(formFlow.observations)).toEqual([
+      { id: 'all', label: 'All', count: 6 },
+      { id: 'full', label: 'Full marks', count: 3 },
+      { id: 'lost', label: 'Lost points', count: 3 },
+    ])
+    expect(
+      listedRuns(formFlow.observations, { result: 'lost', profile: '' }).map(
+        (item) => item.mean_score,
+      ),
+    ).toEqual([90, 0, 85])
+    expect(
+      listedRuns(formFlow.observations, {
+        result: '',
+        profile: 'profile ade-solo-builder',
+      }),
+    ).toHaveLength(1)
+  })
+
+  it('says what the ticks mean', () => {
+    expect(selectionHint([])).toBe('Tick two runs to compare them')
+    expect(selectionHint(['x'])).toBe('A ticked · tick B')
+    expect(selectionHint(['x', 'y'])).toBe('A and B ticked')
   })
 })

@@ -4,11 +4,14 @@ import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
   axisTop,
   definitionChoices,
+  differenceText,
   losses,
   metricValue,
   niceMax,
+  scoreStatus,
   staleNotice,
   summaryFigures,
+  toggleSelection,
 } from '@/lib/test-history'
 import {
   formFlow,
@@ -138,5 +141,35 @@ describe('the chart and the summary', () => {
     expect(renderToStaticMarkup(<LossesPanel losses={[]} />)).toContain(
       'Every scored run met every criterion.',
     )
+  })
+})
+
+describe('a run', () => {
+  it('reads its score as the canvas does', () => {
+    expect(scoreStatus(run('9:13'))).toBe('lost 10')
+    expect(scoreStatus(run('7:50'))).toBe('no points')
+    expect(scoreStatus(run('3:29'))).toBe('full marks')
+    const limit = run('3:29')
+    limit.mean_score = null
+    if (limit.runs) {
+      limit.runs[0].status = 'resource_limit'
+      limit.runs[0].score = null
+    }
+    expect(scoreStatus(limit)).toBe('hit a limit')
+  })
+
+  it('ticks A first, then B, and never a third', () => {
+    expect(toggleSelection([], 'a')).toEqual(['a'])
+    expect(toggleSelection(['a'], 'b')).toEqual(['a', 'b'])
+    expect(toggleSelection(['a', 'b'], 'c')).toEqual(['a', 'b'])
+    expect(toggleSelection(['a', 'b'], 'a')).toEqual(['b'])
+  })
+
+  it('writes B minus A without calling either better', () => {
+    const count = (value: number) => String(value)
+    expect(differenceText(90, 100, count, 'points')).toBe('+10 pts')
+    expect(differenceText(196, 53, count)).toBe('−143 · −73%')
+    expect(differenceText(4, 4, count)).toBe('no change')
+    expect(differenceText(null, 4, count)).toBe('—')
   })
 })
