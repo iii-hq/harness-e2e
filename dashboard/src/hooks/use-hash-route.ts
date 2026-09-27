@@ -19,7 +19,9 @@ export type DashboardRoute =
   | { page: 'compare'; left: string | null; right: string | null }
   /** Two evaluated system versions of the test catalog. */
   | { page: 'versions'; left: string | null; right: string | null }
-  | { page: 'test-history'; testId: string }
+  /** A test's runs; `compare` is two of them, A and B, in the hash's
+   *  `a` and `b` params. */
+  | { page: 'test-history'; testId: string; compare?: boolean }
   | { page: 'suites' }
   | { page: 'stacks' }
 
@@ -89,7 +91,9 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   const [head, ...rest] = segments
 
   if (head === 'tests' && rest[0]) {
-    return { page: 'test-history', testId: rest[0] }
+    return rest[1] === 'compare'
+      ? { page: 'test-history', testId: rest[0], compare: true }
+      : { page: 'test-history', testId: rest[0] }
   }
   if (workspaceViews.has(head as WorkspaceView)) {
     return { page: 'workspace', view: head as WorkspaceView }
@@ -179,6 +183,18 @@ export function hashForTestHistory(testId: string): string {
   return dashboardHash(`tests/${encodeSegment(testId)}`)
 }
 
+/** Two runs of a test, A (the reference) and B, by execution id. */
+export function hashForRunComparison(
+  testId: string,
+  a: string,
+  b: string,
+): string {
+  return hashWithParams(
+    dashboardHash(`tests/${encodeSegment(testId)}/compare`),
+    new URLSearchParams({ a, b }),
+  )
+}
+
 export function hashForSuites(): string {
   return dashboardHash('suites')
 }
@@ -192,7 +208,8 @@ export function routeRenderIdentity(route: DashboardRoute): string {
   if (route.page === 'compare' || route.page === 'versions') {
     return `${route.page}:${route.left ?? ''}:${route.right ?? ''}`
   }
-  if (route.page === 'test-history') return `${route.page}:${route.testId}`
+  if (route.page === 'test-history')
+    return `${route.page}:${route.testId}${route.compare ? ':compare' : ''}`
   if (route.page === 'workspace') return `workspace:${route.view}`
   return route.page
 }

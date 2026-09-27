@@ -1,0 +1,1066 @@
+{
+  "history": {
+    "test_id": "form_flow_build",
+    "test_version": "all",
+    "current_version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+    "available_versions": [
+      {
+        "version": "sha256:6831b6286831b6286831b6286831b6286831b6286831b6286831b6286831b628",
+        "execution_count": 1,
+        "run_count": 1,
+        "last_seen": "2026-09-24T06:56:00Z",
+        "observation_count": 1
+      },
+      {
+        "version": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "execution_count": 4,
+        "run_count": 4,
+        "last_seen": "2026-09-24T13:01:00Z",
+        "observation_count": 4
+      },
+      {
+        "version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+        "execution_count": 1,
+        "run_count": 1,
+        "last_seen": "2026-09-24T18:29:00Z",
+        "observation_count": 1
+      }
+    ],
+    "cases": ["form_flow_build:seed-1"],
+    "subjects": ["claude-code/claude-opus-5-5", "deepseek/deepseek-flash"],
+    "subject_models": [
+      {
+        "provider": "claude-code",
+        "models": ["claude-opus-5-5"]
+      },
+      {
+        "provider": "deepseek",
+        "models": ["deepseek-flash"]
+      }
+    ],
+    "systems": [
+      {
+        "id": "system-a",
+        "label": "Source 0123456789ab"
+      },
+      {
+        "id": "system-b",
+        "label": "Source fedcba987654"
+      }
+    ],
+    "series": [],
+    "observations": [
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150005",
+        "evaluated_version_id": "system-b",
+        "cohort_id": "cohort-claude-opus-5-5",
+        "completed_at": "2026-09-24T18:29:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-1768da69",
+        "assessment_profile_sha256": "assessment-1768da69",
+        "status": "passed",
+        "mean_score": 100,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+        "seed": 1,
+        "system_version_id": "system-b",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "claude-code",
+        "subject_model": "claude-opus-5-5",
+        "median_cost_usd": null,
+        "median_tokens": 72473,
+        "median_duration_seconds": 1033,
+        "median_function_calls": 179,
+        "median_function_call_errors": 17,
+        "median_turns": 104,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00005",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00005-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 100,
+            "turns": 104,
+            "function_calls": 179,
+            "function_call_errors": 17,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4db0005",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 104,
+                  "function_calls": 179,
+                  "function_call_errors": 17,
+                  "duration_ms": 1028000
+                }
+              ],
+              "child_sessions": 0,
+              "calls_by_worker": [
+                {
+                  "worker": "coder",
+                  "calls": 80
+                },
+                {
+                  "worker": "browser",
+                  "calls": 40
+                },
+                {
+                  "worker": "form_flow",
+                  "calls": 30
+                },
+                {
+                  "worker": "engine",
+                  "calls": 12
+                },
+                {
+                  "worker": "harness",
+                  "calls": 9
+                },
+                {
+                  "worker": "canvas",
+                  "calls": 8
+                }
+              ],
+              "input_tokens": 5563,
+              "output_tokens": 66910,
+              "cache_read_tokens": 14286203,
+              "cache_write_tokens": 243550,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "function_surface=true"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 20,
+                  "reason": "met"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 15,
+                  "reason": "met"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 5,
+                  "reason": "met"
+                }
+              ]
+            },
+            "duration_seconds": 1033
+          }
+        ],
+        "plan_execution_id": "plan-bc0664bbbcff463cfe00bbecfce283f9",
+        "execution_label": null,
+        "agent_profile": "ade-worker-builder"
+      },
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150004",
+        "evaluated_version_id": "system-b",
+        "cohort_id": "cohort-claude-opus-5-5",
+        "completed_at": "2026-09-24T13:01:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-0c5c0902",
+        "assessment_profile_sha256": "assessment-0c5c0902",
+        "status": "passed",
+        "mean_score": 100,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "seed": 1,
+        "system_version_id": "system-b",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "claude-code",
+        "subject_model": "claude-opus-5-5",
+        "median_cost_usd": null,
+        "median_tokens": 41235,
+        "median_duration_seconds": 509,
+        "median_function_calls": 75,
+        "median_function_call_errors": 16,
+        "median_turns": 53,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00004",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00004-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 100,
+            "turns": 53,
+            "function_calls": 75,
+            "function_call_errors": 16,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4db0004",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 53,
+                  "function_calls": 75,
+                  "function_call_errors": 16,
+                  "duration_ms": 504000
+                }
+              ],
+              "child_sessions": 0,
+              "calls_by_worker": [
+                {
+                  "worker": "coder",
+                  "calls": 30
+                },
+                {
+                  "worker": "form_flow",
+                  "calls": 17
+                },
+                {
+                  "worker": "browser",
+                  "calls": 9
+                },
+                {
+                  "worker": "shell",
+                  "calls": 7
+                },
+                {
+                  "worker": "engine",
+                  "calls": 5
+                },
+                {
+                  "worker": "fs",
+                  "calls": 4
+                },
+                {
+                  "worker": "canvas",
+                  "calls": 2
+                },
+                {
+                  "worker": "directory",
+                  "calls": 1
+                }
+              ],
+              "input_tokens": 6044,
+              "output_tokens": 35191,
+              "cache_read_tokens": 4280135,
+              "cache_write_tokens": 117892,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "function_surface=true"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 20,
+                  "reason": "met"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 15,
+                  "reason": "met"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 5,
+                  "reason": "met"
+                }
+              ]
+            },
+            "duration_seconds": 509
+          }
+        ],
+        "plan_execution_id": "plan-cf6ab5f943136bb54a954bc763a26eff",
+        "execution_label": "Opus 5.5 \u00b7 ade-worker-builder \u00b7 wake fix",
+        "agent_profile": "ade-solo-builder"
+      },
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150003",
+        "evaluated_version_id": "system-a",
+        "cohort_id": "cohort-claude-opus-5-5",
+        "completed_at": "2026-09-24T12:13:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-0c5c0902",
+        "assessment_profile_sha256": "assessment-0c5c0902",
+        "status": "passed",
+        "mean_score": 90,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "seed": 1,
+        "system_version_id": "system-a",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "claude-code",
+        "subject_model": "claude-opus-5-5",
+        "median_cost_usd": null,
+        "median_tokens": 170900,
+        "median_duration_seconds": 2268,
+        "median_function_calls": 323,
+        "median_function_call_errors": 48,
+        "median_turns": 196,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00003",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00003-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 90,
+            "turns": 196,
+            "function_calls": 323,
+            "function_call_errors": 48,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4dbc794",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 37,
+                  "function_calls": 60,
+                  "function_call_errors": 7,
+                  "duration_ms": 2233381
+                },
+                {
+                  "session_id": "form-flow-lead-8c2e",
+                  "parent_session_id": "e2e_1b116e699dc24ca9b0d8dde8e4dbc794",
+                  "depth": 1,
+                  "label": "tech-lead",
+                  "turns": 39,
+                  "function_calls": 79,
+                  "function_call_errors": 8,
+                  "duration_ms": 1917180
+                },
+                {
+                  "session_id": "form-flow-backend-3d9a",
+                  "parent_session_id": "form-flow-lead-8c2e",
+                  "depth": 2,
+                  "label": null,
+                  "turns": 41,
+                  "function_calls": 74,
+                  "function_call_errors": 21,
+                  "duration_ms": 729134
+                },
+                {
+                  "session_id": "form-flow-frontend-6b1e",
+                  "parent_session_id": "form-flow-lead-8c2e",
+                  "depth": 2,
+                  "label": null,
+                  "turns": 79,
+                  "function_calls": 110,
+                  "function_call_errors": 12,
+                  "duration_ms": 831708
+                }
+              ],
+              "child_sessions": 3,
+              "calls_by_worker": [
+                {
+                  "worker": "browser",
+                  "calls": 32
+                },
+                {
+                  "worker": "coder",
+                  "calls": 9
+                },
+                {
+                  "worker": "form_flow",
+                  "calls": 7
+                },
+                {
+                  "worker": "engine",
+                  "calls": 4
+                },
+                {
+                  "worker": "harness",
+                  "calls": 4
+                },
+                {
+                  "worker": "directory",
+                  "calls": 2
+                },
+                {
+                  "worker": "canvas",
+                  "calls": 1
+                },
+                {
+                  "worker": "console",
+                  "calls": 1
+                }
+              ],
+              "input_tokens": 42449,
+              "output_tokens": 128451,
+              "cache_read_tokens": 17075530,
+              "cache_write_tokens": 531575,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "compose_valid=true, worker_ready=true, function_surface=false"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 20,
+                  "reason": "met"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 15,
+                  "reason": "met"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 5,
+                  "reason": "met"
+                }
+              ]
+            },
+            "duration_seconds": 2268
+          }
+        ],
+        "plan_execution_id": "plan-f811eb1f31c9ab47bca5de86e3c895e5",
+        "execution_label": "Opus 5.5 \u00b7 ade-worker-builder \u00b7 wake fix",
+        "agent_profile": "ade-worker-builder"
+      },
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150002",
+        "evaluated_version_id": "system-a",
+        "cohort_id": "cohort-claude-opus-5-5",
+        "completed_at": "2026-09-24T11:01:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-0c5c0902",
+        "assessment_profile_sha256": "assessment-0c5c0902",
+        "status": "passed",
+        "mean_score": 100,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "seed": 1,
+        "system_version_id": "system-a",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "claude-code",
+        "subject_model": "claude-opus-5-5",
+        "median_cost_usd": null,
+        "median_tokens": 44098,
+        "median_duration_seconds": 446,
+        "median_function_calls": 57,
+        "median_function_call_errors": 4,
+        "median_turns": 46,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00002",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00002-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 100,
+            "turns": 46,
+            "function_calls": 57,
+            "function_call_errors": 4,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4db0002",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 46,
+                  "function_calls": 57,
+                  "function_call_errors": 4,
+                  "duration_ms": 441000
+                }
+              ],
+              "child_sessions": 0,
+              "calls_by_worker": [
+                {
+                  "worker": "coder",
+                  "calls": 25
+                },
+                {
+                  "worker": "browser",
+                  "calls": 12
+                },
+                {
+                  "worker": "form_flow",
+                  "calls": 10
+                },
+                {
+                  "worker": "engine",
+                  "calls": 4
+                },
+                {
+                  "worker": "shell",
+                  "calls": 4
+                },
+                {
+                  "worker": "canvas",
+                  "calls": 2
+                }
+              ],
+              "input_tokens": 5388,
+              "output_tokens": 38710,
+              "cache_read_tokens": 4443927,
+              "cache_write_tokens": 142990,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "function_surface=true"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 20,
+                  "reason": "met"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 15,
+                  "reason": "met"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 5,
+                  "reason": "met"
+                }
+              ]
+            },
+            "duration_seconds": 446
+          }
+        ],
+        "plan_execution_id": "plan-81960bf0afbe493e793920f06fe3a169",
+        "execution_label": "Opus 5.5 \u00b7 template only",
+        "agent_profile": null
+      },
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150001",
+        "evaluated_version_id": "system-a",
+        "cohort_id": "cohort-claude-opus-5-5",
+        "completed_at": "2026-09-24T10:50:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-0c5c0902",
+        "assessment_profile_sha256": "assessment-0c5c0902",
+        "status": "passed",
+        "mean_score": 0,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "seed": 1,
+        "system_version_id": "system-a",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "claude-code",
+        "subject_model": "claude-opus-5-5",
+        "median_cost_usd": null,
+        "median_tokens": 17133,
+        "median_duration_seconds": 200,
+        "median_function_calls": 15,
+        "median_function_call_errors": 3,
+        "median_turns": 11,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00001",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00001-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 0,
+            "turns": 11,
+            "function_calls": 15,
+            "function_call_errors": 3,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4db0001",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 11,
+                  "function_calls": 15,
+                  "function_call_errors": 3,
+                  "duration_ms": 195000
+                }
+              ],
+              "child_sessions": 0,
+              "calls_by_worker": [
+                {
+                  "worker": "coder",
+                  "calls": 8
+                },
+                {
+                  "worker": "harness",
+                  "calls": 4
+                },
+                {
+                  "worker": "directory",
+                  "calls": 3
+                }
+              ],
+              "input_tokens": 6079,
+              "output_tokens": 11054,
+              "cache_read_tokens": 305412,
+              "cache_write_tokens": 52458,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 0,
+                  "reason": "the Worker never started"
+                }
+              ]
+            },
+            "duration_seconds": 200
+          }
+        ],
+        "plan_execution_id": "plan-684b8f754aa50b61006e2415b061b254",
+        "execution_label": "Opus 5.5 \u00b7 ade-worker-builder",
+        "agent_profile": "ade-worker-builder"
+      },
+      {
+        "execution_id": "eed6731d366e9867d7a1b5aaaf150000",
+        "evaluated_version_id": "system-a",
+        "cohort_id": "cohort-deepseek-flash",
+        "completed_at": "2026-09-24T06:56:00Z",
+        "case_id": "form_flow_build:seed-1",
+        "contract_sha256": "contract-6831b628",
+        "assessment_profile_sha256": "assessment-6831b628",
+        "status": "passed",
+        "mean_score": 85,
+        "run_count": 1,
+        "scored_runs": 1,
+        "behavior_sha256": "sha256:6831b6286831b6286831b6286831b6286831b6286831b6286831b6286831b628",
+        "seed": 1,
+        "system_version_id": "system-a",
+        "system_label": "Source 0123456789ab",
+        "stack_mode": "source",
+        "subject_provider": "deepseek",
+        "subject_model": "deepseek-flash",
+        "median_cost_usd": null,
+        "median_tokens": 356237,
+        "median_duration_seconds": 623,
+        "median_function_calls": 138,
+        "median_function_call_errors": 8,
+        "median_turns": 72,
+        "runs": [
+          {
+            "run_id": "32c6b9c4907846aaaea371cb86b00000",
+            "attempt_id": "32c6b9c4907846aaaea371cb86b00000-1",
+            "status": "passed",
+            "completion": "completed",
+            "score": 85,
+            "turns": 72,
+            "function_calls": 138,
+            "function_call_errors": 8,
+            "details": {
+              "sessions": [
+                {
+                  "session_id": "e2e_1b116e699dc24ca9b0d8dde8e4db0000",
+                  "parent_session_id": null,
+                  "depth": 0,
+                  "label": null,
+                  "turns": 72,
+                  "function_calls": 138,
+                  "function_call_errors": 8,
+                  "duration_ms": 618000
+                }
+              ],
+              "child_sessions": 0,
+              "calls_by_worker": [
+                {
+                  "worker": "coder",
+                  "calls": 60
+                },
+                {
+                  "worker": "form_flow",
+                  "calls": 30
+                },
+                {
+                  "worker": "browser",
+                  "calls": 20
+                },
+                {
+                  "worker": "engine",
+                  "calls": 10
+                },
+                {
+                  "worker": "harness",
+                  "calls": 8
+                },
+                {
+                  "worker": "directory",
+                  "calls": 6
+                },
+                {
+                  "worker": "console",
+                  "calls": 4
+                }
+              ],
+              "input_tokens": 248693,
+              "output_tokens": 107544,
+              "cache_read_tokens": 11991040,
+              "cache_write_tokens": null,
+              "criteria": [
+                {
+                  "id": "runtime_contract",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "function_surface=true"
+                },
+                {
+                  "id": "domain_primary",
+                  "possible": 20,
+                  "awarded": 20,
+                  "reason": "met"
+                },
+                {
+                  "id": "domain_branch",
+                  "possible": 15,
+                  "awarded": 15,
+                  "reason": "met"
+                },
+                {
+                  "id": "invalid_inputs",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_initial",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "canvas_update",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "console_delivery",
+                  "possible": 10,
+                  "awarded": 10,
+                  "reason": "met"
+                },
+                {
+                  "id": "browser_interaction",
+                  "possible": 10,
+                  "awarded": 0,
+                  "reason": "the page never reached the edited state"
+                },
+                {
+                  "id": "evidence_complete",
+                  "possible": 5,
+                  "awarded": 0,
+                  "reason": "no screenshot of the Canvas graph"
+                }
+              ]
+            },
+            "duration_seconds": 623
+          }
+        ],
+        "plan_execution_id": "plan-1d32074494c8ae86a7fec7e2c0f96447",
+        "execution_label": "Software engineering",
+        "agent_profile": "ade-worker-builder"
+      }
+    ],
+    "total": 6,
+    "next_cursor": null
+  },
+  "catalog_row": {
+    "test_id": "form_flow_build",
+    "lifecycle": "active",
+    "current_version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+    "spec": {
+      "summary": "Build a visual SWE issue-form Worker with deterministic bug and feature fields, live editing and preview, and a flowchart projection stored through Canvas.",
+      "prompt": "Build the Form Flow Builder Worker inside `\u2026/scenario-workspaces/form_flow_build-<run>`. Read README.md first.\nRegister `<worker>::preview`, `<worker>::canvas`, and `<worker>::ui-content`.\nBuild the ESM asset with `buildWorkerUi`.",
+      "criteria": [
+        {
+          "id": "runtime_contract",
+          "weight": 10,
+          "description": "The run-scoped Worker is ready and exposes its described domain, Canvas, and UI functions.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "domain_primary",
+          "weight": 20,
+          "description": "The primary deterministic domain path matches the independent Harness oracle.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "domain_branch",
+          "weight": 15,
+          "description": "The alternate deterministic domain path matches the independent Harness oracle.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "invalid_inputs",
+          "weight": 10,
+          "description": "Invalid domain input is rejected and the Worker remains healthy.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "canvas_initial",
+          "weight": 10,
+          "description": "The Worker creates and reads the exact initial Mermaid projection through Canvas.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "canvas_update",
+          "weight": 10,
+          "description": "The live editor updates the same Canvas id to the expected Mermaid projection.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "console_delivery",
+          "weight": 10,
+          "description": "The Console reports fresh, warning-free script and style assets for the Worker.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "browser_interaction",
+          "weight": 10,
+          "description": "The real Console page completes the required live-preview interaction.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        },
+        {
+          "id": "evidence_complete",
+          "weight": 5,
+          "description": "Portable screenshots show the Worker page and the Canvas graph it opens in the Console.",
+          "kind": "deterministic",
+          "policy": "advisory",
+          "dimension": "outcome"
+        }
+      ],
+      "execution": {
+        "max_turns": 256,
+        "max_output_tokens": 65536,
+        "max_total_tokens": 6000000,
+        "stuck_timeout_seconds": 1800
+      },
+      "denied_functions": []
+    },
+    "available_versions": [
+      {
+        "version": "sha256:6831b6286831b6286831b6286831b6286831b6286831b6286831b6286831b628",
+        "execution_count": 1,
+        "run_count": 1,
+        "last_seen": "2026-09-24T06:56:00Z"
+      },
+      {
+        "version": "sha256:0c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c09020c5c0902",
+        "execution_count": 4,
+        "run_count": 4,
+        "last_seen": "2026-09-24T13:01:00Z"
+      },
+      {
+        "version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+        "execution_count": 1,
+        "run_count": 1,
+        "last_seen": "2026-09-24T18:29:00Z"
+      }
+    ],
+    "selected_version": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69",
+    "result": null
+  },
+  "neighbours": ["fanout_ladder", "form_flow_build", "git_regression_forensics"]
+}

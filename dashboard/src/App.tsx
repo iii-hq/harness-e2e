@@ -3,6 +3,7 @@ import { type DashboardRoute, useHashRoute } from '@/hooks/use-hash-route'
 import { ExecutionComparePage } from '@/pages/ExecutionComparePage'
 import { ExecutionPage } from '@/pages/ExecutionPage'
 import { ExecutionsPage } from '@/pages/ExecutionsPage'
+import { RunComparePage } from '@/pages/RunComparePage'
 import { StacksPage } from '@/pages/StacksPage'
 import { SuitesPage } from '@/pages/SuitesPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
@@ -31,7 +32,11 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'versions':
       return <TestsPage initialFrom={route.left} initialTo={route.right} />
     case 'test-history':
-      return <TestHistoryPage key={route.testId} testId={route.testId} />
+      return route.compare ? (
+        <RunComparePage key={route.testId} testId={route.testId} />
+      ) : (
+        <TestHistoryPage key={route.testId} testId={route.testId} />
+      )
     case 'suites':
       return <SuitesPage />
     case 'stacks':

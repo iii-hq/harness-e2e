@@ -1037,7 +1037,7 @@ pub(super) async fn test_history(
     controller: &Controller,
     request: TestHistoryRequest,
 ) -> Result<TestHistoryResponse> {
-    controller.read_model().await?.test_history(request)
+    controller.test_history(request).await
 }
 
 pub(super) async fn catalog(

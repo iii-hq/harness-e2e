@@ -5,6 +5,7 @@ mod live_progress;
 mod plan_projection;
 pub(crate) mod presenter;
 pub(crate) mod read_model;
+mod run_sessions;
 mod store;
 
 pub(crate) use read_model::ExecutionProjection;
@@ -699,6 +700,213 @@ pub(crate) mod tests {
         assert_eq!(observation.median_turns, Some(3.0));
         assert_eq!(history.series[0].median_function_calls, Some(4.0));
         assert_eq!(history.series[0].median_function_call_errors, Some(1.0));
+    }
+
+    #[test]
+    fn test_history_reads_the_session_tree_of_each_run_on_the_page() {
+        let root = tempfile::tempdir().unwrap();
+        let mut value = report();
+        value.subject.agent = Some(crate::report::AgentProfileArtifact {
+            id: "ade-worker-builder".into(),
+            configuration_sha256: TEST_DIGEST.into(),
+        });
+        let session = |id: &str, parent: Option<&str>, depth, turns, calls, errors| {
+            crate::wire::SessionUsage {
+                session_id: id.into(),
+                parent_session_id: parent.map(Into::into),
+                depth,
+                turns,
+                function_calls: calls,
+                function_call_errors: errors,
+                validation_retries: None,
+                transient_resumes: None,
+                wake_resumes: None,
+                input_tokens: None,
+                output_tokens: None,
+                cache_read_tokens: None,
+                cache_write_tokens: None,
+                reasoning_tokens: None,
+                cost_usd: None,
+                context: None,
+            }
+        };
+        let run = &mut value.scenarios[0].runs[0];
+        run.metrics = Some(Observed::from_normalized(SessionMetricsPayload {
+            root_session_id: "e2e_1b116e699dc24ca9".into(),
+            complete: true,
+            totals: SessionUsageTotals {
+                sessions: 4,
+                turns: 196,
+                function_calls: 323,
+                function_call_errors: 48,
+                input_tokens: Some(42_449),
+                output_tokens: Some(128_451),
+                cache_read_tokens: Some(17_075_530),
+                cache_write_tokens: Some(531_575),
+                ..SessionUsageTotals::default()
+            },
+            // Reported out of tree order: a grandchild before its parent.
+            by_session: vec![
+                session("e2e_1b116e699dc24ca9", None, 0, 37, 3, 1),
+                session("form-backend", Some("form-lead"), 2, 41, 74, 21),
+                session("form-lead", Some("e2e_1b116e699dc24ca9"), 1, 39, 79, 8),
+                session("form-frontend", Some("form-lead"), 2, 79, 110, 12),
+            ],
+            traces: Some(json!({
+                "by_session": [
+                    {"session_id": "e2e_1b116e699dc24ca9", "depth": 0, "duration_ms": 2_233_381},
+                    {"session_id": "form-lead", "depth": 1, "duration_ms": 1_917_180}
+                ]
+            })),
+        }));
+        // The root's transcript: a call through agent_trigger to its
+        // run-scoped worker, a native call and the spawn naming the lead.
+        run.transcript = Some(
+            json!({"messages": [{"message": {"role": "assistant", "content": [
+                {"type": "function_call", "id": "c1", "function_id": "agent_trigger",
+                 "arguments": {"function": "form_flow_1b116e699dc2::preview", "payload": {}}},
+                {"type": "function_call", "id": "c2", "function_id": "coder::read-file",
+                 "arguments": {"path": "README.md"}},
+                {"type": "function_call", "id": "c3", "function_id": "harness::spawn",
+                 "arguments": {"agent": "tech-lead", "session_id": "form-lead", "task": "Lead"}}
+            ]}}]}),
+        );
+        run.criteria = vec![
+            crate::report::CriterionReport {
+                id: "answer".into(),
+                description: None,
+                possible: 90,
+                awarded: Some(90),
+                reason: "matches".into(),
+                gate: false,
+            },
+            crate::report::CriterionReport {
+                id: "runtime_contract".into(),
+                description: None,
+                possible: 10,
+                awarded: Some(0),
+                reason: "function_surface=false".into(),
+                gate: false,
+            },
+        ];
+        let run_dir = root.path().join("history-sessions");
+        let mut run_metadata = metadata();
+        run_metadata.id = "history-sessions".into();
+        write_metadata(&run_dir, &run_metadata).unwrap();
+        let report_manifest = manifest(&value);
+        value
+            .write_to(&run_dir.join("results"), &report_manifest)
+            .unwrap();
+
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let mut history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: Some("all".into()),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        assert_eq!(history.test_version, "all");
+        assert_eq!(history.total, 1);
+        assert!(history
+            .available_versions
+            .iter()
+            .any(|version| version.observation_count == 1));
+        // Before the native results are read, a run has its retained totals.
+        assert_eq!(history.observations[0].runs[0].run_id, "run");
+        assert_eq!(history.observations[0].runs[0].duration_seconds, Some(1.5));
+        assert!(history.observations[0].runs[0].details.is_none());
+
+        model.attach_run_details(&mut history, &model.summaries, root.path());
+        let observation = &history.observations[0];
+        assert_eq!(
+            observation.agent_profile.as_deref(),
+            Some("ade-worker-builder")
+        );
+        assert_eq!(observation.execution_label.as_deref(), Some("first run"));
+        assert_eq!(observation.plan_execution_id, None);
+        let details = serde_json::to_value(observation.runs[0].details.as_ref().unwrap()).unwrap();
+        assert_eq!(
+            details,
+            json!({
+                "sessions": [
+                    {"session_id": "e2e_1b116e699dc24ca9", "parent_session_id": null, "depth": 0,
+                     "label": null, "turns": 37, "function_calls": 3, "function_call_errors": 1,
+                     "duration_ms": 2_233_381},
+                    {"session_id": "form-lead", "parent_session_id": "e2e_1b116e699dc24ca9",
+                     "depth": 1, "label": "tech-lead", "turns": 39, "function_calls": 79,
+                     "function_call_errors": 8, "duration_ms": 1_917_180},
+                    {"session_id": "form-backend", "parent_session_id": "form-lead", "depth": 2,
+                     "label": null, "turns": 41, "function_calls": 74, "function_call_errors": 21,
+                     "duration_ms": null},
+                    {"session_id": "form-frontend", "parent_session_id": "form-lead", "depth": 2,
+                     "label": null, "turns": 79, "function_calls": 110,
+                     "function_call_errors": 12, "duration_ms": null}
+                ],
+                "child_sessions": 3,
+                "calls_by_worker": [
+                    {"worker": "coder", "calls": 1},
+                    {"worker": "form_flow", "calls": 1},
+                    {"worker": "harness", "calls": 1}
+                ],
+                "input_tokens": 42_449,
+                "output_tokens": 128_451,
+                "cache_read_tokens": 17_075_530,
+                "cache_write_tokens": 531_575,
+                "criteria": [
+                    {"id": "answer", "possible": 90.0, "awarded": 90.0, "reason": "matches"},
+                    {"id": "runtime_contract", "possible": 10.0, "awarded": 0.0,
+                     "reason": "function_surface=false"}
+                ]
+            })
+        );
+
+        // A run whose native results are gone keeps its retained totals.
+        std::fs::remove_dir_all(run_dir.join("results")).unwrap();
+        let mut history = model
+            .test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+            .unwrap();
+        model.attach_run_details(&mut history, &model.summaries, root.path());
+        assert!(history.observations[0].runs[0].details.is_none());
+        assert_eq!(history.observations[0].runs[0].score, Some(90.0));
+    }
+
+    #[test]
+    fn test_history_finds_the_two_executions_an_a_b_compares() {
+        let root = tempfile::tempdir().unwrap();
+        for index in 0..3 {
+            let mut value = report();
+            value.execution.execution_id = format!("execution-{index}");
+            value.execution.completed_at = format!("2026-08-0{}T12:00:02Z", index + 7);
+            let mut run_metadata = metadata();
+            run_metadata.id = format!("local-{index}");
+            run_metadata.completed_at = value.execution.completed_at.clone();
+            let run_dir = root.path().join(&run_metadata.id);
+            write_metadata(&run_dir, &run_metadata).unwrap();
+            let manifest = manifest(&value);
+            value.write_to(&run_dir.join("results"), &manifest).unwrap();
+        }
+        let model = DashboardReadModel::load(root.path()).unwrap();
+        let history = |executions: Vec<&str>, limit| {
+            model.test_history(super::read_model::TestHistoryRequest {
+                test_id: "direct_answer".into(),
+                test_version: Some("all".into()),
+                executions: Some(executions.into_iter().map(Into::into).collect()),
+                limit: Some(limit),
+                ..super::read_model::TestHistoryRequest::default()
+            })
+        };
+        // The oldest run is found even when the page holds one run only.
+        let pair = history(vec!["local-0", "local-2"], 1).unwrap();
+        assert_eq!(pair.total, 2);
+        assert_eq!(pair.observations[0].execution_id, "local-2");
+        let oldest = history(vec!["local-0"], 1).unwrap();
+        assert_eq!(oldest.observations[0].execution_id, "local-0");
+        assert_eq!(history(vec!["gone"], 1).unwrap().total, 0);
+        assert!(history(vec!["local-0", "local-1", "local-2"], 1).is_err());
     }
 
     #[test]

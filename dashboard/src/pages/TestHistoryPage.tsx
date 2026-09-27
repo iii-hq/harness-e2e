@@ -1,56 +1,28 @@
 import {
-  COMPARISON_METRICS,
-  ExecutionComparisonPanel,
-  finiteMetric,
-  formatCost,
-  formatCount,
-  formatDuration,
-  formatScore,
-  formatTokens,
-  SectionPanel,
-} from '@/components/ExecutionComparisonPanel'
-
-export {
-  formatCost,
-  formatDuration,
-  formatTokens,
-} from '@/components/ExecutionComparisonPanel'
-
-import {
-  ArrowLeftRight,
-  ArrowRight,
-  ChevronLeft,
-  ChevronRight,
-  Copy,
-} from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { AboutTestPanel } from '@/components/AboutTestPanel'
-import { AssessmentWorkspace } from '@/components/AssessmentWorkspace'
-import {
-  DashboardPageActions,
-  dashboardHeaderActionClassName,
-} from '@/components/DashboardPageActions'
-import { ProviderModelDropdown } from '@/components/ProviderModelDropdown'
-import { ScenarioChatAction } from '@/components/ScenarioChatAction'
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  SegmentedControl,
+  Select,
+} from '@iii-dev/console-ui'
+import { Ellipsis, GitCompare, Info } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { DashboardPageActions } from '@/components/DashboardPageActions'
+import { useDashboardChrome } from '@/components/DashboardShell'
+import { RunsTable } from '@/components/history/RunsTable'
+import { TestContract } from '@/components/history/TestContract'
+import { LossesPanel, TrendChart } from '@/components/history/TrendChart'
 import {
   buttonClassName,
-  Callout,
-  DataTable,
-  DataTableRow,
-  Dialog,
   EmptyState,
-  FilterChip,
-  FilterChipGroup,
-  isInteractiveTarget,
-  MetricCard,
-  numericCellClassName,
-  type OperationalStatus,
+  FactChip,
+  FactList,
   PageHeader,
-  Select,
-  StatusBadge,
 } from '@/design-system'
 import {
-  hashForExecution,
+  hashForRunComparison,
   hashForTestHistory,
   hashForTests,
   hashForVersionComparison,
@@ -58,816 +30,228 @@ import {
   replaceRouteParams,
   routeParams,
 } from '@/hooks/use-hash-route'
-import {
-  type DashboardExecutionDetail,
-  getDashboardDataBridge,
-} from '@/lib/dashboard-data-source'
+import { useLatestRequest } from '@/hooks/use-latest-request'
+import { getDashboardDataBridge } from '@/lib/dashboard-data-source'
 import { definitionTitle, shortDefinition } from '@/lib/definition-digest'
+import { plural } from '@/lib/format'
 import { requestQuickExecution } from '@/lib/quick-execution'
-import type {
-  HistoryModelGroup,
-  TestCatalogRow,
-  TestHistoryResponse,
-  TestObservation,
-  TestSpec,
-} from '@/lib/test-catalog'
-import { catalogRealismPresentation } from '@/lib/test-catalog-view'
+import type { TestCatalogRow } from '@/lib/test-catalog'
 import {
-  compareTestObservations,
-  testObservationKey,
-} from '@/lib/test-history-comparison'
+  ALL_DEFINITIONS,
+  type ChartMetric,
+  copiedText,
+  copyText,
+  definitionChoices,
+  findRun,
+  type HistoryObservation,
+  type HistoryResponse,
+  losses,
+  profileText,
+  type Result,
+  resultOf,
+  runKey,
+  staleNotice,
+  summaryFigures,
+  toggleSelection,
+} from '@/lib/test-history'
+import '@/design-system/styles.css'
+import './test-history.css'
 
-/* ---------------------------------------------------------------- helpers */
+/* ---------------------------------------------------------------- state */
 
-function modelSelection(provider: string, model: string) {
-  return JSON.stringify([provider, model])
-}
-
-function parseModelSelection(value: string) {
-  if (!value) return null
-  try {
-    const parsed = JSON.parse(value) as unknown
-    if (
-      Array.isArray(parsed) &&
-      parsed.length === 2 &&
-      typeof parsed[0] === 'string' &&
-      typeof parsed[1] === 'string'
-    ) {
-      return { provider: parsed[0], model: parsed[1] }
-    }
-  } catch {
-    // A malformed selection is treated as no filter.
-  }
-  return null
-}
-
-function modelGroups(history: TestHistoryResponse | null): HistoryModelGroup[] {
-  if (history?.subject_models.length) return history.subject_models
-  if (!history) return []
-
-  const groups = new Map<string, Set<string>>()
-  for (const observation of history.observations) {
-    const provider = observation.subject_provider
-    const model = observation.subject_model
-    if (!provider || !model) continue
-    const models = groups.get(provider) ?? new Set<string>()
-    models.add(model)
-    groups.set(provider, models)
-  }
-  return [...groups.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([provider, models]) => ({
-      provider,
-      models: [...models].sort((left, right) => left.localeCompare(right)),
-    }))
-}
-
-function mean(values: Array<number | null | undefined>) {
-  const known = values.filter(
-    (value): value is number => value !== null && Number.isFinite(value),
-  )
-  if (known.length === 0) return null
-  return known.reduce((total, value) => total + value, 0) / known.length
-}
-
-function median(values: Array<number | null | undefined>) {
-  const known = values
-    .filter(
-      (value): value is number => value !== null && Number.isFinite(value),
-    )
-    .sort((left, right) => left - right)
-  if (known.length === 0) return null
-  const middle = Math.floor(known.length / 2)
-  return known.length % 2
-    ? known[middle]
-    : (known[middle - 1] + known[middle]) / 2
-}
-
-function formatDate(value: string) {
-  if (!value) return 'not completed'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return 'unknown date'
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date)
-}
-
-function formatDay(value: string) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-  }).format(date)
-}
-
-/** Audit TH-05: the DS status vocabulary; "passed" is green, never accent. */
-export function statusPresentation(status: string): {
-  status: OperationalStatus
-  label: string
-} {
-  if (status === 'passed') return { status: 'passed', label: 'passed' }
-  if (status === 'hard_gate_failed')
-    return { status: 'failed', label: 'failed (legacy result)' }
-  if (status === 'technical_failed')
-    return { status: 'failed', label: 'technical failure' }
-  if (status === 'infra_failed')
-    return { status: 'failed', label: 'infrastructure failure' }
-  return {
-    status: 'failed',
-    label: status.replace(/[_-]+/g, ' ').toLowerCase(),
-  }
-}
-
-function shortHash(value: string | null | undefined) {
-  if (!value) return null
-  return value.replace(/^sha256:/, '').slice(0, 8)
-}
-
-function contractSummary(observations: TestObservation[]) {
-  const contracts = [
-    ...new Set(
-      observations
-        .map((observation) => observation.contract_sha256)
-        .filter(Boolean),
-    ),
-  ]
-  if (contracts.length === 0) return null
-  if (contracts.length > 1) return { short: 'multiple contracts', full: null }
-  return { short: `sha ${shortHash(contracts[0])}`, full: contracts[0] }
-}
-
-function modelLabel(provider?: string | null, model?: string | null) {
-  if (!provider && !model) return 'unknown model'
-  return [provider, model].filter(Boolean).join('/') || 'unknown model'
-}
-
-function systemSummary(observation: TestObservation) {
-  const revision = shortHash(observation.system_revision)
-  const stack =
-    observation.stack_mode === 'source'
-      ? 'source'
-      : observation.stack_mode === 'registry'
-        ? 'registry'
-        : 'local'
-  return revision ? `${stack} ${revision}` : observation.system_label || stack
-}
-
-function knownMetricCount(values: Array<number | null | undefined>) {
-  return values.filter((value) => finiteMetric(value) !== null).length
-}
-
-export function metricCaption(known: number, total: number) {
-  if (known === total)
-    return `across ${total} ${total === 1 ? 'execution' : 'executions'}`
-  return `across ${known} of ${total} executions`
-}
-
-function runLabel(count: number) {
-  return `${count} ${count === 1 ? 'run' : 'runs'}`
-}
-
-/* --------------------------------------------------------------- trend */
-
-/** The rendered width of an element, so an SVG viewBox can match its pixels. */
-function useMeasuredWidth<T extends HTMLElement>(fallback: number) {
-  const ref = useRef<T>(null)
-  const [width, setWidth] = useState(fallback)
-  useEffect(() => {
-    const element = ref.current
-    if (!element || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver((entries) => {
-      const next = entries[0]?.contentRect.width
-      if (next) setWidth(Math.round(next))
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
-  return { ref, width }
-}
-
-export function ScoreTrendChart({
-  observations,
-  selectedKeys,
-  onSelect,
-}: {
-  observations: TestObservation[]
-  selectedKeys: string[]
-  onSelect: (observation: TestObservation) => void
-}) {
-  const { ref, width } = useMeasuredWidth<HTMLDivElement>(560)
-  // Observations arrive newest-first; the chart reads left → right in time.
-  const plotted = [...observations]
-    .reverse()
-    .filter((item) => finiteMetric(item.mean_score) !== null)
-  if (plotted.length === 0) {
-    return (
-      <p className="m-0 text-xs text-ink-soft">
-        No scored executions to plot yet.
-      </p>
-    )
-  }
-  const left = 44
-  const right = Math.max(left + 80, width - 20)
-  const top = 16
-  const bottom = 132
-  const xs = plotted.map((_, index) =>
-    plotted.length === 1
-      ? (left + right) / 2
-      : left + (index * (right - left)) / (plotted.length - 1),
-  )
-  const yFor = (score: number) =>
-    top + ((100 - Math.max(0, Math.min(100, score))) / 100) * (bottom - top)
-  const line = xs
-    .map(
-      (x, index) =>
-        `${x.toFixed(1)},${yFor(plotted[index].mean_score as number).toFixed(1)}`,
-    )
-    .join(' ')
-  const gate = yFor(50)
-  const anchorFor = (index: number) =>
-    plotted.length === 1
-      ? 'middle'
-      : index === 0
-        ? 'start'
-        : index === plotted.length - 1
-          ? 'end'
-          : 'middle'
-  return (
-    <div ref={ref} className="w-full">
-      <svg
-        className="block h-40 w-full font-mono text-label"
-        viewBox={`0 0 ${width} 160`}
-        role="img"
-        aria-label="Mean score per retained execution, oldest on the left"
-        data-score-trend
-      >
-        {[top, gate, bottom].map((y) => (
-          <line
-            key={y}
-            className="stroke-line"
-            x1={left - 8}
-            y1={y}
-            x2={right + 8}
-            y2={y}
-            strokeDasharray={y === gate ? '3 3' : undefined}
-          />
-        ))}
-        <text
-          className="fill-ink-soft"
-          x={left - 12}
-          y={top + 4}
-          textAnchor="end"
-        >
-          100
-        </text>
-        <text
-          className="fill-ink-soft"
-          x={left - 12}
-          y={gate + 4}
-          textAnchor="end"
-        >
-          50
-        </text>
-        <text
-          className="fill-ink-soft"
-          x={left - 12}
-          y={bottom + 4}
-          textAnchor="end"
-        >
-          0
-        </text>
-        <text
-          className="fill-ink-muted"
-          x={left - 12}
-          y={gate + 14}
-          textAnchor="end"
-        >
-          gate
-        </text>
-        {plotted.length > 1 ? (
-          <polyline
-            className="fill-none stroke-ink-muted"
-            strokeWidth="1.5"
-            points={line}
-            vectorEffect="non-scaling-stroke"
-          />
-        ) : null}
-        {plotted.map((item, index) => {
-          const key = testObservationKey(item)
-          const selectedIndex = selectedKeys.indexOf(key)
-          const failed = item.status !== 'passed'
-          const score = item.mean_score as number
-          const x = xs[index]
-          const y = yFor(score)
-          const slot =
-            selectedIndex === 0 ? 'A' : selectedIndex === 1 ? 'B' : null
-          const labelBelow = y <= bottom - 24
-          return (
-            // biome-ignore lint/a11y/useSemanticElements: an SVG hit target cannot be a native <button>; the group carries the full button contract (role, tabIndex, keyboard activation).
-            <g
-              className="cursor-pointer outline-none focus-visible:[outline:2px_solid_var(--accent)]"
-              key={key}
-              role="button"
-              tabIndex={0}
-              aria-pressed={selectedIndex >= 0}
-              aria-label={`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${statusPresentation(item.status).label}${slot ? ` · selected as ${slot}` : ''}`}
-              onClick={() => onSelect(item)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter' || event.key === ' ') {
-                  event.preventDefault()
-                  onSelect(item)
-                }
-              }}
-            >
-              <title>
-                {`${formatDate(item.completed_at)} · score ${score.toFixed(0)} · ${statusPresentation(item.status).label} · ${formatDuration(item.median_duration_seconds)} · ${formatTokens(item.median_tokens)} tokens`}
-              </title>
-              <circle className="fill-transparent" cx={x} cy={y} r="12" />
-              <circle
-                className={
-                  selectedIndex >= 0
-                    ? 'fill-ink'
-                    : failed
-                      ? 'fill-danger'
-                      : 'fill-success'
-                }
-                cx={x}
-                cy={y}
-                r={selectedIndex >= 0 ? 5 : 4}
-              />
-              {slot ? (
-                <g>
-                  <rect
-                    className="fill-ink"
-                    x={x - 8}
-                    y={labelBelow ? y + 9 : y - 24}
-                    width="16"
-                    height="14"
-                    rx="3"
-                  />
-                  <text
-                    className="fill-canvas font-semibold"
-                    x={x}
-                    y={labelBelow ? y + 19.5 : y - 13.5}
-                    textAnchor="middle"
-                  >
-                    {slot}
-                  </text>
-                </g>
-              ) : (
-                <text
-                  className="fill-ink-soft"
-                  x={x}
-                  y={labelBelow ? y + 18 : y - 9}
-                  textAnchor={anchorFor(index)}
-                >
-                  {score.toFixed(0)}
-                </text>
-              )}
-            </g>
-          )
-        })}
-        <text className="fill-ink-muted" x={xs[0]} y="154" textAnchor="middle">
-          {formatDay(plotted[0].completed_at)}
-        </text>
-        {plotted.length > 1 ? (
-          <text
-            className="fill-ink-muted"
-            x={xs[xs.length - 1]}
-            y="154"
-            textAnchor="middle"
-          >
-            {formatDay(plotted[plotted.length - 1].completed_at)}
-          </text>
-        ) : null}
-      </svg>
-    </div>
-  )
-}
-
-/** A panel with the DS heading pair (title, one-line summary) and actions. */
-/* ---------------------------------------------------------- comparison */
-
-type Verdict = {
-  status: OperationalStatus
-  title: string
-  detail: string
-}
-
-export function comparisonVerdict(
-  comparison: ReturnType<typeof compareTestObservations>,
-): Verdict {
-  const objectiveRegressed =
-    comparison.baseline.status === 'passed' &&
-    comparison.candidate.status !== 'passed'
-  const objectiveImproved =
-    comparison.baseline.status !== 'passed' &&
-    comparison.candidate.status === 'passed'
-  let improved = objectiveImproved
-  let regressed = objectiveRegressed
-  const details: string[] = []
-  if (objectiveImproved) details.push('now passes')
-  if (objectiveRegressed) details.push('no longer passes')
-  for (const metric of COMPARISON_METRICS) {
-    if (metric.betterWhen === 'neither') continue
-    const value = comparison.metrics[metric.key]
-    if (value.delta === null || value.delta === 0) continue
-    const better =
-      metric.betterWhen === 'higher' ? value.delta > 0 : value.delta < 0
-    if (better) improved = true
-    else regressed = true
-    details.push(
-      `${metric.label} ${better ? (metric.key === 'score' ? 'up' : 'down') : metric.key === 'score' ? 'down' : 'up'}`,
-    )
-  }
-  const status: OperationalStatus =
-    improved && regressed
-      ? 'inconclusive'
-      : regressed
-        ? 'failed'
-        : improved
-          ? 'passed'
-          : 'inconclusive'
-  const title =
-    improved && regressed
-      ? 'mixed result'
-      : regressed
-        ? 'b regressed'
-        : improved
-          ? 'b improved'
-          : 'no material change'
-  return {
-    status,
-    title,
-    detail: details.length
-      ? details.join(' · ')
-      : 'all comparable metrics unchanged',
-  }
-}
-
-export function ObservationComparisonPanel({
-  baseline,
-  candidate,
-  testId,
-  onClear,
-  onSwap,
-}: {
-  baseline: TestObservation | null
-  candidate: TestObservation | null
-  testId: string
-  onClear: () => void
-  onSwap: () => void
-}) {
-  const comparison =
-    baseline && candidate ? compareTestObservations(baseline, candidate) : null
-  const verdict = comparison?.compatible ? comparisonVerdict(comparison) : null
-  return (
-    <ExecutionComparisonPanel
-      headingId="test-comparison-title"
-      data-test-comparison
-      aria-live="polite"
-      summary={
-        baseline && candidate
-          ? `a = ${formatDate(baseline.completed_at)} · b = ${formatDate(candidate.completed_at)}`
-          : 'choose two executions in the table'
-      }
-      metrics={comparison?.metrics ?? {}}
-      interpretDeltas={Boolean(comparison?.compatible)}
-      showDeltas={Boolean(comparison?.compatible)}
-      controls={
-        <>
-          <button
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-            })}
-            type="button"
-            onClick={onSwap}
-            disabled={!candidate}
-          >
-            <ArrowLeftRight aria-hidden="true" size={13} />
-            swap
-          </button>
-          <button
-            className={buttonClassName({ variant: 'quiet', size: 'compact' })}
-            type="button"
-            onClick={onClear}
-            disabled={!baseline}
-          >
-            clear
-          </button>
-        </>
-      }
-      actions={
-        baseline && candidate ? (
-          <>
-            {[baseline, candidate].map((observation, index) => (
-              <a
-                key={observation.execution_id}
-                className={buttonClassName({
-                  variant: 'quiet',
-                  size: 'compact',
-                  className: 'no-underline',
-                })}
-                href={hashForExecution(observation.execution_id)}
-              >
-                open {index === 0 ? 'a' : 'b'}
-                <ArrowRight aria-hidden="true" size={13} />
-              </a>
-            ))}
-            <ScenarioChatAction
-              compact
-              executionId={candidate.execution_id}
-              scenarioId={testId}
-            />
-          </>
-        ) : null
-      }
-    >
-      {comparison ? (
-        comparison.compatible ? (
-          <Callout tone="success">
-            <span className="flex flex-wrap items-center gap-2">
-              {verdict ? (
-                <StatusBadge status={verdict.status} label={verdict.title} />
-              ) : null}
-              <span className="text-ink-soft">
-                {verdict?.detail} · same contract, seed, cohort and model
-              </span>
-            </span>
-          </Callout>
-        ) : (
-          <Callout
-            tone="warning"
-            title="not comparable · values shown, deltas not interpreted"
-          >
-            {comparison.reasons.join(' · ')}. Choose two executions of the same
-            model and cohort to read deltas.
-          </Callout>
-        )
-      ) : (
-        <p className="m-0 text-xs text-ink-soft">
-          Choose two executions from the history to compare.
-        </p>
-      )}
-    </ExecutionComparisonPanel>
-  )
-}
-
-/* ------------------------------------------------------------- details */
-
-function ExecutionDetailsDialog({
-  observation,
-  testDefinition,
-  testId,
-  spec,
-  onClose,
-}: {
-  observation: TestObservation
-  testDefinition: string | undefined
-  testId: string
-  spec: TestSpec | null
-  onClose: () => void
-}) {
-  const [detail, setDetail] = useState<DashboardExecutionDetail | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    setDetail(null)
-    setError(null)
-    setLoading(true)
-    void getDashboardDataBridge()
-      .then((bridge) => bridge.getExecution(observation.execution_id))
-      .then((next) => {
-        if (!cancelled) setDetail(next)
-      })
-      .catch((cause) => {
-        if (!cancelled)
-          setError(cause instanceof Error ? cause.message : String(cause))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [observation.execution_id])
-
-  const scopedDetail = useMemo(
-    () =>
-      detail
-        ? {
-            ...detail,
-            reports: detail.reports.filter(
-              (report) => report.scenario_id === testId,
-            ),
-          }
-        : null,
-    [detail, testId],
-  )
-  const definition = shortDefinition(
-    observation.behavior_sha256 || testDefinition,
-  )
-  const availableReports = scopedDetail?.reports.filter(
-    (report) => report.available,
-  ).length
-  const result = statusPresentation(observation.status)
-  const metrics = [
-    ['score', formatScore(observation.mean_score)],
-    ['duration', formatDuration(observation.median_duration_seconds)],
-    ['tokens', formatTokens(observation.median_tokens)],
-    ['cost', formatCost(observation.median_cost_usd)],
-    ['turns', formatCount(observation.median_turns)],
-  ].filter(([, value]) => value !== '—')
-
-  // Audit TH-03: an opaque panel from the design system, no accent bar.
-  return (
-    <Dialog
-      open
-      onClose={onClose}
-      size="lg"
-      tall
-      kicker="execution"
-      title={testId}
-      description={`${formatDate(observation.completed_at)} · ${definition ? `definition ${definition}` : 'definition not recorded'} · ${runLabel(observation.run_count)}`}
-      closeLabel="Close execution details"
-      className="ds-root"
-      footer={
-        <>
-          <a
-            className={buttonClassName({
-              variant: 'secondary',
-              className: 'no-underline',
-            })}
-            href={hashForExecution(observation.execution_id)}
-          >
-            open full execution report
-          </a>
-          <ScenarioChatAction
-            detail={scopedDetail}
-            executionId={observation.execution_id}
-            scenarioId={testId}
-          />
-          <button
-            className={buttonClassName({ variant: 'primary' })}
-            type="button"
-            onClick={onClose}
-          >
-            close
-          </button>
-        </>
-      }
-    >
-      <div className="grid gap-6">
-        <dl className="m-0 grid gap-3 text-xs @[560px]:grid-cols-2 @[840px]:grid-cols-3">
-          <div className="grid gap-1">
-            <dt className="ds-label">result</dt>
-            <dd className="m-0">
-              <StatusBadge status={result.status} label={result.label} />
-            </dd>
-          </div>
-          <div className="grid gap-1">
-            <dt className="ds-label">execution model</dt>
-            <dd className="m-0 font-mono text-ink">
-              {modelLabel(
-                observation.subject_provider,
-                observation.subject_model,
-              )}
-            </dd>
-          </div>
-          <div className="grid gap-1">
-            <dt className="ds-label">system</dt>
-            <dd className="m-0 font-mono text-ink">
-              {systemSummary(observation)}
-            </dd>
-          </div>
-        </dl>
-        {metrics.length > 0 ? (
-          <dl
-            className="m-0 flex flex-wrap gap-x-6 gap-y-2 font-mono text-xs"
-            aria-label="Execution metrics"
-          >
-            {metrics.map(([label, value]) => (
-              <div className="flex items-baseline gap-2" key={label}>
-                <dt className="ds-label">{label}</dt>
-                <dd className="m-0 text-ink">{value}</dd>
-              </div>
-            ))}
-          </dl>
-        ) : null}
-        {/* Audit TH-20: a result is unreadable without the contract it was
-            measured against, so the spec travels with it into the dialog. */}
-        {spec ? (
-          <AboutTestPanel layout="stacked" spec={spec} testId={testId} />
-        ) : null}
-        <section
-          className="grid gap-3"
-          aria-labelledby="execution-report-title"
-        >
-          <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h3
-              className="m-0 text-sm font-semibold text-ink"
-              id="execution-report-title"
-            >
-              Assessment details for this test
-            </h3>
-            {detail ? (
-              <span className="font-mono text-label text-ink-muted">
-                {availableReports ?? 0} available{' '}
-                {(availableReports ?? 0) === 1 ? 'report' : 'reports'}
-              </span>
-            ) : null}
-          </div>
-          {loading ? (
-            <p className="m-0 text-xs text-ink-soft" role="status">
-              Loading execution report…
-            </p>
-          ) : error ? (
-            <Callout tone="danger">{error}</Callout>
-          ) : (
-            <AssessmentWorkspace detail={scopedDetail} spec={spec} />
-          )}
-        </section>
-      </div>
-    </Dialog>
-  )
-}
-
-/* ----------------------------------------------------------------- page */
-
-type HistoryFilters = {
-  /** Definition digest, or the server's `unmaterialized` marker. */
-  definition: string | undefined
+export type HistoryFilters = {
+  /** A definition digest, or every definition. */
+  definition: string
   model: string
   system: string
+  profile: string
   result: string
 }
 
-const EMPTY_FILTERS: HistoryFilters = {
-  definition: undefined,
-  model: '',
-  system: '',
-  result: '',
+// Older links filtered by status; a value the page does not know is dropped,
+// so the result control always has one option on.
+const RESULT_PARAMS: Record<string, string> = {
+  full: 'full',
+  lost: 'lost',
+  none: 'none',
+  passed: 'full',
+  failed: 'lost',
 }
 
-/** Audit TH-19: filters, the a/b selection and the open dialog live in the hash. */
+/** Filters and the A/B ticks live in the hash, so a link reopens the page
+ *  as it was. */
 export function historyStateFromParams(params: URLSearchParams) {
   return {
     filters: {
-      definition: params.get('definition') || undefined,
+      definition: params.get('definition') || ALL_DEFINITIONS,
       model: params.get('model') ?? '',
       system: params.get('system') ?? '',
-      result: params.get('result') ?? '',
+      profile: params.get('profile') ?? '',
+      result: RESULT_PARAMS[params.get('result') ?? ''] ?? '',
     } satisfies HistoryFilters,
-    comparisonKeys: ['a', 'b']
+    selected: ['a', 'b']
       .map((slot) => params.get(slot))
       .filter((value): value is string => Boolean(value)),
-    open: params.get('open'),
   }
 }
 
 export function historyStateToParams(
   filters: HistoryFilters,
-  comparisonKeys: string[],
-  open: string | null,
+  selected: string[],
 ) {
   const params = new URLSearchParams()
-  if (filters.definition !== undefined)
+  if (filters.definition !== ALL_DEFINITIONS)
     params.set('definition', filters.definition)
-  if (filters.model) params.set('model', filters.model)
-  if (filters.system) params.set('system', filters.system)
-  if (filters.result) params.set('result', filters.result)
-  if (comparisonKeys[0]) params.set('a', comparisonKeys[0])
-  if (comparisonKeys[1]) params.set('b', comparisonKeys[1])
-  if (open) params.set('open', open)
+  for (const key of ['model', 'system', 'profile', 'result'] as const)
+    if (filters[key]) params.set(key, filters[key])
+  if (selected[0]) params.set('a', selected[0])
+  if (selected[1]) params.set('b', selected[1])
   return params
 }
 
-function filtersActive(filters: HistoryFilters) {
-  return (
-    filters.definition !== undefined ||
-    Boolean(filters.model || filters.system || filters.result)
+/** The runs the list shows: the result and profile filters apply here, so
+ *  the summary and the chart keep every run of the definition. */
+export function listedRuns(
+  observations: HistoryObservation[],
+  filters: Pick<HistoryFilters, 'result' | 'profile'>,
+) {
+  return observations.filter(
+    (item) =>
+      (!filters.result ||
+        filters.result === 'all' ||
+        resultOf(item) === filters.result) &&
+      (!filters.profile || profileText(item) === filters.profile),
   )
 }
 
-/** Audit TH-07: says which definition is shown and whether it moved on. */
-export function definitionStatement(history: TestHistoryResponse) {
-  const current = history.current_version ?? null
-  const shown = shortDefinition(history.test_version)
-  if (current === null || current === history.test_version)
-    return `definition ${shown}${current === null ? '' : ' · current'}`
-  const currentDefinition = history.available_versions.find(
-    (item) => item.version === current,
+export function resultChoices(observations: HistoryObservation[]) {
+  const counts = { all: observations.length, full: 0, lost: 0, none: 0 }
+  for (const item of observations) counts[resultOf(item)] += 1
+  return (
+    [
+      ['all', 'All'],
+      ['full', 'Full marks'],
+      ['lost', 'Lost points'],
+      ['none', 'No score'],
+    ] as Array<[Result, string]>
   )
-  const currentRuns = currentDefinition?.execution_count ?? 0
-  return `showing definition ${shown} (latest with executions) · current definition ${shortDefinition(current)} has ${currentRuns === 0 ? 'no executions yet' : `${currentRuns} ${currentRuns === 1 ? 'execution' : 'executions'}`}`
+    .filter(([id]) => id === 'all' || counts[id] > 0)
+    .map(([id, label]) => ({ id, label, count: counts[id] }))
 }
+
+/** `All models · 2`, or the one model when only one ran. */
+export function modelPlaceholder(groups: HistoryResponse['subject_models']) {
+  const models = groups.flatMap((group) => group.models)
+  return models.length === 1 ? models[0] : `All models · ${models.length}`
+}
+
+/** The worker's answer to a definition it does not hold. */
+export function unknownDefinition(message: string) {
+  return /unknown test .* version/.test(message)
+}
+
+export function selectionHint(selected: string[]) {
+  if (selected.length === 0) return 'Tick two runs to compare them'
+  return selected.length === 1 ? 'A ticked · tick B' : 'A and B ticked'
+}
+
+/** `{provider, model}` travels as one select value. */
+function parseModel(value: string) {
+  const [provider, model] = value.split('\n')
+  return provider && model ? { provider, model } : null
+}
+
+/* --------------------------------------------------------------- header */
+
+function MoreMenu({
+  onCopyLink,
+  onCopyDigest,
+  neighbours,
+  definition,
+}: {
+  onCopyLink: () => void
+  onCopyDigest: (digest: string) => void
+  neighbours: { previous: string | null; next: string | null }
+  definition: string | null
+}) {
+  const go = (hash: string) => () => {
+    window.location.hash = hash
+  }
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="ds-button ds-button-quiet ds-button-default th-more"
+          aria-label="More actions"
+        >
+          <Ellipsis size={16} aria-hidden="true" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem onSelect={onCopyLink}>Copy link</DropdownMenuItem>
+        {definition ? (
+          <DropdownMenuItem onSelect={() => onCopyDigest(definition)}>
+            Copy the current definition digest
+          </DropdownMenuItem>
+        ) : null}
+        <DropdownMenuItem onSelect={go(hashForVersionComparison())}>
+          Compare systems
+        </DropdownMenuItem>
+        {neighbours.previous || neighbours.next ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {neighbours.previous ? (
+          <DropdownMenuItem
+            onSelect={go(hashForTestHistory(neighbours.previous))}
+          >
+            Previous test · {neighbours.previous}
+          </DropdownMenuItem>
+        ) : null}
+        {neighbours.next ? (
+          <DropdownMenuItem onSelect={go(hashForTestHistory(neighbours.next))}>
+            Next test · {neighbours.next}
+          </DropdownMenuItem>
+        ) : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** The header's chips: the current definition, the runs and the contract. */
+export function historyFacts(
+  history: HistoryResponse | null,
+  row: TestCatalogRow | null,
+) {
+  const current = history?.current_version ?? row?.current_version ?? null
+  const choices = history ? definitionChoices(history) : []
+  const runs = choices.reduce((total, choice) => total + choice.runs, 0)
+  const ran = choices.filter((choice) => choice.runs > 0).length
+  const criteria = row?.spec?.criteria ?? []
+  return [
+    current
+      ? {
+          label: 'Definition',
+          value: `${shortDefinition(current)} · current`,
+          full: current,
+        }
+      : null,
+    history
+      ? {
+          label: 'Runs',
+          value: `${runs} in ${plural(ran, 'definition')}`,
+        }
+      : null,
+    criteria.length > 0
+      ? {
+          label: 'Scored on',
+          value: `${plural(criteria.length, 'criterion', 'criteria')} · ${criteria.reduce((total, item) => total + item.weight, 0)} points`,
+        }
+      : null,
+  ].filter((fact) => fact !== null)
+}
+
+/* ----------------------------------------------------------------- page */
 
 export function TestHistoryPage({ testId }: { testId: string }) {
   const initial = useMemo(
@@ -879,64 +263,75 @@ export function TestHistoryPage({ testId }: { testId: string }) {
       ),
     [],
   )
-  const [history, setHistory] = useState<TestHistoryResponse | null>(null)
-  const [catalogRow, setCatalogRow] = useState<TestCatalogRow | null>(null)
+  const [filters, setFilters] = useState<HistoryFilters>(initial.filters)
+  const [selected, setSelected] = useState<string[]>(initial.selected)
+  const [history, setHistory] = useState<HistoryResponse | null>(null)
+  const [row, setRow] = useState<TestCatalogRow | null>(null)
   const [neighbours, setNeighbours] = useState<{
     previous: string | null
     next: string | null
   }>({ previous: null, next: null })
-  const [filters, setFilters] = useState<HistoryFilters>(initial.filters)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [openKey, setOpenKey] = useState<string | null>(initial.open)
-  const [comparisonKeys, setComparisonKeys] = useState<string[]>(
-    initial.comparisonKeys,
-  )
-  const [selectionNotice, setSelectionNotice] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [definitionGone, setDefinitionGone] = useState(false)
+  const [copied, setCopied] = useState<string | null>(null)
+  const [metric, setMetric] = useState<ChartMetric>('score')
+  const [open, setOpen] = useState<Set<string>>(new Set())
+  const narrow = useDashboardChrome()?.narrow ?? false
+  const beginRequest = useLatestRequest()
+
   useEffect(() => {
-    let cancelled = false
+    const request = beginRequest()
     setLoading(true)
     setError(null)
+    const model = parseModel(filters.model)
     void getDashboardDataBridge()
-      .then((next) => {
-        if (cancelled) return
-        const execution = parseModelSelection(filters.model)
-        return next.getTestHistory({
+      .then((bridge) =>
+        bridge.getTestHistory({
           test_id: testId,
           test_version: filters.definition,
-          subject_provider: execution?.provider,
-          subject_model: execution?.model,
+          subject_provider: model?.provider,
+          subject_model: model?.model,
           system_version_id: filters.system || undefined,
           limit: 100,
-        })
-      })
+        }),
+      )
       .then((data) => {
-        if (!cancelled && data) setHistory(data)
+        if (request.isCurrent()) setHistory(data as HistoryResponse)
       })
       .catch((cause) => {
-        if (!cancelled)
-          setError(cause instanceof Error ? cause.message : String(cause))
+        if (!request.isCurrent()) return
+        const message = cause instanceof Error ? cause.message : String(cause)
+        // A definition the history no longer holds (an old link): back to
+        // every definition, and say why.
+        if (
+          filters.definition !== ALL_DEFINITIONS &&
+          unknownDefinition(message)
+        ) {
+          setDefinitionGone(true)
+          setFilters((current) => ({
+            ...current,
+            definition: ALL_DEFINITIONS,
+          }))
+          return
+        }
+        setError(message)
       })
       .finally(() => {
-        if (!cancelled) setLoading(false)
+        if (request.isCurrent()) setLoading(false)
       })
-    return () => {
-      cancelled = true
-    }
-  }, [filters.definition, filters.model, filters.system, testId])
+  }, [beginRequest, filters.definition, filters.model, filters.system, testId])
 
-  // Identity (realism, lifecycle) and the previous/next test come from the
-  // catalog (audit T-14 / TH-06).
+  // The contract and the previous and next tests come from the catalog.
   useEffect(() => {
     let cancelled = false
     void getDashboardDataBridge()
       .then((bridge) => bridge.listTests({ limit: 100 }))
       .then((list) => {
         if (cancelled) return
-        const ids = list.rows.map((row) => row.test_id)
+        const ids = list.rows.map((item) => item.test_id)
         const index = ids.indexOf(testId)
-        setCatalogRow(list.rows[index] ?? null)
+        setRow(list.rows[index] ?? null)
         setNeighbours({
           previous: index > 0 ? ids[index - 1] : null,
           next: index >= 0 && index < ids.length - 1 ? ids[index + 1] : null,
@@ -949,707 +344,359 @@ export function TestHistoryPage({ testId }: { testId: string }) {
   }, [testId])
 
   useEffect(() => {
-    replaceRouteParams(historyStateToParams(filters, comparisonKeys, openKey))
-  }, [filters, comparisonKeys, openKey])
+    replaceRouteParams(historyStateToParams(filters, selected))
+  }, [filters, selected])
 
-  const executionModelGroups = useMemo(() => modelGroups(history), [history])
-
-  const allObservations = history?.observations ?? []
-  // Audit TH-21: the result filter is applied here so the chips keep their
-  // counts and a selection survives when both sides stay visible.
-  const observations = filters.result
-    ? allObservations.filter((item) =>
-        filters.result === 'passed'
-          ? item.status === 'passed'
-          : item.status !== 'passed',
-      )
-    : allObservations
-  const passedCount = allObservations.filter(
-    (item) => item.status === 'passed',
-  ).length
-  const failedCount = allObservations.length - passedCount
-
+  // A tick on a run the filters no longer load is dropped; one from an
+  // older link, by execution alone, lands on that execution's first case.
   useEffect(() => {
-    if (loading || comparisonKeys.length === 0) return
-    const visible = new Set(observations.map(testObservationKey))
-    const kept = comparisonKeys.filter((key) => visible.has(key))
-    if (kept.length !== comparisonKeys.length) {
-      setComparisonKeys(kept)
-      setSelectionNotice(
-        kept.length === 0
-          ? 'Selection cleared: the chosen executions left the filter.'
-          : 'b was cleared because it left the filter.',
-      )
-    }
-  }, [loading, observations, comparisonKeys])
-
-  const scores = allObservations.map((item) => item.mean_score)
-  const costs = allObservations.map((item) => item.median_cost_usd)
-  const durations = allObservations.map((item) => item.median_duration_seconds)
-  const tokens = allObservations.map((item) => item.median_tokens)
-  const knownCosts = knownMetricCount(costs)
-  const comparisonSelections = comparisonKeys
-    .map((key) => observations.find((item) => testObservationKey(item) === key))
-    .filter((item): item is TestObservation => Boolean(item))
-  const baseline = comparisonSelections[0] ?? null
-  const candidate = comparisonSelections[1] ?? null
-  const openObservation =
-    openKey === null
-      ? null
-      : (allObservations.find((item) => testObservationKey(item) === openKey) ??
-        null)
-  const contract = contractSummary(allObservations)
-  const lastRun = allObservations[0] ?? null
-  const realism = catalogRow ? catalogRealismPresentation(catalogRow) : null
-  const hasEvidence = allObservations.length > 0
-  const filtered = filtersActive(filters)
-  const isLocalTest = testId.startsWith('local_')
+    if (!history) return
+    setSelected((keys) => {
+      const next = keys.flatMap((key) => {
+        const found = findRun(history.observations, key)
+        return found ? [runKey(found)] : []
+      })
+      return next.join() === keys.join() ? keys : next
+    })
+  }, [history])
 
   const setFilter = <K extends keyof HistoryFilters>(
     key: K,
     value: HistoryFilters[K],
-  ) => {
-    setSelectionNotice(null)
-    setFilters((current) => ({ ...current, [key]: value }))
-  }
+  ) => setFilters((current) => ({ ...current, [key]: value }))
 
-  function selectForComparison(observation: TestObservation) {
-    const key = testObservationKey(observation)
-    setSelectionNotice(null)
-    setComparisonKeys((current) => {
-      const selectedIndex = current.indexOf(key)
-      if (selectedIndex === 0) return current.slice(1)
-      if (selectedIndex === 1) return current.slice(0, 1)
-      if (current.length === 0) return [key]
-      if (current.length === 1) return [...current, key]
-      return [current[0], key]
+  const spec = row?.spec ?? null
+  const observations = history?.observations ?? []
+  const listed = listedRuns(observations, filters)
+  const profiles = [...new Set(observations.map(profileText))].sort()
+  const current = history?.current_version ?? row?.current_version ?? null
+  const toggleOpen = (key: string) =>
+    setOpen((keys) => {
+      const next = new Set(keys)
+      if (!next.delete(key)) next.add(key)
+      return next
     })
+  const choices = history ? definitionChoices(history) : []
+  const stale = history ? staleNotice(history) : null
+  const total = choices.reduce((sum, choice) => sum + choice.runs, 0)
+  const runThisTest = () => requestQuickExecution([testId])
+
+  const copy = (text: string, what: string) =>
+    void copyText(text).then((ok) => {
+      setCopied(copiedText(what, ok))
+      window.setTimeout(() => setCopied(null), 2500)
+    })
+
+  const copyLink = () => {
+    copy(window.location.href, 'Link')
   }
-
-  const identity = [
-    history ? definitionStatement(history) : null,
-    contract?.short ?? null,
-    realism?.value ? `realism ${realism.value}` : null,
-    history
-      ? `${history.total} ${history.total === 1 ? 'execution' : 'executions'} retained`
-      : null,
-    lastRun
-      ? `last run ${formatDate(lastRun.completed_at)} · ${statusPresentation(lastRun.status).label}`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(' · ')
-
-  const runThisTest = (
-    <a
-      className={dashboardHeaderActionClassName({ primary: true })}
-      href={hashForWorkspace()}
-      onClick={() => requestQuickExecution([testId])}
-    >
-      Run this test
-    </a>
-  )
 
   return (
-    <>
+    <div className="ds-root page-shell th-page">
       <DashboardPageActions active="tests" context={testId} />
-      <div className="ds-root page-shell">
-        <PageHeader
-          variant="detail"
-          mono
-          back={{
-            label: 'Back to Tests',
-            href: hashForTests(new URLSearchParams({ highlight: testId })),
-          }}
-          title={testId}
-          summary={
-            loading && !history
-              ? 'loading the history…'
-              : identity || 'no identity recorded'
-          }
-          headingId="test-history-title"
-          actions={
-            <>
-              <a
-                className={dashboardHeaderActionClassName()}
-                href={hashForVersionComparison()}
-              >
-                Compare systems
-              </a>
-              {runThisTest}
-              {catalogRow ? (
-                <StatusBadge
-                  status={
-                    catalogRow.lifecycle === 'active' ? 'passed' : 'unavailable'
-                  }
-                  label={
-                    catalogRow.lifecycle === 'never_run'
-                      ? 'never run'
-                      : catalogRow.lifecycle
-                  }
-                />
-              ) : null}
-              {isLocalTest ? (
-                <span className="inline-flex items-center rounded-[6px] bg-[var(--surface-fill)] px-1.5 py-0.5 font-mono text-label text-ink-soft">
-                  local
-                </span>
-              ) : null}
-              {contract?.full ? (
-                <button
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                  })}
-                  type="button"
-                  title={contract.full}
-                  aria-label="Copy the full contract hash"
-                  onClick={() => {
-                    void navigator.clipboard
-                      ?.writeText(contract.full ?? '')
-                      .then(() => {
-                        setCopied(true)
-                        window.setTimeout(() => setCopied(false), 1500)
-                      })
-                  }}
-                >
-                  <Copy size={13} aria-hidden="true" />
-                  {copied ? 'copied' : 'copy sha'}
-                </button>
-              ) : null}
-              <span className="inline-flex gap-1">
-                <a
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                    className: `no-underline ${neighbours.previous ? '' : 'pointer-events-none opacity-50'}`,
-                  })}
-                  href={
-                    neighbours.previous
-                      ? hashForTestHistory(neighbours.previous)
-                      : undefined
-                  }
-                  aria-disabled={!neighbours.previous}
-                  title={neighbours.previous ?? 'first test'}
-                >
-                  <ChevronLeft size={13} aria-hidden="true" />
-                  prev
-                </a>
-                <a
-                  className={buttonClassName({
-                    variant: 'quiet',
-                    size: 'compact',
-                    className: `no-underline ${neighbours.next ? '' : 'pointer-events-none opacity-50'}`,
-                  })}
-                  href={
-                    neighbours.next
-                      ? hashForTestHistory(neighbours.next)
-                      : undefined
-                  }
-                  aria-disabled={!neighbours.next}
-                  title={neighbours.next ?? 'last test'}
-                >
-                  next
-                  <ChevronRight size={13} aria-hidden="true" />
-                </a>
+      <PageHeader
+        variant="detail"
+        mono
+        className="th-header"
+        back={{
+          label: 'Back to Tests',
+          href: hashForTests(new URLSearchParams({ highlight: testId })),
+        }}
+        title={testId}
+        headingId="test-history-title"
+        summary={
+          spec?.summary ??
+          (loading && !history
+            ? 'Loading the history…'
+            : 'Every run of this test, newest first.')
+        }
+        actions={
+          <>
+            {copied ? (
+              <span className="th-faint" role="status">
+                {copied}
               </span>
-            </>
-          }
-        />
-
-        {error ? (
-          <EmptyState
-            className="mt-6"
-            tone="error"
-            title="History unavailable"
-            description={error}
-          />
-        ) : null}
-
-        {!error && !loading && !hasEvidence && !filtered ? (
-          // Audit TH-01: an empty history is one message and the next action.
-          <EmptyState
-            className="mt-6"
-            title="no retained executions yet"
-            description="This test has never run on this dashboard. Run it once to start the metric history."
-            actions={
+            ) : null}
+            {selected.length === 2 ? (
               <a
-                className={buttonClassName({
-                  variant: 'primary',
-                  className: 'no-underline',
-                })}
-                href={hashForWorkspace()}
-                onClick={() => requestQuickExecution([testId])}
-              >
-                run this test
-              </a>
-            }
-          />
-        ) : null}
-
-        {!error && (loading || hasEvidence || filtered) ? (
-          <div className="mt-6 grid gap-6">
-            {hasEvidence ? (
-              <section
-                aria-label="Retained history metrics"
-                className="grid gap-3"
-              >
-                <p className="m-0 text-xs text-ink-muted">
-                  Retained history · {allObservations.length} executions · mean
-                  score and medians of the reported execution summaries
-                </p>
-                <div
-                  className="grid gap-3 @[560px]:grid-cols-2 @[960px]:grid-cols-4"
-                  data-history-tiles
-                >
-                  <MetricCard
-                    label="successful executions"
-                    value={`${passedCount} / ${allObservations.length}`}
-                    detail="objective result"
-                    tone={
-                      passedCount === allObservations.length
-                        ? 'positive'
-                        : passedCount === 0
-                          ? 'negative'
-                          : 'warning'
-                    }
-                  />
-                  {knownMetricCount(scores) > 0 ? (
-                    <MetricCard
-                      label="mean score"
-                      value={formatScore(mean(scores))}
-                      detail={`scored contract · /100 · ${metricCaption(knownMetricCount(scores), allObservations.length)}`}
-                    />
-                  ) : null}
-                  {knownMetricCount(durations) > 0 ? (
-                    <MetricCard
-                      label="median duration"
-                      value={formatDuration(median(durations))}
-                      detail={metricCaption(
-                        knownMetricCount(durations),
-                        allObservations.length,
-                      )}
-                    />
-                  ) : null}
-                  {knownMetricCount(tokens) > 0 ? (
-                    <MetricCard
-                      label="median tokens"
-                      value={formatTokens(median(tokens))}
-                      detail={`subject execution · ${metricCaption(knownMetricCount(tokens), allObservations.length)}`}
-                    />
-                  ) : null}
-                  {knownCosts > 0 ? (
-                    <MetricCard
-                      label="median cost"
-                      value={formatCost(median(costs))}
-                      detail={metricCaption(knownCosts, allObservations.length)}
-                    />
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
-
-            {allObservations.filter(
-              (item) => finiteMetric(item.mean_score) !== null,
-            ).length >= 2 ? (
-              <details>
-                <summary className="cursor-pointer text-sm font-medium text-ink">
-                  Score trend · {allObservations.length} retained executions
-                </summary>
-                <SectionPanel
-                  title="score trend"
-                  summary={`newest right · ${allObservations.length} executions${knownCosts === 0 ? ' · cost not recorded in local runs' : ''}`}
-                  headingId="score-trend-title"
-                >
-                  <ScoreTrendChart
-                    observations={allObservations}
-                    selectedKeys={comparisonKeys}
-                    onSelect={selectForComparison}
-                  />
-                </SectionPanel>
-              </details>
-            ) : null}
-
-            <section className="grid gap-3" aria-label="History filters">
-              <div className="flex flex-wrap items-center gap-2">
-                <label
-                  className="ds-visually-hidden"
-                  htmlFor="history-definition"
-                >
-                  Scenario definition
-                </label>
-                <Select
-                  id="history-definition"
-                  className="max-w-[16rem]"
-                  value={filters.definition ?? ''}
-                  onChange={(event) =>
-                    setFilter('definition', event.target.value || undefined)
-                  }
-                >
-                  <option value="">definition: latest with executions</option>
-                  {(history?.available_versions ?? []).map((item) => (
-                    <option
-                      key={item.version}
-                      value={item.version}
-                      title={definitionTitle(item.version)}
-                    >
-                      {shortDefinition(item.version)}
-                      {item.version === history?.current_version
-                        ? ' · current'
-                        : ''}
-                      {` · ${item.execution_count} ${item.execution_count === 1 ? 'execution' : 'executions'}`}
-                    </option>
-                  ))}
-                </Select>
-                <div className="w-full max-w-[16rem]">
-                  <ProviderModelDropdown
-                    groups={executionModelGroups}
-                    value={filters.model}
-                    onChange={(next) => setFilter('model', next)}
-                    optionValue={modelSelection}
-                    placeholder="all execution models"
-                    ariaLabel="Execution model"
-                    clearLabel="all execution models"
-                  />
-                </div>
-                {(history?.systems.length ?? 0) > 0 ? (
-                  <Select
-                    aria-label="System revision"
-                    className="max-w-[16rem]"
-                    value={filters.system}
-                    onChange={(event) =>
-                      setFilter('system', event.target.value)
-                    }
-                  >
-                    <option value="">all system revisions</option>
-                    {(history?.systems ?? []).map((item) => (
-                      <option key={item.id} value={item.id}>
-                        {item.label}
-                      </option>
-                    ))}
-                  </Select>
-                ) : null}
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <FilterChipGroup label="Result">
-                  <FilterChip
-                    active={filters.result === ''}
-                    count={allObservations.length}
-                    onClick={() => setFilter('result', '')}
-                  >
-                    all
-                  </FilterChip>
-                  <FilterChip
-                    active={filters.result === 'failed'}
-                    count={failedCount}
-                    onClick={() => setFilter('result', 'failed')}
-                  >
-                    failed
-                  </FilterChip>
-                  <FilterChip
-                    active={filters.result === 'passed'}
-                    count={passedCount}
-                    onClick={() => setFilter('result', 'passed')}
-                  >
-                    passed
-                  </FilterChip>
-                </FilterChipGroup>
-                <output
-                  className="ms-auto font-mono text-label text-ink-muted"
-                  aria-live="polite"
-                >
-                  {loading
-                    ? 'loading executions…'
-                    : `${observations.length} of ${allObservations.length} executions`}
-                </output>
-              </div>
-            </section>
-
-            {selectionNotice ? (
-              <Callout tone="info">{selectionNotice}</Callout>
-            ) : null}
-
-            {loading ? (
-              <div className="grid gap-px" aria-busy="true" role="status">
-                <span className="ds-visually-hidden">
-                  Loading metric history
-                </span>
-                {Array.from({ length: 4 }, (_, index) => (
-                  <div
-                    // biome-ignore lint/suspicious/noArrayIndexKey: static placeholders
-                    key={index}
-                    className="h-12 animate-pulse rounded-[6px] bg-[var(--surface-fill)] motion-reduce:animate-none"
-                  />
-                ))}
-              </div>
-            ) : observations.length === 0 ? (
-              <EmptyState
-                title="No executions match these filters"
-                description="Widen the definition, model or result filter."
-                actions={
-                  <button
-                    className={buttonClassName({ variant: 'secondary' })}
-                    type="button"
-                    onClick={() => {
-                      setSelectionNotice(null)
-                      setFilters(EMPTY_FILTERS)
-                    }}
-                  >
-                    clear filters
-                  </button>
-                }
-              />
-            ) : (
-              <DataTable
-                caption={`Metric history for ${testId}, ${observations.length} executions`}
-                collapse
-                minWidth="56rem"
-                sticky
-                data-history-table
-              >
-                <thead>
-                  <tr>
-                    <th scope="col">
-                      <span className="ds-visually-hidden">Compare</span>
-                      a/b
-                    </th>
-                    <th scope="col">execution</th>
-                    <th scope="col">model · system</th>
-                    <th scope="col">result</th>
-                    <th scope="col" className={numericCellClassName}>
-                      score
-                    </th>
-                    <th scope="col" className={numericCellClassName}>
-                      duration
-                    </th>
-                    <th scope="col" className={numericCellClassName}>
-                      tokens
-                    </th>
-                    {knownCosts > 0 ? (
-                      <th scope="col" className={numericCellClassName}>
-                        cost
-                      </th>
-                    ) : null}
-                    <th scope="col">
-                      <span className="ds-visually-hidden">Actions</span>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {observations.map((item) => {
-                    const key = testObservationKey(item)
-                    const selectedIndex = comparisonKeys.indexOf(key)
-                    const result = statusPresentation(item.status)
-                    return (
-                      // Audit TH-09: one row of compact controls; the row
-                      // itself opens the details.
-                      <DataTableRow
-                        key={key}
-                        className={`cursor-pointer ${selectedIndex >= 0 ? 'is-selected' : ''}`}
-                        data-execution-id={item.execution_id}
-                        onClick={(event) => {
-                          if (isInteractiveTarget(event.target)) return
-                          setOpenKey(key)
-                        }}
-                      >
-                        <td data-label="a/b">
-                          <label className="inline-flex min-h-7 cursor-pointer items-center gap-2 font-mono text-label text-ink-soft">
-                            <input
-                              className="size-4 accent-[var(--accent)]"
-                              type="checkbox"
-                              checked={selectedIndex >= 0}
-                              onChange={() => selectForComparison(item)}
-                              aria-label={`Select ${formatDate(item.completed_at)} for comparison`}
-                            />
-                            {selectedIndex === 0
-                              ? 'a'
-                              : selectedIndex === 1
-                                ? 'b'
-                                : ''}
-                          </label>
-                        </td>
-                        <td data-label="Execution">
-                          <span className="block font-mono text-xs text-ink">
-                            {formatDate(item.completed_at)}
-                          </span>
-                          <span
-                            className="block font-mono text-label text-ink-muted"
-                            title={definitionTitle(item.behavior_sha256)}
-                          >
-                            {runLabel(item.run_count)} ·{' '}
-                            {item.execution_id.slice(0, 8)}…
-                            {shortDefinition(item.behavior_sha256)
-                              ? ` · ${shortDefinition(item.behavior_sha256)}`
-                              : ''}
-                          </span>
-                        </td>
-                        <td data-label="Model · system">
-                          <span className="block font-mono text-xs text-ink">
-                            {modelLabel(
-                              item.subject_provider,
-                              item.subject_model,
-                            )}
-                          </span>
-                          <span className="block font-mono text-label text-ink-muted">
-                            {systemSummary(item)}
-                          </span>
-                        </td>
-                        <td data-label="Result">
-                          <StatusBadge
-                            status={result.status}
-                            label={result.label}
-                          />
-                        </td>
-                        <td data-label="Score" className={numericCellClassName}>
-                          {formatScore(item.mean_score)}
-                        </td>
-                        <td
-                          data-label="Duration"
-                          className={numericCellClassName}
-                        >
-                          {formatDuration(item.median_duration_seconds)}
-                        </td>
-                        <td
-                          data-label="Tokens"
-                          className={numericCellClassName}
-                        >
-                          {formatTokens(item.median_tokens)}
-                        </td>
-                        {knownCosts > 0 ? (
-                          <td
-                            data-label="Cost"
-                            className={numericCellClassName}
-                          >
-                            {formatCost(item.median_cost_usd)}
-                          </td>
-                        ) : null}
-                        <td data-label="Actions" className="text-right">
-                          <span className="inline-flex items-center gap-1">
-                            <a
-                              className={buttonClassName({
-                                variant: 'quiet',
-                                size: 'compact',
-                                className: 'no-underline',
-                              })}
-                              href={hashForExecution(item.execution_id)}
-                            >
-                              open
-                              <ArrowRight size={13} aria-hidden="true" />
-                            </a>
-                            <ScenarioChatAction
-                              compact
-                              executionId={item.execution_id}
-                              scenarioId={testId}
-                            />
-                          </span>
-                        </td>
-                      </DataTableRow>
-                    )
-                  })}
-                </tbody>
-              </DataTable>
-            )}
-
-            {baseline && candidate ? (
-              <ObservationComparisonPanel
-                baseline={baseline}
-                candidate={candidate}
-                testId={testId}
-                onClear={() => setComparisonKeys([])}
-                onSwap={() =>
-                  setComparisonKeys((current) =>
-                    current.length === 2 ? [current[1], current[0]] : current,
-                  )
-                }
-              />
-            ) : null}
-          </div>
-        ) : null}
-        {catalogRow?.spec ? (
-          <AboutTestPanel
-            className="mt-6"
-            spec={catalogRow.spec}
-            testId={testId}
-          />
-        ) : null}
-      </div>
-
-      {comparisonKeys.length > 0 && !loading ? (
-        // Audit TH-09: the selection bar stays in view while rows are ticked.
-        <div
-          className="sticky bottom-0 z-10 bg-panel px-3 py-3 md:px-6"
-          data-selection-bar
-        >
-          <div className="flex flex-wrap items-center gap-3 font-mono text-xs">
-            <span className="text-ink">
-              {comparisonKeys.length} selected
-              {baseline ? ` · a = ${formatDate(baseline.completed_at)}` : ''}
-              {candidate ? ` · b = ${formatDate(candidate.completed_at)}` : ''}
-            </span>
-            <span className="text-ink-muted">
-              {!candidate
-                ? 'tick another execution as b'
-                : compareTestObservations(
-                      baseline as TestObservation,
-                      candidate,
-                    ).compatible
-                  ? 'same model and cohort · deltas interpreted'
-                  : 'different model or cohort · deltas shown, not interpreted'}
-            </span>
-            <span className="ms-auto flex gap-2">
-              <button
                 className={buttonClassName({
                   variant: 'secondary',
-                  size: 'compact',
+                  className: 'no-underline',
                 })}
-                type="button"
-                onClick={() =>
-                  setComparisonKeys((current) =>
-                    current.length === 2 ? [current[1], current[0]] : current,
-                  )
-                }
-                disabled={!candidate}
+                href={hashForRunComparison(testId, selected[0], selected[1])}
+                data-compare-runs
               >
-                swap
-              </button>
+                <GitCompare size={16} aria-hidden="true" />
+                Compare A and B
+              </a>
+            ) : (
               <button
-                className={buttonClassName({
-                  variant: 'quiet',
-                  size: 'compact',
-                })}
                 type="button"
-                onClick={() => setComparisonKeys([])}
+                className={buttonClassName({ variant: 'secondary' })}
+                disabled
+                title="Tick two runs in the list to compare them"
+                data-compare-runs
               >
-                clear
+                <GitCompare size={16} aria-hidden="true" />
+                Compare two runs
               </button>
-              <button
-                className={buttonClassName({
-                  variant: 'primary',
-                  size: 'compact',
-                })}
-                type="button"
-                disabled={!baseline || !candidate}
-                onClick={() =>
-                  document
-                    .getElementById('test-comparison-title')
-                    ?.scrollIntoView({ block: 'start' })
-                }
-              >
-                compare a → b
-              </button>
-            </span>
-          </div>
+            )}
+            <a
+              className={buttonClassName({
+                variant: 'primary',
+                className: 'no-underline',
+              })}
+              href={hashForWorkspace()}
+              onClick={runThisTest}
+            >
+              Run this test
+            </a>
+            <MoreMenu
+              onCopyLink={copyLink}
+              onCopyDigest={(digest) => copy(digest, 'Digest')}
+              neighbours={neighbours}
+              definition={
+                history?.current_version ?? row?.current_version ?? null
+              }
+            />
+          </>
+        }
+      />
+      <FactList className="th-facts" aria-label="About this test">
+        {historyFacts(history, row).map((fact) => (
+          <FactChip key={fact.label} {...fact} />
+        ))}
+      </FactList>
+
+      {stale ? (
+        <div className="th-notice" role="status" data-stale-definition>
+          <Info size={16} aria-hidden="true" className="th-notice-icon" />
+          <p>{stale}</p>
+          <a
+            className="th-act th-act-filled"
+            href={hashForWorkspace()}
+            onClick={runThisTest}
+          >
+            Run on the current definition
+          </a>
         </div>
       ) : null}
 
-      {openObservation ? (
-        <ExecutionDetailsDialog
-          observation={openObservation}
-          testDefinition={history?.test_version}
-          testId={testId}
-          spec={catalogRow?.spec ?? null}
-          onClose={() => setOpenKey(null)}
+      {error ? (
+        <EmptyState
+          tone="error"
+          title="History unavailable"
+          description={error}
         />
       ) : null}
-    </>
+
+      {history && choices.length > 0 ? (
+        <section className="th-definitions" aria-labelledby="th-defs">
+          <h2 id="th-defs" className="th-h2">
+            Definition
+          </h2>
+          <SegmentedControl
+            variant="radio"
+            aria-label="Definition"
+            className="th-segments"
+            value={filters.definition}
+            onChange={(value) => {
+              setSelected([])
+              setDefinitionGone(false)
+              setFilter('definition', value)
+            }}
+            options={[
+              {
+                value: ALL_DEFINITIONS,
+                label: (
+                  <>
+                    All <span className="th-count">{total}</span>
+                  </>
+                ),
+              },
+              ...choices.map((choice) => ({
+                value: choice.version,
+                title: definitionTitle(choice.version),
+                label: (
+                  <>
+                    <span className="th-mono">{choice.label}</span>
+                    {choice.current ? (
+                      <span className="th-tag">current</span>
+                    ) : null}
+                    <span className="th-count">{choice.runs}</span>
+                  </>
+                ),
+              })),
+            ]}
+          />
+          {definitionGone ? (
+            <span className="th-faint" role="status" data-definition-gone>
+              That definition is no longer in this test’s history.
+            </span>
+          ) : filters.definition === ALL_DEFINITIONS ? (
+            <span className="th-faint">
+              Runs on different definitions answer different contracts; compare
+              within one.
+            </span>
+          ) : null}
+        </section>
+      ) : null}
+
+      {observations.length > 0 ? (
+        <>
+          <section className="th-kpis" aria-label="Summary">
+            {summaryFigures(observations, history?.total).map((figure) => (
+              <div className="th-kpi" key={figure.label}>
+                <span className="th-kpi-label">{figure.label}</span>
+                <span className="th-kpi-value">{figure.value}</span>
+                <span className="th-kpi-sub">{figure.sub}</span>
+              </div>
+            ))}
+          </section>
+          <div className="th-two">
+            <TrendChart
+              observations={observations}
+              metric={metric}
+              onMetric={setMetric}
+            />
+            <LossesPanel losses={losses(observations, spec)} />
+          </div>
+        </>
+      ) : null}
+
+      {history || loading ? (
+        <section
+          className="th-runs"
+          aria-labelledby="th-runs"
+          aria-busy={loading || undefined}
+        >
+          <div className="th-toolbar">
+            <h2 id="th-runs" className="th-h2 th-h2-lg">
+              Runs
+            </h2>
+            <SegmentedControl
+              variant="radio"
+              aria-label="Result"
+              className="th-segments"
+              value={filters.result || 'all'}
+              onChange={(value) =>
+                setFilter('result', value === 'all' ? '' : value)
+              }
+              options={resultChoices(observations).map((choice) => ({
+                value: choice.id,
+                label: (
+                  <>
+                    {choice.label}
+                    <span className="th-count">{choice.count}</span>
+                  </>
+                ),
+              }))}
+            />
+            {(history?.subject_models ?? []).length > 0 ? (
+              <Select
+                aria-label="Model"
+                className="th-select"
+                value={filters.model || undefined}
+                placeholder={modelPlaceholder(history?.subject_models ?? [])}
+                allowEmpty
+                emptyLabel="All models"
+                onClear={() => setFilter('model', '')}
+                onChange={(value) => setFilter('model', value)}
+                groups={(history?.subject_models ?? []).map((group) => ({
+                  label: group.provider,
+                  options: group.models.map((model) => ({
+                    value: `${group.provider}\n${model}`,
+                    label: model,
+                  })),
+                }))}
+              />
+            ) : null}
+            {profiles.length > 1 || filters.profile ? (
+              <Select
+                aria-label="Profile"
+                className="th-select"
+                value={filters.profile || undefined}
+                placeholder={`All profiles · ${profiles.length}`}
+                allowEmpty
+                emptyLabel="All profiles"
+                onClear={() => setFilter('profile', '')}
+                onChange={(value) => setFilter('profile', value)}
+                options={profiles.map((profile) => ({
+                  value: profile,
+                  label: profile,
+                }))}
+              />
+            ) : null}
+            {(history?.systems ?? []).length > 1 || filters.system ? (
+              <Select
+                aria-label="System revision"
+                className="th-select"
+                value={filters.system || undefined}
+                placeholder="All system revisions"
+                allowEmpty
+                emptyLabel="All system revisions"
+                onClear={() => setFilter('system', '')}
+                onChange={(value) => setFilter('system', value)}
+                options={(history?.systems ?? []).map((system) => ({
+                  value: system.id,
+                  label: system.label,
+                }))}
+              />
+            ) : null}
+            <span className="th-faint th-push" aria-live="polite">
+              {selectionHint(selected)}
+            </span>
+          </div>
+          {loading && !history ? (
+            <div className="th-skeleton" role="status">
+              <span className="ds-visually-hidden">Loading the runs</span>
+              {[0, 1, 2, 3].map((index) => (
+                <div key={index} />
+              ))}
+            </div>
+          ) : listed.length > 0 ? (
+            <RunsTable
+              observations={listed}
+              current={current}
+              grouped={
+                new Set(listed.map((item) => item.behavior_sha256)).size > 1
+              }
+              selected={selected}
+              onToggleSelected={(key) =>
+                setSelected((keys) => toggleSelection(keys, key))
+              }
+              open={open}
+              onToggleOpen={toggleOpen}
+              narrow={narrow}
+            />
+          ) : observations.length > 0 ? (
+            <div className="th-empty">
+              <p className="th-faint">No run matches these filters.</p>
+              <button
+                type="button"
+                className="th-act th-act-filled"
+                onClick={() =>
+                  setFilters((value) => ({ ...value, result: '', profile: '' }))
+                }
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : (
+            <p className="th-empty th-faint">
+              No run on this definition yet. Run the test to get its first
+              result.
+            </p>
+          )}
+          {history && history.total > observations.length ? (
+            <p className="th-note">
+              Showing the latest {observations.length} of {history.total} runs.
+            </p>
+          ) : null}
+        </section>
+      ) : null}
+
+      {spec ? <TestContract spec={spec} /> : null}
+    </div>
   )
 }
