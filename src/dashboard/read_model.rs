@@ -293,8 +293,17 @@ pub(super) struct LastRun {
     pub score: Option<f64>,
     pub status: RunStatus,
     pub completion: CompletionState,
-    /// `current` when it ran the current definition, else `previous`.
-    pub definition: String,
+    pub definition: RunDefinition,
+}
+
+/// Which definition a run evaluated, next to the test's current one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum RunDefinition {
+    /// The test's current definition.
+    Current,
+    /// An earlier definition (or the last one of a retired test).
+    Previous,
 }
 
 /// The catalog's run facts for one test, from the same observations the
@@ -333,11 +342,10 @@ fn run_facts(entry: &TestEntry) -> (Option<LastRun>, Vec<Option<f64>>, usize, us
             status: run.status,
             completion: run.completion,
             definition: if current(version) {
-                "current"
+                RunDefinition::Current
             } else {
-                "previous"
-            }
-            .into(),
+                RunDefinition::Previous
+            },
         });
     let recent_scores = runs[runs.len().saturating_sub(RECENT_SCORES)..]
         .iter()
@@ -1995,7 +2003,7 @@ mod tests {
         assert_eq!(last.at, "2026-08-09T10:00:00Z");
         assert_eq!(last.score, None);
         assert_eq!(last.status, RunStatus::InfrastructureError);
-        assert_eq!(last.definition, "current");
+        assert_eq!(last.definition, RunDefinition::Current);
 
         // A run of the current definition, then runs of another one: the
         // last run is the current definition's, where the history opens.
@@ -2009,7 +2017,7 @@ mod tests {
         let last = earlier.last_run.unwrap();
         assert_eq!(last.at, "2026-08-08T10:00:00Z");
         assert_eq!(last.score, Some(90.0));
-        assert_eq!(last.definition, "current");
+        assert_eq!(last.definition, RunDefinition::Current);
 
         // The definition moved on: the runs stay, none of them current.
         model
@@ -2019,7 +2027,10 @@ mod tests {
             .current_version = Some("newer".into());
         let changed = row(&model);
         assert_eq!((changed.runs_current, changed.runs_total), (0, 3));
-        assert_eq!(changed.last_run.unwrap().definition, "previous");
+        assert_eq!(
+            changed.last_run.unwrap().definition,
+            RunDefinition::Previous
+        );
 
         // Only the last eight scores travel.
         let many = DashboardReadModel::from_projections(vec![projection(
