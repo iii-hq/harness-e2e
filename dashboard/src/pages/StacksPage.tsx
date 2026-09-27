@@ -92,6 +92,7 @@ export function StackSheet({
   busy,
   copyError,
   created = false,
+  gone = false,
   onCopy,
   onSaved,
   onClose,
@@ -105,6 +106,8 @@ export function StackSheet({
   copyError: string | null
   /** Opened right after it was created. */
   created?: boolean
+  /** No longer listed: deleted elsewhere while it was open. */
+  gone?: boolean
   onCopy: () => void
   onSaved: (stack: Stack) => void
   onClose: () => void
@@ -235,6 +238,15 @@ export function StackSheet({
 
           <div className="sk-sheet-body">
             <aside className="sk-aside" aria-label="What it declares">
+              {gone ? (
+                <div className="sk-alert" role="alert" data-stack-gone>
+                  <CircleX size={16} aria-hidden="true" />
+                  <span>
+                    This stack is no longer in this Console. Copy the YAML
+                    before closing.
+                  </span>
+                </div>
+              ) : null}
               {editing && error ? (
                 <div className="sk-alert" role="alert" id="sk-error">
                   <CircleX size={16} aria-hidden="true" />
@@ -864,10 +876,12 @@ export function StacksPage() {
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  // The stack open in the sheet, and whether it was just created.
+  // The stack open in the sheet, as last seen, and whether it was just
+  // created. Kept so a reload that no longer lists it does not close it.
   const [sheet, setSheet] = useState<{
     id: string
     mode: 'view' | 'edit'
+    stack: Stack
     created?: boolean
   } | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
@@ -913,7 +927,7 @@ export function StacksPage() {
     try {
       const created = await bridge.createStack(stack.id)
       setStacks((current) => upsertStack(current, created))
-      setSheet({ id: created.id, mode: 'edit', created: true })
+      setSheet({ id: created.id, mode: 'edit', stack: created, created: true })
       void load()
     } catch (cause) {
       setActionError(errorText(cause))
@@ -929,7 +943,7 @@ export function StacksPage() {
       const created = await bridge.createStack(from, label)
       setStacks((current) => upsertStack(current, created))
       setCreating(false)
-      setSheet({ id: created.id, mode: 'edit', created: true })
+      setSheet({ id: created.id, mode: 'edit', stack: created, created: true })
       void load()
     } catch (cause) {
       setCreateError(errorText(cause))
@@ -962,7 +976,10 @@ export function StacksPage() {
   }
 
   const failedFirstLoad = Boolean(error) && stacks === null
-  const open = sheet ? stacks?.find((stack) => stack.id === sheet.id) : null
+  const listed = sheet
+    ? stacks?.find((stack) => stack.id === sheet.id)
+    : undefined
+  const open = sheet ? (listed ?? sheet.stack) : null
   return (
     <div className="ds-root ex-page sk-page" data-narrow={narrow || undefined}>
       <DashboardPageActions
@@ -1038,6 +1055,7 @@ export function StacksPage() {
             setSheet({
               id: stack.id,
               mode: stack.source === 'local' ? 'edit' : 'view',
+              stack,
             })
           }}
           onCopy={(stack) => void copy(stack)}
@@ -1057,9 +1075,13 @@ export function StacksPage() {
           busy={busy}
           copyError={actionError}
           created={sheet?.created}
+          gone={Boolean(stacks) && !listed}
           onCopy={() => void copy(open)}
           onSaved={(saved) => {
             setStacks((current) => upsertStack(current, saved))
+            setSheet((current) =>
+              current?.id === saved.id ? { ...current, stack: saved } : current,
+            )
             void load()
           }}
           onClose={() => setSheet(null)}

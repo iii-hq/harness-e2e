@@ -4,7 +4,8 @@
 // an edit whose warnings show beside the editor, a save the runner refuses
 // said beside it without clearing what was typed, Discard and the question
 // before closing unsaved changes, New stack from a stack of this Console,
-// Delete behind the host's confirmation; then the provider credentials:
+// Delete behind the host's confirmation (run once when confirmed twice), a
+// sheet kept when its stack is deleted elsewhere; then the provider credentials:
 // import, set, add and delete one, by name only. The repository's stacks are
 // the files of stacks/; the runner's answers (what a stack declares, its
 // warnings and the parse error) are stood in for here and covered by the
@@ -78,6 +79,8 @@ const calls = { create: [], update: [], remove: [], credentials: [] }
 let failList = true
 // Set to make the next copy fail.
 let failCreate = false
+// A stack deleted elsewhere right after it is saved.
+let vanish = null
 
 // The worker's credentials: names only ever leave it.
 const known = {
@@ -140,13 +143,15 @@ const trigger = (name, request = {}) => {
         'The stack is not YAML: did not find expected node content at line 2 column 1, while parsing a flow node',
       )
     const index = local.findIndex((stack) => stack.id === request.stack_id)
-    local[index] = view(
+    const saved = view(
       request.stack_id,
       request.label ?? local[index].label,
       'local',
       request.yaml ?? local[index].yaml,
     )
-    return local[index]
+    local[index] = saved
+    if (request.stack_id === vanish) local.splice(index, 1)
+    return saved
   }
   if (id === 'stack-delete') {
     calls.remove.push(request)
@@ -448,6 +453,36 @@ try {
     'sk-heading',
   )
 
+  // A stack deleted elsewhere while it is open: the reload no longer lists
+  // it, and its sheet stays, saying so, with what it holds.
+  await page
+    .getByRole('button', { name: 'Copy default', exact: true })
+    .first()
+    .click()
+  const kept = page.locator('[data-stack-sheet="edit"]')
+  await page.getByRole('dialog', { name: 'Edit default copy' }).waitFor()
+  vanish = 'stack-3'
+  await kept.getByLabel('Stack name', { exact: true }).fill('Vanishing')
+  await kept.getByRole('button', { name: 'Save stack', exact: true }).click()
+  await kept
+    .getByText(
+      'This stack is no longer in this Console. Copy the YAML before closing.',
+      { exact: true },
+    )
+    .waitFor()
+  await mine.locator('[data-stack="stack-3"]').waitFor({ state: 'detached' })
+  await kept.locator('#sk-yaml').fill(`${fallback.yaml}# kept\n`)
+  assert.equal(
+    await kept.locator('#sk-yaml').inputValue(),
+    `${fallback.yaml}# kept\n`,
+  )
+  await kept.locator('#sk-yaml').press('Escape')
+  await page
+    .getByRole('alertdialog', { name: 'Discard changes to Vanishing?' })
+    .getByRole('button', { name: 'Discard changes', exact: true })
+    .click()
+  await kept.waitFor({ state: 'detached' })
+
   // Provider credentials, below the stacks: each by name, set or not.
   const section = page.locator('[data-credentials]')
   const status = (name) =>
@@ -561,7 +596,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation; provider credentials listed by name, imported, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; a failed copy's error left behind; provider credentials listed by name, imported, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
   )
 } catch (error) {
   console.error(
