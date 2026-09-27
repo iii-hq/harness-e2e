@@ -762,10 +762,7 @@ export function SuiteDetail({
                 split.
               </span>
               <button
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                })}
+                className={dashboardHeaderActionClassName()}
                 type="button"
                 onClick={onRetryGroups}
               >
