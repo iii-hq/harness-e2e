@@ -242,7 +242,7 @@ export function CatalogTable({
             data-catalog-group={group.key}
           >
             <tr className="tc-group-head">
-              <th scope="colgroup" colSpan={narrow ? 4 : 7}>
+              <th scope="rowgroup" colSpan={narrow ? 4 : 7}>
                 <Checkbox
                   aria-label={`Select every test in ${group.label}`}
                   checked={state === 'all'}
@@ -404,13 +404,15 @@ function SaveSuiteDialog({
         <form className="ex-rename" onSubmit={(event) => void submit(event)}>
           <HostInput
             aria-label="Suite name"
+            aria-invalid={error ? true : undefined}
+            aria-describedby={error ? 'tc-save-suite-error' : undefined}
             maxLength={160}
             placeholder="Suite name"
             value={label}
             onChange={setLabel}
           />
           {error ? (
-            <p className="ex-error" role="alert">
+            <p id="tc-save-suite-error" className="ex-error" role="alert">
               {error}
             </p>
           ) : null}
@@ -736,32 +738,36 @@ export function TestsCatalogPage() {
         </Callout>
       ) : null}
 
-      {saved ? (
-        <div className="ex-flash" role="status">
-          <Check size={16} aria-hidden="true" />
-          <span>
-            Saved “{saved.label}” with {plural(saved.count, 'test')}.{' '}
-            <a href={hashForSuites()}>Open Suites</a>
-          </span>
-          <button
-            className="ex-icon-button"
-            type="button"
-            aria-label="Dismiss"
-            onClick={() => setSaved(null)}
-          >
-            <X size={16} aria-hidden="true" />
-          </button>
-        </div>
-      ) : null}
-      {saved?.warnings.length ? (
-        <Callout tone="warning" title="What the suite changed">
-          <ul className="tc-warnings">
-            {saved.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
-            ))}
-          </ul>
-        </Callout>
-      ) : null}
+      {/* One live region, always in the page, so what saving the suite
+          did (and what it changed) is read out as it appears. */}
+      <div className="tc-saved" aria-live="polite">
+        {saved ? (
+          <div className="ex-flash">
+            <Check size={16} aria-hidden="true" />
+            <span>
+              Saved “{saved.label}” with {plural(saved.count, 'test')}.{' '}
+              <a href={hashForSuites()}>Open Suites</a>
+            </span>
+            <button
+              className="ex-icon-button"
+              type="button"
+              aria-label="Dismiss"
+              onClick={() => setSaved(null)}
+            >
+              <X size={16} aria-hidden="true" />
+            </button>
+          </div>
+        ) : null}
+        {saved?.warnings.length ? (
+          <Callout tone="warning" role="note" title="What the suite changed">
+            <ul className="tc-warnings">
+              {saved.warnings.map((warning) => (
+                <li key={warning}>{warning}</li>
+              ))}
+            </ul>
+          </Callout>
+        ) : null}
+      </div>
 
       {ticked.length > 0 ? (
         <div

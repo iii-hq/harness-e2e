@@ -103,6 +103,7 @@ describe('tests catalog table', () => {
     expect(html).toContain('<tbody class="tc-group" aria-label="kanban"')
     expect(html).toContain('1 of 3 current')
     expect(html).toContain('>Standalone<')
+    expect(html).toContain('<th scope="rowgroup"')
     expect(html).toContain('none current')
     expect(html).toContain('aria-label="Tests, 4 of 4"')
   })

@@ -420,6 +420,14 @@ try {
   const name = page.getByRole('dialog', { name: 'Save as suite' })
   await name.getByRole('button', { name: 'Save suite', exact: true }).click()
   await name.getByText('Name the suite.').waitFor()
+  const nameField = name.getByRole('textbox', { name: 'Suite name' })
+  assert.equal(await nameField.getAttribute('aria-invalid'), 'true')
+  assert.equal(
+    await name
+      .locator(`#${await nameField.getAttribute('aria-describedby')}`)
+      .textContent(),
+    'Name the suite.',
+  )
   await name.getByRole('textbox', { name: 'Suite name' }).fill('Picked')
   // The worker's refusal is said in the dialog, which stays open.
   refuseCreate = 'The suite store is read-only.'
@@ -432,8 +440,10 @@ try {
     tests: ['registry_implementation', 'registry_verification', 'minimal_path'],
     label: 'Picked',
   })
-  await page.getByText('Saved “Picked” with 3 tests.').waitFor()
-  await page.getByText('it was left out').waitFor()
+  // Read out as it appears: the save and what it changed.
+  const said = page.locator('[aria-live="polite"]').filter({ hasText: 'Saved' })
+  await said.getByText('Saved “Picked” with 3 tests.').waitFor()
+  await said.getByText('it was left out').waitFor()
   // The new suite is a chip on its tests and a filter.
   await page
     .locator('[data-test-id="minimal_path"]')

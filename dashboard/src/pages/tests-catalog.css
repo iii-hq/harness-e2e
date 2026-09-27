@@ -48,6 +48,16 @@
   align-self: stretch;
 }
 
+.tc-saved {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
+}
+
+.tc-saved:empty {
+  display: none;
+}
+
 .tc-warnings {
   margin: 0;
   padding-inline-start: calc(var(--spacing) * 4);
