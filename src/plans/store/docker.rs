@@ -912,6 +912,13 @@ impl PlanStore {
             )
         };
         let ended = matches!(state, "done" | "failed");
+        // Installed before it reads as ended, so a group that ended always
+        // shows its results.
+        if ended {
+            if let Err(error) = self.import_group(id, &group).await {
+                tracing::info!(execution_id = %id, group_id = %group.group_id, error = %format!("{error:#}"), "a Docker group's runs are left to the import at the end");
+            }
+        }
         self.update_docker(id, |_, _, groups| {
             let current = &mut groups[index];
             (current.state, current.error) = (state.into(), error);
@@ -919,31 +926,20 @@ impl PlanStore {
                 current.counted = group.attempt;
             }
         })
-        .await?;
-        // Its slot goes to the next group while its runs are installed.
-        drop((_kanban, _permit));
-        if ended {
-            if let Err(error) = self.import_group(id, index).await {
-                tracing::info!(execution_id = %id, group_id = %group.group_id, error = %format!("{error:#}"), "a Docker group's runs are left to the import at the end");
-            }
-        }
-        Ok(())
+        .await
+        .map(drop)
     }
 
-    /// Install the counted attempt of a group that ended, as the import at
-    /// the end installs it again: its tests report while the other groups
-    /// run, and an attempt run again replaces the one before. A group that
-    /// left no readable run is left to that import, which says why.
-    async fn import_group(&self, id: &str, index: usize) -> Result<()> {
+    /// Install an attempt of a group that ended, as the import at the end
+    /// installs it again: its tests report while the other groups run, and
+    /// an attempt run again replaces the one before. A group that left no
+    /// readable run is left to that import, which says why.
+    async fn import_group(&self, id: &str, group: &DockerGroup) -> Result<()> {
         let runner = self.runner()?;
         let execution = self.read_execution(id).await?;
-        let ExecutionSource::Docker { groups, .. } = &execution.source else {
-            bail!("execution {id} is not a Docker execution");
-        };
-        let group = groups[index].clone();
         let bundle = self.docker_artifacts(id).join(format!(
             "e2e-observation-{id}-{}-{}-gh-{}",
-            group.campaign_id, group.group_id, group.counted
+            group.campaign_id, group.group_id, group.attempt
         ));
         let previous = execution
             .slots
@@ -2451,6 +2447,16 @@ mod tests {
         assert!(launcher.calls("finalize").is_empty());
         assert_eq!(running.slots[1].state, "running");
         assert!(running.slots[1].execution_id.is_empty());
+        // What the Console reads: the ended group's report, the running
+        // one's and the queued ones' states.
+        let detail = store.execution_detail(&id, &[]).await.unwrap().unwrap();
+        let reports = detail["reports"].as_array().unwrap();
+        assert_eq!(reports[0]["available"], true);
+        assert_eq!(reports[0]["native_execution_id"], native.as_str());
+        assert_eq!(reports[1]["state"], "running");
+        assert!(reports[2..]
+            .iter()
+            .all(|report| report["state"] == "queued" && report["available"] == false));
         store.cancel(&id).await.unwrap();
         let cancelled = until(&store, &id, settled).await;
         assert_eq!(cancelled.state, "cancelled");
@@ -2753,8 +2759,13 @@ mod tests {
         let native = natives[0].clone();
         assert_eq!(natives[1], native);
         let (mut prepared, _) = prepared_groups(&checkout).unwrap();
-        (prepared[0].state, prepared[0].counted) = ("done".into(), 1);
+        prepared[0].state = "running".into();
         prepared[1].state = "running".into();
+        let group = |index: usize, attempt: u32| DockerGroup {
+            attempt,
+            ..prepared[index].clone()
+        };
+        let (first, failed, again) = (group(0, 1), group(1, 1), group(0, 2));
         store
             .write_execution(&PlanExecution {
                 id: id.clone(),
@@ -2796,7 +2807,7 @@ mod tests {
         // Installed at once: its test reports, the Console hears of it, and
         // the other groups' slots still follow them.
         let mut changes = store.changes();
-        store.import_group(&id, 0).await.unwrap();
+        store.import_group(&id, &first).await.unwrap();
         assert_eq!(changes.try_recv().unwrap(), id);
         let installed = store.read_execution(&id).await.unwrap();
         assert_eq!(installed.slots.len(), 4);
@@ -2823,34 +2834,21 @@ mod tests {
         assert_eq!(moved.slots[2].state, "running");
 
         // A group that left no run is left to the import at the end.
-        let failed = bundle("case-persistent-state", 1);
-        fs::create_dir_all(&failed).unwrap();
+        let left = bundle("case-persistent-state", 1);
+        fs::create_dir_all(&left).unwrap();
         fs::write(
-            failed.join("failure.json"),
+            left.join("failure.json"),
             r#"{"error": "compose::add failed"}"#,
         )
         .unwrap();
-        store
-            .update_docker(&id, |_, _, groups| {
-                (groups[1].state, groups[1].counted) = ("failed".into(), 1);
-            })
-            .await
-            .unwrap();
-        let error = store.import_group(&id, 1).await.unwrap_err();
+        let error = store.import_group(&id, &failed).await.unwrap_err();
         assert!(format!("{error:#}").contains("compose::add failed"));
         let kept = store.read_execution(&id).await.unwrap();
         assert!(kept.slots[1].execution_id.is_empty());
 
         // Run again, its next attempt replaces the one before under the
         // same id, without another slot.
-        store
-            .update_docker(&id, |attempt, _, groups| {
-                *attempt = 2;
-                (groups[0].attempt, groups[0].counted) = (2, 2);
-            })
-            .await
-            .unwrap();
-        store.import_group(&id, 0).await.unwrap();
+        store.import_group(&id, &again).await.unwrap();
         let replaced = store.read_execution(&id).await.unwrap();
         assert_eq!(replaced.slots.len(), 4);
         assert_eq!(replaced.slots[0].execution_id, native);

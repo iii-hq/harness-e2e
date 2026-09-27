@@ -138,6 +138,9 @@ impl PlanStore {
             );
             if running {
                 current[0]["state"] = json!("running");
+            } else if slot.state == "pending" {
+                // Waiting for its turn: queued, not missing.
+                current[0]["state"] = json!("queued");
             }
             reports.extend(current);
             // Earlier attempts are shown with their slot and counted nowhere:
