@@ -5,8 +5,10 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
+  EmptyState as HostEmptyState,
   Input as HostInput,
   SegmentedControl,
+  StatusPanel,
   Table,
   TableBody,
   TableCaption,
@@ -18,12 +20,14 @@ import {
   TableViewport,
 } from '@iii-dev/console-ui'
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Check,
   Copy,
   ExternalLink,
   GitCompare,
+  Inbox,
   Minus,
   Pencil,
   RotateCcw,
@@ -51,7 +55,6 @@ import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
   Callout,
-  EmptyState,
   Input,
   isInteractiveTarget,
   RowMenu,
@@ -617,6 +620,83 @@ export function deletedMessage(titles: string[]) {
   return titles.length === 1
     ? `Deleted “${titles[0]}” with its runs and evidence.`
     : `Deleted ${titles.length} executions with their runs and evidence.`
+}
+
+/* ------------------------------------------------------------- states */
+
+/** Nothing to show: the host's EmptyState, at most one ghost action (the
+ *  header already offers Run tests). */
+export function LedgerEmpty({
+  retained,
+  filtered,
+  onClear,
+  onImport,
+}: {
+  /** Whether any execution is retained at all. */
+  retained: boolean
+  filtered: boolean
+  onClear: () => void
+  /** Absent without a bridge: nothing can be imported. */
+  onImport?: () => void
+}) {
+  return (
+    <HostEmptyState
+      icon={filtered ? Search : Inbox}
+      title={
+        retained
+          ? 'No executions match these filters'
+          : 'No executions retained yet'
+      }
+      description={
+        retained
+          ? 'Widen the result filter, clear the search or load older executions.'
+          : 'Run tests here or import a run from GitHub to start retaining execution evidence.'
+      }
+      action={
+        filtered
+          ? { label: 'Clear filters', onClick: onClear }
+          : !retained && onImport
+            ? { label: 'Import from GitHub', onClick: onImport }
+            : undefined
+      }
+    />
+  )
+}
+
+/** A load that failed: what failed, what to do, the worker's message under
+ *  them in mono, and Retry (the host's StatusPanel, alert). */
+export function LedgerLoadFailure({
+  reload,
+  message,
+  onRetry,
+}: {
+  /** Rows are still shown from an earlier load. */
+  reload: boolean
+  message: string
+  onRetry: () => void
+}) {
+  return (
+    <StatusPanel
+      variant="alert"
+      icon={<AlertCircle size={18} />}
+      headline={
+        reload
+          ? 'Couldn’t reload the executions'
+          : 'Couldn’t load the executions'
+      }
+      detail={
+        <>
+          Check that the harness worker is running on this stack, then retry.
+          <span className="ex-error-message">{message}</span>
+        </>
+      }
+      action={
+        <Button type="button" variant="ghost" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      }
+    />
+  )
 }
 
 /* -------------------------------------------------------------- table */
@@ -1436,21 +1516,7 @@ export function ExecutionsPage() {
       </p>
 
       {error && !failedFirstLoad ? (
-        <Callout tone="danger" title="Executions could not be reloaded">
-          <span className="ex-callout-line">
-            {error}
-            <button
-              className={buttonClassName({
-                variant: 'secondary',
-                size: 'compact',
-              })}
-              type="button"
-              onClick={() => void load()}
-            >
-              Try again
-            </button>
-          </span>
-        </Callout>
+        <LedgerLoadFailure reload message={error} onRetry={() => void load()} />
       ) : null}
 
       {failedFirstLoad ? null : (
@@ -1547,63 +1613,17 @@ export function ExecutionsPage() {
           ))}
         </div>
       ) : failedFirstLoad ? (
-        <EmptyState
-          tone="error"
-          title="Executions could not be loaded"
-          description={error}
-          actions={
-            <button
-              className={buttonClassName({ variant: 'secondary' })}
-              type="button"
-              onClick={() => void load()}
-            >
-              Try again
-            </button>
-          }
+        <LedgerLoadFailure
+          reload={false}
+          message={error ?? ''}
+          onRetry={() => void load()}
         />
       ) : visible.length === 0 ? (
-        <EmptyState
-          title={
-            rows.length === 0
-              ? 'No executions retained yet'
-              : 'No executions match these filters'
-          }
-          description={
-            rows.length === 0
-              ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
-              : 'Widen the result filter, clear the search or load older executions.'
-          }
-          actions={
-            filtered ? (
-              <button
-                className={buttonClassName({ variant: 'secondary' })}
-                type="button"
-                onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
-              >
-                Clear filters
-              </button>
-            ) : rows.length === 0 && bridge ? (
-              <>
-                <button
-                  className={buttonClassName({ variant: 'primary' })}
-                  type="button"
-                  onClick={() => {
-                    setRunnerScope([])
-                    setRunnerOpen(true)
-                  }}
-                >
-                  Run tests
-                </button>
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => setImportOpen(true)}
-                >
-                  Import from GitHub
-                </button>
-              </>
-            ) : null
-          }
+        <LedgerEmpty
+          retained={rows.length > 0}
+          filtered={filtered}
+          onClear={() => setFilters(LEDGER_DEFAULT_FILTERS)}
+          onImport={bridge ? () => setImportOpen(true) : undefined}
         />
       ) : (
         <div className="ex-ledger" data-ledger>

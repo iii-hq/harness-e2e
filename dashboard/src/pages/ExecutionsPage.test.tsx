@@ -17,6 +17,8 @@ import {
   importLedgerExecutionAgain,
   LEDGER_DEFAULT_FILTERS,
   type LedgerActions,
+  LedgerEmpty,
+  LedgerLoadFailure,
   type LedgerRow,
   LedgerTable,
   ledgerFiltersFromParams,
@@ -572,6 +574,57 @@ function bridgeDouble(overrides: Partial<DashboardDataBridge> = {}) {
   } as unknown as DashboardDataBridge
   return { bridge, calls }
 }
+
+describe('the list when there is nothing to show', () => {
+  it('uses the host EmptyState with one ghost action, never a second primary', () => {
+    const empty = renderToStaticMarkup(
+      <LedgerEmpty
+        retained={false}
+        filtered={false}
+        onClear={noop}
+        onImport={noop}
+      />,
+    )
+    expect(empty).toContain('data-ui="empty-state"')
+    expect(empty).toContain('<h2>No executions retained yet</h2>')
+    expect(empty).toContain('>Import from GitHub</button>')
+    expect(empty).not.toContain('Run tests</button>')
+    const filtered = renderToStaticMarkup(
+      <LedgerEmpty retained filtered onClear={noop} onImport={noop} />,
+    )
+    expect(filtered).toContain('<h2>No executions match these filters</h2>')
+    expect(filtered).toContain('>Clear filters</button>')
+    expect(filtered).not.toContain('Import from GitHub')
+    // Without a bridge there is nothing to offer.
+    expect(
+      renderToStaticMarkup(
+        <LedgerEmpty retained={false} filtered={false} onClear={noop} />,
+      ),
+    ).not.toContain('<button')
+  })
+
+  it('says a failed load on the host StatusPanel, the message under it', () => {
+    const html = renderToStaticMarkup(
+      <LedgerLoadFailure
+        reload={false}
+        message="harness worker timed out"
+        onRetry={noop}
+      />,
+    )
+    expect(html).toContain('data-ui="status-panel" data-variant="alert"')
+    expect(html).toContain('<strong>Couldn’t load the executions</strong>')
+    expect(html).toContain(
+      '<span class="ex-error-message">harness worker timed out</span>',
+    )
+    expect(html).toContain('data-variant="ghost"')
+    expect(html).toContain('>Retry</button>')
+    expect(
+      renderToStaticMarkup(
+        <LedgerLoadFailure reload message="x" onRetry={noop} />,
+      ),
+    ).toContain('Couldn’t reload the executions')
+  })
+})
 
 describe('what the list does through the bridge', () => {
   it('deletes what it can and titles each refusal in the worker’s words', async () => {

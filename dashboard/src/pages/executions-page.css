@@ -142,6 +142,15 @@
   min-width: 0;
 }
 
+/* The worker's own words under a failed load (LyOverlays: mono 11). */
+.ex-error-message {
+  display: block;
+  margin-top: var(--spacing);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  overflow-wrap: anywhere;
+}
+
 .ex-callout-line {
   display: flex;
   flex-wrap: wrap;
