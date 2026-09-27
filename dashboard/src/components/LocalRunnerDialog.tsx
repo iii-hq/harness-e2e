@@ -216,6 +216,22 @@ export function withSequentialGroups(
   return result
 }
 
+/** The form on the suite a page opened the dialog on (Suites: Run this
+ *  suite), unless a suite is picked already. */
+export function formOnSuite(
+  form: RunnerForm,
+  suite: SuiteContent | undefined,
+): RunnerForm {
+  if (!suite || form.suite) return form
+  return {
+    ...form,
+    suite: suite.id,
+    scenarios: suite.scenarios,
+    runs: String(suite.repetitions),
+    technicalRetries: String(suite.technical_retries),
+  }
+}
+
 /** What a suite holds, to fill the form and to tell whether it still does. */
 export type SuiteContent = Pick<
   Suite,
@@ -489,19 +505,12 @@ export function LocalRunnerDialog({
         setDockerGroups(raw.docker_parallel_groups)
       setSuites(listed)
       setStacks(stackList)
-      // The suite the page opened the dialog on, the first time only.
+      // The suite the page opened the dialog on, once it is listed: until
+      // then a refresh (or Retry) tries again.
       const opened = listed.find((entry) => entry.id === pendingSuite.current)
-      pendingSuite.current = undefined
+      if (opened) pendingSuite.current = undefined
       setForm((current) => {
-        const base = opened
-          ? {
-              ...current,
-              suite: opened.id,
-              scenarios: opened.scenarios,
-              runs: String(opened.repetitions),
-              technicalRetries: String(opened.technical_retries),
-            }
-          : current
+        const base = formOnSuite(current, opened)
         return {
           ...base,
           // Never a model the user did not pick or run last.
@@ -654,6 +663,8 @@ export function LocalRunnerDialog({
         '',
     }))
   const pickSuite = (value: string) => {
+    // A suite picked here outranks the one the page opened on.
+    pendingSuite.current = undefined
     const chosen = pickedSuite(value, choices)
     setForm((current) =>
       chosen

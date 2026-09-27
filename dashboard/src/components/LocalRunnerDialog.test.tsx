@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   choiceValue,
   executionStartRequest,
+  formOnSuite,
   lastUsedModel,
   namedSuite,
   pickedStack,
@@ -338,5 +339,34 @@ describe('Run tests from scratch', () => {
     expect(withSequentialGroups(['minimal_path'], [], groups)).toEqual([
       'minimal_path',
     ])
+  })
+})
+
+describe('opened on a suite (Suites: Run this suite)', () => {
+  const pr = {
+    id: 'pr',
+    label: 'PR',
+    scenarios: ['minimal_path', 'persistent_state'],
+    repetitions: 2,
+    technical_retries: 0,
+  }
+
+  it('fills the form with the suite once it is listed', () => {
+    expect(formOnSuite(runnerForm(null), pr)).toMatchObject({
+      suite: 'pr',
+      scenarios: pr.scenarios,
+      runs: '2',
+      technicalRetries: '0',
+    })
+  })
+
+  it('leaves the form as it is while the suite is not listed (the suites failed to load)', () => {
+    const form = runnerForm(null)
+    expect(formOnSuite(form, undefined)).toBe(form)
+  })
+
+  it('does not override a suite picked in the dialog', () => {
+    const picked = { ...runnerForm(null), suite: 'regression' }
+    expect(formOnSuite(picked, pr)).toBe(picked)
   })
 })
