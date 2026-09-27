@@ -7,7 +7,7 @@ import {
   Plus,
   TriangleAlert,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { GithubCard } from '@/components/run-dialog/GithubCard'
 import { Picker, type PickerGroup } from '@/components/run-dialog/Picker'
 import {
@@ -216,6 +216,22 @@ export function withSequentialGroups(
   return result
 }
 
+/** The form on the suite a page opened the dialog on (Suites: Run this
+ *  suite), unless a suite is picked already. */
+export function formOnSuite(
+  form: RunnerForm,
+  suite: SuiteContent | undefined,
+): RunnerForm {
+  if (!suite || form.suite) return form
+  return {
+    ...form,
+    suite: suite.id,
+    scenarios: suite.scenarios,
+    runs: String(suite.repetitions),
+    technicalRetries: String(suite.technical_retries),
+  }
+}
+
 /** What a suite holds, to fill the form and to tell whether it still does. */
 export type SuiteContent = Pick<
   Suite,
@@ -419,6 +435,7 @@ export function LocalRunnerDialog({
   bridge,
   open,
   initialScenarios = NO_SCENARIOS,
+  initialSuite,
   parameters = null,
   label = '',
   onClose,
@@ -427,6 +444,8 @@ export function LocalRunnerDialog({
   open: boolean
   /** Tests preselected by the page that opened the dialog (audit TH-06). */
   initialScenarios?: string[]
+  /** The suite picked once the suites are listed (Suites: Run this suite). */
+  initialSuite?: string
   /** Parameters of the execution to run again; the form starts from them. */
   parameters?: ExecutionParameters | null
   /** Name of the execution run again; the new one starts with it. */
@@ -450,6 +469,7 @@ export function LocalRunnerDialog({
   )
   // The model taken from the last execution, said so under the field.
   const [lastSubject, setLastSubject] = useState('')
+  const pendingSuite = useRef(initialSuite)
   // One Run dialog is open at a time: stable ids let the browser journeys
   // (scripts/*.browser.mjs) address its controls.
   const id = (name: string) => `run-dialog-${name}`
@@ -485,12 +505,19 @@ export function LocalRunnerDialog({
         setDockerGroups(raw.docker_parallel_groups)
       setSuites(listed)
       setStacks(stackList)
-      setForm((current) => ({
-        ...current,
-        // Never a model the user did not pick or run last.
-        subject: current.subject || (last ? modelKey(last) : ''),
-        scenarios: withSequentialGroups(current.scenarios, [], next.groups),
-      }))
+      // The suite the page opened the dialog on, once it is listed: until
+      // then a refresh (or Retry) tries again.
+      const opened = listed.find((entry) => entry.id === pendingSuite.current)
+      if (opened) pendingSuite.current = undefined
+      setForm((current) => {
+        const base = formOnSuite(current, opened)
+        return {
+          ...base,
+          // Never a model the user did not pick or run last.
+          subject: base.subject || (last ? modelKey(last) : ''),
+          scenarios: withSequentialGroups(base.scenarios, [], next.groups),
+        }
+      })
     } catch {
       setCatalog(null)
     } finally {
@@ -636,6 +663,8 @@ export function LocalRunnerDialog({
         '',
     }))
   const pickSuite = (value: string) => {
+    // A suite picked here outranks the one the page opened on.
+    pendingSuite.current = undefined
     const chosen = pickedSuite(value, choices)
     setForm((current) =>
       chosen

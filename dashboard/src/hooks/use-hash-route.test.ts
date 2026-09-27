@@ -88,6 +88,10 @@ describe('dashboard hash routes', () => {
     })
     expect(hashForSuites()).toBe('#/ext/harness-e2e/suites')
     expect(routeFromHash(hashForSuites())).toEqual({ page: 'suites' })
+    expect(hashForSuites('suite-1')).toBe(
+      '#/ext/harness-e2e/suites?suite=suite-1',
+    )
+    expect(routeFromHash(hashForSuites('suite-1'))).toEqual({ page: 'suites' })
     expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
     expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
     // The retired plan pages are no route of this page any more.
