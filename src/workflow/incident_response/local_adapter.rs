@@ -800,8 +800,11 @@ mod tests {
 
     #[tokio::test]
     async fn local_adapter_runs_deterministic_lifecycle_and_resets_fixture() {
-        let temporary =
-            tempfile::tempdir_in(Path::new(env!("CARGO_MANIFEST_DIR")).join("target")).unwrap();
+        // Under the checkout, not the OS temp dir; `target/` is absent when
+        // CARGO_TARGET_DIR builds elsewhere.
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+        fs::create_dir_all(&base).unwrap();
+        let temporary = tempfile::tempdir_in(base).unwrap();
         let root = temporary.path().join("fixture");
         create_fixture(&root).unwrap();
         let adapter = LocalIncidentAdapter::from_root(root.clone()).unwrap();
