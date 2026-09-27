@@ -434,7 +434,7 @@
   gap: calc(var(--spacing) * 3);
   margin: 0;
   padding: calc(var(--spacing) * 5) calc(var(--spacing) * 2);
-  border-top: 1px solid var(--color-edge);
+  border-top: var(--ds-row-divider);
 }
 
 .th-empty p {
@@ -949,7 +949,7 @@
   align-items: start;
   gap: calc(var(--spacing) * 2.5);
   padding: calc(var(--spacing) * 1.75) 0;
-  border-bottom: 1px solid var(--color-edge);
+  border-bottom: var(--ds-row-divider);
   font-size: var(--text-xs);
 }
 
