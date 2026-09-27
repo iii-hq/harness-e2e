@@ -11,7 +11,14 @@ import {
   TriangleAlert,
   X,
 } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from 'react'
 import { Picker } from '@/components/run-dialog/Picker'
 import {
   checkState,
@@ -86,11 +93,29 @@ export function withContracts(
   })
 }
 
+export type RunAction = 'import' | 'importing' | 'imported' | 'failed'
+
 /** Where a run stands here: not imported, being imported (this dialog is
- *  starting it, or the worker is downloading it), or held by an execution. */
-export function githubRunAction(run: GithubRun, starting = false) {
+ *  starting it, or the worker is downloading it), held by an execution, or
+ *  its last import failed and it can be imported again. */
+export function githubRunAction(run: GithubRun, starting = false): RunAction {
   if (starting || run.execution_state === 'importing') return 'importing'
+  if (run.execution_state === 'failed') return 'failed'
   return run.execution_id ? 'imported' : 'import'
+}
+
+/** The rows an execution holds, at the state the worker says it ended in. */
+export function withExecutionState(
+  runs: GithubRun[],
+  executionId: string,
+  state: string,
+  error: string | null,
+): GithubRun[] {
+  return runs.map((run) =>
+    run.execution_id === executionId
+      ? { ...run, execution_state: state, execution_error: error }
+      : run,
+  )
 }
 
 export function shortSha(sha: string | null | undefined) {
@@ -133,7 +158,8 @@ export function runMatches(
     .filter(Boolean)
     .join(' ')
     .toLowerCase()
-  const imported = githubRunAction(run, starting) !== 'import'
+  const action = githubRunAction(run, starting)
+  const imported = action === 'imported' || action === 'importing'
   return (
     (!q || text.includes(q)) &&
     (!branch || run.head_branch === branch) &&
@@ -275,6 +301,11 @@ export function GithubRunRow({
 }) {
   const action = githubRunAction(run, starting)
   const pending = Boolean(run.contract_pending)
+  const problem = failure
+    ? `The import didn’t start: ${failure}`
+    : action === 'failed'
+      ? `The import failed${run.execution_error ? `: ${run.execution_error}` : '.'}`
+      : null
   const suite = run.suite_label || run.suite
   const conclusion = conclusionOf(run.conclusion)
   const rc = run.release_control_execution_id
@@ -344,15 +375,15 @@ export function GithubRunRow({
           ) : (
             <span className="gi-detail rd-ellipsis">{contractDetail(run)}</span>
           )}
-          {failure ? (
+          {problem ? (
             <span
               className="rd-hint rd-warning gi-warning"
               data-tone="alert"
               role="alert"
             >
               <AlertCircle size={16} aria-hidden="true" />
-              <span className="rd-ellipsis" title={failure}>
-                The import didn’t start: {failure}
+              <span className="rd-ellipsis" title={problem}>
+                {problem}
               </span>
             </span>
           ) : null}
@@ -383,6 +414,12 @@ export function GithubRunRow({
           <span className="gi-state-label">
             <Check size={16} aria-hidden="true" className="gi-ok" />
             Imported
+          </span>
+        ) : null}
+        {action === 'failed' ? (
+          <span className="gi-state-label">
+            <AlertCircle size={16} aria-hidden="true" className="gi-alert" />
+            Failed
           </span>
         ) : null}
         {action === 'importing' ? (
@@ -474,6 +511,9 @@ export function GithubImportDialog({
   const [starting, setStarting] = useState<number[]>([])
   const [started, setStarted] = useState<number[]>([])
   const [failures, setFailures] = useState<Record<number, string>>({})
+  // What the change handler reads: the rows as last rendered.
+  const runsRef = useRef(runs)
+  runsRef.current = runs
 
   const checkGithub = useCallback(() => {
     bridge?.getGithubStatus().then(setGithub, () => setGithub(null))
@@ -531,6 +571,51 @@ export function GithubImportDialog({
     checkGithub()
     void load(1)
   }, [open, load, checkGithub])
+
+  // An import the worker ended moves its row to Imported or Failed.
+  useEffect(() => {
+    if (!open || !bridge) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    bridge
+      .subscribeRunChanges((payload) => {
+        const executionId = String(payload.execution_id ?? '')
+        if (payload.kind !== 'finished') return
+        const held = runsRef.current.filter(
+          (run) => run.execution_id === executionId,
+        )
+        if (held.length === 0) return
+        void bridge
+          .getExecution(executionId)
+          .then((detail) => {
+            if (cancelled) return
+            const execution = detail.plan_execution
+            setRuns((current) =>
+              withExecutionState(
+                current,
+                executionId,
+                execution?.state ?? 'completed',
+                execution?.error ?? null,
+              ),
+            )
+            setStarted((current) =>
+              current.filter(
+                (runId) => !held.some((run) => run.run_id === runId),
+              ),
+            )
+          })
+          .catch(() => undefined)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      dispose?.()
+    }
+  }, [open, bridge])
 
   const retry = (page: number) => {
     if (page === 1) checkGithub()
@@ -592,8 +677,8 @@ export function GithubImportDialog({
   const hidden = selected.filter(
     (runId) => !visible.some((run) => run.run_id === runId),
   ).length
-  const imported = runs.filter(
-    (run) => githubRunAction(run, isStarting(run)) !== 'import',
+  const imported = runs.filter((run) =>
+    runMatches(run, { ...NO_FILTERS, show: 'imported' }, isStarting(run)),
   ).length
   const again = runs.filter(
     (run) =>

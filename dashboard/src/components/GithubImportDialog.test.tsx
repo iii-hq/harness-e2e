@@ -12,6 +12,7 @@ import {
   shortSha,
   sortGithubRuns,
   withContracts,
+  withExecutionState,
 } from '@/components/GithubImportDialog'
 import type { GithubRun } from '@/lib/dashboard-data-source'
 
@@ -82,9 +83,18 @@ describe('GitHub import model', () => {
     expect(githubRunAction(run({ run_id: 1 }), true)).toBe('importing')
     expect(
       githubRunAction(
-        run({ run_id: 2, execution_id: 'plan-a', execution_state: 'failed' }),
+        run({
+          run_id: 2,
+          execution_id: 'plan-a',
+          execution_state: 'completed',
+        }),
       ),
     ).toBe('imported')
+    expect(
+      githubRunAction(
+        run({ run_id: 2, execution_id: 'plan-a', execution_state: 'failed' }),
+      ),
+    ).toBe('failed')
     expect(
       githubRunAction(
         run({ run_id: 3, execution_id: 'p', execution_state: 'importing' }),
@@ -125,6 +135,37 @@ describe('GitHub import model', () => {
     expect(runMatches(imported, { ...all, show: 'imported' })).toBe(true)
     // An import this dialog is starting counts as imported.
     expect(runMatches(fresh, { ...all, show: 'imported' }, true)).toBe(true)
+    // One whose import failed does not: it can be imported again.
+    const failed = run({
+      run_id: 5,
+      execution_id: 'plan-f',
+      execution_state: 'failed',
+    })
+    expect(runMatches(failed, { ...all, show: 'imported' })).toBe(false)
+    expect(runMatches(failed, { ...all, show: 'new' })).toBe(true)
+  })
+
+  it('follows an import the worker ended, to Imported or to Failed', () => {
+    const listed = [
+      run({ run_id: 1, execution_id: 'plan-a', execution_state: 'importing' }),
+      run({ run_id: 2, execution_id: 'plan-b', execution_state: 'importing' }),
+    ]
+    const done = withExecutionState(listed, 'plan-a', 'completed', null)
+    expect(done.map((entry) => githubRunAction(entry))).toEqual([
+      'imported',
+      'importing',
+    ])
+    expect(done[1]).toBe(listed[1])
+    const failed = withExecutionState(
+      done,
+      'plan-b',
+      'failed',
+      'This run keeps no e2e-contract artifact',
+    )
+    expect(githubRunAction(failed[1])).toBe('failed')
+    expect(failed[1].execution_error).toBe(
+      'This run keeps no e2e-contract artifact',
+    )
   })
 
   it('groups runs by the local day they were created', () => {
@@ -256,6 +297,21 @@ describe('GitHub run row', () => {
     const importing = row(run({ run_id: 2 }), { starting: true })
     expect(text(importing)).toContain('Importing…')
     expect(importing).toMatch(/<input[^>]*disabled/)
+    // A failed import says why and can be ticked again.
+    const failed = row(
+      run({
+        run_id: 3,
+        execution_id: 'plan-f',
+        execution_state: 'failed',
+        execution_error: 'gh: HTTP 410: artifact expired',
+      }),
+    )
+    expect(text(failed)).toContain('Failed')
+    expect(text(failed)).not.toContain('Imported')
+    expect(text(failed)).toContain(
+      'The import failed: gh: HTTP 410: artifact expired',
+    )
+    expect(failed).not.toMatch(/<input[^>]*disabled/)
   })
 })
 

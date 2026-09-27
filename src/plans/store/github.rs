@@ -237,6 +237,7 @@ impl PlanStore {
             "release_control_execution_id": title.strip_prefix("E2E · "),
             "execution_id": null,
             "execution_state": null,
+            "execution_error": null,
         });
         match self.cached_contract(repository, run_id, attempt) {
             Some(summary) => merge(&mut row, &summary),
@@ -245,6 +246,7 @@ impl PlanStore {
         if let Ok(execution) = self.read_execution(&import_id(repository, run_id)).await {
             row["execution_id"] = json!(execution.id);
             row["execution_state"] = json!(execution.state);
+            row["execution_error"] = json!(execution.error);
         }
         row
     }

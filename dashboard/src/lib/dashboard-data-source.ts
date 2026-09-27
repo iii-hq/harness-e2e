@@ -226,6 +226,8 @@ export type GithubRun = {
   contract_pending?: boolean
   execution_id: string | null
   execution_state: string | null
+  /** Why the execution holding it failed, as its last import said. */
+  execution_error?: string | null
 }
 
 export type GithubRunsResponse = {

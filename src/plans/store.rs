@@ -3413,11 +3413,12 @@ pub(crate) mod tests {
     async fn a_run_being_imported_is_not_imported_twice_and_a_failed_download_fails_it() {
         let root = tempfile::tempdir().unwrap();
         let data = root.path().join("data");
-        // Every call answers with the run; its artifact list then holds no
-        // contract, so the download fails after the import began.
+        // Every call answers with the run (and the list with it); its
+        // artifact list then holds no contract, so the download fails after
+        // the import began.
         let gh = fake_gh(
             root.path(),
-            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","run_started_at":"2026-09-20T10:00:00Z"}'"#,
+            r#"printf '%s' '{"id":42,"run_attempt":1,"display_title":"E2E · rc-1","html_url":"https://github.com/o/r/actions/runs/42","run_started_at":"2026-09-20T10:00:00Z","total_count":1,"workflow_runs":[{"id":42,"run_attempt":1}]}'"#,
         );
         let manager = manager_with_gh(&data, Arc::new(FakeRunner::new(data.clone())), gh);
         let (first, started) = manager.begin_github_import("o/r", 42).await.unwrap();
@@ -3436,6 +3437,13 @@ pub(crate) mod tests {
             .as_deref()
             .unwrap()
             .contains("no e2e-contract artifact"));
+        // The list says so, with why, so the Console offers it again.
+        let listed = manager.github_runs("o/r", 1).await.unwrap();
+        assert_eq!(listed["runs"][0]["execution_state"], "failed");
+        assert_eq!(
+            listed["runs"][0]["execution_error"].as_str(),
+            failed.error.as_deref()
+        );
         // A failed import can be started again.
         assert!(manager.begin_github_import("o/r", 42).await.unwrap().1);
     }

@@ -207,6 +207,10 @@
   color: var(--rd-ok);
 }
 
+.gi-alert {
+  color: var(--rd-alert);
+}
+
 .gi-spin {
   flex: 0 0 auto;
   color: var(--rd-accent);
