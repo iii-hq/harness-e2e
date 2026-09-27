@@ -367,13 +367,46 @@ p.mkdir(parents=True)
     return {'ready': True}
 
 
-def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
+def compose_namespace(text):
+    """Namespace Compose registers the project in (its daemon's compose::* and every worker).
+
+    iii compose takes --namespace, then the file's top-level `namespace:`, then
+    `default`; the evaluator never passes --namespace, so the file decides.
+    """
+    # ponytail: scans block-style top-level keys; the trusted runtime has no YAML
+    # library. A flow-style file or a value on a continuation line reads as `default`.
+    for line in text.splitlines():
+        match = re.fullmatch(r'''(["']?)namespace\1[ \t]*:(?:[ \t]+(.*))?''', line)
+        if not match:
+            continue
+        value = re.sub(r'(?:^|[ \t])#.*', '', match[2] or '').strip()
+        if len(value) >= 2 and value[0] in '"\'' and value[-1] == value[0]:
+            value = value[1:-1].strip()
+        if value in ('', '~', 'null', 'Null', 'NULL'):
+            return 'default'
+        if not re.fullmatch(r'[a-z0-9_-]+', value):
+            raise EvaluationError(f'cannot resolve the Compose namespace from {value!r}')
+        return value
+    return 'default'
+
+
+def project_namespace(candidate):
+    completed = subprocess.run(docker_exec(candidate, ['head', '-c', '1048576', '/workspace/worker-compose.yaml']),
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, check=False, timeout=10)
+    if completed.returncode:
+        raise EvaluationError('cannot read the Compose file: '
+                              + completed.stderr.decode(errors='replace')[-4096:])
+    return compose_namespace(completed.stdout.decode(errors='replace'))
+
+
+def hot_reload(candidate, evaluator, evidence, runtime, namespace, cancel=None):
     token = os.urandom(16).hex()
     marker = f'KANBAN_HOT_RELOAD_{token}'
     root = '/workspace/kanban'
     backup = f'/tmp/kanban-hot-reload-{token}'
     logs = docker_exec(candidate, ['/runtime/iii', 'trigger', 'compose::logs',
-                       '--engine', 'ws://127.0.0.1:50179', '--namespace', 'default',
+                       '--engine', 'ws://127.0.0.1:50179', '--namespace', namespace,
                        '--json', json.dumps({'file': '/workspace/worker-compose.yaml', 'tail': 1000})])
     logs_path = evidence / 'hot-reload-compose.log'
     successful_log_queries = 0
@@ -425,7 +458,7 @@ def hot_reload(candidate, evaluator, evidence, runtime, cancel=None):
             raise InfrastructureError('hot reload source restoration failed: '
                                       + restored.stderr.decode(errors='replace')[-4096:])
     if not successful_log_queries:
-        raise InfrastructureError('Compose worker logs were unavailable during hot reload')
+        raise InfrastructureError(f'Compose worker logs were unavailable during hot reload in namespace {namespace}')
     recovered = wait_runtime_ready(runtime[0], evaluator, cancel, timeout=10)
     return {'observed': observed and recovered, 'source_restored': True}
 
@@ -480,7 +513,7 @@ b=r.read(65537);assert len(b)<=65536;sys.stdout.buffer.write(b)
     raise InfrastructureError('Node inspector did not become ready')
 
 
-def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
+def control_callback(evidence, candidate, evaluator, runtime, namespace, cancel=None):
     responses = {}
 
     def poll():
@@ -537,7 +570,7 @@ def control_callback(evidence, candidate, evaluator, runtime, cancel=None):
                 value = restart_runtime(candidate, evaluator, evidence, runtime, cancel,
                                         register_configuration=False, reset_configuration=True)
             elif operation == 'hot_reload' and not payload:
-                value = hot_reload(candidate, evaluator, evidence, runtime, cancel)
+                value = hot_reload(candidate, evaluator, evidence, runtime, namespace, cancel)
             elif operation == 'inspect_runtime' and not payload:
                 value = inspect_runtime(candidate, evaluator, cancel)
             else:
@@ -801,12 +834,13 @@ print('workspace readable; trusted files, evaluator process and external network
                                          'detail': 'Compose application did not become ready; see runtime.log.'})
                     (evidence / 'result.json').write_text(json.dumps(result))
                 else:
+                    namespace = project_namespace(candidate)
                     probe = docker_exec(evaluator, ['/runtime/node', '/trusted/probe.mjs', '--case', args.case,
                                         '--base-url', 'http://127.0.0.1:3000', '--engine-url', 'ws://127.0.0.1:50179',
-                                        '--output', '/evidence'])
+                                        '--namespace', namespace, '--output', '/evidence'])
                     try:
                         code = bounded(probe, evidence / 'probe.log', 600, evaluator, cancel,
-                                       control_callback(evidence, candidate, evaluator, runtime, cancel))
+                                       control_callback(evidence, candidate, evaluator, runtime, namespace, cancel))
                         result = probe_result(evidence, args.case, code)
                     except InfrastructureError:
                         raise

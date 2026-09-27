@@ -151,12 +151,21 @@ def identity_of(args: argparse.Namespace, artifacts: Path | None) -> dict[str, A
     # is the only place an exact version exists.
     evidence = obj(read_json(artifacts / "compose-evidence.json")) if artifacts else {}
     observed = obj(obj(evidence.get("runtime")).get("observed_versions"))
+    versions = observed or resolution.get("stack_versions")
+    # A worker built from a commit reports its Cargo version: it is named by
+    # its commit, so no release series takes the build for a release.
+    commits = obj(resolution.get("stack_commits"))
+    if versions and commits:
+        versions = {**versions, **{worker: f"@{str(obj(pin).get('commit'))[:7]}" for worker, pin in commits.items()}}
     return prune(
         {
             "plan_sha256": plan.get("sha256"),
             "profile_sha256": snapshot.get("profile_sha256"),
             "definition_sha256": snapshot.get("definition_sha256"),
-            "stack_versions": observed or resolution.get("stack_versions"),
+            "stack_versions": versions,
+            # The full commit of each, the repository and folder it was built
+            # from, and whether that repository's default branch has it.
+            "stack_commits": commits or None,
             "stack_lock_sha256": args.stack_lock_sha256,
             "runner_revision": args.runner_sha,
             "cli_version": resolution.get("cli_version") or args.cli_version,

@@ -536,6 +536,39 @@ export const chromium = {
             self.assertEqual(corrupt["status"], "unverified")
             self.assertIn("require working create/list/get", corrupt["detail"])
 
+    def test_project_functions_use_the_project_namespace_or_default(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sdk = root / "iii.mjs"
+            sdk.write_text("""
+import { appendFileSync } from 'node:fs'
+export function registerWorker() {
+  return {
+    trigger: async ({ function_id, namespace }) => {
+      appendFileSync(process.env.TRIGGERS, `${namespace} ${function_id}\\n`)
+      throw new Error('function_not_found')
+    },
+    shutdown: async () => {},
+  }
+}
+""")
+            playwright = root / "playwright.mjs"
+            playwright.write_text("export const chromium = { launch: async () => ({ contexts: () => [], close: async () => {} }) }\n")
+            for extra, namespace in (([], "default"), (["--namespace", "kanban"], "kanban")):
+                with self.subTest(namespace=namespace):
+                    triggers = root / f"{namespace}.log"
+                    completed = self.run_probe(
+                        "--case", "kanban_c2_persistence",
+                        "--base-url", "http://127.0.0.1:1",
+                        "--engine-url", "ws://127.0.0.1:1",
+                        *extra,
+                        "--output", str(root / namespace),
+                        env={**os.environ, "TRIGGERS": str(triggers),
+                             "III_SDK_MODULE": str(sdk), "PLAYWRIGHT_MODULE": str(playwright)},
+                    )
+                    self.assertEqual(completed.returncode, 0, completed.stderr)
+                    self.assertEqual(triggers.read_text().splitlines()[0], f"{namespace} kanban::tickets::create")
+
     def test_direct_configuration_waits_for_the_resolved_path(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -591,7 +624,11 @@ export const chromium = {
 import { readFileSync, writeFileSync } from 'node:fs'
 export function registerWorker() {
   return {
-    trigger: async ({ function_id, payload }) => {
+    trigger: async ({ function_id, namespace, payload }) => {
+      // The project (compose::*) lives where the compose file put it; the
+      // engine's configuration::* only in default, like the real engine.
+      const home = function_id.startsWith('configuration::') ? 'default' : 'kanban'
+      if (namespace !== home) throw new Error(`function_not_found: ${function_id} in ${namespace}`)
       if (function_id === 'compose::status') return { containers: [{container:'kanban'}] }
       const value = JSON.parse(readFileSync(process.env.CONFIG_STATE, 'utf8'))
       if (function_id === 'configuration::get') return { value }
@@ -647,6 +684,7 @@ export const chromium = {
                     "--case", "kanban_c1_foundation",
                     "--base-url", f"http://127.0.0.1:{server.server_port}",
                     "--engine-url", "ws://127.0.0.1:1",
+                    "--namespace", "kanban",
                     "--output", str(output),
                     env={
                         **os.environ,

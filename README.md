@@ -197,18 +197,67 @@ stack: the executor stamps the namespace, the runner's data directory, the
 model's provider, what the suite needs and the private env file per group.
 Scripts always come from the dispatched ref.
 
+A container may pin `commit:` (short or full sha) instead of `version:`:
+
+```yaml
+containers:
+  harness:
+    worker: package://harness
+    commit: 3f2a9c1
+    # repository: iii-hq/workers   # override only
+    # path: harness                # override only
+```
+
+The repository is the one the Registry downloads the worker's releases from
+(`github.com/<org>/<repo>/releases/download/…`), the folder is the worker's
+name there, or the root of a repository named after the worker
+(`iii-hq/harness-e2e`); `repository:` and `path:` only override. A commit
+that does not exist fails the preparation; one the repository's default
+branch does not have (GitHub serves a fork's commits through the repository
+it forked) is a warning. The worker is built at that commit
+with its own manifest (`iii.worker.yaml`: Rust workers, `cargo build
+--release --locked`) and runs as a `path://` worker. Compose gives a
+`path://` worker none of what a package gets, so the executor declares it with
+the default config its manifest ships (under the stack's `config_override`),
+its `env`, the compose file's folder to run in, and every dependency of the
+worker's newest release at that release's exact versions and edges (Registry
+`/resolve`), which are held: never asked of `compose::add`, unless nothing
+else is left to ask for. The contract carries the build and
+`runtime.commits`. A worker built from a commit reports its Cargo version,
+so the reports name it `@<sha7>` in `identity.stack_versions`, never a
+release, and `identity.stack_commits` gives its full commit, repository,
+folder and whether the default branch has it; the Console shows and
+compares it as `@<sha7>`.
+
+Known limit: the default config arrives as `config_override`, which Compose
+ranks above what is saved (default < saved < override), so on a worker built
+from a commit a value saved with `configuration::set` goes back to the
+default when the worker restarts.
+
 Preparation resolves the rest, once:
 
 1. `scripts/prepare_execution.py dispatch` reads the inputs into
-   `execution.json`, `stack.yaml` and `plan.json`; `runtime` resolves `iii`
-   and the template.
-2. `runner` resolves the stack's own `harness-e2e` with `iii compose build`,
+   `execution.json`, `stack.yaml` and `plan.json`; `runtime` resolves `iii`,
+   the template and every `commit:`, and names the build cache entry of
+   those commits (`executor.sh prepare resolve`, the step with a
+   `GITHUB_TOKEN`).
+2. `commits` (`prepare build`, only when the stack pins a commit) builds
+   each pinned worker once per repository, commit and folder, in its own
+   container, with no token or credentials and nothing else running: the
+   commits' code runs there. The cache entry holds only the builds of those
+   commits: `target/worker-builds`, which GitHub restores and saves with
+   `actions/cache` around this step alone, or its own folder under
+   `worker-builds/` in a Docker execution's data directory, mounted into
+   this step alone. It copies the build into the contract
+   (`workers/<container>/`) and declares it in the stack.
+3. `runner` resolves the stack's own `harness-e2e` with `iii compose build`,
    pins that release in the stack and fetches it. That binary materializes the
    suite (`suite.json`, also kept as `profile.json`), so the suite always comes
    from the runner every group runs, and the finalizer aggregates with it. The
-   runner's identity in the reports is its revision.
-3. `contracts` writes one contract per campaign.
-4. The stack is assembled once with `compose::add`, which expands every
+   runner's identity in the reports is its revision. A runner pinned to a
+   commit is its build.
+4. `contracts` writes one contract per campaign.
+5. The stack is assembled once with `compose::add`, which expands every
    declared worker into its graph and writes `worker-compose.lock`; it gets
    the groups' provider credentials and one retry. The model's provider and,
    for an agent profile, the Directory come from Harness's graph with its pins;
@@ -247,33 +296,57 @@ campaigns.
 Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first
 12 hex of the Dockerfile's sha256>` ([`Dockerfile`](Dockerfile)): git, curl, jq,
 gh, Python 3 with pip and PyYAML, Node 24 with pnpm, Go 1.25, Rust 1.98.1,
-Playwright's Chromium at `/usr/bin/chromium` and the Docker CLI with buildx and
-compose, much of what the `ubuntu-latest` runner gave the groups before.
-Bases, the Ubuntu archive snapshot and every download are pinned, so one
-Dockerfile is one set of tools. It holds no scripts:
+Playwright's Chromium at `/usr/bin/chromium`, the Docker CLI with buildx and
+compose, and the Docker Engine (`dockerd`, containerd, runc, iptables), much
+of what the `ubuntu-latest` runner gave the groups before. Bases, the Ubuntu
+archive snapshot and every download are pinned, so one Dockerfile is one set
+of tools. It holds no scripts:
 [`scripts/run_in_image.sh`](scripts/run_in_image.sh) `<phase>` mounts the
-checkout at the same path, with a fresh `TMPDIR`, runs as the caller's uid
-with `no-new-privileges`, passes the phase's environment through by name, and
+checkout at the same path, runs as the caller's uid with
+`no-new-privileges`, passes the phase's environment through by name, and
 runs [`scripts/executor.sh`](scripts/executor.sh) `prepare
-[materialize|assemble|fixtures]`, `group`, `package` or `finalize
+resolve|build|materialize|assemble|fixtures`, `group`, `package` or `finalize
 [restore|aggregate]` there. `prepare fixtures` checks out what the groups
 start from and no package brings (the Kanban fixture, the Linkly templates,
 the stack's template, the Registry sources and the trending topics fixture)
 below `target/`, three tries each, and `group` routes the fixture repositories
 a scenario clones to those checkouts; `finalize` lays each campaign's groups
 out from the group bundles the execution selected (linked, not copied) before
-aggregating them. Only `group` gets the host's Docker socket, and only
-`prepare` a `GITHUB_TOKEN`: a group's subject has a shell. Interrupted, the
-wrapper stops its container; a group whose image or container never started
-still writes its `failure.json`.
+aggregating them. Only `prepare resolve` and `prepare fixtures` get a
+`GITHUB_TOKEN`: a group's subject has a shell, and `prepare build` runs the
+commits a stack pins. `prepare` sees the checkout read-only but for
+`target/`, and `prepare` without a step runs resolve, build, materialize and
+assemble, each in a container of its own. Interrupted, the wrapper stops its container; a group whose image or
+container never started still writes its `failure.json`.
 
-Each group's engine listens on 49134 in its own container, off the host's
-network unless `HARNESS_E2E_DOCKER_NETWORK=host`. The Registry groups need
-host networking for their screenshots: the fixture publishes the application
-on the host's loopback, where only a phase on the host's network reaches it.
-The workflow runs every group on its runner's network, since each job owns
-its runner, and keeps on the runner what needs it: the GitHub App token for
-the private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
+No phase mounts the host's Docker socket or joins the host's network. Each
+container has a network of its own on Docker's default bridge, where a group's
+engine listens on 49134 without taking a host port. A `group` container runs
+a Docker daemon of its own: privileged, in a cgroup namespace of its own, it
+starts as root with
+an anonymous volume, labelled like the container, at `/var/lib/docker`;
+`executor.sh group` starts `dockerd` there, runs the group as the caller's uid
+(whose group owns the daemon's socket) and stops the daemon after it, which
+stops its containers. Every container a scenario starts (Registry's runner,
+Kanban's, trending topics') is that daemon's, in the group's network, so the
+application the Registry fixture publishes on `127.0.0.1` is where its
+screenshots look, and it goes with the group's container and its volume
+(`docker rm -fv` for one left behind). Each group starts with no image and
+pulls what its scenarios run.
+
+This keeps groups from colliding, not from the host. The group's user
+reaches root in its container through the daemon's socket, and the container
+is privileged, so that root is root-equivalent on the host, as the host's
+socket was: a subject can start a privileged container with the host's
+devices, mount the host's disk and read what is there (the host daemon's
+container configurations, with a concurrent `prepare`'s `GITHUB_TOKEN`, the
+Console's provider credentials and a worker's `provider_env_file`, `gh`'s
+credentials). From the default bridge it
+also reaches the host's ports on the bridge's gateway (a local Console on
+3113, iii on 49134) and other groups' containers.
+
+The workflow keeps on the runner what needs it: the GitHub App token for the
+private fixture sources, artifacts, the OIDC reports, `gh`, packaging, and
 removing a cancelled phase's container before anything is reported or
 packaged.
 
@@ -391,7 +464,12 @@ data directory:
   `e2e-observation-<id>-gh-<n>`).
 - `logs/`: each phase's output.
 
-`prepare materialize`, `assemble` and `fixtures` run once, then one `group`
+`worker-builds/<entry>/` beside `docker-executions/` keeps the workers
+stacks pin to a `commit:`, one entry per set of pinned commits, mounted into
+`prepare build` alone.
+
+`prepare resolve`, `build` (when the stack pins a commit), `materialize`,
+`assemble` and `fixtures` run once, then one `group`
 container per group, `docker_parallel_groups` (2) at a time across executions,
 each packaged, then `finalize`, whose root bundle is imported by the code that
 imports a GitHub run, from the folder. The root links its groups' bundles
@@ -407,27 +485,148 @@ finish and imports what did. A worker older than this release cannot read a
 Docker execution and drops it from its database, as it drops any row it cannot
 read.
 
-Every group runs on a network of its own. The Registry fixture serves the
-application it screenshots on the host's loopback, which only a phase on the
-host's network reaches; there a group's stack takes host ports this machine's
-iii already holds (its Console binds 3113), so the Registry groups run isolated
-as well, and their executions say their screenshots are missing.
+Every group runs on a network of its own with a Docker daemon of its own
+(see [Executor image](#executor-image)): it publishes no port on this host, so
+its stack never collides with this machine's iii (its Console binds 3113) or
+another group's. It can still reach them, and root on this host, as that
+section says.
 
 Worker configuration:
 
-- `provider_env_file`: an env file with the provider credentials the GitHub
-  groups receive (`DEEPSEEK_API_KEY`, `ZAI_API_KEY`, `TYPESAFE_API_KEY`),
-  passed to `prepare assemble` and every group with `--env-file`; never logged
-  or copied into the execution's folder. Without one, the execution says its
-  providers start without credentials.
+- `provider_env_file`: an env file of provider credentials under the Console's
+  own (below): where both name a variable, the Console's value wins.
+
+Provider credentials are the Console's, on the Stacks page: environment
+variables by name (`OPENAI_API_KEY`), set, replaced or deleted there, or
+imported from the worker's own environment for the names
+[`config/provider-credentials.json`](config/provider-credentials.json) lists.
+They live in `credentials.env` of the worker's `data_dir`, mode 600, never in
+the database, an execution's folder or its evidence, and the worker never
+answers with a value (`e2e::dashboard::credentials-list` gives names and
+whether each is set). `credential-set` takes the value as `secret`: the iii
+SDKs record each invocation's input in its trace (`iii.invocation.input`)
+unless `III_DISABLE_TRACE_PAYLOADS=1`, and leave out the values of keys such
+as `secret`; a key named `value` would be kept there as sent.
+
+A Docker execution reads them once per group attempt, merged with
+`provider_env_file` (whose lines it cannot use it names, without their
+values, as warnings), and hands that one set to the group and to the packaging
+that checks its evidence, each in a file of `data_dir/.phase-credentials/`
+(mode 600, directory 700) passed with `--env-file` and removed when the phase
+ends; the worker removes what a stop left there when it starts. `prepare
+assemble` gets them the same way; the root bundle, as on GitHub, none. An
+execution whose model's provider has no key, or with a value under 8
+characters (the evidence is not checked for it), says so and still runs.
+
+Inside, `scripts/run_in_image.sh` tells the phase which variables are
+credentials (`HARNESS_E2E_CREDENTIALS`, the names of that file); the launcher
+writes exactly those, plus `DEEPSEEK_API_KEY`, `ZAI_API_KEY` and
+`TYPESAFE_API_KEY` when its environment has them, into the stack's `.env`,
+warns when the model's provider's key is missing, and gives the runner their
+names. The runner replaces each such value (and each the catalog names) by
+`[redacted:NAME]`, as written and as JSON escapes it, in every artifact and
+journal event before it hashes it, so a key the subject printed never reaches
+a digest. `exact_stack_campaign.py package` looks for them again, raw and
+escaped: in the launcher's `logs/`, which nothing hashes, it replaces them;
+anywhere else a file is bound by a digest (the runner's references, the
+campaign bundle, Release Control's checks), so it rewrites nothing and refuses
+the bundle, naming the files and credentials, never the values; the
+diagnostic is kept instead. `bundle-manifest.json` records what it found per
+name (`redaction`). On GitHub the preparation and each group job write the
+credentials among the job's secrets, the names that catalog lists and no
+other secret, to such a file in `RUNNER_TEMP`, which the phase and its
+packaging read; a shard's runs are reported to Release Control from the tree
+that is uploaded, after packaging, so a refused bundle reports its outcome
+and diagnostic and no run. The workflow names each of those secrets in that
+step: `toJSON(secrets)` would hold every run for approval.
 - `scripts_dir`: a checkout's `scripts/` to run instead of the embedded ones,
   copied into each new execution, so an edited script takes effect on the next.
 - `docker_parallel_groups`: groups at once, 2 by default.
+- `docker_registry_mirrors`: a pull-through cache per registry for the Docker
+  daemon each group runs, which starts with no image, as
+  `{mcr.microsoft.com: http://172.17.0.1:5001}`: the daemon pulls from the
+  mirror first and from the registry when the mirror fails. It reaches the
+  groups as `HARNESS_E2E_REGISTRY_MIRRORS` (`REGISTRY=URL ...`), which
+  `scripts/run_in_image.sh group` also takes from its caller.
+
+Kanban's and trending topics' images come from `mcr.microsoft.com`, which
+`dockerd --registry-mirror` does not cover (it mirrors Docker Hub alone); a
+group's daemon writes each mirror into `/etc/docker/certs.d/<registry>/hosts.toml`
+instead. One `registry:2` per upstream serves as the cache, listening on the
+Docker bridge's gateway (`docker network inspect bridge --format '{{(index
+.IPAM.Config 0).Gateway}}'`), where every group container reaches this host:
+
+```sh
+docker run -d --name mcr-cache --restart unless-stopped -p 172.17.0.1:5001:5000 \
+  -v mcr-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://mcr.microsoft.com registry:2
+docker run -d --name hub-cache --restart unless-stopped -p 172.17.0.1:5000:5000 \
+  -v hub-cache:/var/lib/registry -e REGISTRY_PROXY_REMOTEURL=https://registry-1.docker.io registry:2
+```
 
 The phases get none of the worker's environment but where Docker and
-`TMPDIR` are (keep `TMPDIR` short: Chromium's socket path holds 107 bytes).
+`TMPDIR` are.
 `prepare fixtures` gets the worker's `GITHUB_TOKEN`, or the signed-in `gh`'s,
 for the private Registry and trending topics sources.
+
+#### Subscription providers
+
+`openai-codex` and `claude-code` sign in with this machine's CLI login, not an
+API key: `${CODEX_HOME:-~/.codex}/auth.json` (`codex login`) and
+`${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json` (`claude`). A group gets
+the login's access token and nothing else: no refresh or id token ever enters
+a container or GitHub. Before an execution's first group, the worker reads the
+login; when its access token would expire before the group's deadline
+(10800 s and 15 minutes), it refreshes the login first, as the CLI does. The
+execution's later groups get that same token while it lasts a group, so one
+group's refresh never rotates the token another is running with.
+
+Refresh tokens rotate on every use, so only one holder may refresh. The
+worker's groups take turns, two workers on one machine take
+`<login>.harness-e2e.lock`, and a Claude refresh also takes the `claude` CLI's
+own refresh lock (`<config>/.oauth_refresh.lock` and `<config>.lock`, renewed
+while held). Under the locks the login is read again; the refresh is written
+back only over the login it came from (atomically, mode 600), with the tokens
+alone replaced and everything else the CLI wrote meanwhile kept, its keys in
+sorted order. If the login was rotated by someone else meanwhile, theirs
+stands. The `codex` CLI takes no such lock, so a refresh racing it can cost
+one side its rotation; a refused refresh is retried once with the token the
+CLI wrote. A Codex access token lasts 10 days, so it is rarely refreshed;
+Claude's lasts hours. A refresh that fails (the service busy, the login
+refused) while the token still works hands that token over with a warning on
+the execution; a login that is signed out or dead is a warning too
+("provider-claude-code starts without credentials: the Claude login on this
+machine expired; run `claude`"), and the group runs without it.
+
+The access token (`CODEX_ACCESS_TOKEN`, `CLAUDE_CODE_ACCESS_TOKEN`) is a
+credential: it goes with the provider credentials above, in the same file of
+`data_dir/.phase-credentials/` handed to the group and to the packaging that
+checks its evidence, removed when each ends; `prepare assemble` and a commit's
+build get none. [`config/provider-credentials.json`](config/provider-credentials.json)
+names it under `subscriptions`: never set on the Stacks page, but redacted
+like any other credential, by the runner and again by packaging. What else the
+login holds is no secret and goes to the group by name: `CODEX_ACCOUNT_ID`,
+`CLAUDE_CODE_EXPIRES_AT` (epoch milliseconds). The launcher writes the login
+the provider reads, into the group's runtime tree and not its evidence, and
+points only the provider at it (`CODEX_HOME`, `CLAUDE_CONFIG_DIR`);
+`stack/credentials.json` says where the token came from and when it expires,
+without it. A token already expired fails the group in its `credentials`
+phase; one that expires before the group's deadline is said out loud. The
+subject is denied the credential vault (`auth::*`) and each provider's own
+sign-in, status and logout (`provider::*::auth::*`), and the audit flags a
+call to either. It can still read the access token (from its workers'
+environment or the login file), as it can an API key; the runner redacts it by
+value from what it records, and any JWT (`eyJ….eyJ….…`) by its shape. As the
+[Executor image](#executor-image) section says, a subject is also
+root-equivalent on this host, where the login itself is.
+
+On GitHub the group job's credentials step also reads the optional secrets
+`CODEX_ACCESS_TOKEN` and `CLAUDE_CODE_ACCESS_TOKEN` of the
+`harness-e2e-trusted` environment into its file, and the group step the
+optional variables `CODEX_ACCOUNT_ID` and `CLAUDE_CODE_EXPIRES_AT`; the
+preparation reads none. Without a token, its provider starts signed out.
+Paste the access token from the login file, never the refresh token. A Codex
+token pasted there lasts 10 days; Claude's lasts hours, which makes it
+impractical on GitHub.
 
 ## Worker
 
@@ -439,8 +638,10 @@ daemon, then runs `compose::add`, `compose::up`, `compose::status`, and
 `compose::down`. Each execution uses one isolated namespace for Compose and
 for the project functions it starts.
 
-Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and
-`III_CONFIG`. All four are mandatory. The configuration holds the
+Compose supplies `III_URL`, `III_NAMESPACE`, `III_WORKER_NAME`, and the
+configuration: `III_CONFIG`, a file, before iii 0.24.3; `III_CONFIG_NAME`, the
+configuration-service entry read with `configuration::get`, from 0.24.3 on.
+The first three and one of those two are mandatory. The configuration holds the
 execution-specific evidence directory and the separate control-plane database
 namespace. Start `worker-compose.control.yaml` before `worker-compose.yaml`.
 The control file provisions the single-connection `harness_e2e` SQLite pool

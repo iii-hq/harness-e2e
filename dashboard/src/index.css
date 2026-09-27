@@ -9,6 +9,15 @@
 @import "./legacy.css" layer(legacy);
 @source "./";
 @source not inline("shadow");
+/* The host's controls carry Tailwind classes of their own, and this sheet's
+   copies of the same utilities are scoped under [data-iii-ui], so they
+   outrank the host's: the legacy pages' `h-12`, `text-base`, `min-h-12`,
+   `py-2`, `px-3`, `bg-transparent`, `bg-ink` and `text-ink` beat what a
+   host Input, SearchField, Select, Selector or Button sets on top of them,
+   and the controls kept their phone size, their search icon overlapped the
+   text and they lost their hover. Emitting those utilities here, after the
+   base ones, gives them back. */
+@source inline("sm:h-9 sm:text-[13px] sm:min-h-0 sm:py-1.5 pl-8 pr-8 hover:bg-surface-hover hover:bg-ink/90 data-[placeholder]:text-ink-ghost");
 
 @theme inline {
   --color-canvas: var(--bg);
@@ -40,7 +49,9 @@
 @theme reference {
   --color-panel: var(--color-panel);
   --color-panel-raised: var(--color-panel-raised);
+  --color-surface-hover: var(--color-surface-hover);
   --color-ink: var(--color-ink);
+  --color-ink-ghost: var(--color-ink-ghost);
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
 }

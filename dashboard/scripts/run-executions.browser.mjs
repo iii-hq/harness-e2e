@@ -113,6 +113,7 @@ const running = (id) => ({
 const nightly = 'plan-22222222222222222222222222222222'
 const runningSummary = {
   ...running(nightly),
+  label: 'Nightly',
   // The last execution: Run tests starts from its model.
   parameters: {
     ...imported.plan_execution.parameters,
@@ -198,6 +199,75 @@ const dockerRunning = {
     },
   },
 }
+// The canvas fixtures (Main.dc.html): its TESTS, SEQUENCES, SUITES and STACKS.
+const TESTS =
+  'registry_planning registry_implementation registry_environment registry_verification kanban_c1_foundation kanban_c2_persistence kanban_c3_board kanban_c4_ticket_flow kanban_c5_edit_move kanban_c6_discussion kanban_c7_live linkly_tutorial context_pressure minimal_path persistent_state insert_record sequential_pipeline database_migration_recovery shell_coder_sandbox research_pipeline fanout_ladder incident_response todo_worker_simple todo_worker_planned engineering_endurance_ladder git_regression_forensics alertmanager_route_match mechanical_reaction timer_wake receiving_operation validation_loop subagent_validation subagent_validation_failure validation_self_repair validation_scope_enforcement validation_chain secret_hygiene prompt_injection_resilience moving_target poison_message cleanup_under_failure depth_ladder quorum_fan_in contention_ledger wake_chain_soak chess_engine_build form_flow_build state_machine_canvas_build chess_play_ladder trend_blog trending_topics_build typescript_chat_service tool_contract_recovery policy_bound_action cross_app_transaction performance_regression browser_cross_site release_train_recovery cross_repo_contract_migration'.split(
+    ' ',
+  )
+const SEQUENCES = [['registry_implementation', 'registry_verification']]
+const suite = (
+  id,
+  label,
+  source,
+  repetitions,
+  technical_retries,
+  scenarios,
+) => ({
+  id,
+  label,
+  source,
+  purpose: '',
+  scenarios,
+  repetitions,
+  technical_retries,
+  sha256: `sha256:${id}`,
+  updated_at: null,
+})
+const regressionTests = [
+  'persistent_state',
+  'tool_contract_recovery',
+  'timer_wake',
+  'shell_coder_sandbox',
+  'database_migration_recovery',
+  'contention_ledger',
+  'validation_self_repair',
+  'context_pressure',
+  'prompt_injection_resilience',
+]
+const suites = [
+  suite('regression', 'Regression', 'repository', 1, 1, regressionTests),
+  suite('software-engineering', 'Software engineering', 'repository', 1, 0, [
+    'registry_implementation',
+    'registry_verification',
+    'trending_topics_build',
+    'linkly_tutorial',
+    'alertmanager_route_match',
+    'chess_engine_build',
+    'form_flow_build',
+    'state_machine_canvas_build',
+  ]),
+  suite('pr', 'PR', 'repository', 1, 0, [
+    'minimal_path',
+    'persistent_state',
+    'tool_contract_recovery',
+    'shell_coder_sandbox',
+  ]),
+  suite('kanban-chain', 'Kanban chain', 'local', 1, 0, [
+    'kanban_c1_foundation',
+    'kanban_c2_persistence',
+    'kanban_c3_board',
+    'kanban_c4_ticket_flow',
+    'kanban_c5_edit_move',
+    'kanban_c6_discussion',
+    'kanban_c7_live',
+  ]),
+]
+const workers = (commit = null) =>
+  ['harness', 'harness-e2e', 'shell', 'storage', 'llm-router'].map((name) => ({
+    name,
+    version: null,
+    commit: name === 'harness' ? commit : null,
+  }))
 const stacks = [
   {
     id: 'default',
@@ -206,19 +276,33 @@ const stacks = [
     yaml: 'iii: latest\ncontainers:\n  harness:\n    worker: package://harness\n',
     iii: 'latest',
     template: null,
-    containers: [{ name: 'harness', version: null, commit: null }],
+    containers: workers(),
     warnings: [],
     updated_at: null,
   },
   {
-    id: 'stack-0123456789ab',
-    label: 'Pinned harness',
-    source: 'local',
-    yaml: 'iii: 0.24.1\ncontainers: {}\n',
-    iii: '0.24.1',
-    template: null,
-    containers: [],
+    id: 'harness-template',
+    label: 'harness-template',
+    source: 'repository',
+    yaml: 'iii: latest\ntemplate: harness\ncontainers: {}\n',
+    iii: 'latest',
+    template: 'harness',
+    containers: workers(),
     warnings: [],
+    updated_at: null,
+  },
+  {
+    id: 'stack-3f9a1c2e7b40',
+    label: 'default · harness pinned',
+    source: 'local',
+    yaml: 'iii: latest\ncontainers:\n  harness:\n    commit: 3f9a1c2e7b40\n',
+    iii: 'latest',
+    template: null,
+    containers: workers('3f9a1c2e7b40'),
+    warnings: [
+      'harness pins a commit; it takes effect once the executor runs commit pins.',
+      'harness-e2e runs path://../harness-e2e, a path on this machine; the stack runs it only here.',
+    ],
     updated_at: '2026-09-24T10:00:00Z',
   },
 ]
@@ -301,19 +385,13 @@ const trigger = async (name, request = {}) => {
   if (id === 'catalog-get') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
     return {
-      scenarios: [
-        'minimal_path',
-        'context_pressure',
-        'trend_blog',
-        'registry_implementation',
-        'registry_verification',
-      ],
+      scenarios: TESTS,
       // Alphabetically first, never picked for the user.
       models: [
         { provider: 'claude-code', model: 'claude-code/claude-fable-5' },
         { provider: 'deepseek', model: 'deepseek-v4-flash' },
       ],
-      scenario_groups: [['registry_implementation', 'registry_verification']],
+      scenario_groups: SEQUENCES,
     }
   }
   if (id === 'execution-start') {
@@ -328,7 +406,7 @@ const trigger = async (name, request = {}) => {
   }
   if (id === 'suites-list') {
     if (catalogDown) throw new Error('catalog unavailable: harness restarting')
-    return { suites: [] }
+    return { suites }
   }
   if (id === 'stacks-list') return { stacks }
   if (id === 'execution-delete') {
@@ -412,35 +490,50 @@ try {
   assert.equal(await importDialog.getByText('0.11.28').count(), 2)
   await page.keyboard.press('Escape')
 
-  // One execution: nothing to compare it with, so no hint, button or column.
+  // One execution: ticked alone, there is nothing to compare it with.
   executions = [runningSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  const compareHint = page.getByText('tick two executions to compare')
-  assert.equal(await compareHint.count(), 0)
-  assert.equal(
-    await page.getByRole('button', { name: 'compare', exact: true }).count(),
-    0,
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
+  await page.getByRole('checkbox', { name: 'Select Nightly' }).check()
+  const selection = page.getByRole('toolbar', { name: 'Selected executions' })
+  await selection.getByText('Tick one more to compare.').waitFor()
+  assert.ok(
+    await selection
+      .getByRole('button', { name: 'Compare A and B', exact: true })
+      .isDisabled(),
   )
-  assert.equal(
-    await page.locator('[data-ledger] input[type=checkbox]').count(),
-    0,
-  )
+  await selection.getByRole('button', { name: 'Clear selection' }).click()
 
-  // The ledger: a running row reads its progress; a cancelled one reads as
-  // cancelled with how far it got, and its runtime rounds whole. Two rows:
-  // now they can be compared.
+  // The list: a running row reads its progress; a cancelled one reads as
+  // cancelled with how far it got, and its runtime rounds whole.
   executions = [runningSummary, cancelledSummary]
   await page.reload()
-  await page.getByText('1 of 9 done', { exact: true }).waitFor()
-  await compareHint.waitFor()
+  await page.getByText('1 of 9 runs reported', { exact: true }).waitFor()
   assert.equal(await page.getByText(/inconclusive event/).count(), 0)
   const stopped = page.locator(`[data-execution-id="${cancelledSummary.id}"]`)
-  await stopped.getByText('cancelled', { exact: true }).waitFor()
-  await stopped.getByText('3 of 9 done', { exact: true }).waitFor()
+  await stopped.getByText('Cancelled', { exact: true }).waitFor()
+  await stopped.getByText('3 of 9 runs reported', { exact: true }).waitFor()
   await stopped.getByText('2m 00s', { exact: true }).waitFor()
   assert.equal(await page.getByText(/infrastructure event/).count(), 0)
   assert.equal(await page.getByText('1m 60s').count(), 0)
+  // A running row's menu cancels it, and says why it cannot be deleted yet.
+  await page
+    .locator(`[data-execution-id="${nightly}"]`)
+    .getByRole('button', { name: /^Actions for / })
+    .click()
+  const rowMenu = page.getByRole('menu')
+  await rowMenu.getByRole('menuitem', { name: 'Cancel execution' }).waitFor()
+  assert.equal(
+    await rowMenu
+      .getByRole('menuitem', { name: /^Delete…/ })
+      .getAttribute('aria-disabled'),
+    'true',
+  )
+  await rowMenu.getByText('Finish or cancel it first').waitFor()
+  await rowMenu.getByRole('menuitem', { name: 'Cancel execution' }).click()
+  for (let tries = 0; !cancelled.length && tries < 50; tries += 1)
+    await page.waitForTimeout(100)
+  assert.deepEqual(cancelled, [nightly])
 
   // Run tests: it starts from the last execution's model; a sequential group
   // ticks whole before running; the box, its name and Space all toggle a
@@ -536,7 +629,7 @@ try {
     .getByRole('button', { name: 'Cancel execution', exact: true })
     .click()
   await confirmCancel.waitFor({ state: 'hidden' })
-  assert.deepEqual(cancelled, [`plan-${'1'.padStart(32, 'f')}`])
+  assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
   await page.getByText('Execution · running').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
@@ -622,7 +715,7 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
   await page.getByRole('button', { name: 'Run again', exact: true }).click()
   await again.getByText('catalog ready').waitFor()
-  await again.getByText('2 of 6', { exact: true }).waitFor()
+  await again.getByText(`2 of ${TESTS.length + 1}`, { exact: true }).waitFor()
   assert.equal(
     await again.getByRole('checkbox', { name: 'trend_blog' }).count(),
     0,
@@ -644,7 +737,9 @@ try {
     'default',
   )
   await runTests.locator('#run-dialog-stack').click()
-  await runTests.getByRole('option', { name: /^Pinned harness/ }).waitFor()
+  await runTests
+    .getByRole('option', { name: /^default · harness pinned/ })
+    .waitFor()
   await page.keyboard.press('Escape')
   await box('minimal_path').click()
   await runTests
@@ -722,7 +817,7 @@ try {
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])
   console.log(
-    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
+    'Run tests, Run again and GitHub import browser flow passed: empty ledger, no model picked without history, quick list with contracts read per row, progress, cancelled row and whole runtime, cancel from the menu of a running row, last model by default, sequential group ticked whole, box/label/Space toggles, no seed, busy runner named with a link, start and follow, cancel, suite, stack and versions in the header, Run again under the recorded suite, selected-first prefill without a catalog, Docker with a stack, Docker groups while running, Run again in Docker on the stack as recorded, delete.',
   )
 } finally {
   await browser.close()

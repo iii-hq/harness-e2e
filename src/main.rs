@@ -159,8 +159,24 @@ struct ReportArgs {
     verbose: bool,
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    disable_iii_telemetry();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(run_cli())
+}
+
+/// iii's anonymous product-usage telemetry stays off for this worker and for
+/// every engine, CLI and worker it starts, which inherit its environment,
+/// whatever it inherited itself.
+fn disable_iii_telemetry() {
+    // Before the runtime starts any thread, so nothing reads the environment
+    // while it changes (the reason `set_var` is `unsafe` from Rust 2024).
+    std::env::set_var("III_TELEMETRY_ENABLED", "false");
+}
+
+async fn run_cli() -> Result<()> {
     let cli = Cli::parse();
     if cli.manifest {
         println!("{}", serde_json::to_string(&manifest::build_manifest())?);
@@ -300,6 +316,17 @@ async fn run(args: RunArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn what_the_worker_starts_inherits_iii_telemetry_off() {
+        std::env::set_var("III_TELEMETRY_ENABLED", "true");
+        disable_iii_telemetry();
+        let child = std::process::Command::new("sh")
+            .args(["-c", "printf %s \"$III_TELEMETRY_ENABLED\""])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&child.stdout), "false");
+    }
 
     #[test]
     fn list_subcommand_needs_no_model_configuration() {

@@ -13,22 +13,22 @@
   scroll-margin-top: 82px;
 }
 
-button,
-select,
-a {
+:where([data-harness-e2e-dashboard]) button,
+:where([data-harness-e2e-dashboard]) select,
+:where([data-harness-e2e-dashboard]) a {
   font: inherit;
 }
 
-a {
+:where([data-harness-e2e-dashboard]) a {
   color: inherit;
 }
 
-button,
-select {
+:where([data-harness-e2e-dashboard]) button,
+:where([data-harness-e2e-dashboard]) select {
   color: var(--text);
 }
 
-footer a {
+:where([data-harness-e2e-dashboard]) footer a {
   display: inline-flex;
   align-items: center;
   min-height: 44px;
@@ -38,7 +38,7 @@ footer a {
   transition: color 160ms ease;
 }
 
-footer a:hover {
+:where([data-harness-e2e-dashboard]) footer a:hover {
   color: var(--text);
 }
 
@@ -100,9 +100,9 @@ select:hover {
   background-color: var(--surface-soft);
 }
 
-select:focus-visible,
-button:focus-visible,
-a:focus-visible {
+:where([data-harness-e2e-dashboard]) select:focus-visible,
+:where([data-harness-e2e-dashboard]) button:focus-visible,
+:where([data-harness-e2e-dashboard]) a:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
@@ -277,7 +277,7 @@ tbody tr:hover {
   font-size: 1.5rem;
 }
 
-footer {
+:where([data-harness-e2e-dashboard]) footer {
   display: flex;
   align-items: center;
   justify-content: space-between;

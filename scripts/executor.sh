@@ -4,10 +4,16 @@
 # below target/, as the workflow always has; GitHub's jobs and the Console's
 # Docker executions run the same phases:
 #
-#   prepare [materialize|assemble|fixtures]
-#       materialize  read the dispatch (DISPATCH_*), resolve iii and the
-#                    template, fetch the stack's runner and materialize the
-#                    suite with it.
+#   prepare resolve|build|materialize|assemble|fixtures
+#       resolve      read the dispatch (DISPATCH_*), resolve iii, the template
+#                    and every `commit:` the stack pins, with GITHUB_TOKEN
+#                    when there is one.
+#       build        build what the stack pins to a commit into the contract,
+#                    through the build cache HARNESS_E2E_WORKER_BUILDS
+#                    (default target/worker-builds). It runs the commits'
+#                    code: never with a token or credentials, and on its own,
+#                    so what else the execution runs cannot reach the cache.
+#       materialize  fetch the stack's runner and materialize the suite with it.
 #       assemble     write one contract per campaign (EXECUTION_KEY), assemble
 #                    and lock the stack once, and lock every contract to it.
 #       fixtures     check out below target/ what the groups start from and
@@ -16,12 +22,18 @@
 #                    the trending topics fixture. For the group
 #                    HARNESS_E2E_CAMPAIGN_GROUP_ID names, else for every group
 #                    of the execution. The private ones read GITHUB_TOKEN.
-#       Without an argument, materialize and assemble. GitHub reports the
-#       materialized suite to Release Control between the two, before
-#       anything is assembled.
+#       In that order; scripts/run_in_image.sh runs each in a container of
+#       its own. GitHub restores and saves the build cache around build and
+#       reports the materialized suite to Release Control before anything is
+#       assembled.
 #   group     start one group's frozen stack and run its scenarios
 #             (HARNESS_E2E_CONTRACT, HARNESS_E2E_CAMPAIGN_GROUP_ID, ...), with
 #             the fixture repositories it clones read from those checkouts.
+#             Started as root with HARNESS_E2E_EXECUTOR_USER=UID:GID (as
+#             run_in_image.sh does, privileged), it first starts a Docker
+#             daemon of its own, with the pull-through caches
+#             HARNESS_E2E_REGISTRY_MIRRORS names, and runs the group as that
+#             user.
 #   package WORKFLOW ROOT...
 #             check that each ROOT (below target/, its contract in
 #             stack-lock.json) holds nothing unsafe and hash it into its
@@ -37,8 +49,13 @@
 #       Without an argument, both.
 set -Eeuo pipefail
 
+# iii telemetry stays off in every phase and in all it starts, whatever an
+# --env-file (a provider_env_file overrides the image's ENV) says; the workers
+# Compose adds to the graph inherit it from the engine and daemon.
+export III_TELEMETRY_ENABLED=false
+
 usage() {
-  echo "usage: executor.sh prepare [materialize|assemble|fixtures] | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
+  echo "usage: executor.sh prepare resolve|build|materialize|assemble|fixtures | group | package WORKFLOW ROOT... | finalize [restore|aggregate]" >&2
   exit 2
 }
 
@@ -46,15 +63,25 @@ cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.."
 contract_dir=target/harness-e2e-contract
 contracts=$contract_dir/contracts
 
-# The container runs as the caller's uid, which the image may not know; git,
-# Node and Python ask the passwd database who that is.
-if ! getent passwd "$(id -u)" >/dev/null && [[ -w /etc/passwd ]]; then
-  printf 'executor:x:%s:%s::%s:/bin/bash\n' "$(id -u)" "$(id -g)" "$HOME" >>/etc/passwd
+# The container runs as the caller's uid (a group, as the uid it names),
+# which the image may not know; git, Node and Python ask the passwd database
+# who that is.
+user=${HARNESS_E2E_EXECUTOR_USER:-$(id -u):$(id -g)}
+if ! getent passwd "${user%:*}" >/dev/null && [[ -w /etc/passwd ]]; then
+  printf 'executor:x:%s:%s::%s:/bin/bash\n' "${user%:*}" "${user#*:}" "$HOME" >>/etc/passwd
 fi
 
-materialize() {
+resolve() {
   python3 scripts/prepare_execution.py dispatch --contract-dir "$contract_dir"
   python3 scripts/prepare_execution.py runtime --contract-dir "$contract_dir"
+}
+
+build() {
+  python3 scripts/prepare_execution.py commits --contract-dir "$contract_dir" \
+    --cache-dir "${HARNESS_E2E_WORKER_BUILDS:-target/worker-builds}"
+}
+
+materialize() {
   # The suite is materialized by the runner the stack runs, never by a build
   # of this checkout: its master plan and scenario catalog are the ones every
   # group executes. suite.json is the snapshot; profile.json is the same file
@@ -188,6 +215,85 @@ route_fixtures() {
   ((${#routes[@]} == 0)) || export GIT_CONFIG_COUNT=$((${#routes[@]} / 2))
 }
 
+# A group's own Docker daemon: every container a scenario starts is this
+# container's (its network, so a port published on 127.0.0.1 is where the
+# group looks for it; its data root, the /var/lib/docker volume) and dies
+# with it. The group runs as the user, who reaches the daemon's socket
+# through its group. That socket makes it root in this container, and this
+# container is privileged: root-equivalent on the host, as the host's socket
+# was before. Stopped, the daemon stops its containers.
+group() {
+  # Artifacts lose the executable bit on their way to a group job; the
+  # workers built from a commit get it back.
+  chmod -f a+x "$contract_dir"/workers/*/bin/* 2>/dev/null || true
+  route_fixtures
+  if [[ -z "${HARNESS_E2E_EXECUTOR_USER:-}" ]]; then
+    exec bash scripts/run_exact_stack_group.sh
+  fi
+  # cgroup v2: dockerd hands the controllers down only from a cgroup that
+  # holds no process, so this container's move into a leaf first, as
+  # Docker's own dind does (run_in_image.sh gives it a cgroup namespace).
+  if [[ -w /sys/fs/cgroup/cgroup.subtree_control ]]; then
+    mkdir -p /sys/fs/cgroup/init
+    xargs -rn1 </sys/fs/cgroup/cgroup.procs >/sys/fs/cgroup/init/cgroup.procs 2>/dev/null || true
+    sed -e 's/ / +/g' -e 's/^/+/' </sys/fs/cgroup/cgroup.controllers >/sys/fs/cgroup/cgroup.subtree_control
+  fi
+  # Pull-through caches by registry, "REGISTRY=URL ...": the daemon pulls
+  # from the mirror first and from the registry when the mirror fails.
+  local mirrors mirror registry server
+  read -ra mirrors <<<"${HARNESS_E2E_REGISTRY_MIRRORS:-}"
+  for mirror in "${mirrors[@]}"; do
+    if [[ ! "$mirror" =~ ^[A-Za-z0-9][A-Za-z0-9.:-]*=https?://[^\"\\]+$ ]]; then
+      echo "::warning::ignoring registry mirror '$mirror': not REGISTRY=http(s)://HOST[:PORT]" >&2
+      continue
+    fi
+    registry=${mirror%%=*} server=${mirror%%=*}
+    [[ "$registry" != docker.io ]] || server=registry-1.docker.io
+    mkdir -p "/etc/docker/certs.d/$registry"
+    printf 'server = "https://%s"\n[host."%s"]\n  capabilities = ["pull", "resolve"]\n' \
+      "$server" "${mirror#*=}" >"/etc/docker/certs.d/$registry/hosts.toml"
+  done
+  # A command bash starts in the background ignores SIGINT and SIGQUIT; the
+  # daemon and the group get them back, as they have them on a runner.
+  local log=${TMPDIR:-/tmp}/dockerd.log try status=0
+  env --default-signal=INT,QUIT dockerd --group "${user#*:}" >"$log" 2>&1 &
+  daemon=$!
+  for ((try = 0; try < 60; try++)); do
+    docker version >/dev/null 2>&1 && break
+    kill -0 "$daemon" 2>/dev/null || try=60
+    sleep 1
+  done
+  if ((try >= 60)); then
+    tail -n 50 "$log" >&2
+    echo "the group's Docker daemon did not start" >&2
+    stop_daemon
+    return 1
+  fi
+  setpriv --reuid "${user%:*}" --regid "${user#*:}" --clear-groups \
+    env --default-signal=INT,QUIT bash scripts/run_exact_stack_group.sh &
+  launcher=$!
+  # A stopped container stops the group first: the launcher takes its stack
+  # down, then the daemon its containers.
+  trap 'kill -TERM "$launcher" 2>/dev/null || true' INT TERM
+  wait "$launcher" || status=$?
+  while kill -0 "$launcher" 2>/dev/null; do wait "$launcher" || status=$?; done
+  stop_daemon
+  return "$status"
+}
+
+# TERM, 30 s to stop its containers and exit, then KILL: a daemon that hangs
+# on its way out never holds the group's job.
+stop_daemon() {
+  local try
+  kill -TERM "$daemon" 2>/dev/null || return 0
+  for ((try = 0; try < 30; try++)); do
+    case "$(ps -o stat= -p "$daemon")" in "" | Z*) break ;; esac
+    sleep 1
+  done
+  kill -KILL "$daemon" 2>/dev/null || true
+  wait "$daemon" 2>/dev/null || true
+}
+
 package() {
   local workflow=${1:?package needs the workflow identity} root
   shift
@@ -255,20 +361,15 @@ aggregate() {
 case "${1:-}" in
   prepare)
     case "${2:-}" in
+      resolve) resolve ;;
+      build) build ;;
       materialize) materialize ;;
       assemble) assemble ;;
       fixtures) fixtures ;;
-      "")
-        materialize
-        assemble
-        ;;
       *) usage ;;
     esac
     ;;
-  group)
-    route_fixtures
-    exec bash scripts/run_exact_stack_group.sh
-    ;;
+  group) group ;;
   package)
     shift
     package "$@"

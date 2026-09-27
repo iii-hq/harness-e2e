@@ -58,6 +58,7 @@ where
     let mut bytes = serde_json::to_vec_pretty(value)
         .with_context(|| format!("serialize {}", relative_path.display()))?;
     bytes.push(b'\n');
+    let bytes = crate::redaction::redact_credentials(bytes);
     write_atomic(&path, &bytes)?;
     Ok(ArtifactReference {
         id: id.into(),
@@ -77,6 +78,8 @@ pub fn write_bytes(
     media_type: impl Into<String>,
     bytes: &[u8],
 ) -> Result<ArtifactReference> {
+    let redacted = crate::redaction::redact_credentials(bytes.to_vec());
+    let bytes = redacted.as_slice();
     validate_relative_path(relative_path)?;
     let path = output.join(relative_path);
     if let Some(parent) = path.parent() {
@@ -244,6 +247,29 @@ mod tests {
         let left = serde_json::json!({"b": 2, "a": {"d": 4, "c": 3}});
         let right = serde_json::json!({"a": {"c": 3, "d": 4}, "b": 2});
         assert_eq!(sha256_value(&left).unwrap(), sha256_value(&right).unwrap());
+    }
+
+    #[test]
+    fn canonical_hash_survives_writing_and_rereading_a_computed_float() {
+        // A Linkly chapter's cost delta (end - start), as in run 36122990798:
+        // without correctly rounded parsing its shortest form reads back one
+        // ULP off, and the reread value no longer hashes like the written one.
+        let value = serde_json::json!({"cost_usd": 0.5328641639999999_f64 - 0.326257392});
+        let output = tempfile::tempdir().unwrap();
+        let reference = write_json(
+            output.path(),
+            Path::new("deliverable.json"),
+            "deliverable",
+            "test",
+            &value,
+        )
+        .unwrap();
+        let reread: serde_json::Value =
+            serde_json::from_slice(&fs::read(output.path().join(reference.path)).unwrap()).unwrap();
+        assert_eq!(
+            sha256_value(&reread).unwrap(),
+            sha256_value(&value).unwrap()
+        );
     }
 
     #[test]

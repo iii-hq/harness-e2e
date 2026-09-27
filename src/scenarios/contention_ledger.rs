@@ -141,7 +141,11 @@ impl Scenario for ContentionLedger {
             filesystem_root: None,
             execution: ExecutionPolicy {
                 max_turns: Some(24),
-                max_output_tokens: Some(8_192),
+                // The single-response plan (tables, trigger, three spawns) is
+                // long; a reasoning model spent a whole 8k turn thinking it
+                // through and emitted nothing. Same budget as the fan-out
+                // scenarios.
+                max_output_tokens: Some(32_768),
                 max_total_tokens: Some(1_000_000),
                 stuck_timeout_seconds: 420,
                 max_validation_retries: None,

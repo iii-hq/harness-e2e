@@ -11,10 +11,15 @@ unknown fields are ignored so either side can add one and ship alone.
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import hashlib
 import json
+import os
 import re
+import sys
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -33,10 +38,36 @@ APPLICATION = "harness"
 RUNNER = "harness-e2e"
 #: What a declaration means when it does not name a version.
 DEFAULT_SELECTOR = "latest"
+# The `database` package's own default for its `primary` database.
+DATABASE_PRIMARY_URL = "sqlite:./data/iii.db"
 #: The stack an execution runs on when it names none.
 DEFAULT_STACK = Path(__file__).resolve().parents[1] / "stacks" / "default.yaml"
 #: Stack keys the executor reads; the rest of a stack is the Compose project.
 EXECUTOR_KEYS = ("iii", "template")
+#: The key each provider reads, and the other credentials workers read.
+CREDENTIAL_CATALOG = Path(__file__).resolve().parents[1] / "config" / "provider-credentials.json"
+#: A credential is an environment variable.
+CREDENTIAL_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+#: Taken from a phase's own environment when set, as groups always were.
+ENVIRONMENT_CREDENTIALS = ("DEEPSEEK_API_KEY", "ZAI_API_KEY", "TYPESAFE_API_KEY")
+#: Shorter values are not looked for in evidence: they would match anywhere
+#: and break the JSON they sit in.
+REDACTION_MIN_LENGTH = 8
+#: What the launcher captures from the processes it starts, below a bundle's
+#: root: nothing hashes it, so a credential found there is replaced. Every
+#: other file is bound by a digest (the runner's references, the aggregator's
+#: campaign bundle, Release Control's checks) and is never rewritten.
+REWRITABLE_ROOT = "logs"
+#: The providers that sign in with a subscription login rather than a key:
+#: the variable a group receives its access token in (never a refresh or id
+#: token), the one that tells the provider where its login is, and the file
+#: it reads there.
+SUBSCRIPTION_LOGINS = {
+    "openai-codex": ("CODEX_ACCESS_TOKEN", "CODEX_HOME", "auth.json"),
+    "claude-code": ("CLAUDE_CODE_ACCESS_TOKEN", "CLAUDE_CONFIG_DIR", ".credentials.json"),
+}
+#: The ChatGPT account id claim of a Codex access token.
+CODEX_AUTH_CLAIM = "https://api.openai.com/auth"
 
 
 def load_yaml(text: str) -> Any:
@@ -88,6 +119,108 @@ def declared_base() -> dict[str, Any]:
     """The Compose project of the default stack."""
     stack = load_yaml(DEFAULT_STACK.read_text())
     return {key: value for key, value in stack.items() if key not in EXECUTOR_KEYS}
+
+
+def credential_catalog() -> tuple[dict[str, str], set[str]]:
+    """The key each provider reads, and every name the catalog knows: a
+    subscription login's access token too, which a group job may carry."""
+    catalog = json.loads(CREDENTIAL_CATALOG.read_text())
+    subscriptions = set(catalog.get("subscriptions", {}).values())
+    return catalog["providers"], set(catalog["providers"].values()) | set(catalog["others"]) | subscriptions
+
+
+def usable_credential(name: Any, value: Any) -> bool:
+    """A named, non-empty, one-line value: what an env file can carry."""
+    return (
+        isinstance(name, str) and CREDENTIAL_NAME.fullmatch(name) is not None
+        and isinstance(value, str) and value != "" and "\n" not in value and "\r" not in value
+    )
+
+
+def read_env_file(path: Path) -> dict[str, str]:
+    """`NAME=value` lines, as `docker run --env-file` reads them."""
+    values = {}
+    for line in path.read_text().splitlines():
+        name, separator, value = line.lstrip().partition("=")
+        if separator and usable_credential(name, value):
+            values[name] = value
+    return values
+
+
+def received_credentials(environ: Any, env_file: Path | None = None) -> dict[str, str]:
+    """The credentials a phase received, and nothing else of its environment:
+    the variables HARNESS_E2E_CREDENTIALS names (the env file
+    run_in_image.sh passed the container), the three groups always took from
+    their environment, and the entries of `env_file` when it exists."""
+    names = set(environ.get("HARNESS_E2E_CREDENTIALS", "").split()) | set(ENVIRONMENT_CREDENTIALS)
+    values = {name: environ[name] for name in sorted(names) if usable_credential(name, environ.get(name))}
+    if env_file is not None and env_file.is_file():
+        values.update(read_env_file(env_file))
+    return values
+
+
+def catalog_credentials(environ: Any) -> dict[str, str]:
+    """The catalog's names that `environ` sets, and nothing else of it: a
+    workflow step names exactly those secrets, never `toJSON(secrets)`,
+    which holds a run for approval and hands the step every other secret."""
+    _, known = credential_catalog()
+    return {name: environ[name] for name in sorted(known) if usable_credential(name, environ.get(name))}
+
+
+def write_private(path: Path, values: dict[str, str]) -> None:
+    """An env file only its owner reads (mode 600), whatever was there."""
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        file.write("".join(f"{name}={value}\n" for name, value in sorted(values.items())))
+
+
+def credential_forms(value: str) -> list[str]:
+    """A value as written and as JSON escapes it, longest first."""
+    forms = {value, json.dumps(value)[1:-1], json.dumps(value, ensure_ascii=False)[1:-1]}
+    return sorted(forms, key=len, reverse=True)
+
+
+def redact_tree(root: Path, paths: list[str], credentials: dict[str, str]) -> dict[str, Any]:
+    """Look for each credential's value in the files at `paths`. Found in the
+    launcher's logs, it is replaced by `[redacted:NAME]`; found anywhere else,
+    nothing is rewritten and the tree is refused. Says how often per name,
+    never the value."""
+    scanned = {name: value for name, value in credentials.items() if len(value) >= REDACTION_MIN_LENGTH}
+    # Longest first: a value that holds another is replaced whole.
+    ordered = sorted(scanned.items(), key=lambda item: (-len(item[1]), item[0]))
+    hits = dict.fromkeys(sorted(scanned), 0)
+    rewrites: dict[Path, bytes] = {}
+    bound = []
+    for relative in paths:
+        path = root / relative
+        payload = original = path.read_bytes()
+        found = set()
+        for name, value in ordered:
+            for form in credential_forms(value):
+                count = payload.count(form.encode())
+                if count:
+                    hits[name] += count
+                    found.add(name)
+                    payload = payload.replace(form.encode(), f"[redacted:{name}]".encode())
+        if payload == original:
+            continue
+        if Path(relative).parts[0] == REWRITABLE_ROOT:
+            rewrites[path] = payload
+        else:
+            bound.append(f"{relative} ({', '.join(sorted(found))})")
+    if bound:
+        raise ValueError(
+            "provider credentials found in files bound by digests, which are never rewritten: "
+            + "; ".join(bound)
+        )
+    for path, payload in rewrites.items():
+        path.write_bytes(payload)
+    return {
+        "credentials": hits,
+        "files": sorted(path.relative_to(root).as_posix() for path in rewrites),
+        "too_short": sorted(set(credentials) - set(scanned)),
+    }
 
 
 def load_object(path: Path, label: str) -> dict[str, Any]:
@@ -455,6 +588,23 @@ def with_fixture(template: dict[str, Any], fixture: dict[str, Any]) -> dict[str,
     return result
 
 
+def merged(base: dict[str, Any], over: dict[str, Any]) -> dict[str, Any]:
+    """`over` on top of `base`, mappings key by key, anything else replaced."""
+    result = dict(base)
+    for key, value in over.items():
+        both = isinstance(value, dict) and isinstance(result.get(key), dict)
+        result[key] = merged(result[key], value) if both else value
+    return result
+
+
+def built_versions(versions: dict[str, str], contract: dict[str, Any]) -> dict[str, str]:
+    """`versions` with each worker built from a commit named `@<sha7>`: what
+    it reports is its Cargo version, which a release series must not take
+    for a release."""
+    pins = ((contract.get("runtime") or {}).get("commits") or {}).values()
+    return dict(sorted({**versions, **{pin["worker"]: f"@{pin['commit'][:7]}" for pin in pins}}.items()))
+
+
 def scoped_config_name(namespace: str, name: str) -> str:
     """A configuration id both Compose and the engine accept.
 
@@ -529,11 +679,18 @@ def project_scaffold(
         raise ValueError("env file must be absolute")
     manifest = copy.deepcopy(template if template is not None else (runtime.get("compose") or declared_base()))
     containers = manifest.setdefault("containers", {})
+    # A worker the stack built from a commit is a path:// worker that is
+    # still the package it was built from, known by its path.
+    commits = runtime.get("commits") or {}
+    assembled = (runtime.get("compose") or {}).get("containers") or {}
+    built = {assembled[name]["worker"]: pin["worker"] for name, pin in commits.items() if name in assembled}
+
+    def package_of(container: dict[str, Any]) -> str | None:
+        source = str(container.get("worker", ""))
+        return worker_name(source) if source.startswith("package://") else built.get(source)
+
     def declares(package: str) -> bool:
-        return any(
-            str(item.get("worker", "")).startswith("package://") and worker_name(item["worker"]) == package
-            for item in containers.values()
-        )
+        return any(package_of(item) == package for item in containers.values())
 
     if not declares(RUNNER):
         containers.setdefault(RUNNER, {"worker": f"package://{RUNNER}", "version": DEFAULT_SELECTOR})
@@ -588,6 +745,29 @@ def project_scaffold(
             container["version"] = locked.get(package, DEFAULT_SELECTOR)
         package_names.setdefault(package, []).append(name)
     if template is not None:
+        # A worker the stack built from a commit runs that build, not the
+        # template's package: its source, start and folder change, and the
+        # build's default config and env go under the template's own, as
+        # they do for any worker built from a commit. The dependencies are
+        # declared beside it.
+        for pinned, pin in commits.items():
+            for name in package_names.pop(pin["worker"], []):
+                container = containers[name]
+                container.pop("version", None)
+                container["worker"] = assembled[pinned]["worker"]
+                container["scripts"] = {**(container.get("scripts") or {}), "run": assembled[pinned]["scripts"]["run"]}
+                container["working_dir"] = assembled[pinned].get("working_dir", ".")
+                if pin.get("config"):
+                    container["config_override"] = merged(pin["config"], container.get("config_override") or {})
+                if pin.get("env"):
+                    container["environment"] = {**pin["env"], **(container.get("environment") or {})}
+            for dependency in pin.get("dependencies") or []:
+                if dependency in package_names:
+                    continue
+                if dependency in containers:
+                    raise ValueError(f"container {dependency} is not the {dependency} worker {pin['worker']} depends on")
+                containers[dependency] = copy.deepcopy(assembled[dependency])
+                package_names[dependency] = [dependency]
         # Compose expands dependencies by container name, so a template that
         # renamed a role has to point at the name its own project uses.
         for container in containers.values():
@@ -599,8 +779,7 @@ def project_scaffold(
                     for dependency in container["start_after"]
                 ]
     for name, container in containers.items():
-        source = str(container["worker"])
-        worker = worker_name(source) if source.startswith("package://") else None
+        worker = package_of(container)
         if worker in declared_environment:
             container.setdefault("environment", {}).update(sorted(declared_environment[worker].items()))
         if worker == RUNNER:
@@ -613,6 +792,12 @@ def project_scaffold(
         elif worker == APPLICATION and harness_override:
             container["config_name"] = scoped_config_name(namespace, "harness")
             container.setdefault("config_override", {}).update(harness_override)
+        elif worker == "database":
+            # The runner's `primary` database, the package's built-in default,
+            # declared: iii 0.24.3+ injects the package's published default
+            # (`{}`) as the live value, which hides the one the worker seeds.
+            databases = container.setdefault("config_override", {}).setdefault("databases", {})
+            databases.setdefault("primary", {"url": DATABASE_PRIMARY_URL})
         # Compose 0.24.2 derives `<namespace>-<container>` for the rest and
         # refuses to start when that exceeds 64 characters, which a long group
         # id reaches: only then name the container ourselves.
@@ -646,6 +831,10 @@ def project_scaffold(
     if env_file:
         for container in containers.values():
             container["env_file"] = [env_file]
+    # iii telemetry stays off in every worker, whatever the Compose daemon
+    # that starts it inherited (a developer's own daemon, say).
+    for container in containers.values():
+        container.setdefault("environment", {})["III_TELEMETRY_ENABLED"] = "false"
     manifest.update({
         "namespace": namespace,
         "startup_timeout": "5m",
@@ -653,6 +842,72 @@ def project_scaffold(
         "containers": containers,
     })
     return manifest
+
+
+def jwt_claims(token: str) -> dict[str, Any]:
+    """The claims of a JWT, unverified; empty for anything else."""
+    try:
+        payload = token.split(".")[1]
+        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
+    except (IndexError, ValueError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def subscription_login(
+    contract: dict[str, Any], environ: dict[str, str], root: Path, now: float
+) -> tuple[str, dict[str, Any]] | None:
+    """The login a subscription provider starts with, written below `root`
+    (mode 700, the file 600) from the access token the group received and
+    nothing else: the provider's environment assignment pointing at it, and
+    evidence of it without the token. None when the subject's provider takes
+    an API key, or when its token was not given, which is said out loud: the
+    provider starts signed out. A token that is already dead is an error."""
+    provider = contract["suite"]["subject"]["provider"]
+    if provider not in SUBSCRIPTION_LOGINS:
+        return None
+    variable, home, name = SUBSCRIPTION_LOGINS[provider]
+    token = environ.get(variable, "")
+    if not token:
+        print(f"[WARN] {variable} is not set; provider-{provider} starts without a credential", file=sys.stderr)
+        return None
+    expires_at: float | None
+    if provider == "openai-codex":
+        claims = jwt_claims(token)
+        expires_at = claims["exp"] if isinstance(claims.get("exp"), (int, float)) else None
+        account = environ.get("CODEX_ACCOUNT_ID") or (claims.get(CODEX_AUTH_CLAIM) or {}).get("chatgpt_account_id")
+        login: dict[str, Any] = {
+            "auth_mode": "chatgpt",
+            "tokens": {"access_token": token, **({"account_id": account} if account else {})},
+        }
+    else:
+        milliseconds = environ.get("CLAUDE_CODE_EXPIRES_AT", "")
+        if milliseconds and not milliseconds.isdigit():
+            raise ValueError("CLAUDE_CODE_EXPIRES_AT must be epoch milliseconds")
+        expires_at = int(milliseconds) / 1000 if milliseconds else None
+        login = {"claudeAiOauth": {"accessToken": token, **({"expiresAt": int(milliseconds)} if milliseconds else {})}}
+    if expires_at is not None and expires_at <= now + 60:
+        raise ValueError(f"{variable} expired before the group started; provider-{provider} would start signed out")
+    # A pasted token (GitHub) is not refreshed: said when it may not last the
+    # group (its run timeout and fifteen minutes to start its stack).
+    budget = int(environ.get("HARNESS_E2E_RUN_TIMEOUT_SECONDS") or 10800) + 900
+    if expires_at is not None and expires_at < now + budget:
+        at = datetime.fromtimestamp(expires_at, timezone.utc).isoformat()
+        print(f"[WARN] {variable} expires at {at}, before the group's deadline; "
+              f"provider-{provider} may be signed out before the group ends", file=sys.stderr)
+    folder = root / provider
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
+    folder.chmod(0o700)
+    descriptor = os.open(folder / name, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(descriptor, 0o600)
+    with os.fdopen(descriptor, "w") as file:
+        json.dump(login, file)
+    evidence = {
+        "provider": provider,
+        "source": "env",
+        "expires_at": None if expires_at is None else datetime.fromtimestamp(expires_at, timezone.utc).isoformat(),
+    }
+    return f"provider-{provider}.{home}={folder}", evidence
 
 
 def compose_evidence(
@@ -761,8 +1016,18 @@ def _package_files(root: Path) -> list[dict[str, Any]]:
     return files
 
 
-def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any]) -> dict[str, Any]:
+def package_bundle(
+    root: Path,
+    contract: dict[str, Any],
+    workflow: dict[str, Any],
+    credentials: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Check the tree and look for the credentials the phase received in it
+    (see `redact_tree`), then hash it: the digests are of what is uploaded."""
     files = _package_files(root)
+    redaction = redact_tree(root, [entry["path"] for entry in files], credentials or {})
+    if redaction["files"]:
+        files = _package_files(root)
     return {
         "schema": "e2e-observation-bundle",
         "campaign_id": contract["campaign_id"],
@@ -773,6 +1038,7 @@ def package_bundle(root: Path, contract: dict[str, Any], workflow: dict[str, Any
         "terminal_payload": "results.json" if (root / "results.json").is_file() else None,
         "failure_payload": "failure.json" if (root / "failure.json").is_file() else None,
         "files": files,
+        "redaction": redaction,
     }
 
 
@@ -823,6 +1089,18 @@ def main() -> int:
     package.add_argument("--contract", type=Path, required=True)
     package.add_argument("--workflow", required=True)
     package.add_argument("--output", type=Path, required=True)
+    package.add_argument("--credentials", type=Path,
+                         help="an env file of the credentials the phase received, redacted out of the tree")
+    stack_env = commands.add_parser("credentials-env", help="the stack's .env: every credential the group received")
+    stack_env.add_argument("--contract", type=Path, required=True)
+    stack_env.add_argument("--output", type=Path, required=True)
+    credentials_file = commands.add_parser(
+        "credentials-file", help="a private env file of the catalog's credentials this environment sets")
+    credentials_file.add_argument("--output", type=Path, required=True)
+    login = commands.add_parser("subscription-login")
+    login.add_argument("--contract", type=Path, required=True)
+    login.add_argument("--root", type=Path, required=True)
+    login.add_argument("--evidence", type=Path, required=True)
     layout = commands.add_parser("validate-layout")
     layout.add_argument("--artifact-root", type=Path, required=True)
     layout.add_argument("--runtime-root", type=Path, required=True)
@@ -838,6 +1116,11 @@ def main() -> int:
             for root in project_roots(args.compose):
                 print(root)
             return 0
+        if args.command == "credentials-file":
+            values = catalog_credentials(os.environ)
+            write_private(args.output, values)
+            print("provider credentials: " + (", ".join(values) or "none"))
+            return 0
         contract = validate_contract(load_object(args.contract, "contract"))
         if args.command == "validate":
             print(canonical(contract))
@@ -849,9 +1132,9 @@ def main() -> int:
         elif args.command == "manifest":
             args.output.write_text(json.dumps(campaign_manifest(contract), indent=2) + "\n")
         elif args.command == "materialize":
-            installed = observed_versions(
+            installed = built_versions(observed_versions(
                 load_object(args.workers, "engine workers"), args.namespace
-            ) if args.workers else {}
+            ), contract) if args.workers else {}
             request = materialize_request(
                 contract, load_object(args.catalog, "scenario catalog"),
                 group_id=args.group_id, installed=installed,
@@ -904,8 +1187,23 @@ def main() -> int:
                 (args.output.parent / "worker-compose.lock").write_text(yaml.safe_dump(lock, sort_keys=False))
             if args.engine_config:
                 args.engine_config.write_text(yaml.safe_dump(project_engine_config(manifest, args.engine_port), sort_keys=False))
+        elif args.command == "subscription-login":
+            # The token comes from the environment, never the command line.
+            delivered = subscription_login(contract, dict(os.environ), args.root, time.time())
+            if delivered:
+                assignment, evidence = delivered
+                args.evidence.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n")
+                print(assignment)
         elif args.command == "group-template":
             print(group_template(contract, args.group_id))
+        elif args.command == "credentials-env":
+            values = received_credentials(os.environ)
+            write_private(args.output, values)
+            # Said out loud; the group still runs.
+            provider = contract["suite"]["subject"]["provider"]
+            key = credential_catalog()[0].get(provider)
+            if key and key not in values:
+                print(f"[WARN] {key} is not set; provider-{provider} starts without a credential", file=sys.stderr)
         elif args.command == "compose-evidence":
             manifest = compose_evidence(
                 contract,
@@ -924,9 +1222,14 @@ def main() -> int:
             workflow = json.loads(args.workflow)
             if not isinstance(workflow, dict):
                 raise ValueError("workflow must be a JSON object")
-            args.output.write_text(json.dumps(package_bundle(args.root, contract, workflow), indent=2, sort_keys=True) + "\n")
+            credentials = received_credentials(os.environ, args.credentials)
+            manifest = package_bundle(args.root, contract, workflow, credentials)
+            for name in manifest["redaction"]["too_short"]:
+                print(f"::warning::{name} is shorter than {REDACTION_MIN_LENGTH} characters: "
+                      "the evidence is not checked for it")
+            args.output.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
         return 0
-    except (ValueError, json.JSONDecodeError) as error:
+    except (ValueError, json.JSONDecodeError, OSError) as error:
         print(f"error: {error}")
         return 2
 

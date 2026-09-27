@@ -290,14 +290,9 @@ if [[ "$campaign_group_id" == case-kanban-* ]] && [[ -z "$assemble_only" ]]; the
   [[ -d "$fixture_root/.git" ]] || fail "Kanban fixture checkout is unavailable: $fixture_root"
   kanban_runtime="$run_root/kanban-runtime.json"
   failure_phase=kanban_bootstrap
-  # Kanban's containers mount node through the host's Docker daemon. From the
-  # executor image only the run root is at the same path on both sides, so
-  # they get a copy of this node there, never whatever node the host has.
-  kanban_node="$run_root/kanban-node"
-  cp "$(realpath "$(command -v node)")" "$kanban_node"
   python3 "$kanban_bootstrap" \
     --fixture "$fixture_root" --iii "$iii_bin" --runtime-root "$run_root/kanban-runtime" \
-    --output "$kanban_runtime" --node "$kanban_node" \
+    --output "$kanban_runtime" --node "$(realpath "$(command -v node)")" \
     --npm "$(realpath "$(command -v npm)")"
   jq -e 'keys == ["browser-dependencies","browsers","dependencies","fixture","iii","image","node","playwright-module","pnpm"]' \
     "$kanban_runtime" >/dev/null
@@ -336,19 +331,14 @@ if [[ "$linkly_fixture" == true ]]; then
 fi
 
 # One env file for the whole project, written after any template scaffold so
-# it replaces the placeholder the template ships. A provider without its key
-# is said out loud and the group still runs; TYPESAFE_API_KEY is optional.
+# it replaces the placeholder the template ships: every credential the group
+# received (those HARNESS_E2E_CREDENTIALS names, which run_in_image.sh sets
+# from its --env-file, and DEEPSEEK_API_KEY, ZAI_API_KEY and TYPESAFE_API_KEY
+# from the environment), nothing else of it. The model's provider without its
+# key is said out loud and the group still runs.
 : >"$env_file"
 chmod 600 "$env_file"
-for variable in DEEPSEEK_API_KEY ZAI_API_KEY TYPESAFE_API_KEY; do
-  if [[ -z "${!variable:-}" ]]; then
-    if [[ "$variable" != TYPESAFE_API_KEY ]]; then
-      log "[WARN] $variable is not set; its provider starts without a credential"
-    fi
-    continue
-  fi
-  printf '%s=%s\n' "$variable" "${!variable}" >>"$env_file"
-done
+python3 "$contract_tool" credentials-env --contract "$contract_path" --output "$env_file"
 
 project_args=(
   --contract "$contract_path"
@@ -362,6 +352,12 @@ project_args=(
   --engine-config "$engine_config"
   --engine-port "$engine_port"
 )
+# The runner replaces their values in every artifact before it hashes it,
+# the names the catalog lists and these alike.
+credential_names=$(cut -d= -f1 "$env_file" | paste -sd' ' -)
+if [[ -n "$credential_names" ]]; then
+  project_args+=(--environment "harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names")
+fi
 # Without a group the scaffold is the stack the whole suite shares.
 if [[ -n "$assemble_only" ]]; then
   project_args+=(--assemble)
@@ -381,6 +377,18 @@ if [[ "$profile_assets" == true && -z "$assemble_only" ]]; then
 fi
 if [[ -n "${HARNESS_E2E_KANBAN_RUNTIME:-}" ]]; then
   project_args+=(--environment "harness-e2e.HARNESS_E2E_KANBAN_RUNTIME=$HARNESS_E2E_KANBAN_RUNTIME")
+fi
+# A subscription provider (openai-codex, claude-code) signs in with the
+# access token the group received and nothing else, never a refresh or id
+# token: its login is written from CODEX_ACCESS_TOKEN or
+# CLAUDE_CODE_ACCESS_TOKEN into the runtime tree, the provider alone is
+# pointed at it, and stack/credentials.json says when it expires, without it.
+# A token already dead fails the group here; a missing one is a warning.
+if [[ -z "$assemble_only" ]]; then
+  login=$(python3 "$contract_tool" subscription-login --contract "$contract_path" \
+    --root "$run_root/login" --evidence "$artifact_dir/stack/credentials.json") \
+    || { failure_phase=credentials; fail "${login#error: }"; }
+  [[ -z "$login" ]] || project_args+=(--environment "$login")
 fi
 python3 "$contract_tool" project "${project_args[@]}"
 
@@ -409,18 +417,38 @@ else
   # this repository's addition, and the engine installs what it needs with it.
   add_args=("file=$compose_file")
   if [[ -n "$project_template" ]]; then
-    add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@')")
+    # A runner built from a commit is declared with its dependencies, and
+    # then there is nothing to ask for: compose::up starts the project.
+    runner_root=$(python3 "$contract_tool" roots --compose "$compose_file" | grep '^harness-e2e@' || true)
+    [[ -z "$runner_root" ]] || add_args+=("worker=$runner_root")
   else
     # Except what the executor only needs to exist: the model's provider and
     # the Directory. Harness's graph brings them pinned, and asking for one as
     # well is a second, conflicting spec. Declared, one keeps its pin unasked.
-    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory "
+    # So do the dependencies of a worker built from a commit, declared at the
+    # versions of its newest release.
+    held=" $(jq -r '[.runtime.commits // {} | .[].dependencies[]?] | join(" ")' "$contract_path") "
+    ensured=" provider-$(jq -r '.suite.subject.provider' "$contract_path") iii-directory $held"
+    roots=$(python3 "$contract_tool" roots --compose "$compose_file")
     while IFS= read -r root; do
-      [[ "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
-    done < <(python3 "$contract_tool" roots --compose "$compose_file")
+      [[ -z "$root" || "$ensured" == *" ${root%@*} "* ]] || add_args+=("worker=$root")
+    done <<<"$roots"
+    # Every root built from a commit: its held dependencies are asked for at
+    # the exact versions one release graph resolved together.
+    if ((${#add_args[@]} == 1)); then
+      while IFS= read -r root; do
+        [[ -z "$root" || "$held" != *" ${root%@*} "* ]] || add_args+=("worker=$root")
+      done <<<"$roots"
+    fi
+    ((${#add_args[@]} > 1)) || fail "the stack declares no package worker for compose::add to assemble"
   fi
-  compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
-  await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  if ((${#add_args[@]} > 1)) || [[ -z "$project_template" ]]; then
+    compose_trigger compose::add "${add_args[@]}" >"$artifact_dir/stack/add.json"
+    await_compose_add "$artifact_dir/stack/add.json" "$artifact_dir/stack/add-operation.json"
+  else
+    jq -n '{status:"skipped",reason:"the runner is built from a commit and declared; compose::up starts the project"}' \
+      >"$artifact_dir/stack/add.json"
+  fi
   [[ -z "$project_template" ]] || cp "$compose_file" "$artifact_dir/stack/worker-compose.yaml"
 fi
 if [[ -n "$assemble_only" ]]; then

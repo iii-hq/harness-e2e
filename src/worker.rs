@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -29,10 +30,10 @@ pub struct WorkerConfig {
     /// Docker executions: groups running at once, across executions.
     #[serde(default = "default_docker_parallel_groups")]
     pub docker_parallel_groups: usize,
-    /// Docker executions: an env file with the provider credentials the
-    /// GitHub groups receive (DEEPSEEK_API_KEY, ZAI_API_KEY,
-    /// TYPESAFE_API_KEY), passed to the executor with `--env-file`. Resolved
-    /// as `data_dir` is.
+    /// Docker executions: an env file of provider credentials under the
+    /// Console's own (`credentials.env` in `data_dir`, set from the Stacks
+    /// page): where both name one, the Console's wins. Resolved as
+    /// `data_dir` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_env_file: Option<String>,
     /// Docker executions: a checkout's `scripts/` to run instead of the
@@ -40,6 +41,12 @@ pub struct WorkerConfig {
     /// edited script takes effect on the next one. Resolved as `data_dir` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scripts_dir: Option<String>,
+    /// Docker executions: a pull-through cache per registry (`docker.io`,
+    /// `mcr.microsoft.com`, ...) for the Docker daemon each group runs, which
+    /// starts with no image: it pulls from the mirror first, from the
+    /// registry itself when the mirror fails.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub docker_registry_mirrors: BTreeMap<String, String>,
 }
 
 fn default_control_database() -> String {
@@ -65,6 +72,7 @@ impl Default for WorkerConfig {
             docker_parallel_groups: default_docker_parallel_groups(),
             provider_env_file: None,
             scripts_dir: None,
+            docker_registry_mirrors: BTreeMap::new(),
         }
     }
 }
@@ -80,22 +88,40 @@ impl WorkerConfig {
         if self.docker_parallel_groups == 0 {
             return Err("docker_parallel_groups must be at least 1".into());
         }
+        // Each becomes a line of the daemon's hosts.toml.
+        let plain = |value: &str| {
+            !value.is_empty()
+                && !value.contains(|c: char| c.is_whitespace() || "\"'=\\".contains(c))
+        };
+        for (registry, mirror) in &self.docker_registry_mirrors {
+            if !plain(registry)
+                || registry.contains('/')
+                || !plain(mirror)
+                || !(mirror.starts_with("http://") || mirror.starts_with("https://"))
+            {
+                return Err(format!(
+                    "docker_registry_mirrors: {registry:?} needs a registry host and an http(s) URL"
+                ));
+            }
+        }
         Ok(self)
     }
 
     /// How Docker executions run, with paths resolved as `data_dir` is.
-    pub(crate) fn docker(&self, config_path: &Path) -> Result<crate::plans::store::DockerSettings> {
+    pub(crate) fn docker(&self, base: &Path) -> Result<crate::plans::store::DockerSettings> {
         let path = |value: &Option<String>| {
             value
                 .as_deref()
                 .filter(|value| !value.trim().is_empty())
-                .map(|value| resolve_data_dir(value, config_path))
+                .map(|value| resolve_data_dir(value, base))
                 .transpose()
         };
         Ok(crate::plans::store::DockerSettings {
             parallel_groups: self.docker_parallel_groups,
             provider_env_file: path(&self.provider_env_file)?,
             scripts_dir: path(&self.scripts_dir)?,
+            registry_mirrors: self.docker_registry_mirrors.clone(),
+            logins: None,
         })
     }
 }
@@ -103,12 +129,23 @@ impl WorkerConfig {
 #[derive(Debug, Clone, Default, Args)]
 pub struct WorkerArgs {}
 
+/// Where the worker's configuration comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ConfigSource {
+    /// `III_CONFIG`: a file, as iii compose before 0.24.3 (and the release
+    /// job) delivers it.
+    File(PathBuf),
+    /// `III_CONFIG_NAME`: the configuration-service entry iii compose 0.24.3+
+    /// injects the merged value into, read with `configuration::get`.
+    Service(String),
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct WorkerEnvironment {
     url: String,
     namespace: String,
     worker_name: String,
-    config: PathBuf,
+    config: ConfigSource,
 }
 
 impl WorkerEnvironment {
@@ -128,18 +165,28 @@ impl WorkerEnvironment {
         if worker_name != WORKER_NAME {
             bail!("III_WORKER_NAME must be '{WORKER_NAME}', got '{worker_name}'");
         }
+        let present = |value: Option<String>| value.filter(|value| !value.trim().is_empty());
+        let config = match (
+            present(environment("III_CONFIG")),
+            present(environment("III_CONFIG_NAME")),
+        ) {
+            (Some(path), _) => ConfigSource::File(PathBuf::from(path)),
+            (None, Some(name)) => ConfigSource::Service(name.trim().to_string()),
+            (None, None) => {
+                bail!("III_CONFIG or III_CONFIG_NAME is required; start harness-e2e through iii compose")
+            }
+        };
         Ok(Self {
             url: required("III_URL", environment("III_URL"))?,
             namespace: required("III_NAMESPACE", environment("III_NAMESPACE"))?,
             worker_name,
-            config: PathBuf::from(required("III_CONFIG", environment("III_CONFIG"))?),
+            config,
         })
     }
 }
 
 pub async fn serve(_args: WorkerArgs) -> Result<()> {
     let environment = WorkerEnvironment::read()?;
-    let config = load_config(&environment.config)?;
 
     let iii = register_worker(
         &environment.url,
@@ -157,15 +204,24 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
             ..InitOptions::default()
         },
     );
+    // Relative paths resolve beside the config file, or from the working
+    // directory when the configuration service delivers the value.
+    let (config, base) = match &environment.config {
+        ConfigSource::File(path) => (load_config(path)?, config_file_dir(path)?),
+        ConfigSource::Service(name) => (
+            fetch_config(&iii, name).await?,
+            std::env::current_dir().context("resolve the working directory")?,
+        ),
+    };
     wait_for_persistence(&iii, &config.control_namespace, &config.control_database).await?;
 
-    let data_dir = resolve_data_dir(&config.data_dir, &environment.config)?;
+    let data_dir = resolve_data_dir(&config.data_dir, &base)?;
     std::fs::create_dir_all(&data_dir)
         .with_context(|| format!("create worker data directory {}", data_dir.display()))?;
     tracing::info!(
         data_dir = %data_dir.display(),
         namespace = %environment.namespace,
-        config = %environment.config.display(),
+        config = ?environment.config,
         "Harness E2E storage directory selected"
     );
     let control = ControlPlane::new_with_persistence(
@@ -186,7 +242,7 @@ pub async fn serve(_args: WorkerArgs) -> Result<()> {
         &iii,
         control.clone(),
         config.github_repository.clone(),
-        config.docker(&environment.config)?,
+        config.docker(&base)?,
     )
     .await
     .context("register dashboard functions")?;
@@ -204,7 +260,51 @@ pub fn load_config(path: &Path) -> Result<WorkerConfig> {
     config.validate().map_err(anyhow::Error::msg)
 }
 
-pub fn resolve_data_dir(value: &str, config_path: &Path) -> Result<PathBuf> {
+/// The configuration `name` holds in the configuration service, read as
+/// the ecosystem workers read theirs: `configuration::get` in the default
+/// namespace, placeholders expanded. No entry means the built-in defaults.
+async fn fetch_config(iii: &iii_sdk::IIIClient, name: &str) -> Result<WorkerConfig> {
+    let response = iii
+        .trigger(
+            TriggerRequest {
+                function_id: "configuration::get".into(),
+                payload: serde_json::json!({ "id": name }),
+                action: None,
+                timeout_ms: Some(15_000),
+            }
+            .namespace("default"),
+        )
+        .await;
+    let value = match response {
+        Ok(response) => response.get("value").cloned().unwrap_or_default(),
+        Err(iii_sdk::errors::Error::Remote { code, .. }) if code == "NOT_FOUND" => {
+            serde_json::Value::Null
+        }
+        Err(error) => bail!("read configuration {name}: {error}"),
+    };
+    config_from_value(value).with_context(|| format!("decode configuration {name}"))
+}
+
+fn config_from_value(value: serde_json::Value) -> Result<WorkerConfig> {
+    if value.is_null() {
+        tracing::info!("no configuration value found; using built-in default configuration");
+        return Ok(WorkerConfig::default());
+    }
+    let config: WorkerConfig = serde_json::from_value(value)?;
+    config.validate().map_err(anyhow::Error::msg)
+}
+
+fn config_file_dir(path: &Path) -> Result<PathBuf> {
+    Ok(path
+        .canonicalize()
+        .with_context(|| format!("resolve worker config {}", path.display()))?
+        .parent()
+        .context("worker config has no parent directory")?
+        .to_path_buf())
+}
+
+/// `value` with `~` expanded, relative to `base` when relative.
+pub fn resolve_data_dir(value: &str, base: &Path) -> Result<PathBuf> {
     if value.trim().is_empty() {
         bail!("worker config data_dir cannot be empty");
     }
@@ -212,12 +312,7 @@ pub fn resolve_data_dir(value: &str, config_path: &Path) -> Result<PathBuf> {
     if path.is_absolute() {
         return Ok(path);
     }
-    Ok(config_path
-        .canonicalize()
-        .with_context(|| format!("resolve worker config {}", config_path.display()))?
-        .parent()
-        .context("worker config has no parent directory")?
-        .join(path))
+    Ok(base.join(path))
 }
 
 fn expand_home(value: &str) -> Result<PathBuf> {
@@ -322,7 +417,7 @@ mod tests {
         assert_eq!(config.control_database, "custom_db");
         assert_eq!(config.control_namespace, "campaign-123");
         assert_eq!(
-            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            resolve_data_dir(&config.data_dir, &config_file_dir(&path).unwrap()).unwrap(),
             PathBuf::from("/tmp/e2e-evidence")
         );
     }
@@ -334,7 +429,7 @@ mod tests {
         std::fs::write(&path, "data_dir: evidence\n").unwrap();
         let config = load_config(&path).unwrap();
         assert_eq!(
-            resolve_data_dir(&config.data_dir, &path).unwrap(),
+            resolve_data_dir(&config.data_dir, &config_file_dir(&path).unwrap()).unwrap(),
             directory.path().join("evidence")
         );
     }
@@ -344,7 +439,10 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.yaml");
         std::fs::write(&path, "data_dir: evidence\n").unwrap();
-        let docker = load_config(&path).unwrap().docker(&path).unwrap();
+        let docker = load_config(&path)
+            .unwrap()
+            .docker(&config_file_dir(&path).unwrap())
+            .unwrap();
         assert_eq!(
             (
                 docker.parallel_groups,
@@ -359,7 +457,10 @@ mod tests {
             "data_dir: evidence\ndocker_parallel_groups: 4\nprovider_env_file: providers.env\nscripts_dir: /src/harness-e2e/scripts\n",
         )
         .unwrap();
-        let docker = load_config(&path).unwrap().docker(&path).unwrap();
+        let docker = load_config(&path)
+            .unwrap()
+            .docker(&config_file_dir(&path).unwrap())
+            .unwrap();
         assert_eq!(docker.parallel_groups, 4);
         assert_eq!(
             docker.provider_env_file,
@@ -374,6 +475,46 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("docker_parallel_groups must be at least 1"));
+    }
+
+    #[test]
+    fn docker_registry_mirrors_name_a_registry_and_an_http_url() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("config.yaml");
+        std::fs::write(
+            &path,
+            "data_dir: evidence\ndocker_registry_mirrors:\n  mcr.microsoft.com: http://172.17.0.1:5001\n",
+        )
+        .unwrap();
+        let docker = load_config(&path)
+            .unwrap()
+            .docker(&config_file_dir(&path).unwrap())
+            .unwrap();
+        assert_eq!(
+            docker.registry_mirrors,
+            BTreeMap::from([(
+                "mcr.microsoft.com".to_owned(),
+                "http://172.17.0.1:5001".to_owned()
+            )])
+        );
+        for bad in [
+            "mcr.microsoft.com: 172.17.0.1:5001",
+            "mcr.microsoft.com: 'http://x\" y'",
+            "mcr.microsoft.com/playwright: http://x",
+        ] {
+            std::fs::write(
+                &path,
+                format!("data_dir: evidence\ndocker_registry_mirrors:\n  {bad}\n"),
+            )
+            .unwrap();
+            assert!(
+                load_config(&path)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("docker_registry_mirrors"),
+                "{bad}"
+            );
+        }
     }
 
     #[test]
@@ -392,7 +533,70 @@ mod tests {
         assert_eq!(environment.worker_name, WORKER_NAME);
         assert_eq!(
             environment.config,
-            PathBuf::from("/tmp/compose/harness-e2e.yaml")
+            ConfigSource::File(PathBuf::from("/tmp/compose/harness-e2e.yaml"))
+        );
+    }
+
+    #[test]
+    fn config_comes_from_the_file_first_then_the_configuration_service() {
+        let read = |pairs: &[(&str, &str)]| {
+            let mut values = BTreeMap::from([
+                ("III_WORKER_NAME", WORKER_NAME.to_string()),
+                ("III_URL", "ws://127.0.0.1:49259".to_string()),
+                ("III_NAMESPACE", "campaign-123".to_string()),
+            ]);
+            values.extend(pairs.iter().map(|(name, value)| (*name, value.to_string())));
+            WorkerEnvironment::from_environment(|name| values.get(name).cloned())
+        };
+        // iii compose before 0.24.3 sets both: the file wins.
+        assert_eq!(
+            read(&[
+                ("III_CONFIG", "/tmp/c.yaml"),
+                ("III_CONFIG_NAME", "e2e-x-harness-e2e")
+            ])
+            .unwrap()
+            .config,
+            ConfigSource::File(PathBuf::from("/tmp/c.yaml"))
+        );
+        // iii compose 0.24.3+ sets only the entry name.
+        assert_eq!(
+            read(&[
+                ("III_CONFIG", " "),
+                ("III_CONFIG_NAME", "e2e-x-harness-e2e")
+            ])
+            .unwrap()
+            .config,
+            ConfigSource::Service("e2e-x-harness-e2e".into())
+        );
+        assert!(read(&[])
+            .unwrap_err()
+            .to_string()
+            .contains("III_CONFIG or III_CONFIG_NAME is required"));
+    }
+
+    #[test]
+    fn configuration_service_value_decodes_like_the_file() {
+        let config = config_from_value(serde_json::json!({
+            "data_dir": "/tmp/e2e-evidence",
+            "control_database": "primary",
+            "control_namespace": "campaign-123",
+        }))
+        .unwrap();
+        assert_eq!(
+            (config.data_dir.as_str(), config.control_database.as_str()),
+            ("/tmp/e2e-evidence", "primary")
+        );
+        assert_eq!(
+            config_from_value(serde_json::Value::Null).unwrap(),
+            WorkerConfig::default()
+        );
+        assert!(config_from_value(serde_json::json!({ "data_dir": "" }))
+            .unwrap_err()
+            .to_string()
+            .contains("data_dir cannot be empty"));
+        assert_eq!(
+            resolve_data_dir("evidence", Path::new("/srv/worker")).unwrap(),
+            PathBuf::from("/srv/worker/evidence")
         );
     }
 

@@ -393,6 +393,7 @@ impl PlanStore {
             fs::create_dir_all(root.join("plan-store/stacks"))?;
             fs::create_dir_all(root.join("plan-store/executions"))?;
         }
+        crate::plans::credentials::sweep(&root);
         let manager = Arc::new(Self {
             root,
             persistence: control.as_ref().map(ControlPlane::persistence),
@@ -1315,8 +1316,7 @@ impl PlanStore {
         }
         for mut execution in self.executions().await? {
             // A GitHub run goes on without this worker: follow it again.
-            if github_started(&execution)
-                && (execution.active() || execution.state == "importing")
+            if github_started(&execution) && (execution.active() || execution.state == "importing")
             {
                 self.spawn_follow_github(&execution.id);
                 continue;
@@ -4808,7 +4808,10 @@ esac"#,
         let signed_in = manager_with_gh(
             root.path(),
             runner.clone(),
-            fake_gh(root.path(), "echo '  Logged in to github.com account octo (keyring)'"),
+            fake_gh(
+                root.path(),
+                "echo '  Logged in to github.com account octo (keyring)'",
+            ),
         );
         let status = signed_in.github_status("o/r").await;
         assert_eq!(status["ready"], json!(true));
@@ -4816,17 +4819,24 @@ esac"#,
         assert_eq!(status["repository"], json!("o/r"));
 
         let out = tempfile::tempdir().unwrap();
-        let signed_out = manager_with_gh(root.path(), runner.clone(), fake_gh(out.path(), "exit 1"));
+        let signed_out =
+            manager_with_gh(root.path(), runner.clone(), fake_gh(out.path(), "exit 1"));
         let status = signed_out.github_status("o/r").await;
         assert_eq!(status["ready"], json!(false));
-        assert!(status["message"].as_str().unwrap().contains("gh auth login"));
+        assert!(status["message"]
+            .as_str()
+            .unwrap()
+            .contains("gh auth login"));
 
         let mut missing_cli = fake_gh(out.path(), "exit 0");
         missing_cli.program = root.path().join("no-such-gh");
         let missing = manager_with_gh(root.path(), runner, missing_cli);
         let status = missing.github_status("o/r").await;
         assert_eq!(status["ready"], json!(false));
-        assert!(status["message"].as_str().unwrap().contains("not installed"));
+        assert!(status["message"]
+            .as_str()
+            .unwrap()
+            .contains("not installed"));
     }
 
     #[tokio::test]
@@ -4836,7 +4846,11 @@ esac"#,
             root.path(),
             r#"{"status":"completed","conclusion":"success","run_attempt":1}"#,
         );
-        let manager = manager_with_gh(root.path(), Arc::new(FakeRunner::new(root.path().into())), gh);
+        let manager = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            gh,
+        );
         let started = manager
             .start_execution_in(github_parameters(), "On GitHub", Some("o/r"))
             .await
@@ -4866,7 +4880,10 @@ esac"#,
         assert!(ended.error.is_some());
 
         let log = fs::read_to_string(root.path().join("gh.log")).unwrap();
-        let dispatch = log.lines().find(|line| line.starts_with("api -X POST")).unwrap();
+        let dispatch = log
+            .lines()
+            .find(|line| line.starts_with("api -X POST"))
+            .unwrap();
         assert!(dispatch.contains("repos/o/r/actions/workflows/exact-stack-e2e.yml/dispatches"));
         assert!(dispatch.contains("return_run_details=true"));
         assert!(dispatch.contains("ref=main"));
@@ -4940,8 +4957,11 @@ esac"#,
             r#"{"status":"completed","conclusion":"failure","run_attempt":1}"#,
             &jobs.to_string(),
         );
-        let manager =
-            manager_with_gh(root.path(), Arc::new(FakeRunner::new(root.path().into())), gh);
+        let manager = manager_with_gh(
+            root.path(),
+            Arc::new(FakeRunner::new(root.path().into())),
+            gh,
+        );
         let started = manager
             .start_execution_in(parameters, "", Some("o/r"))
             .await
@@ -4958,7 +4978,10 @@ esac"#,
         .await
         .unwrap();
 
-        let again = manager.rerun_scenario(&started.id, &scenario).await.unwrap();
+        let again = manager
+            .rerun_scenario(&started.id, &scenario)
+            .await
+            .unwrap();
         assert_eq!(again.state, "running");
         assert!(again.rerun.is_some());
         assert!(matches!(
@@ -4986,7 +5009,10 @@ esac"#,
         let mut finished = other.read_execution(&started.id).await.unwrap();
         finished.state = "failed".into();
         other.write_execution(&finished).await.unwrap();
-        let error = other.rerun_scenario(&started.id, &scenario).await.unwrap_err();
+        let error = other
+            .rerun_scenario(&started.id, &scenario)
+            .await
+            .unwrap_err();
         assert!(error.to_string().contains("No job of run #77 runs"));
     }
 

@@ -1,27 +1,36 @@
 #!/usr/bin/env bash
 # Run one phase of an execution in the executor image.
 #
-#   scripts/run_in_image.sh [--env-file FILE] prepare [materialize|assemble]
+#   scripts/run_in_image.sh [--env-file FILE] prepare [resolve|build|materialize|assemble|fixtures]
 #   scripts/run_in_image.sh [--env-file FILE] group
 #   scripts/run_in_image.sh [--env-file FILE] finalize
 #   scripts/run_in_image.sh image    print the image this checkout runs in
 #
 # The image holds only tools (the Dockerfile beside scripts/). The scripts are
 # this checkout's: its root is mounted at the same path, with the target/
-# directory every phase reads and writes, and so is a fresh TMPDIR, so a path
-# a scenario hands the host's Docker daemon through the socket names the same
-# files on both sides. Only `group` gets that socket. The container runs as
-# the calling user, can never gain privileges, and by default, without the
-# host's network, starts its engine on 49134 in a namespace of its own.
-# HARNESS_E2E_DOCKER_NETWORK=host puts it on the host's network instead, for a
-# host that runs one phase at a time: fixtures that publish a port on the
-# host's loopback (Registry, for its screenshots) are only reachable from the
-# phase there.
+# directory every phase reads and writes. No container can gain privileges,
+# each has a network of its own (a group starts its engine on 49134 there),
+# and every phase runs as the calling user. Nothing reaches the host's
+# Docker: a `group` container is privileged and starts as root, with a volume
+# at /var/lib/docker, for the Docker daemon scripts/executor.sh starts in it
+# before it runs the group as the calling user. The containers its scenarios
+# start are that daemon's and go with the group's container and its volume.
+# Its user reaches root in that container through the daemon's socket, and
+# a privileged container is root on the host: what the host's socket gave a
+# group before, and no more.
 #
 # The environment the phases read passes through by name, never by value on
 # the command line: HARNESS_E2E_*, DISPATCH_*, the git configuration that
 # GIT_CONFIG_COUNT states, CI, the execution key, the provider credentials
-# and, to `prepare` alone, GITHUB_TOKEN; --env-file adds a file of them.
+# and, to `prepare resolve` and `prepare fixtures` alone, GITHUB_TOKEN;
+# --env-file adds a file of them. `prepare` without a step runs resolve,
+# build, materialize and assemble, each in a container of its own, the env
+# file only for assemble: the commits a stack pins are built with neither.
+# A `prepare` container sees the checkout read-only but for target/, and
+# `prepare build` alone the build cache HARNESS_E2E_WORKER_BUILDS names.
+# The phase learns which variables are credentials from
+# HARNESS_E2E_CREDENTIALS, the names of that file: the launcher writes those
+# into the stack's .env and packaging redacts their values out of evidence.
 #
 # The container is labelled harness-e2e.execution=$EXECUTION_KEY,
 # harness-e2e.phase and harness-e2e.group. Interrupted, the wrapper stops it.
@@ -44,6 +53,17 @@ if [[ "$phase" == image ]]; then
 fi
 
 warn() { printf '::warning::%s\n' "$*" >&2; }
+
+if [[ "$phase" == prepare && $# -eq 0 ]]; then
+  for step in resolve build materialize assemble; do
+    if [[ "$step" == assemble && -n "$env_file" ]]; then
+      bash "${BASH_SOURCE[0]}" --env-file "$env_file" prepare "$step" || exit
+    else
+      bash "${BASH_SOURCE[0]}" prepare "$step" || exit
+    fi
+  done
+  exit 0
+fi
 
 # A group that fails before its container ran leaves its failure where the
 # launcher would have, so it reports an infrastructure failure, not nothing.
@@ -74,34 +94,71 @@ else
   }
 fi
 
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX")
-cidfile="$tmp.cid"
-# Fixtures a scenario ran as root through the socket may leave files behind.
-trap 'rm -rf "$tmp" "$cidfile" 2>/dev/null || warn "could not remove all of $tmp"' EXIT
-# Chromium opens a socket under TMPDIR, and a socket path holds 107 bytes.
-((${#tmp} <= 60)) || warn "TMPDIR $tmp is too long for Chromium's socket: the browser worker will not start"
+cidfile=$(mktemp -u "${TMPDIR:-/tmp}/harness-e2e-executor.XXXXXX.cid")
+trap 'rm -f "$cidfile"' EXIT
 
-args=(run --rm --init --cidfile "$cidfile"
-  --label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
-  --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}"
-  --user "$(id -u):$(id -g)" --security-opt no-new-privileges
-  --volume "$root:$root" --workdir "$root"
-  --volume "$tmp:$tmp" --env "TMPDIR=$tmp"
+labels=(--label "harness-e2e.execution=${EXECUTION_KEY:-}" --label "harness-e2e.phase=$phase"
+  --label "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}")
+mounts=(--volume "$root:$root")
+if [[ "$phase" == prepare ]]; then
+  # What a pinned commit's build or the stack's runner writes stays below
+  # target/: the scripts the host runs afterwards are out of its reach.
+  mkdir -p "$root/target"
+  mounts=(--volume "$root:$root:ro" --volume "$root/target:$root/target")
+fi
+args=(run --rm --init --cidfile "$cidfile" "${labels[@]}"
+  --security-opt no-new-privileges
+  "${mounts[@]}" --workdir "$root"
   --env "HARNESS_E2E_EXECUTOR_IMAGE=$reference")
 if [[ "$phase" == group ]]; then
-  socket=${DOCKER_HOST:-unix:///var/run/docker.sock}
-  socket=${socket#unix://}
-  args+=(--group-add "$(stat -c %g "$socket")" --volume "$socket:/var/run/docker.sock")
+  # Anonymous, so --rm removes it; labelled like the container.
+  volume=type=volume,dst=/var/lib/docker
+  for label in "${labels[@]}"; do
+    [[ "$label" == --label ]] || volume+=",volume-label=$label"
+  done
+  # A cgroup namespace of its own whatever the host's default: the daemon
+  # rearranges the cgroups it sees.
+  args+=(--privileged --cgroupns private --user 0:0 --mount "$volume"
+    --env "HARNESS_E2E_EXECUTOR_USER=$(id -u):$(id -g)")
+else
+  args+=(--user "$(id -u):$(id -g)")
 fi
-[[ -z "${HARNESS_E2E_DOCKER_NETWORK:-}" ]] || args+=(--network "$HARNESS_E2E_DOCKER_NETWORK")
-[[ -z "$env_file" ]] || args+=(--env-file "$env_file")
+credentials=()
+# A build runs the commits a stack pins: no credentials reach it.
+building=false
+[[ "$phase" != prepare || "${1:-}" != build ]] || building=true
+[[ -z "$env_file" || "$building" == false ]] || warn "prepare build takes no credentials; ignoring --env-file $env_file"
+if [[ -n "$env_file" && "$building" == false ]]; then
+  args+=(--env-file "$env_file")
+  # Names only, as Docker reads the file; Docker refuses a file it cannot.
+  if [[ -r "$env_file" ]]; then
+    while IFS= read -r line || [[ -n "$line" ]]; do
+      line=${line#"${line%%[![:space:]]*}"}
+      if [[ "$line" == *=* && "${line%%=*}" =~ ^[A-Z][A-Z0-9_]*$ ]]; then
+        credentials+=("${line%%=*}")
+      fi
+    done <"$env_file"
+  fi
+fi
+((${#credentials[@]} == 0)) || args+=(--env "HARNESS_E2E_CREDENTIALS=${credentials[*]}")
+# A build cache outside the checkout, at the same path: the Console's Docker
+# executions keep the workers built from a commit under its data directory.
+if [[ "$phase" == prepare && "${1:-}" == build && -n "${HARNESS_E2E_WORKER_BUILDS:-}" ]]; then
+  mkdir -p "$HARNESS_E2E_WORKER_BUILDS"
+  args+=(--volume "$HARNESS_E2E_WORKER_BUILDS:$HARNESS_E2E_WORKER_BUILDS")
+fi
 for name in $(compgen -e); do
   case "$name" in
-    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_DOCKER_NETWORK) ;;
-    # Only prepare calls GitHub; a group's subject has a shell.
-    GITHUB_TOKEN) [[ "$phase" != prepare ]] || args+=(--env "$name") ;;
+    HARNESS_E2E_EXECUTOR_IMAGE | HARNESS_E2E_EXECUTOR_USER | HARNESS_E2E_CREDENTIALS) ;;
+    # Only resolving a dispatch and fetching fixtures call GitHub; a group's
+    # subject has a shell, and a build runs a commit's code.
+    GITHUB_TOKEN) [[ "$phase" != prepare || ! "${1:-}" =~ ^(resolve|fixtures)$ ]] || args+=(--env "$name") ;;
+    DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY) [[ "$building" == true ]] || args+=(--env "$name") ;;
+    # What a subscription login holds besides its access token (which comes
+    # in the env file): no secret, and for a group alone.
+    CODEX_ACCOUNT_ID | CLAUDE_CODE_EXPIRES_AT) [[ "$phase" != group ]] || args+=(--env "$name") ;;
     HARNESS_E2E_* | DISPATCH_* | GIT_CONFIG_COUNT | GIT_CONFIG_KEY_* | GIT_CONFIG_VALUE_* | CI | EXECUTION_KEY | \
-      RELEASE_CONTROL_OIDC_AUDIENCE | DEEPSEEK_API_KEY | ZAI_API_KEY | TYPESAFE_API_KEY)
+      RELEASE_CONTROL_OIDC_AUDIENCE)
       args+=(--env "$name") ;;
   esac
 done
@@ -123,5 +180,9 @@ status=0
 wait "$container" || status=$?
 if ((status != 0)) && [[ ! -s "$cidfile" ]]; then
   record_failure executor_start "$status" "the executor container did not start"
+elif ((status != 0)) && [[ "$phase" == group ]]; then
+  # Before the launcher ran (its Docker daemon did not start, say) or
+  # without it writing one.
+  record_failure executor "$status" "the group's executor container exited $status before the group recorded a failure"
 fi
 exit "$status"

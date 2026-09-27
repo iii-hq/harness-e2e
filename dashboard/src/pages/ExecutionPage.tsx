@@ -121,7 +121,7 @@ function summaryFromDetail(
  *  native run's are its own request), or when nothing was recorded, the
  *  scenarios and model it reports with the form's defaults. */
 export function rerunParameters(
-  detail: DashboardExecutionDetail,
+  detail: Pick<DashboardExecutionDetail, 'plan_execution' | 'parameters'>,
   scenarios: string[],
   subject: ExecutionModel | undefined,
 ): ExecutionParameters {
@@ -509,6 +509,9 @@ export function ExecutionPage({
   const [deleting, setDeleting] = useState(false)
   // The parameters the Run again form opened with; null while it is closed.
   const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
+  // Open apart from the parameters, so Run again keeps its title while the
+  // dialog animates closed.
+  const [rerunOpen, setRerunOpen] = useState(false)
   // The scenario the Run this scenario again dialog is open on.
   const [scenarioRerun, setScenarioRerun] = useState<string | null>(null)
   const anchorSection = anchor ? sectionFromAnchor(anchor) : null
@@ -888,7 +891,8 @@ export function ExecutionPage({
                 <button
                   className={buttonClassName({ variant: 'secondary' })}
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    setRerunOpen(true)
                     setRerun(
                       rerunParameters(
                         detail,
@@ -897,7 +901,7 @@ export function ExecutionPage({
                         presentation.subjects[0],
                       ),
                     )
-                  }
+                  }}
                 >
                   <RotateCcw size={15} aria-hidden="true" />
                   Run again
@@ -1157,10 +1161,10 @@ export function ExecutionPage({
       ) : null}
       <LocalRunnerDialog
         bridge={bridge}
-        open={rerun !== null}
+        open={rerunOpen}
         parameters={rerun}
         label={detail.plan_execution?.label ?? detail.label ?? ''}
-        onClose={() => setRerun(null)}
+        onClose={() => setRerunOpen(false)}
       />
     </div>
   )

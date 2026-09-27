@@ -31,6 +31,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # The self-hosted runner resolves the evidence through iii: telemetry off.
+  III_TELEMETRY_ENABLED: "false"
+
 jobs:
   validate:
     if: endsWith(github.workflow_ref, '@refs/heads/main')

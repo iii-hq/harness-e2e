@@ -282,6 +282,8 @@ def main(argv: list[str] | None = None) -> None:
             command.add_argument("--timeout", type=float, default=60.0)
         command.set_defaults(func=func)
     args = parser.parse_args(argv)
+    # Every iii this runs, and the stack `up` starts, keeps telemetry off.
+    os.environ["III_TELEMETRY_ENABLED"] = "false"
     args.func(args)
 
 

@@ -704,8 +704,9 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
   // The application under test and the runner that measured it are different
   // workers; a path checkout of either is described with the others below.
   const harness = stack.find((worker) => worker.name === 'harness')
-  if (harness?.observed && harness.source !== 'path')
-    parts.push(`harness ${harness.observed}`)
+  const built = harness?.commit ? `@${harness.commit.slice(0, 7)}` : null
+  if (harness && harness.source !== 'path' && (built ?? harness.observed))
+    parts.push(`harness ${built ?? harness.observed}`)
   const runner = stack.find((worker) => worker.name === 'harness-e2e')
   if (runner?.observed) parts.push(`runner ${runner.observed}`)
   const paths = new Map<string, string[]>()
@@ -822,7 +823,12 @@ function stackComparison(
     distinct(
       stacks[side]
         .filter((worker) => worker.name === name)
-        .map((worker) => worker.observed ?? 'version not observed'),
+        .map((worker) =>
+          // Built from a commit, a worker is that commit, not its Cargo version.
+          worker.commit
+            ? `@${worker.commit.slice(0, 7)}`
+            : (worker.observed ?? 'version not observed'),
+        ),
     )
       .sort()
       .join(' | ')

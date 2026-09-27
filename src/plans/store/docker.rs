@@ -6,7 +6,12 @@
 //!
 //! - `inputs.json`: what `prepare` reads as `DISPATCH_*`: the suite (an id of
 //!   the master plan, or the whole suite as JSON), the stack's YAML, the
-//!   model and the agent profile. Credentials never go here.
+//!   model and the agent profile. Credentials never go here: `prepare
+//!   assemble`, each group and each packaging get this Console's (see
+//!   `credentials`) in a private temporary file that goes after the phase. A
+//!   group of a subscription provider (`openai-codex`, `claude-code`) and its
+//!   packaging also get the access token of this machine's login (see
+//!   `subscription`), refreshed first when it would not last the group.
 //! - `checkout/`: what the wrapper mounts, at the same path: the Dockerfile
 //!   this worker embeds (it names the image), the scripts it embeds or a copy
 //!   of `scripts_dir`, both frozen for the execution, and `target/`, every
@@ -16,13 +21,19 @@
 //!   `e2e-observation-<id>-gh-<attempt>`.
 //! - `logs/`: each phase's output.
 //!
-//! `prepare` (materialize, assemble, fixtures), one `group` container per
+//! `worker-builds/<entry>/` beside it keeps the workers stacks pin to a
+//! `commit:`, one entry per set of pinned commits (what `prepare resolve`
+//! names), mounted into `prepare build` alone: a build only ever reaches the
+//! entry of the commits it was asked to build.
+//!
+//! `prepare` (resolve, build when the stack pins a commit, materialize,
+//! assemble, fixtures), one `group` container per
 //! group, `docker_parallel_groups` at a time across executions, each packaged,
 //! then `finalize`, whose root bundle is imported once every group ended.
 //! Running a scenario again runs its groups as the next attempt, finalizes
 //! again and imports again: the last attempt counts, as a re-run job's does
 //! on GitHub.
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -42,7 +53,9 @@ use super::{
     PlanStore, Rerun, Slot,
 };
 use crate::artifact;
+use crate::plans::credentials::{self, Credentials};
 use crate::plans::stacks;
+use crate::subscription::{Access, Subscription};
 use crate::test_plan::{self, MasterPlan};
 
 /// The scripts every phase runs, extracted into each execution's checkout.
@@ -72,6 +85,10 @@ const SUPPORT: &[(&str, &str)] = &[
         "src/scenarios/kanban/catalog.json",
         include_str!("../../../src/scenarios/kanban/catalog.json"),
     ),
+    (
+        "config/provider-credentials.json",
+        include_str!("../../../config/provider-credentials.json"),
+    ),
 ];
 
 /// What the workflow gives a group job: ten minutes for polling, capture and
@@ -81,17 +98,29 @@ const GROUP_DEADLINES: [(&str, &str); 2] = [
     ("HARNESS_E2E_RUN_TIMEOUT_SECONDS", "10800"),
 ];
 
+/// How long a group's access token must last: its run timeout and fifteen
+/// minutes to start its stack.
+const SUBSCRIPTION_BUDGET: Duration = Duration::from_secs(10800 + 900);
+
 /// How this worker runs Docker executions (worker configuration).
 #[derive(Debug, Clone)]
 pub(crate) struct DockerSettings {
     /// Groups running at once, across executions.
     pub parallel_groups: usize,
-    /// An env file with the provider credentials the GitHub groups receive,
-    /// passed to `prepare assemble` and every group with `--env-file`.
+    /// An env file of provider credentials under this Console's own (see
+    /// `credentials`): where both name one, the Console's wins.
     pub provider_env_file: Option<PathBuf>,
     /// A checkout's `scripts/` to run instead of the embedded scripts, copied
     /// into each new execution.
     pub scripts_dir: Option<PathBuf>,
+    /// A pull-through cache per registry for each group's Docker daemon,
+    /// handed to the group as `HARNESS_E2E_REGISTRY_MIRRORS`.
+    pub registry_mirrors: BTreeMap<String, String>,
+    /// Where the subscription providers' CLI logins are read, as a home
+    /// (`.codex/auth.json`, `.claude/.credentials.json`); `None` reads them
+    /// where the CLIs keep them for this process (`CODEX_HOME`,
+    /// `CLAUDE_CONFIG_DIR`, `HOME`).
+    pub logins: Option<PathBuf>,
 }
 
 impl Default for DockerSettings {
@@ -100,6 +129,8 @@ impl Default for DockerSettings {
             parallel_groups: 2,
             provider_env_file: None,
             scripts_dir: None,
+            registry_mirrors: BTreeMap::new(),
+            logins: None,
         }
     }
 }
@@ -237,9 +268,10 @@ impl Launcher for ImageLauncher {
         let filters = [format!("label=harness-e2e.execution={execution}")];
         let containers = self.containers("-aq", &filters).await;
         if !containers.is_empty() {
+            // With the volume a group's Docker daemon keeps its images in.
             let _ = Command::new(&self.docker)
                 .arg("rm")
-                .arg("-f")
+                .arg("-fv")
                 .args(&containers)
                 .output()
                 .await;
@@ -310,6 +342,10 @@ pub(super) struct Docker {
     launcher: Arc<dyn Launcher>,
     groups: Arc<Semaphore>,
     cancels: std::sync::Mutex<HashMap<String, Arc<watch::Sender<bool>>>>,
+    /// The access token each running execution's groups sign in with, by
+    /// execution: reused while it lasts a group, so one group refreshing
+    /// the login never rotates the token another group runs with.
+    accesses: std::sync::Mutex<HashMap<String, Access>>,
 }
 
 impl Docker {
@@ -328,6 +364,7 @@ impl Docker {
             settings,
             launcher,
             cancels: std::sync::Mutex::new(HashMap::new()),
+            accesses: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
@@ -374,6 +411,12 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 }
 
 impl PlanStore {
+    /// This Console's provider credentials, the worker's `provider_env_file`
+    /// under them.
+    pub(crate) fn credentials(&self) -> Credentials {
+        Credentials::new(&self.root, self.docker.settings.provider_env_file.clone())
+    }
+
     fn docker_folder(&self, id: &str) -> PathBuf {
         self.root.join("docker-executions").join(id)
     }
@@ -414,17 +457,18 @@ impl PlanStore {
             .iter()
             .map(|warning| format!("Stack {}: {warning}", stack.name))
             .collect::<Vec<_>>();
-        match &self.docker.settings.provider_env_file {
-            None => warnings.push(
-                "No provider_env_file is configured: the providers start without credentials."
-                    .into(),
-            ),
-            Some(file) if !file.is_file() => warnings.push(format!(
-                "provider_env_file {} does not exist: the providers start without credentials.",
-                file.display()
-            )),
-            Some(_) => {}
+        if let Some(file) = &self.docker.settings.provider_env_file {
+            if !file.is_file() {
+                warnings.push(format!(
+                    "provider_env_file {} does not exist; only this Console's credentials reach the providers.",
+                    file.display()
+                ));
+            }
         }
+        let credentials = self.credentials();
+        let values = credentials.merged()?;
+        warnings.extend(credentials.warnings(&values)?);
+        warnings.extend(credential_warning(&parameters.provider, &values));
         execution.warnings.extend(warnings);
         let groups = placeholder_groups(&execution.slots);
         execution.slots = group_slots(&groups);
@@ -507,6 +551,7 @@ impl PlanStore {
                 }
             }
             store.docker.forget(&id, &sender);
+            store.docker.accesses.lock().unwrap().remove(&id);
         });
     }
 
@@ -557,19 +602,48 @@ impl PlanStore {
         if let Ok(token) = std::env::var("GITHUB_TOKEN") {
             dispatch.push(("GITHUB_TOKEN".into(), token));
         }
-        for (step, env, env_file) in [
-            ("materialize", dispatch, None),
-            (
-                "assemble",
-                key(),
-                self.docker.settings.provider_env_file.clone(),
-            ),
-        ] {
+        let mut warnings = Vec::new();
+        for step in ["resolve", "build", "materialize", "assemble"] {
+            let env = match step {
+                "resolve" => dispatch.clone(),
+                "build" => {
+                    let resolved =
+                        read_json(&checkout.join("target/harness-e2e-contract/execution.json"))?;
+                    warnings.extend(off_default_branch(&resolved));
+                    // Nothing pinned to a commit, nothing to build.
+                    let Some(entry) = resolved["builds"].as_str() else {
+                        continue;
+                    };
+                    ensure!(
+                        entry
+                            .strip_prefix("worker-builds-")
+                            .is_some_and(|digest| !digest.is_empty()
+                                && digest.bytes().all(|byte| byte.is_ascii_hexdigit())),
+                        "prepare resolve named an unexpected build cache entry {entry:?}"
+                    );
+                    let cache = self.root.join("worker-builds").join(entry);
+                    let mut env = key();
+                    env.push((
+                        "HARNESS_E2E_WORKER_BUILDS".into(),
+                        cache.display().to_string(),
+                    ));
+                    env
+                }
+                _ => key(),
+            };
             let log = folder.join(format!("logs/prepare-{step}.log"));
+            // Held until the phase ends, then removed.
+            let credentials = match step {
+                "assemble" => {
+                    let credentials = self.credentials();
+                    credentials.phase_file(&credentials.merged()?)?
+                }
+                _ => None,
+            };
             let phase = Phase {
                 args: vec!["prepare".into(), step.into()],
                 env,
-                env_file: env_file.filter(|file| file.is_file()),
+                env_file: credentials.as_ref().map(|file| file.path().to_owned()),
                 log: log.clone(),
             };
             if !self
@@ -616,13 +690,13 @@ impl PlanStore {
         }
         let _guard = self.lock.lock().await;
         let mut execution = self.read_execution(id).await?;
+        execution.warnings.extend(warnings);
         if !fetched {
             execution.warnings.push(format!(
                 "Checking out the groups' fixtures failed (see {}); a group that needs one says so.",
                 log.display()
             ));
         }
-        execution.warnings.extend(network_note(&groups));
         execution.slots = group_slots(&groups);
         if let ExecutionSource::Docker {
             phase,
@@ -760,11 +834,32 @@ impl PlanStore {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned())),
         );
+        let mirrors = &self.docker.settings.registry_mirrors;
+        if !mirrors.is_empty() {
+            env.push((
+                "HARNESS_E2E_REGISTRY_MIRRORS".into(),
+                mirrors
+                    .iter()
+                    .map(|(registry, mirror)| format!("{registry}={mirror}"))
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ));
+        }
         let folder = self.docker_folder(id);
         let log = folder.join(format!(
             "logs/group-{}-{}-{}.log",
             group.campaign_id, group.group_id, group.attempt
         ));
+        // One set for the group and the packaging that checks its evidence:
+        // a credential changed meanwhile is still looked for, and so is the
+        // access token a subscription provider signs in with. What else its
+        // login holds is no secret, and goes by name.
+        let mut values = self.credentials().merged()?;
+        if let Some(access) = self.subscription_access(id).await? {
+            values.insert(access.token.0, access.token.1);
+            env.extend(access.env);
+        }
+        let credentials = self.credentials().phase_file(&values)?;
         let succeeded = self
             .docker
             .launcher
@@ -774,22 +869,34 @@ impl PlanStore {
                 Phase {
                     args: vec!["group".into()],
                     env,
-                    env_file: self
-                        .docker
-                        .settings
-                        .provider_env_file
-                        .clone()
-                        .filter(|file| file.is_file()),
+                    env_file: credentials.as_ref().map(|file| file.path().to_owned()),
                     log: log.clone(),
                 },
                 cancel.clone(),
             )
             .await?;
+        drop(credentials);
         let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
             "group_id": group.group_id, "attempt": group.attempt, "job": "group"});
-        self.package(id, checkout, &workflow, &[&artifacts], "Group", &name)
+        let packaged = self
+            .package(
+                id,
+                checkout,
+                &workflow,
+                &[&artifacts],
+                ("Group", &name),
+                Some(&values),
+            )
             .await?;
-        let (state, error) = if succeeded {
+        let (state, error) = if !packaged {
+            (
+                "failed",
+                Some(format!(
+                    "Its evidence did not pass the packaging checks and was not kept; see {}.",
+                    folder.join(format!("logs/package-{name}.log")).display()
+                )),
+            )
+        } else if succeeded {
             ("done", None)
         } else if *cancel.borrow() {
             ("cancelled", None)
@@ -815,38 +922,105 @@ impl PlanStore {
         .map(drop)
     }
 
+    /// For a subscription provider, the access token of this machine's login:
+    /// the one the execution's groups already got while it lasts a group,
+    /// else the login's, refreshed first if it would not. What cannot be had,
+    /// or may not last, is a warning; the group runs either way.
+    async fn subscription_access(&self, id: &str) -> Result<Option<Access>> {
+        let execution = self.read_execution(id).await?;
+        let Some(subscription) = execution
+            .parameters
+            .as_ref()
+            .and_then(|parameters| Subscription::from_provider(&parameters.provider))
+        else {
+            return Ok(None);
+        };
+        let held = self.docker.accesses.lock().unwrap().get(id).cloned();
+        if let Some(access) = held.filter(|access| access.covers(SUBSCRIPTION_BUDGET)) {
+            return Ok(Some(access));
+        }
+        let got = subscription
+            .access(self.docker.settings.logins.as_deref(), SUBSCRIPTION_BUDGET)
+            .await;
+        let note = match &got {
+            Ok(access) => access.warning.clone(),
+            Err(error) => Some(format!(
+                "provider-{} starts without credentials: {error:#}",
+                subscription.provider()
+            )),
+        };
+        if let Some(note) = note {
+            let _guard = self.lock.lock().await;
+            let mut execution = self.read_execution(id).await?;
+            if !execution.warnings.contains(&note) {
+                execution.warnings.push(note);
+                self.write_execution(&execution).await?;
+            }
+        }
+        let access = got.ok();
+        if let Some(access) = &access {
+            self.docker
+                .accesses
+                .lock()
+                .unwrap()
+                .insert(id.to_owned(), access.clone());
+        }
+        Ok(access)
+    }
+
     /// Hash each root into its bundle-manifest.json, as the workflow does
-    /// before it uploads one. A root that holds something unsafe is replaced
-    /// by the diagnostic alone.
+    /// before it uploads one, checking it for `credentials` (the group's).
+    /// A root that holds something unsafe, or that could not be checked, is
+    /// replaced by the diagnostic alone: `false` then.
     async fn package(
         &self,
         id: &str,
         checkout: &Path,
         workflow: &Value,
         roots: &[&Path],
-        kind: &str,
-        name: &str,
-    ) -> Result<()> {
+        (kind, name): (&str, &str),
+        credentials: Option<&BTreeMap<String, String>>,
+    ) -> Result<bool> {
         let mut args = vec!["package".to_owned(), workflow.to_string()];
         args.extend(roots.iter().map(|root| root.to_string_lossy().into_owned()));
         let log = self
             .docker_folder(id)
             .join(format!("logs/package-{name}.log"));
-        let packaged = self
-            .docker
-            .launcher
-            .run(
-                checkout,
-                id,
-                Phase {
-                    args,
-                    env: vec![("EXECUTION_KEY".into(), id.into())],
-                    env_file: None,
-                    log: log.clone(),
-                },
-                uncancellable(),
-            )
-            .await?;
+        // Whatever stops the check, the tree is not kept unchecked.
+        let checked = async {
+            let file = match credentials {
+                Some(values) => self.credentials().phase_file(values)?,
+                None => None,
+            };
+            self.docker
+                .launcher
+                .run(
+                    checkout,
+                    id,
+                    Phase {
+                        args,
+                        env: vec![("EXECUTION_KEY".into(), id.into())],
+                        env_file: file.as_ref().map(|file| file.path().to_owned()),
+                        log: log.clone(),
+                    },
+                    uncancellable(),
+                )
+                .await
+        };
+        let packaged = match checked.await {
+            Ok(packaged) => packaged,
+            Err(error) => {
+                tracing::warn!(execution_id = %id, error = %format!("{error:#}"), "cannot check {name}");
+                let _ = fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log)
+                    .and_then(|mut file| {
+                        std::io::Write::write_all(&mut file, format!("\n{error:#}\n").as_bytes())
+                    });
+                false
+            }
+        };
         if !packaged {
             for root in roots {
                 if root.exists() {
@@ -861,7 +1035,7 @@ impl PlanStore {
                 )?;
             }
         }
-        Ok(())
+        Ok(packaged)
     }
 
     /// Lay the groups' last attempts out and aggregate them, then package the
@@ -899,8 +1073,17 @@ impl PlanStore {
                 if !bundle.join("bundle-manifest.json").is_file() {
                     let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
                         "group_id": group.group_id, "attempt": group.attempt, "job": "finalize"});
-                    self.package(id, checkout, &workflow, &[&bundle], "Group", name)
-                        .await?;
+                    // Its own set went with the stopped drive: the current one.
+                    let values = self.credentials().merged()?;
+                    self.package(
+                        id,
+                        checkout,
+                        &workflow,
+                        &[&bundle],
+                        ("Group", name),
+                        Some(&values),
+                    )
+                    .await?;
                 }
                 selected.insert(
                     format!("{} · {}", group.campaign_id, group.group_id),
@@ -955,13 +1138,15 @@ impl PlanStore {
         let workflow = json!({"runner": "harness-e2e console", "execution_id": id,
             "attempt": attempt, "job": "finalize"});
         let roots_ref = roots.iter().map(PathBuf::as_path).collect::<Vec<_>>();
+        // As on GitHub, the root holds no credential: each group was checked
+        // with its own when it was packaged.
         self.package(
             id,
             checkout,
             &workflow,
             &roots_ref,
-            "Root",
-            &format!("root-{attempt}"),
+            ("Root", &format!("root-{attempt}")),
+            None,
         )
         .await?;
         fs::rename(&campaigns, &root).context("keep the root bundle")?;
@@ -1181,6 +1366,25 @@ impl PlanStore {
     }
 }
 
+/// What an execution says when its model's provider starts without a key:
+/// it still runs. A subscription provider signs in with this machine's login
+/// instead, and says so when its group cannot.
+fn credential_warning(provider: &str, credentials: &BTreeMap<String, String>) -> Option<String> {
+    if Subscription::from_provider(provider).is_some() {
+        return None;
+    }
+    match credentials::provider_key(provider) {
+        Some(key) if !credentials.contains_key(&key) => Some(format!(
+            "{key} is not set (Stacks, provider credentials): provider-{provider} starts without a credential."
+        )),
+        None if credentials.is_empty() => Some(
+            "No provider credential is set (Stacks, provider credentials): the providers start without one."
+                .into(),
+        ),
+        _ => None,
+    }
+}
+
 fn docker_phase(execution: &PlanExecution) -> &str {
     match &execution.source {
         ExecutionSource::Docker { phase, .. } => phase,
@@ -1188,10 +1392,31 @@ fn docker_phase(execution: &PlanExecution) -> &str {
     }
 }
 
+/// A warning for each commit pinned that its repository's default branch
+/// does not have, which may be a fork's.
+fn off_default_branch(execution: &Value) -> Vec<String> {
+    execution["commits"]
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(_, pin)| pin["on_default_branch"] == false)
+        .map(|(name, pin)| {
+            format!(
+                "{name} pins {}@{}, which its default branch does not have: it may come from a fork.",
+                pin["repository"].as_str().unwrap_or_default(),
+                pin["commit"].as_str().unwrap_or_default()
+            )
+        })
+        .collect()
+}
+
 /// What `prepare` sends as `DISPATCH_SUITE`: a suite of the master plan by
 /// its id when it runs as reviewed, so its digest is the workflow's for that
 /// suite; any other suite whole, as JSON, with every scenario given.
-pub(super) fn dispatch_suite(parameters: &ExecutionParameters, master: &MasterPlan) -> Result<String> {
+pub(super) fn dispatch_suite(
+    parameters: &ExecutionParameters,
+    master: &MasterPlan,
+) -> Result<String> {
     let suite = parameters.suite.as_ref();
     let scenarios = &parameters.scenarios;
     if let Some(id) = suite.and_then(|suite| suite.id.as_ref()) {
@@ -1339,32 +1564,9 @@ fn placeholders(slots: &[Slot]) -> bool {
     slots.iter().all(|slot| slot.execution_id.is_empty())
 }
 
-fn registry(group_id: &str) -> bool {
-    group_id.starts_with("case-registry-")
-}
-
-/// Every group runs on a network of its own. The Registry fixture serves the
-/// application it screenshots on the host's loopback, which only a phase on
-/// the host's network reaches; there a group's stack would take this host's
-/// ports (its Console binds 3113 on every address, as this host's iii does),
-/// so the Registry groups run isolated too, and without those screenshots.
-fn network_note(groups: &[DockerGroup]) -> Option<String> {
-    let registry = groups
-        .iter()
-        .filter(|group| registry(&group.group_id))
-        .map(|group| group.group_id.as_str())
-        .collect::<std::collections::BTreeSet<_>>();
-    (!registry.is_empty()).then(|| {
-        format!(
-            "{} ran on an isolated network: the application the Registry fixture serves on the host's loopback cannot be reached for its screenshots, so they are missing. On the host's network the group's stack would take this host's ports (its Console binds 3113).",
-            registry.into_iter().collect::<Vec<_>>().join(", ")
-        )
-    })
-}
-
 /// Groups whose fixtures are private repositories.
 fn private_fixtures(group_id: &str) -> bool {
-    registry(group_id) || group_id == "case-trending-topics-build"
+    group_id.starts_with("case-registry-") || group_id == "case-trending-topics-build"
 }
 
 /// Copy a directory tree, as `cp -a` does, to `destination`, which must not
@@ -1425,7 +1627,11 @@ mod tests {
         args: Vec<String>,
         env: HashMap<String, String>,
         env_file: Option<PathBuf>,
+        /// The env file's content and mode while the phase ran.
+        credentials: Option<(String, u32)>,
     }
+
+    type DuringGroup = Box<dyn Fn(&str) + Send>;
 
     /// Stands in for Docker: each phase leaves what the real one leaves.
     #[derive(Default)]
@@ -1437,6 +1643,10 @@ mod tests {
         hold: std::sync::Mutex<BTreeSet<String>>,
         /// Groups whose run errs before it ends (the disk is full).
         broken: std::sync::Mutex<BTreeSet<String>>,
+        /// Groups whose packaging errs.
+        broken_package: std::sync::Mutex<BTreeSet<String>>,
+        /// Called while a group runs, with its group id.
+        during_group: std::sync::Mutex<Option<DuringGroup>>,
         removed: std::sync::Mutex<Vec<String>>,
     }
 
@@ -1461,11 +1671,20 @@ mod tests {
             phase: Phase,
             mut cancel: watch::Receiver<bool>,
         ) -> Result<bool> {
+            use std::os::unix::fs::PermissionsExt;
             let env = phase.env.iter().cloned().collect::<HashMap<_, _>>();
+            let credentials = match &phase.env_file {
+                Some(file) => Some((
+                    fs::read_to_string(file)?,
+                    fs::metadata(file)?.permissions().mode() & 0o777,
+                )),
+                None => None,
+            };
             self.calls.lock().unwrap().push(Call {
                 args: phase.args.clone(),
                 env: env.clone(),
                 env_file: phase.env_file.clone(),
+                credentials,
             });
             fs::write(&phase.log, phase.args.join(" "))?;
             let contracts = checkout.join("target/harness-e2e-contract");
@@ -1475,22 +1694,30 @@ mod tests {
                 .collect::<Vec<_>>()
                 .as_slice()
             {
-                ["materialize"] => {
+                ["resolve"] => {
                     fs::create_dir_all(&contracts)?;
-                    let master = test_plan::embedded()?;
                     let suite = &env["DISPATCH_SUITE"];
+                    let mut execution =
+                        json!({"suite": suite, "stack": "inline", "model": env["DISPATCH_MODEL"]});
+                    if env["DISPATCH_STACK"].contains("commit:") {
+                        execution["builds"] = json!("worker-builds-0123abcd");
+                        execution["commits"] = json!({"harness": {"commit": "3f2a9c1".repeat(5),
+                            "repository": "someone/fork", "on_default_branch": false}});
+                    }
+                    fs::write(contracts.join("execution.json"), execution.to_string())?;
+                    fs::write(contracts.join("stack.yaml"), &env["DISPATCH_STACK"])?;
+                }
+                ["build"] => {}
+                ["materialize"] => {
+                    let master = test_plan::embedded()?;
+                    let execution = read_json(&contracts.join("execution.json"))?;
+                    let suite = execution["suite"].as_str().unwrap_or_default();
                     let snapshot = if suite.starts_with('{') {
                         master.materialize_suite(serde_json::from_str(suite)?)?
                     } else {
                         master.materialize(suite)?
                     };
                     fs::write(contracts.join("suite.json"), serde_json::to_vec(&snapshot)?)?;
-                    fs::write(
-                        contracts.join("execution.json"),
-                        json!({"suite": suite, "stack": "inline", "model": env["DISPATCH_MODEL"]})
-                            .to_string(),
-                    )?;
-                    fs::write(contracts.join("stack.yaml"), &env["DISPATCH_STACK"])?;
                 }
                 ["assemble"] => {
                     let snapshot = read_json(&contracts.join("suite.json"))?;
@@ -1507,6 +1734,9 @@ mod tests {
                     let running = self.running.fetch_add(1, Ordering::SeqCst) + 1;
                     self.most.fetch_max(running, Ordering::SeqCst);
                     let artifacts = PathBuf::from(&env["HARNESS_E2E_ARTIFACTS_DIR"]);
+                    if let Some(during) = self.during_group.lock().unwrap().as_ref() {
+                        during(&group);
+                    }
                     let held = self.hold.lock().unwrap().contains(&group);
                     if self.broken.lock().unwrap().contains(&group) {
                         self.running.fetch_sub(1, Ordering::SeqCst);
@@ -1530,6 +1760,15 @@ mod tests {
                     return Ok(succeeded);
                 }
                 [_, roots @ ..] if phase.args[0] == "package" => {
+                    if self
+                        .broken_package
+                        .lock()
+                        .unwrap()
+                        .iter()
+                        .any(|group| roots.iter().any(|root| root.contains(group.as_str())))
+                    {
+                        bail!("create the credentials file for a phase: no space left on device");
+                    }
                     for root in roots {
                         fs::write(Path::new(root).join("bundle-manifest.json"), "{}")?;
                     }
@@ -1725,16 +1964,30 @@ mod tests {
         let runner = Arc::new(FakeRunner::new(data.clone()));
         let launcher = Arc::new(FakeLauncher::default());
         let providers = root.path().join("providers.env");
-        fs::write(&providers, "DEEPSEEK_API_KEY=secret\n").unwrap();
+        fs::write(
+            &providers,
+            "DEEPSEEK_API_KEY=sk-file-9f1c\nZAI_API_KEY=sk-zai-9f1c\n",
+        )
+        .unwrap();
         let store = docker_store(
             &data,
             runner.clone(),
             launcher.clone(),
             DockerSettings {
                 provider_env_file: Some(providers.clone()),
+                registry_mirrors: BTreeMap::from([
+                    ("mcr.microsoft.com".into(), "http://mirror:5001".into()),
+                    ("docker.io".into(), "http://mirror:5000".into()),
+                ]),
                 ..DockerSettings::default()
             },
         );
+        // The Console's credentials over the worker's file.
+        let credentials = store.credentials();
+        credentials
+            .set("DEEPSEEK_API_KEY", "sk-console-9f1c")
+            .unwrap();
+        credentials.set("OPENAI_API_KEY", "sk-openai-9f1c").unwrap();
         let started = store
             .start_execution(docker_parameters("pr"), "In Docker")
             .await
@@ -1755,7 +2008,7 @@ mod tests {
         assert_eq!(inputs["stack"], stacks::REPOSITORY[0].1);
         assert!(!fs::read_to_string(folder.join("inputs.json"))
             .unwrap()
-            .contains("secret"));
+            .contains("9f1c"));
         assert_eq!(
             fs::read_to_string(folder.join("checkout/Dockerfile")).unwrap(),
             DOCKERFILE
@@ -1832,6 +2085,7 @@ mod tests {
 
         // Two groups at a time, each with the provider credentials by file.
         assert_eq!(launcher.most.load(Ordering::SeqCst), 2);
+        let merged = "DEEPSEEK_API_KEY=sk-console-9f1c\nOPENAI_API_KEY=sk-openai-9f1c\nZAI_API_KEY=sk-zai-9f1c\n";
         let phases = launcher
             .calls
             .lock()
@@ -1843,13 +2097,19 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(
-            &phases[..3],
+            &phases[..4],
             [
+                "prepare resolve",
                 "prepare materialize",
                 "prepare assemble",
                 "prepare fixtures"
             ]
         );
+        // A stack that pins no commit has nothing to build.
+        assert!(launcher
+            .calls("prepare")
+            .iter()
+            .all(|call| !call.env.contains_key("HARNESS_E2E_WORKER_BUILDS")));
         // Each group packaged after it ran, then the root after the finalizer.
         assert_eq!(phases[phases.len() - 2..], ["finalize", "package"]);
         assert_eq!(phases.iter().filter(|phase| *phase == "package").count(), 5);
@@ -1859,10 +2119,35 @@ mod tests {
             json!({"runner": "harness-e2e console", "execution_id": id, "attempt": 1, "job": "finalize"})
         );
         for call in launcher.calls.lock().unwrap().iter() {
-            let credentials = matches!(call.args[0].as_str(), "group")
+            // What the stack starts with and what a group's packaging checks
+            // its evidence for; each in a private file of its own in the data
+            // directory, gone once the phase ended. The root holds none, as
+            // on GitHub.
+            let group_package = call.args[0] == "package" && call.args[1].contains("group_id");
+            let credentials = call.args[0] == "group"
+                || group_package
                 || call.args[..] == ["prepare", "assemble"];
             assert_eq!(call.env_file.is_some(), credentials, "{:?}", call.args);
+            if let Some(file) = &call.env_file {
+                assert_eq!(call.credentials, Some((merged.to_owned(), 0o600)));
+                assert!(
+                    file.starts_with(data.join(".phase-credentials")),
+                    "{}",
+                    file.display()
+                );
+                assert!(!file.exists(), "{} outlived its phase", file.display());
+            }
             assert_eq!(call.env["EXECUTION_KEY"], id);
+            // Only a group runs a Docker daemon to pull through them.
+            assert_eq!(
+                call.env
+                    .get("HARNESS_E2E_REGISTRY_MIRRORS")
+                    .map(String::as_str),
+                (call.args[0] == "group")
+                    .then_some("docker.io=http://mirror:5000 mcr.microsoft.com=http://mirror:5001"),
+                "{:?}",
+                call.args
+            );
         }
         let group = &launcher.calls("group")[0];
         assert_eq!(
@@ -1870,7 +2155,23 @@ mod tests {
             "target/harness-e2e-contract/contracts/pr-r01.json"
         );
         assert_eq!(group.env["HARNESS_E2E_SUITE_DEADLINE_SECONDS"], "10200");
-        assert!(!group.env.contains_key("HARNESS_E2E_DOCKER_NETWORK"));
+        // No value is anywhere in the data directory but the store's file.
+        let mut folders = vec![data.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if path != data.join(credentials::FILE) {
+                    let bytes = fs::read(&path).unwrap();
+                    assert!(
+                        !bytes.windows(4).any(|window| window == b"9f1c"),
+                        "{} holds a credential",
+                        path.display()
+                    );
+                }
+            }
+        }
         // Every artifact under the name the workflow gives it.
         let mut names = directories(&store.docker_artifacts(&id))
             .unwrap()
@@ -2296,6 +2597,239 @@ mod tests {
     }
 
     #[test]
+    fn an_execution_warns_when_its_models_provider_has_no_key_and_still_runs() {
+        let set = BTreeMap::from([("ZAI_API_KEY".to_owned(), "k".to_owned())]);
+        assert_eq!(credential_warning("zai", &set), None);
+        assert_eq!(
+            credential_warning("openai", &set).as_deref(),
+            Some("OPENAI_API_KEY is not set (Stacks, provider credentials): provider-openai starts without a credential.")
+        );
+        // A provider the catalog does not know: only none at all is said.
+        assert_eq!(credential_warning("ollama", &set), None);
+        assert!(credential_warning("ollama", &BTreeMap::new())
+            .unwrap()
+            .starts_with("No provider credential is set"));
+        // A subscription provider needs no key.
+        for provider in ["openai-codex", "claude-code"] {
+            assert_eq!(credential_warning(provider, &BTreeMap::new()), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subscription_group_and_its_packaging_get_the_access_token_alone() {
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let providers = root.path().join("providers.env");
+        fs::write(&providers, "ZAI_API_KEY=sk-zai-0123456789\n").unwrap();
+        // This machine's Codex login, good for ten days: handed over as it is.
+        let logins = root.path().join("home");
+        let codex = logins.join(".codex");
+        fs::create_dir_all(&codex).unwrap();
+        let claims = json!({"exp": chrono::Utc::now().timestamp() + 864_000});
+        let access = format!(
+            "eyJhbGciOiJub25lIn0.{}.signature",
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+        );
+        let login = json!({"auth_mode": "chatgpt", "tokens": {"access_token": access,
+            "refresh_token": "refresh-never-leaves", "id_token": "id-never-leaves", "account_id": "acct-1"}});
+        fs::write(codex.join("auth.json"), login.to_string()).unwrap();
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                provider_env_file: Some(providers.clone()),
+                logins: Some(logins),
+                ..DockerSettings::default()
+            },
+        );
+        // A stack pinned to a commit, so its build runs too.
+        let mut parameters = ExecutionParameters {
+            provider: "openai-codex".into(),
+            ..docker_parameters("pr")
+        };
+        if let Some(stack) = parameters.stack.as_mut() {
+            stack.yaml =
+                "containers:\n  harness:\n    worker: package://harness\n    commit: 3f2a9c1\n"
+                    .into();
+        }
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        assert!(
+            done.warnings
+                .iter()
+                .all(|warning| !warning.contains("credential")),
+            "{:?}",
+            done.warnings
+        );
+        assert!(launcher
+            .calls("prepare")
+            .iter()
+            .any(|call| call.args[1] == "build"));
+        // The token alone is a credential; the account goes by name.
+        let with_token = format!("CODEX_ACCESS_TOKEN={access}\nZAI_API_KEY=sk-zai-0123456789\n");
+        let calls = launcher.calls.lock().unwrap().clone();
+        let groups = calls.iter().filter(|call| call.args[0] == "group").count();
+        assert_eq!(groups, 4);
+        for call in &calls {
+            // Each group and the packaging that checks its evidence; nothing
+            // else: not the stack's assembly, never a commit's build.
+            let group_package = call.args[0] == "package" && call.args[1].contains("group_id");
+            let expected = match call.args[0].as_str() {
+                "group" => Some(with_token.as_str()),
+                "package" if group_package => Some(with_token.as_str()),
+                "prepare" if call.args[1] == "assemble" => Some("ZAI_API_KEY=sk-zai-0123456789\n"),
+                _ => None,
+            };
+            assert_eq!(
+                call.credentials
+                    .as_ref()
+                    .map(|(content, mode)| (content.as_str(), *mode)),
+                expected.map(|content| (content, 0o600)),
+                "{:?}",
+                call.args
+            );
+            if let Some(file) = &call.env_file {
+                assert!(file.starts_with(data.join(".phase-credentials")));
+                assert!(!file.exists(), "{} outlived its phase", file.display());
+            }
+            assert_eq!(
+                call.env.get("CODEX_ACCOUNT_ID").map(String::as_str),
+                (call.args[0] == "group").then_some("acct-1"),
+                "{:?}",
+                call.args
+            );
+        }
+        // Held for no execution once its drive ended.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !store.docker.accesses.lock().unwrap().is_empty() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the execution's access token outlived its drive");
+        // Neither the refresh nor the id token is anywhere in the data
+        // directory, nor any access token once the groups ended.
+        let mut folders = vec![data.clone()];
+        while let Some(folder) = folders.pop() {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    folders.push(path);
+                } else if let Ok(bytes) = fs::read(&path) {
+                    let text = String::from_utf8_lossy(&bytes).into_owned();
+                    for secret in ["never-leaves", access.as_str()] {
+                        assert!(!text.contains(secret), "{} holds a token", path.display());
+                    }
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_subscription_login_that_cannot_be_had_is_a_warning_and_the_groups_still_run() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        // A home where no one signed in.
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                logins: Some(root.path().join("home")),
+                ..DockerSettings::default()
+            },
+        );
+        let parameters = ExecutionParameters {
+            provider: "claude-code".into(),
+            ..docker_parameters("pr")
+        };
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        // Said once, and not that no key is set: this one had a login to try.
+        assert_eq!(done.warnings.len(), 1, "{:?}", done.warnings);
+        assert!(
+            done.warnings[0].starts_with("provider-claude-code starts without credentials: ")
+                && done.warnings[0].ends_with("; run `claude`"),
+            "{}",
+            done.warnings[0]
+        );
+        let groups = launcher.calls("group");
+        assert_eq!(groups.len(), 4);
+        assert!(groups.iter().all(|group| group.env_file.is_none()));
+    }
+
+    #[tokio::test]
+    async fn an_executions_groups_share_its_token_while_it_lasts_a_group() {
+        use base64::Engine as _;
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let home = root.path().join("home");
+        fs::create_dir_all(home.join(".codex")).unwrap();
+        let login = |hours: i64, tag: &str| {
+            let claims = json!({"exp": chrono::Utc::now().timestamp() + hours * 3600, "tag": tag});
+            let token = format!(
+                "eyJhbGciOiJub25lIn0.{}.signature",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+            );
+            fs::write(
+                home.join(".codex/auth.json"),
+                json!({"auth_mode": "chatgpt", "tokens": {"access_token": token, "account_id": "acct-1"}})
+                    .to_string(),
+            )
+            .unwrap();
+            token
+        };
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            Arc::new(FakeLauncher::default()),
+            DockerSettings {
+                logins: Some(home.clone()),
+                ..DockerSettings::default()
+            },
+        );
+        let mut execution = store
+            .start_execution(
+                ExecutionParameters {
+                    provider: "openai-codex".into(),
+                    ..docker_parameters("pr")
+                },
+                "",
+            )
+            .await
+            .unwrap();
+        // Read as another execution, whose drive this test is.
+        execution.id = "plan-shared".into();
+        execution.idempotency_key = "execution:shared".into();
+        store.write_execution(&execution).await.unwrap();
+        let first = login(5, "first");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, first);
+        // The CLI renews the login meanwhile: the groups keep the first.
+        login(240, "renewed");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, first);
+        // Once it would not last a group, the login's again.
+        store
+            .docker
+            .accesses
+            .lock()
+            .unwrap()
+            .get_mut("plan-shared")
+            .unwrap()
+            .expires_at = Some(chrono::Utc::now().timestamp() + 600);
+        let renewed = login(240, "renewed");
+        let got = store.subscription_access("plan-shared").await.unwrap();
+        assert_eq!(got.unwrap().token.1, renewed);
+    }
+
+    #[test]
     fn a_reviewed_suite_is_sent_by_id_and_any_other_whole() {
         let master = test_plan::embedded().unwrap();
         let mut parameters = suite_parameters("software-engineering");
@@ -2405,6 +2939,28 @@ mod tests {
         drop(sender);
     }
 
+    #[tokio::test]
+    async fn removing_an_execution_takes_its_containers_volumes_too() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let calls = root.path().join("docker.log");
+        let docker = root.path().join("docker");
+        fs::write(
+            &docker,
+            format!(
+                "#!/bin/sh\necho \"$*\" >>{}\n[ \"$1\" != ps ] || echo cid-1\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&docker, fs::Permissions::from_mode(0o755)).unwrap();
+        ImageLauncher { docker }.remove("plan-1").await;
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "ps -aq --filter label=harness-e2e.execution=plan-1\nrm -fv cid-1\n"
+        );
+    }
+
     #[test]
     fn each_drive_has_its_own_cancel() {
         let docker =
@@ -2464,26 +3020,171 @@ mod tests {
         assert_eq!(done.slots[1].state, "not_run");
     }
 
-    #[test]
-    fn registry_groups_run_isolated_and_say_their_screenshots_are_missing() {
-        let group = |id: &str| DockerGroup {
-            round: 1,
-            campaign_id: "software-engineering-r01".into(),
-            group_id: id.into(),
-            scenarios: Vec::new(),
-            state: "queued".into(),
-            attempt: 1,
-            counted: 0,
-            error: None,
+    #[tokio::test]
+    async fn a_group_and_its_packaging_get_one_set_even_if_it_changes_meanwhile() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings {
+                parallel_groups: 1,
+                ..DockerSettings::default()
+            },
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-before-0123456789")
+            .unwrap();
+        // Replaced while the first group runs.
+        let credentials = data.clone();
+        *launcher.during_group.lock().unwrap() = Some(Box::new(move |group| {
+            if group == "case-minimal-path" {
+                Credentials::new(&credentials, None)
+                    .set("OPENAI_API_KEY", "sk-after-0123456789")
+                    .unwrap();
+            }
+        }));
+        let id = store
+            .start_execution(docker_parameters("pr"), "")
+            .await
+            .unwrap()
+            .id;
+        until(&store, &id, settled).await;
+        let seen = |phase: &str, group: &str| {
+            launcher
+                .calls(phase)
+                .into_iter()
+                .find(|call| {
+                    call.env
+                        .get("HARNESS_E2E_CAMPAIGN_GROUP_ID")
+                        .map(String::as_str)
+                        == Some(group)
+                        || call
+                            .args
+                            .iter()
+                            .any(|arg| arg.ends_with(&format!("{group}-gh-1")))
+                })
+                .and_then(|call| call.credentials)
+                .map(|(values, _)| values)
+                .unwrap()
         };
-        assert_eq!(network_note(&[group("case-minimal-path")]), None);
-        let note = network_note(&[
-            group("case-registry-implementation"),
-            group("case-minimal-path"),
-        ])
-        .unwrap();
-        assert!(note.starts_with("case-registry-implementation ran on an isolated network"));
-        assert!(note.contains("screenshots"));
+        let before = "OPENAI_API_KEY=sk-before-0123456789\n";
+        assert_eq!(seen("group", "case-minimal-path"), before);
+        assert_eq!(seen("package", "case-minimal-path"), before);
+        // The next group starts with the new one.
+        let after = "OPENAI_API_KEY=sk-after-0123456789\n";
+        assert_eq!(seen("group", "case-persistent-state"), after);
+        assert_eq!(seen("package", "case-persistent-state"), after);
+    }
+
+    #[tokio::test]
+    async fn a_stack_pinned_to_a_commit_builds_it_on_its_own_with_its_cache_entry() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher.clone(),
+            DockerSettings::default(),
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-openai-0123456789")
+            .unwrap();
+        let mut parameters = docker_parameters("pr");
+        if let Some(stack) = parameters.stack.as_mut() {
+            stack.yaml =
+                "containers:\n  harness:\n    worker: package://harness\n    commit: 3f2a9c1\n"
+                    .into();
+        }
+        let id = store.start_execution(parameters, "").await.unwrap().id;
+        let done = until(&store, &id, settled).await;
+        let prepared = launcher
+            .calls("prepare")
+            .into_iter()
+            .map(|call| {
+                let cache = call.env.get("HARNESS_E2E_WORKER_BUILDS").cloned();
+                (
+                    call.args[1].clone(),
+                    cache,
+                    call.env.contains_key("GITHUB_TOKEN") || call.credentials.is_some(),
+                )
+            })
+            .collect::<Vec<_>>();
+        let entry = data.join("worker-builds/worker-builds-0123abcd");
+        assert_eq!(
+            prepared
+                .iter()
+                .map(|(step, cache, _)| (step.as_str(), cache.clone()))
+                .collect::<Vec<_>>(),
+            [
+                ("resolve", None),
+                ("build", Some(entry.display().to_string())),
+                ("materialize", None),
+                ("assemble", None),
+                ("fixtures", None),
+            ]
+        );
+        // The build holds neither the token nor the credentials.
+        assert!(!prepared[1].2);
+        assert!(done.warnings.iter().any(|warning| warning
+            == &format!("harness pins someone/fork@{}, which its default branch does not have: it may come from a fork.", "3f2a9c1".repeat(5))), "{:?}", done.warnings);
+    }
+
+    #[tokio::test]
+    async fn a_packaging_that_errs_fails_its_group_and_the_rest_is_imported() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let launcher = Arc::new(FakeLauncher::default());
+        launcher
+            .broken_package
+            .lock()
+            .unwrap()
+            .insert("case-persistent-state".into());
+        let store = docker_store(
+            &data,
+            Arc::new(FakeRunner::new(data.clone())),
+            launcher,
+            DockerSettings::default(),
+        );
+        store
+            .credentials()
+            .set("OPENAI_API_KEY", "sk-openai-0123456789")
+            .unwrap();
+        let id = store
+            .start_execution(docker_parameters("pr"), "")
+            .await
+            .unwrap()
+            .id;
+        let done = until(&store, &id, settled).await;
+        assert_eq!(done.state, "completed", "{:?}", done.error);
+        let ExecutionSource::Docker { groups, .. } = &done.source else {
+            panic!("{:?}", done.source);
+        };
+        let broken = &groups[1];
+        assert_eq!(broken.state, "failed");
+        assert!(broken
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("did not pass the packaging checks"));
+        // Its unchecked evidence was not kept; the others were imported.
+        let bundle = store.docker_artifacts(&id).join(format!(
+            "e2e-observation-{id}-pr-r01-case-persistent-state-gh-1"
+        ));
+        assert_eq!(
+            directories(&bundle).unwrap_or_default(),
+            Vec::<PathBuf>::new()
+        );
+        assert!(bundle.join("failure.json").is_file());
+        for index in [0, 2, 3] {
+            assert!(done.slots[index].eligible, "{:?}", done.slots[index]);
+        }
+        assert_eq!(done.slots[1].state, "not_run");
     }
 
     #[tokio::test]

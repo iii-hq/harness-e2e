@@ -1,11 +1,15 @@
+import base64
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
 import tempfile
 import textwrap
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 
@@ -162,7 +166,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
         self.assertNotIn("harness", project["containers"])
         self.assertEqual(project["containers"]["subject"]["version"], "latest")
-        self.assertEqual(project["containers"]["link"], template["containers"]["link"])
+        self.assertEqual(project["containers"]["link"], {**template["containers"]["link"], "environment": {"III_TELEMETRY_ENABLED": "false"}})
         template["containers"]["link"]["worker"] = "path://../elsewhere"
         with self.assertRaisesRegex(ValueError, "inside its project"):
             MODULE.project_scaffold(contract, "project-one", Path("/data"), {}, {}, template)
@@ -242,6 +246,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
                     "worker": f"package://provider-{provider}",
                     "version": "1.2.3",
                     "env_file": ["/private/.env"],
+                    "environment": {"III_TELEMETRY_ENABLED": "false"},
                 })
                 self.assertNotIn("fp", project["containers"])
                 self.assertNotIn("harness", project["containers"])
@@ -272,12 +277,27 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "provider-deepseek"):
             MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template)
 
+    def test_every_container_keeps_iii_telemetry_off_whatever_the_daemon_inherited(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "link": {"worker": "path://./link", "environment": {"III_TELEMETRY_ENABLED": "true"}},
+        }}
+        for scaffold in (
+            MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None,
+                                    {"harness.III_TELEMETRY_ENABLED": "true"}),
+            MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template,
+                                    profile_root=Path("/isolated/project")),
+        ):
+            for name, container in scaffold["containers"].items():
+                self.assertEqual(container["environment"]["III_TELEMETRY_ENABLED"], "false", name)
+
     def test_base_projects_also_add_the_campaign_provider_when_it_is_not_declared(self):
         contract = campaign_contract()
         contract["suite"]["subject"]["provider"] = "anthropic"
         project = MODULE.project_scaffold(contract, "project-one", Path("/data"), "/private/.env", {})
         self.assertEqual(project["containers"].get("provider-anthropic"), {
             "worker": "package://provider-anthropic", "version": "latest", "env_file": ["/private/.env"],
+            "environment": {"III_TELEMETRY_ENABLED": "false"},
         })
 
     def test_visual_worker_groups_include_canvas_only_for_their_shards(self):
@@ -289,7 +309,8 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         ])
         # The stack the execution assembles once carries Canvas for the suite.
         shared = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
-        self.assertEqual(shared["containers"]["canvas"], {"worker": "package://canvas", "version": "latest"})
+        self.assertEqual(shared["containers"]["canvas"], {"worker": "package://canvas", "version": "latest",
+                                                          "environment": {"III_TELEMETRY_ENABLED": "false"}})
         ordinary = MODULE.project_scaffold(
             contract, "project-one", Path("/data"), None, {}, group_id="daily-core",
         )
@@ -381,6 +402,7 @@ class ReleaseControlCampaignTest(unittest.TestCase):
             "directory": {"worker": "package://api.workers.iii.dev/iii-directory", "version": "0.3.1"},
             "state": {"worker": "package://state", "version": "0.22.8", "env_file": ["/prepare/.env"]},
             "llm-router": {"worker": "package://llm-router"},
+            "db": {"worker": "package://api.workers.iii.dev/database", "version": "0.5.20"},
         }}
         contract = campaign_contract()
         contract["runtime"].update(compose=assembled, lock=lock_of({"harness": "1.9.3", "state": "0.22.8"}))
@@ -409,10 +431,28 @@ class ReleaseControlCampaignTest(unittest.TestCase):
         runner = project["containers"]["e2e"]
         self.assertEqual(runner["config_name"], "e2e-group-harness-e2e")
         self.assertEqual(runner["config_override"]["data_dir"], str(root / "native"))
-        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr"})
+        self.assertEqual(runner["environment"], {"HARNESS_E2E_LANE": "local-pr", "III_TELEMETRY_ENABLED": "false"})
         self.assertEqual(project["containers"]["directory"]["config_override"]["agents_folder"],
                          str(root / "project/agents"))
+        # iii 0.24.3+ serves the package's empty default as the live value:
+        # the runner's `primary` database is declared, not left to the worker.
+        self.assertEqual(project["containers"]["db"]["config_override"],
+                         {"databases": {"primary": {"url": "sqlite:./data/iii.db"}}})
         self.assertEqual({tuple(c["env_file"]) for c in project["containers"].values()}, {(str(root / ".env"),)})
+
+    def test_a_template_database_keeps_its_databases_and_gains_primary(self):
+        template = {"containers": {
+            "harness": {"worker": "package://harness"},
+            "database": {"worker": "package://database", "config_override": {
+                "databases": {"app": {"url": "sqlite:./app.db"}, "primary": {"url": "sqlite:./mine.db"}},
+            }},
+            "other-db": {"worker": "package://database"},
+        }}
+        project = MODULE.project_scaffold(campaign_contract(), "project-one", Path("/data"), None, {}, template)
+        self.assertEqual(project["containers"]["database"]["config_override"]["databases"],
+                         {"app": {"url": "sqlite:./app.db"}, "primary": {"url": "sqlite:./mine.db"}})
+        self.assertEqual(project["containers"]["other-db"]["config_override"]["databases"],
+                         {"primary": {"url": "sqlite:./data/iii.db"}})
 
     def test_pinned_downloads_preserve_template_profiles_and_fail_on_real_errors(self):
         source = RUNNER_SCRIPT.read_text()
@@ -535,6 +575,130 @@ project_trigger() {
         # And written after a template scaffold, so it replaces the placeholder.
         self.assertLess(runner.index("project init"), runner.index(': >"$env_file"'))
         self.assertNotIn("$artifact_dir/.env", runner)
+        # The runner learns their names, to redact their values in what it writes.
+        self.assertLess(runner.index("credentials-env"), runner.index("harness-e2e.HARNESS_E2E_CREDENTIALS=$credential_names"))
+
+    def test_a_subscription_provider_signs_in_with_the_access_token_alone(self):
+        now = 1_800_000_000
+        token = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(json.dumps(
+            {"exp": now + 864_000, MODULE.CODEX_AUTH_CLAIM: {"chatgpt_account_id": "acct-claim"}}
+        ).encode()).decode().rstrip("=") + ".signature"
+        contract = campaign_contract()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "login"
+            contract["suite"]["subject"]["provider"] = "openai-codex"
+            assignment, evidence = MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token}, root, now)
+            folder = root / "openai-codex"
+            self.assertEqual(assignment, f"provider-openai-codex.CODEX_HOME={folder}")
+            self.assertEqual(json.loads((folder / "auth.json").read_text()),
+                             {"auth_mode": "chatgpt", "tokens": {"access_token": token, "account_id": "acct-claim"}})
+            self.assertEqual((folder / "auth.json").stat().st_mode & 0o777, 0o600)
+            self.assertEqual(folder.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(evidence, {"provider": "openai-codex", "source": "env",
+                                        "expires_at": "2027-01-25T08:00:00+00:00"})
+            # The account the token was pasted with wins over its claim.
+            MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1"}, root, now)
+            self.assertEqual(json.loads((folder / "auth.json").read_text())["tokens"]["account_id"], "acct-1")
+
+            contract["suite"]["subject"]["provider"] = "claude-code"
+            environ = {"CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-access", "CLAUDE_CODE_EXPIRES_AT": str((now + 3600) * 1000)}
+            # An hour is less than the group may run: said, and it still runs.
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                assignment, evidence = MODULE.subscription_login(contract, environ, root, now)
+            self.assertEqual(said.getvalue(),
+                             "[WARN] CLAUDE_CODE_ACCESS_TOKEN expires at 2027-01-15T09:00:00+00:00, before the group's "
+                             "deadline; provider-claude-code may be signed out before the group ends\n")
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                MODULE.subscription_login(contract, {**environ, "HARNESS_E2E_RUN_TIMEOUT_SECONDS": "600"}, root, now)
+            self.assertEqual(said.getvalue(), "")
+            folder = root / "claude-code"
+            self.assertEqual(assignment, f"provider-claude-code.CLAUDE_CONFIG_DIR={folder}")
+            self.assertEqual(json.loads((folder / ".credentials.json").read_text()),
+                             {"claudeAiOauth": {"accessToken": "sk-ant-oat01-access", "expiresAt": (now + 3600) * 1000}})
+            self.assertEqual((folder / ".credentials.json").stat().st_mode & 0o777, 0o600)
+            self.assertNotIn("sk-ant", json.dumps(evidence))
+
+            # A provider that takes a key has no login; a subscription one
+            # without its token starts signed out, said out loud.
+            contract["suite"]["subject"]["provider"] = "deepseek"
+            self.assertIsNone(MODULE.subscription_login(contract, {}, root, now))
+            # On GitHub the group job's secrets reach the credentials file by
+            # the catalog's names: the access token alone is a credential,
+            # its account no secret, and nothing else a login holds.
+            self.assertEqual(
+                MODULE.catalog_credentials({"CODEX_ACCESS_TOKEN": token, "CODEX_ACCOUNT_ID": "acct-1",
+                                            "CODEX_REFRESH_TOKEN": "never", "CODEX_ID_TOKEN": "never"}),
+                {"CODEX_ACCESS_TOKEN": token})
+            contract["suite"]["subject"]["provider"] = "claude-code"
+            with unittest.mock.patch("sys.stderr", new_callable=io.StringIO) as said:
+                self.assertIsNone(MODULE.subscription_login(contract, {"CODEX_ACCESS_TOKEN": token}, root, now))
+            self.assertEqual(said.getvalue(),
+                             "[WARN] CLAUDE_CODE_ACCESS_TOKEN is not set; provider-claude-code starts without a credential\n")
+
+    def test_the_launcher_fails_a_dead_login_and_keeps_every_token_out_of_the_evidence(self):
+        runner = RUNNER_SCRIPT.read_text()
+        env_block = ': >"$env_file"' + runner.split(': >"$env_file"', 1)[1].split("\n\n", 1)[0] + "\n"
+        marker = "# A subscription provider (openai-codex"
+        login_block = marker + runner.split(marker, 1)[1].split("\nfi\n", 1)[0] + "\nfi\n"
+        shell = """set -Eeuo pipefail
+contract_tool=$1 contract_path=$2 run_root=$3 artifact_dir=$4 env_file=$3/.env
+assemble_only=""
+project_args=()
+failure_phase=earlier
+log() { printf '%s\\n' "$*" >&2; }
+fail() { printf '[FAIL] %s\\n' "$1" >&2; return 1; }
+trap 'printf "phase=%s\\n" "$failure_phase"' EXIT
+""" + env_block + login_block + 'printf "%s\\n" "${project_args[@]}"\n'
+
+        def launch(directory: Path, provider: str, env: dict[str, str]):
+            contract = campaign_contract()
+            contract["suite"]["subject"]["provider"] = provider
+            (directory / "contract.json").write_text(json.dumps(contract))
+            (directory / "run").mkdir()
+            (directory / "artifacts/stack").mkdir(parents=True)
+            clean = {name: value for name, value in os.environ.items()
+                     if not name.startswith(("CODEX_", "CLAUDE_CODE_", "DEEPSEEK_", "ZAI_", "TYPESAFE_"))}
+            return subprocess.run(
+                ["bash", "-c", shell, "launcher", str(SCRIPT), str(directory / "contract.json"),
+                 str(directory / "run"), str(directory / "artifacts")],
+                env={**clean, **env}, capture_output=True, text=True, check=False,
+            )
+
+        expired = "eyJhbGciOiJub25lIn0." + base64.urlsafe_b64encode(
+            json.dumps({"exp": 1_000}).encode()).decode().rstrip("=") + ".signature"
+        with tempfile.TemporaryDirectory() as directory:
+            result = launch(Path(directory), "openai-codex", {"CODEX_ACCESS_TOKEN": expired})
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("[FAIL] CODEX_ACCESS_TOKEN expired before the group started", result.stderr)
+            self.assertTrue(result.stdout.endswith("phase=credentials\n"), result.stdout)
+            self.assertFalse((Path(directory) / "run/login").exists())
+
+        with tempfile.TemporaryDirectory() as directory:
+            expires_at = str(int((time.time() + 7200) * 1000))
+            result = launch(Path(directory), "claude-code", {
+                # As run_in_image.sh names the --env-file's variables; the
+                # expiry, no secret, comes by name.
+                "HARNESS_E2E_CREDENTIALS": "CLAUDE_CODE_ACCESS_TOKEN ZAI_API_KEY",
+                "CLAUDE_CODE_ACCESS_TOKEN": "sk-ant-oat01-group-access",
+                "CLAUDE_CODE_EXPIRES_AT": expires_at,
+                "ZAI_API_KEY": "zai-key", "DEEPSEEK_API_KEY": "deepseek-key",
+            })
+            self.assertEqual(result.returncode, 0, result.stderr)
+            login = Path(directory) / "run/login/claude-code"
+            self.assertEqual(result.stdout.splitlines(),
+                             ["--environment", f"provider-claude-code.CLAUDE_CONFIG_DIR={login}", "phase=earlier"])
+            self.assertEqual(json.loads((login / ".credentials.json").read_text())["claudeAiOauth"]["accessToken"],
+                             "sk-ant-oat01-group-access")
+            # The stack's env file carries it, as every credential the group
+            # received, for the runner to redact by value.
+            self.assertEqual((Path(directory) / "run/.env").read_text(),
+                             "CLAUDE_CODE_ACCESS_TOKEN=sk-ant-oat01-group-access\n"
+                             "DEEPSEEK_API_KEY=deepseek-key\nZAI_API_KEY=zai-key\n")
+            evidence = Path(directory) / "artifacts/stack/credentials.json"
+            self.assertEqual(json.loads(evidence.read_text())["source"], "env")
+            for path in (Path(directory) / "artifacts").rglob("*"):
+                if path.is_file():
+                    self.assertNotIn("group-access", path.read_text())
 
     def test_common_runner_keeps_grading_files_outside_the_subject_project(self):
         runner = RUNNER_SCRIPT.read_text()
@@ -870,6 +1034,90 @@ fail() {
                 self.assertEqual(harness["config_override"], expected)
                 self.assertEqual(harness["config_name"], "project-one-harness")
 
+    def pinned_contract(self):
+        """A contract whose stack built harness from a commit: the path://
+        worker preparation declared, and one dependency held beside it."""
+        contract = campaign_contract()
+        built = "/checkout/target/harness-e2e-contract/workers/app"
+        contract["runtime"]["compose"] = {"containers": {
+            "app": {"worker": f"path://{built}", "scripts": {"run": f"exec {built}/bin/harness"},
+                    "working_dir": ".", "config_override": {"max_depth": 3, "mode": "loop"},
+                    "start_after": ["llm-router"]},
+            "llm-router": {"worker": "package://llm-router", "version": "1.4.27"},
+            "harness-e2e": {"worker": "package://harness-e2e", "version": "0.15.1"},
+        }}
+        contract["runtime"]["lock"] = lock_of({"llm-router": "1.4.27", "harness-e2e": "0.15.1"})
+        contract["runtime"]["commits"] = {"app": {
+            "worker": "harness", "repository": "iii-hq/workers", "path": "harness",
+            "commit": "3f2a9c1" + "d" * 33, "dependencies": ["llm-router"],
+            "config": {"max_depth": 3, "mode": "loop"}, "env": {"RUST_LOG": "info"}}}
+        return contract, built
+
+    def test_a_worker_built_from_a_commit_is_still_the_package_it_was_built_from(self):
+        contract, built = self.pinned_contract()
+        contract["suite"]["groups"][0]["scenarios"] = ["depth_ladder"]
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
+        app = project["containers"]["app"]
+        self.assertEqual(app["worker"], f"path://{built}")
+        # Harness's limits reach it over its own default config.
+        self.assertEqual(app["config_override"], {"max_depth": 6, "mode": "loop"})
+        self.assertEqual(app["config_name"], "project-one-harness")
+        self.assertNotIn("harness", project["containers"])
+
+    def test_a_template_runs_the_build_the_stack_pinned_with_its_held_dependencies(self):
+        contract, built = self.pinned_contract()
+        template = {"containers": {
+            "subject": {"worker": "package://harness", "version": "1.8.17", "start_after": ["console"],
+                        "config_name": "subject", "config_override": {"mode": "chat"},
+                        "environment": {"RUST_LOG": "warn"}, "scripts": {"pre_run": "true"}},
+            "router": {"worker": "package://llm-router", "version": "1.4.0"},
+            "console": {"worker": "package://ade"},
+        }}
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        containers = project["containers"]
+        # Only where it comes from and how it starts change; the template's
+        # role keeps its own, over the build's defaults.
+        self.assertEqual(containers["subject"], {
+            "worker": f"path://{built}",
+            "scripts": {"pre_run": "true", "run": f"exec {built}/bin/harness"},
+            "working_dir": ".",
+            "start_after": ["console"],
+            "config_name": "subject",
+            "config_override": {"max_depth": 3, "mode": "chat"},
+            "environment": {"RUST_LOG": "warn", "III_TELEMETRY_ENABLED": "false"},
+        })
+        # The dependency the template declares runs what the execution locked.
+        self.assertEqual(containers["router"]["version"], "1.4.27")
+        self.assertNotIn("llm-router", containers)
+        # Without it, the held dependency is declared as the stack declared it.
+        template["containers"].pop("router")
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {}, template)
+        self.assertEqual(project["containers"]["llm-router"]["version"], "1.4.27")
+
+    def test_a_held_database_gets_the_runners_database_merged_once(self):
+        contract, _ = self.pinned_contract()
+        contract["runtime"]["compose"]["containers"]["database"] = {
+            "worker": "package://database", "version": "0.5.20",
+            "config_override": {"databases": {"other": {"url": "sqlite:./other.db"}}}}
+        contract["runtime"]["commits"]["app"]["dependencies"].append("database")
+        project = MODULE.project_scaffold(contract, "project-one", Path("/data"), None, {})
+        databases = [container for container in project["containers"].values()
+                     if container["worker"] == "package://database"]
+        self.assertEqual(len(databases), 1)
+        self.assertEqual(databases[0]["config_override"]["databases"], {
+            "other": {"url": "sqlite:./other.db"}, "primary": {"url": MODULE.DATABASE_PRIMARY_URL}})
+
+    def test_the_run_names_a_worker_built_from_a_commit_by_its_commit(self):
+        contract, _ = self.pinned_contract()
+        contract["suite"]["groups"][0]["scenarios"] = ["direct_answer"]
+        request = MODULE.materialize_request(
+            contract, catalog(), group_id="daily-core",
+            installed=MODULE.built_versions({"harness": "1.8.8-rc.3", "state": "0.22.17"}, contract),
+        )
+        target = request["run_contract"]["target"]
+        self.assertEqual(target["version"], "@3f2a9c1")
+        self.assertEqual(target["stack"]["stack_versions"], {"harness": "@3f2a9c1", "state": "0.22.17"})
+
     def test_compose_evidence_binds_the_declaration_yaml_namespace_and_lifecycle(self):
         contract = campaign_contract()
         expected = {"harness": "1.9.0", "harness-e2e": "0.6.0-experimental"}
@@ -1018,6 +1266,170 @@ fail() {
             manifest = MODULE.package_bundle(artifacts, campaign_contract(), {})
             self.assertEqual([entry["path"] for entry in manifest["files"]], ["failure.json"])
 
+    def test_a_group_forwards_exactly_the_credentials_it_received_into_the_stack(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            contract = campaign_contract()
+            contract["suite"]["subject"]["provider"] = "anthropic"
+            contract_path = root / "contract.json"
+            contract_path.write_text(json.dumps(contract))
+            env_file = root / ".env"
+            environment = {
+                "PATH": os.environ["PATH"],
+                # What run_in_image.sh names from its --env-file.
+                "HARNESS_E2E_CREDENTIALS": "OPENAI_API_KEY ANTHROPIC_API_KEY lower_case",
+                "OPENAI_API_KEY": "sk-openai-0123456789",
+                "ANTHROPIC_API_KEY": "",
+                # Always taken from the environment when set.
+                "DEEPSEEK_API_KEY": "sk-deepseek-0123456789",
+                # Never a credential: not named, whatever it looks like.
+                "GITHUB_TOKEN": "ghs_token_never_forwarded",
+                "XAI_API_KEY": "sk-xai-not-received",
+                "lower_case": "not-a-name",
+            }
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-env", "--contract", str(contract_path), "--output", str(env_file)],
+                env=environment, capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(env_file.read_text(),
+                             "DEEPSEEK_API_KEY=sk-deepseek-0123456789\nOPENAI_API_KEY=sk-openai-0123456789\n")
+            self.assertEqual(env_file.stat().st_mode & 0o777, 0o600)
+            # The model's provider without its key: said, and the group runs.
+            self.assertIn("[WARN] ANTHROPIC_API_KEY is not set; provider-anthropic starts without a credential",
+                          result.stderr)
+            self.assertNotIn("sk-", result.stdout + result.stderr)
+            contract["suite"]["subject"]["provider"] = "openai"
+            contract_path.write_text(json.dumps(contract))
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-env", "--contract", str(contract_path), "--output", str(env_file)],
+                env=environment, capture_output=True, text=True, check=True,
+            )
+            self.assertNotIn("[WARN]", result.stderr)
+
+    def test_github_forwards_only_the_catalogs_credentials_among_its_secrets(self):
+        # The step's environment: the catalog's secrets it names, and
+        # whatever else a runner sets.
+        secrets = {
+            "DEEPSEEK_API_KEY": "sk-deepseek-0123456789",
+            "OPENAI_API_KEY": "sk-openai-0123456789",
+            "ZAI_API_KEY": "",
+            # Other secrets and variables: never forwarded, even one that
+            # looks like a provider key.
+            "CHOCOLATEY_API_KEY": "choco-never-forwarded",
+            "III_CI_APP_PRIVATE_KEY": "-----BEGIN KEY-----\nnever\n-----END KEY-----",
+            "NPM_TOKEN": "npm-never-forwarded",
+            "GITHUB_TOKEN": "ghs-never-forwarded",
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "provider-credentials.env"
+            output.write_text("STALE=never\n")
+            output.chmod(0o644)
+            result = subprocess.run(
+                ["python3", str(SCRIPT), "credentials-file", "--output", str(output)],
+                env={"PATH": os.environ["PATH"], **secrets},
+                capture_output=True, text=True, check=True,
+            )
+            self.assertEqual(output.read_text(),
+                             "DEEPSEEK_API_KEY=sk-deepseek-0123456789\nOPENAI_API_KEY=sk-openai-0123456789\n")
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(result.stdout, "provider credentials: DEEPSEEK_API_KEY, OPENAI_API_KEY\n")
+            # The same file is what packaging redacts.
+            self.assertEqual(MODULE.received_credentials({}, output),
+                             {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": "sk-openai-0123456789"})
+        # Every name the catalog knows is an environment variable.
+        providers, known = MODULE.credential_catalog()
+        self.assertTrue(all(MODULE.CREDENTIAL_NAME.fullmatch(name) for name in known))
+        self.assertEqual(providers["openai"], "OPENAI_API_KEY")
+
+    def test_package_redacts_the_launchers_logs_and_hashes_what_is_kept(self):
+        credentials = {"DEEPSEEK_API_KEY": "sk-deepseek-0123456789", "OPENAI_API_KEY": 'sk-"openai"-0123456789',
+                       "SHORT_KEY": "abc"}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs/engine.log").write_text("key=sk-deepseek-0123456789 and again sk-deepseek-0123456789\n")
+            # As JSON escapes it, in a log the launcher captured.
+            (root / "logs/compose.log").write_text(json.dumps({"env": 'OPENAI_API_KEY=sk-"openai"-0123456789'}))
+            (root / "results.json").write_text('{"transcript": "abc"}\n')
+            manifest = MODULE.package_bundle(root, campaign_contract(), {}, credentials)
+            self.assertEqual(manifest["redaction"], {
+                "credentials": {"DEEPSEEK_API_KEY": 2, "OPENAI_API_KEY": 1},
+                "files": ["logs/compose.log", "logs/engine.log"],
+                "too_short": ["SHORT_KEY"],
+            })
+            self.assertEqual((root / "logs/engine.log").read_text(),
+                             "key=[redacted:DEEPSEEK_API_KEY] and again [redacted:DEEPSEEK_API_KEY]\n")
+            self.assertEqual(json.loads((root / "logs/compose.log").read_text()),
+                             {"env": "OPENAI_API_KEY=[redacted:OPENAI_API_KEY]"})
+            # The digests are of the redacted bytes, the ones uploaded.
+            for entry in manifest["files"]:
+                payload = (root / entry["path"]).read_bytes()
+                self.assertEqual(entry["sha256"], f"sha256:{hashlib.sha256(payload).hexdigest()}")
+                self.assertNotIn(b"sk-", payload)
+            self.assertNotIn("sk-", json.dumps(manifest))
+
+    def test_package_refuses_a_credential_in_a_file_bound_by_digests_and_rewrites_nothing(self):
+        credentials = {"OPENAI_API_KEY": "sk-openai-0123456789"}
+        for relative in ["results.json", "native/0123/evidence/run/attempt/transcript.json", "stack/status.json",
+                         "groups/case-a/logs/engine.log"]:
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "logs").mkdir()
+                (root / "logs/engine.log").write_text("sk-openai-0123456789\n")
+                bound = root / relative
+                bound.parent.mkdir(parents=True, exist_ok=True)
+                bound.write_text('{"output": "sk-openai-0123456789"}\n')
+                with self.assertRaises(ValueError) as refused:
+                    MODULE.package_bundle(root, campaign_contract(), {}, credentials)
+                self.assertIn(f"{relative} (OPENAI_API_KEY)", str(refused.exception))
+                self.assertNotIn("sk-openai", str(refused.exception))
+                # Nothing was rewritten: the tree is not uploaded at all.
+                self.assertEqual(bound.read_text(), '{"output": "sk-openai-0123456789"}\n')
+                self.assertEqual((root / "logs/engine.log").read_text(), "sk-openai-0123456789\n")
+        # Without credentials nothing changes and the manifest says so.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "results.json").write_text("sk-openai-0123456789\n")
+            untouched = MODULE.package_bundle(root, campaign_contract(), {})
+            self.assertEqual(untouched["redaction"], {"credentials": {}, "files": [], "too_short": []})
+
+    def test_the_package_command_checks_what_its_file_and_environment_name(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "bundle"
+            (root / "logs").mkdir(parents=True)
+            (root / "stack-lock.json").write_text(json.dumps(campaign_contract()))
+            (root / "logs/engine.log").write_text("sk-file-0123456789 sk-env-0123456789 sk-unnamed-0123456789\n")
+            credentials = Path(directory) / "provider-credentials.env"
+            credentials.write_text("OPENAI_API_KEY=sk-file-0123456789\nSHORT_KEY=abc\n")
+            command = ["python3", str(SCRIPT), "package", "--root", str(root), "--contract",
+                       str(root / "stack-lock.json"), "--workflow", "{}", "--credentials", str(credentials),
+                       "--output", str(root / "bundle-manifest.json")]
+            environment = {"PATH": os.environ["PATH"], "HARNESS_E2E_CREDENTIALS": "XAI_API_KEY",
+                           "XAI_API_KEY": "sk-env-0123456789", "UNNAMED_API_KEY": "sk-unnamed-0123456789"}
+            result = subprocess.run(command, env=environment, check=True, capture_output=True, text=True)
+            self.assertEqual((root / "logs/engine.log").read_text(),
+                             "[redacted:OPENAI_API_KEY] [redacted:XAI_API_KEY] sk-unnamed-0123456789\n")
+            manifest = json.loads((root / "bundle-manifest.json").read_text())
+            self.assertEqual(manifest["redaction"]["credentials"], {"OPENAI_API_KEY": 1, "XAI_API_KEY": 1})
+            # A value too short to look for is said where the job shows it.
+            self.assertIn("::warning::SHORT_KEY is shorter than 8 characters", result.stdout)
+            # In a bound file it fails loudly, naming the file and the name.
+            (root / "results.json").write_text('{"x": "sk-env-0123456789"}\n')
+            refused = subprocess.run(command, env=environment, capture_output=True, text=True)
+            self.assertEqual(refused.returncode, 2)
+            self.assertIn("results.json (XAI_API_KEY)", refused.stdout)
+            self.assertNotIn("sk-env", refused.stdout + refused.stderr)
+            # An unreadable file is a refusal too, not a traceback.
+            (root / "results.json").chmod(0)
+            try:
+                if os.access(root / "results.json", os.R_OK):
+                    self.skipTest("running as a user who reads anything")
+                unreadable = subprocess.run(command, env=environment, capture_output=True, text=True)
+                self.assertEqual(unreadable.returncode, 2)
+                self.assertIn("error: [Errno 13]", unreadable.stdout)
+            finally:
+                (root / "results.json").chmod(0o644)
+
     def test_package_rejects_symlinks(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1040,7 +1452,8 @@ fail() {
         start = block.index('if [[ -n "$project_template" ]]')
         template_branch = block[start:block.index("else", start)]
         # Only the runner, at the version the scaffold gave it; no template role.
-        self.assertIn('add_args+=("worker=$(python3 "$contract_tool" roots --compose "$compose_file" | grep \'^harness-e2e@\')")', template_branch)
+        self.assertIn('roots --compose "$compose_file" | grep \'^harness-e2e@\'', template_branch)
+        self.assertIn('add_args+=("worker=$runner_root")', template_branch)
         # One add assembles the project; preparation's second asks only for
         # what no graph brought.
         self.assertEqual(block.count("compose_trigger compose::add"), 2)
@@ -1088,8 +1501,14 @@ compose_trigger() {
             # Preparation assembles the stack itself, never a template project.
             (False, "1", "linkly-agentic", False, False, "false", ["compose::add file="]),
             (True, "", "linkly-agentic", False, False, "false", ["compose::add file=", "compose::up --json"]),
+            # A template whose runner is built from a commit has nothing to ask for.
+            (True, "", "linkly-agentic", False, False, "false", ["compose::up --json"], "runner"),
+            # What a worker built from a commit depends on is held, not asked.
+            (False, "1", "", False, False, "false", ["compose::add file="], "harness"),
+            # Unless nothing else is left: then at the versions it holds.
+            (False, "1", "", False, False, "false", ["compose::add file="], "everything"),
         )
-        for locked, assemble_only, template, profile, brought, frozen, calls in cases:
+        for locked, assemble_only, template, profile, brought, frozen, calls, *pinned in cases:
             with self.subTest(locked=locked, assemble_only=assemble_only, template=template,
                               profile=profile, brought=brought), \
                     tempfile.TemporaryDirectory() as directory:
@@ -1098,12 +1517,24 @@ compose_trigger() {
                 project = "project" if template and not assemble_only else "stack"
                 (root / "stack").mkdir()
                 (root / project).mkdir(exist_ok=True)
-                (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(compose))
+                declared = json.loads(json.dumps(compose))
+                commits = None
+                if pinned == ["runner"]:
+                    declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
+                    commits = {"harness-e2e": {"worker": "harness-e2e", "dependencies": []}}
+                elif pinned in (["harness"], ["everything"]):
+                    declared["containers"]["harness"] = {"worker": "path:///built/harness"}
+                    declared["containers"]["llm-router"] = {"worker": "package://llm-router", "version": "1.4.27"}
+                    commits = {"harness": {"worker": "harness", "dependencies": ["llm-router"]}}
+                    if pinned == ["everything"]:
+                        declared["containers"]["harness-e2e"] = {"worker": "path:///built/harness-e2e"}
+                        commits["harness-e2e"] = {"worker": "harness-e2e", "dependencies": []}
+                (root / project / "worker-compose.yaml").write_text(yaml.safe_dump(declared))
                 (root / "brings.yaml").write_text(
                     yaml.safe_dump({"containers": {"iii-directory": directory_from_graph}}).split("\n", 1)[1]
                 )
                 (root / "contract.json").write_text(json.dumps({
-                    "runtime": {"lock": lock_of({}) if locked else None},
+                    "runtime": {"lock": lock_of({}) if locked else None, "commits": commits},
                     "suite": {"subject": {"provider": "deepseek"}},
                 }))
                 variables = (f"assemble_only={assemble_only!r}\nproject_template={template!r}\n"
@@ -1125,7 +1556,16 @@ compose_trigger() {
                     self.assertIn('"frozen":true', made[-1])
                 if assemble_only:
                     self.assertFalse(any("compose::up" in call for call in made), "preparation stops at the lock")
-                if project == "project":
+                if pinned == ["runner"]:
+                    self.assertEqual(json.loads((root / "stack/add.json").read_text())["status"], "skipped")
+                elif pinned == ["everything"]:
+                    self.assertTrue(made[0].endswith("worker=llm-router@1.4.27"), made[0])
+                    self.assertNotIn("worker=provider-deepseek", made[0])
+                elif pinned == ["harness"]:
+                    self.assertIn("worker=harness-e2e@0.12.3", made[0])
+                    self.assertNotIn("worker=harness@", made[0])
+                    self.assertNotIn("worker=llm-router", made[0])
+                elif project == "project":
                     self.assertIn("worker=harness-e2e@0.12.3", made[0])
                     self.assertNotIn("worker=harness@", made[0])
                 elif not locked:

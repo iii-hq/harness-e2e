@@ -77,12 +77,11 @@ jobs:
           [[ "$EXECUTION_ID" =~ ^[0-9a-f-]{36}$ ]]
 
       # Every phase runs in the executor image (Dockerfile) with this
-      # checkout's scripts; see scripts/executor.sh. This half reads the
-      # dispatch, resolves the iii release and the template, and has the
-      # stack's own runner, pinned in the stack, materialize the suite. The
-      # reports name that runner by the revision it reports.
-      - name: Materialize the suite with the stack's runner
-        id: stack_runner
+      # checkout's scripts; see scripts/executor.sh. This one reads the
+      # dispatch and resolves the iii release, the template and every
+      # `commit:` the stack pins, to its full commit.
+      - name: Resolve the dispatch
+        id: resolved
         env:
           DISPATCH_SUITE: ${{ inputs.suite }}
           DISPATCH_STACK: ${{ inputs.stack }}
@@ -90,6 +89,40 @@ jobs:
           DISPATCH_PROFILE: ${{ inputs.profile }}
           DISPATCH_EXECUTION_ID: ${{ inputs.execution_id }}
           GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          scripts/run_in_image.sh prepare resolve
+          # The cache entry of the commits the stack pins, when it pins any.
+          printf 'builds=%s\n' "$(jq -r '.builds // empty' target/harness-e2e-contract/execution.json)" >>"$GITHUB_OUTPUT"
+
+      # The workers built from those commits, cached by the commits alone:
+      # restored, built on their own (the commits' code, with no token and
+      # nothing else running) and saved before the stack's runner runs, so
+      # nothing but the pinned commits' own builds ever writes an entry.
+      - name: Restore the workers built from those commits
+        id: builds
+        if: steps.resolved.outputs.builds != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/worker-builds
+          key: ${{ steps.resolved.outputs.builds }}
+
+      - name: Build the workers the stack pins to a commit
+        if: steps.resolved.outputs.builds != ''
+        run: scripts/run_in_image.sh prepare build
+
+      - name: Save the workers built from those commits
+        if: steps.resolved.outputs.builds != '' && steps.builds.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: target/worker-builds
+          key: ${{ steps.resolved.outputs.builds }}
+
+      # This half has the stack's own runner, pinned in the stack,
+      # materialize the suite. The reports name that runner by the revision
+      # it reports.
+      - name: Materialize the suite with the stack's runner
+        id: stack_runner
         run: |
           set -euo pipefail
           scripts/run_in_image.sh prepare materialize
@@ -116,6 +149,25 @@ jobs:
             --cli-version "$(jq -r '.iii' target/harness-e2e-contract/execution.json)"
           echo "posted=true" >>"$GITHUB_OUTPUT"
 
+      # The provider credentials among this job's secrets: the names
+      # config/provider-credentials.json lists, each named here (never every
+      # secret as JSON, which holds the run for approval and would hand this
+      # step all the others), in a file only this job reads (mode 600,
+      # emptied with RUNNER_TEMP). The phase gets it with --env-file and
+      # packaging redacts its values out of the evidence.
+      - name: Write the provider credentials
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLAMACPP_API_KEY: ${{ secrets.LLAMACPP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+        run: python3 scripts/exact_stack_campaign.py credentials-file --output "$RUNNER_TEMP/provider-credentials.env"
+
       # The other half writes one contract per campaign and assembles the
       # stack once, with the credentials the groups get and one more try:
       # compose::add expands every declared worker into its graph and writes
@@ -125,12 +177,9 @@ jobs:
         id: contracts
         env:
           RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
         run: |
           set -euo pipefail
-          scripts/run_in_image.sh prepare assemble
+          scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare assemble
           summary=target/harness-e2e-contract/contracts/resolution.json
           printf 'matrix=%s\n' "$(jq -c '.matrix' "$summary")" >>"$GITHUB_OUTPUT"
 
@@ -142,7 +191,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=prepare")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         id: contract_upload
@@ -153,7 +202,8 @@ jobs:
           if-no-files-found: error
 
       # The assembly ran with provider credentials: its evidence goes through
-      # the same checks a group's does before it is uploaded.
+      # the same checks a group's does, their values redacted, before it is
+      # uploaded.
       - name: Package the stack assembly evidence
         id: assembly_package
         if: always() && steps.contracts.outcome != 'skipped'
@@ -166,6 +216,7 @@ jobs:
               --root "$root" \
               --contract "$root/stack-lock.json" \
               --workflow '{"workflow":"exact-stack-e2e.yml","job":"prepare","step":"assemble"}' \
+              --credentials "$RUNNER_TEMP/provider-credentials.env" \
               --output "$root/bundle-manifest.json"
           done
 
@@ -243,22 +294,40 @@ jobs:
           GITHUB_TOKEN: ${{ steps.fixture_token.outputs.token }}
         run: scripts/run_in_image.sh prepare fixtures
 
+      # As in preparation: the provider credentials among this job's secrets,
+      # in a private file the group gets and its packaging redacts. Here only,
+      # a subscription provider's pasted access token (never a refresh
+      # token), whose account or expiry, no secrets, the group step reads
+      # from variables: absent, that provider starts signed out; see the
+      # README.
+      - name: Write the provider credentials
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          LLAMACPP_API_KEY: ${{ secrets.LLAMACPP_API_KEY }}
+          MOONSHOT_API_KEY: ${{ secrets.MOONSHOT_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
+          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          CLAUDE_CODE_ACCESS_TOKEN: ${{ secrets.CLAUDE_CODE_ACCESS_TOKEN }}
+          CODEX_ACCESS_TOKEN: ${{ secrets.CODEX_ACCESS_TOKEN }}
+        run: python3 scripts/exact_stack_campaign.py credentials-file --output "$RUNNER_TEMP/provider-credentials.env"
+
       # The workers run in the executor image, so the subject's shell and the
       # scenario runner share its tools: Node and pnpm, Go 1.25 for
-      # alertmanager_route_match, Chromium for the browser worker, and the
-      # host's Docker through its socket. On the runner's network: this job
-      # owns the runner, and the Registry fixture publishes the application
-      # it screenshots on the runner's loopback.
+      # alertmanager_route_match, Chromium for the browser worker, and a
+      # Docker daemon of the group's own, in whose network the Registry
+      # fixture publishes the application it screenshots.
       - name: Execute common campaign group
         id: common
         continue-on-error: true
         env:
-          HARNESS_E2E_DOCKER_NETWORK: host
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
-          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
-          TYPESAFE_API_KEY: ${{ secrets.TYPESAFE_API_KEY }}
           HARNESS_E2E_CONTRACT: target/harness-e2e-contract/contracts/${{ matrix.campaign_id }}.json
-        run: scripts/run_in_image.sh group
+          CODEX_ACCOUNT_ID: ${{ vars.CODEX_ACCOUNT_ID }}
+          CLAUDE_CODE_EXPIRES_AT: ${{ vars.CLAUDE_CODE_EXPIRES_AT }}
+        run: scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group
 
       # Cancelled or timed out, the group's executor container may still be
       # running: it goes before anything is reported or packaged, so what is
@@ -270,32 +339,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.group=$GROUP_ID")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
-
-      # Whatever the group did, its runs reach the ledger: from results.json
-      # when the group finished, from the journal checkpoints when it did not,
-      # and as an empty shard saying so when it produced neither.
-      - name: Report this shard's runs
-        if: always() && inputs.execution_id != ''
-        env:
-          EXECUTION_ID: ${{ inputs.execution_id }}
-          RUNNER_REVISION: ${{ needs.prepare.outputs.runner_revision }}
-          RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
-          RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
-        run: |
-          python3 scripts/report_execution.py shard \
-            --execution-id "$EXECUTION_ID" \
-            --artifact-name "e2e-observation-$EXECUTION_KEY-${{ matrix.campaign_id }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}" \
-            --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
-            --campaign-id '${{ matrix.campaign_id }}' \
-            --group-id '${{ matrix.group_id }}' \
-            --outcome '${{ steps.common.outcome }}' \
-            --artifacts target/harness-e2e-exact-stack \
-            --profile-snapshot target/harness-e2e-contract/profile.json \
-            --plan target/harness-e2e-contract/plan.json \
-            --resolution target/harness-e2e-contract/contracts/resolution.json \
-            --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
-            --runner-sha "$RUNNER_REVISION"
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       - name: Package factual group evidence
         id: group_package
@@ -309,6 +353,7 @@ jobs:
             --root target/harness-e2e-exact-stack \
             --contract target/harness-e2e-exact-stack/stack-lock.json \
             --workflow "$WORKFLOW_IDENTITY" \
+            --credentials "$RUNNER_TEMP/provider-credentials.env" \
             --output target/harness-e2e-exact-stack/bundle-manifest.json
 
       - name: Preserve safe group packaging diagnostic
@@ -319,6 +364,37 @@ jobs:
           diagnostic_dir=$(mktemp -d "${RUNNER_TEMP:?}/harness-e2e-package-failure.XXXXXX")
           printf '%s\n' '{"phase":"artifact_packaging","outcome":"infra_failed","error":"Group artifact validation failed; unsafe tree was not uploaded. See workflow logs."}' > "$diagnostic_dir/failure.json"
           printf 'path=%s\n' "$diagnostic_dir" >> "$GITHUB_OUTPUT"
+
+      # Whatever the group did, its runs reach the ledger: from results.json
+      # when the group finished, from the journal checkpoints when it did not,
+      # and as an empty shard saying so when it produced neither. Read from
+      # the tree that is uploaded, after packaging: when packaging refused
+      # the group's (a credential in it, an unsafe file), the shard carries
+      # the outcome and the diagnostic, no run.
+      - name: Report this shard's runs
+        if: always() && inputs.execution_id != ''
+        env:
+          EXECUTION_ID: ${{ inputs.execution_id }}
+          RUNNER_REVISION: ${{ needs.prepare.outputs.runner_revision }}
+          RELEASE_CONTROL_API_URL: ${{ vars.RELEASE_CONTROL_API_URL }}
+          RELEASE_CONTROL_OIDC_AUDIENCE: ${{ vars.RELEASE_CONTROL_OIDC_AUDIENCE || 'release-control-harness-e2e' }}
+          UPLOADED: ${{ steps.group_package.outcome == 'success' && 'target/harness-e2e-exact-stack/' || steps.group_package_failure.outputs.path }}
+        run: |
+          artifacts=()
+          [[ -z "$UPLOADED" ]] || artifacts=(--artifacts "$UPLOADED")
+          python3 scripts/report_execution.py shard \
+            --execution-id "$EXECUTION_ID" \
+            --artifact-name "e2e-observation-$EXECUTION_KEY-${{ matrix.campaign_id }}-${{ matrix.group_id }}-gh-${{ github.run_attempt }}" \
+            --oidc-audience "$RELEASE_CONTROL_OIDC_AUDIENCE" \
+            --campaign-id '${{ matrix.campaign_id }}' \
+            --group-id '${{ matrix.group_id }}' \
+            --outcome '${{ steps.common.outcome }}' \
+            "${artifacts[@]}" \
+            --profile-snapshot target/harness-e2e-contract/profile.json \
+            --plan target/harness-e2e-contract/plan.json \
+            --resolution target/harness-e2e-contract/contracts/resolution.json \
+            --stack-lock-sha256 '${{ steps.contract.outputs.lock_sha256 }}' \
+            --runner-sha "$RUNNER_REVISION"
 
       - name: Upload group observation bundle
         if: always() && (steps.group_package.outcome == 'success' || steps.group_package_failure.outcome == 'success')
@@ -449,7 +525,7 @@ jobs:
         run: |
           containers=$(docker ps -aq --filter "label=harness-e2e.execution=$EXECUTION_KEY" --filter "label=harness-e2e.phase=finalize")
           echo "executor containers left: ${containers:-none}"
-          [[ -z "$containers" ]] || docker rm -f $containers
+          [[ -z "$containers" ]] || docker rm -fv $containers
 
       - name: Report the campaign summary
         if: always() && inputs.execution_id != ''

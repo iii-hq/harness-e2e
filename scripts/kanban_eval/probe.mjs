@@ -24,7 +24,9 @@ const RUBRIC = JSON.parse(await readFile(new URL('./rubric.json', import.meta.ur
 // check, so on a loaded runner its waits need more than the 8s the rest use.
 const STORE_SWITCH_TIMEOUT_MS = 20_000
 
-const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> --output <directory>
+const usage = `Usage: probe.mjs --case <id> --base-url <url> --engine-url <ws-url> [--namespace <ns>] --output <directory>
+
+  --namespace          Namespace the subject's Compose project registers in (default: default)
 
 Environment:
   III_SDK_MODULE       Absolute path to the trusted iii-sdk module
@@ -218,9 +220,11 @@ async function main() {
         ...init,
         signal: AbortSignal.timeout(5_000),
       }),
+      // compose::* and the subject's functions live in its Compose project
+      // namespace; configuration::* is the engine's own, always in default.
       trigger: (functionId, payload = {}) => iii.trigger({
         function_id: functionId,
-        namespace: 'default',
+        namespace: functionId.startsWith('configuration::') ? 'default' : args.namespace ?? 'default',
         payload,
         timeoutMs: 5_000,
       }),
@@ -769,16 +773,24 @@ export const PROBES = {
       const initialConfig = await json(await api('/api/config'))
       const restored = await create(trigger, { title: 'Settings return probe' })
       const { context, page } = await pageFor(browser, baseUrl)
+      const dataDirField = page.getByLabel('Data directory')
+      // The settings form loads its current value from the same API asynchronously
+      // (see foundation_accessible_settings above); filling it before that load lands
+      // races the field and can silently revert to the old value once it does.
+      const settingsFormLoaded = (expected) => eventually(async () => await dataDirField.inputValue() === expected, 'settings form did not load the current directory')
       try {
+        const alternateDir = `./board-probe-${randomUUID()}`
         await page.getByRole('link', { name: /^settings$/i }).click()
-        await page.getByLabel('Data directory').fill(`./board-probe-${randomUUID()}`)
+        await settingsFormLoaded(initialConfig.data_dir)
+        await dataDirField.fill(alternateDir)
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()
         await expectText(boardEmptyFeedback(page), /no tickets|empty/i, STORE_SWITCH_TIMEOUT_MS)
         await eventually(async () => await boardTicketTotal(page, 0).count() === 1, 'selected empty store total is wrong', STORE_SWITCH_TIMEOUT_MS)
         await page.getByRole('link', { name: /^settings$/i }).click()
-        await page.getByLabel('Data directory').fill(initialConfig.data_dir)
+        await settingsFormLoaded(alternateDir)
+        await dataDirField.fill(initialConfig.data_dir)
         await page.getByRole('button', { name: 'Save settings' }).click()
         await expectText(page.getByRole('status').filter({ hasText: /saved/i }), /saved/i)
         await boardNavigation(page).click()

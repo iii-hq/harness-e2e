@@ -139,14 +139,23 @@ class WorkflowBoundaryTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("strategy:\n      fail-fast: false", workflow)
         # Each phase runs in the executor image, which starts the group there.
-        self.assertIn("scripts/run_in_image.sh group", workflow)
-        # Each group job owns its runner, and the Registry fixture publishes
-        # the application it screenshots on the runner's loopback.
+        self.assertIn('scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group', workflow)
+        # A group runs its own Docker daemon, never on the runner's network:
+        # the Registry fixture publishes the application it screenshots in
+        # the group's.
         group = next(step for step in yaml.safe_load(workflow)["jobs"]["groups"]["steps"]
                      if step.get("id") == "common")
-        self.assertEqual(group["env"]["HARNESS_E2E_DOCKER_NETWORK"], "host")
-        self.assertIn("    route_fixtures\n    exec bash scripts/run_exact_stack_group.sh",
-                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
+        # The provider credentials come in a private file, never as secrets
+        # in the step's environment; a subscription login's account and
+        # expiry, no secrets, come from variables.
+        self.assertEqual(sorted(group["env"]), ["CLAUDE_CODE_EXPIRES_AT", "CODEX_ACCOUNT_ID", "HARNESS_E2E_CONTRACT"])
+        self.assertFalse(any("secrets." in str(value) for value in group["env"].values()))
+        self.assertEqual(group["run"], 'scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" group')
+        executor = (ROOT / "scripts/executor.sh").read_text(encoding="utf-8")
+        self.assertIn("  group) group ;;", executor)
+        self.assertIn("bash scripts/run_exact_stack_group.sh &", executor)
+        for path in (ROOT / "scripts/run_in_image.sh", ROOT / "README.md", ROOT / "src/plans/store/docker.rs"):
+            self.assertNotIn("HARNESS_E2E_DOCKER_NETWORK", path.read_text(encoding="utf-8"))
         self.assertIn("scripts/exact_stack_campaign.py", workflow)
         self.assertIn("runs-on: ${{ matrix.runs_on }}", workflow)
         self.assertIn("environment: harness-e2e-trusted", workflow)
@@ -172,7 +181,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
             with self.subTest(job=job):
                 steps = jobs[job]["steps"]
                 runs = [step.get("run", "") for step in steps]
-                removal = next(index for index, run in enumerate(runs) if "docker rm -f" in run)
+                # With the volume of a group's Docker daemon.
+                removal = next(index for index, run in enumerate(runs) if "docker rm -fv" in run)
                 self.assertEqual(steps[removal]["if"], "always()")
                 self.assertIn('--filter "label=harness-e2e.execution=$EXECUTION_KEY"', runs[removal])
                 self.assertIn(f'--filter "label={phase_filter}"', runs[removal])
@@ -187,6 +197,59 @@ class WorkflowBoundaryTests(unittest.TestCase):
         for label in ("harness-e2e.execution=${EXECUTION_KEY:-}", "harness-e2e.phase=$phase",
                       "harness-e2e.group=${HARNESS_E2E_CAMPAIGN_GROUP_ID:-}"):
             self.assertIn(f'--label "{label}"', wrapper)
+
+    def test_provider_credentials_reach_a_phase_and_its_packaging_by_one_private_file(self):
+        workflow = (ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8")
+        jobs = yaml.safe_load(workflow)["jobs"]
+        credentials = '"$RUNNER_TEMP/provider-credentials.env"'
+        catalog = json.loads((ROOT / "config/provider-credentials.json").read_text())
+        secrets = sorted(set(catalog["providers"].values()) | set(catalog["others"]))
+        # A subscription login's access token reaches a group alone, never
+        # the stack's assembly, and never as a refresh token; its account
+        # and expiry, no secrets, come to the group step by name.
+        subscriptions = sorted(catalog["subscriptions"].values())
+        self.assertNotIn("REFRESH_TOKEN", workflow)
+        for name in subscriptions:
+            self.assertEqual(workflow.count(f"secrets.{name} "), 1)
+        for name in ("CODEX_ACCOUNT_ID", "CLAUDE_CODE_EXPIRES_AT"):
+            self.assertEqual(workflow.count(f"vars.{name} "), 1)
+            self.assertNotIn(f"secrets.{name}", workflow)
+        # Never every secret: toJSON(secrets) holds the run for approval
+        # (action_required, no job starts) and hands a step all the others.
+        self.assertNotIn("toJSON(secrets)", workflow)
+        # Each catalog secret is named by the steps that write the file, and
+        # by no other step.
+        self.assertEqual(len(re.findall(r"secrets\.[A-Z_]*API_KEY", workflow)), 2 * len(secrets))
+        for job, phase, package in (("prepare", "Assemble the stack and lock every contract to it",
+                                     "Package the stack assembly evidence"),
+                                    ("groups", "Execute common campaign group", "Package factual group evidence")):
+            with self.subTest(job=job):
+                steps = jobs[job]["steps"]
+                names = [step.get("name") for step in steps]
+                write = names.index("Write the provider credentials")
+                self.assertLess(write, names.index(phase))
+                self.assertLess(names.index(phase), names.index(package))
+                named = secrets + (subscriptions if job == "groups" else [])
+                self.assertEqual(steps[write]["env"], {name: "${{ secrets." + name + " }}" for name in named})
+                self.assertEqual(
+                    steps[write]["run"],
+                    "python3 scripts/exact_stack_campaign.py credentials-file --output " + credentials)
+                self.assertIn(f"scripts/run_in_image.sh --env-file {credentials}", steps[names.index(phase)]["run"])
+                self.assertIn(f"--credentials {credentials}", steps[names.index(package)]["run"])
+        # Release Control gets a shard's runs from the tree that is uploaded,
+        # after packaging checked it: the diagnostic alone when it refused.
+        steps = jobs["groups"]["steps"]
+        groups = [step.get("name") for step in steps]
+        report = steps[groups.index("Report this shard's runs")]
+        upload = steps[groups.index("Upload group observation bundle")]
+        self.assertLess(groups.index("Preserve safe group packaging diagnostic"), groups.index("Report this shard's runs"))
+        self.assertLess(groups.index("Report this shard's runs"), groups.index("Upload group observation bundle"))
+        self.assertEqual(report["env"]["UPLOADED"], upload["with"]["path"])
+        self.assertIn('"${artifacts[@]}"', report["run"])
+        self.assertNotIn("--artifacts target/", report["run"])
+        # The finalizer holds no credential: the bundles it lays out were
+        # redacted when their group packaged them.
+        self.assertNotIn("provider-credentials", json.dumps(jobs["finalize"]))
 
     def test_the_campaign_workflow_knows_nothing_about_the_contract(self):
         """Contract fields are read by the scripts, never by the workflow: a
@@ -241,11 +304,14 @@ class WorkflowBoundaryTests(unittest.TestCase):
         """The inputs reach disk as the execution, the requested stack, and
         the plan shape older Console imports and the ledger reports read."""
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
-        step = next(step for step in workflow["jobs"]["prepare"]["steps"]
-                    if step.get("name") == "Materialize the suite with the stack's runner")
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        step = steps["Resolve the dispatch"]
         names = ("suite", "stack", "model", "profile", "execution_id")
         self.assertEqual({name: step["env"][f"DISPATCH_{name.upper()}"] for name in names},
                          {name: "${{ inputs." + name + " }}" for name in names})
+        self.assertIn("scripts/run_in_image.sh prepare resolve", step["run"])
+        # What a commit pin builds runs its code: that step gets no token.
+        self.assertNotIn("env", steps["Materialize the suite with the stack's runner"])
         self.assertIn("python3 scripts/prepare_execution.py dispatch --contract-dir \"$contract_dir\"",
                       (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as directory:
@@ -266,6 +332,45 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertEqual(execution["execution_id"], "b0607faa-096a-4efe-a4a2-a2a9bc06de83")
         self.assertEqual(stack["iii"], "latest")
 
+    def test_workers_built_from_a_commit_are_cached_around_their_build_alone(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
+        names = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
+        # Saved before the stack's runner runs, so nothing but the pinned
+        # commits' own builds ever writes an entry.
+        order = ["Resolve the dispatch", "Restore the workers built from those commits",
+                 "Build the workers the stack pins to a commit", "Save the workers built from those commits",
+                 "Materialize the suite with the stack's runner"]
+        self.assertEqual([name for name in names if name in order], order)
+        steps = {step.get("name"): step for step in workflow["jobs"]["prepare"]["steps"]}
+        restore, build, save = steps[order[1]], steps[order[2]], steps[order[3]]
+        self.assertTrue(restore["uses"].startswith("actions/cache/restore@"))
+        self.assertTrue(save["uses"].startswith("actions/cache/save@"))
+        for step in (restore, save):
+            # Where the executor builds when no cache is mounted.
+            self.assertEqual(step["with"], {"path": "target/worker-builds", "key": "${{ steps.resolved.outputs.builds }}"})
+        self.assertEqual(build["run"], "scripts/run_in_image.sh prepare build")
+        self.assertNotIn("env", build)
+        self.assertEqual(build["if"], "steps.resolved.outputs.builds != ''")
+        self.assertEqual(save["if"], "steps.resolved.outputs.builds != '' && steps.builds.outputs.cache-hit != 'true'")
+        self.assertIn("${HARNESS_E2E_WORKER_BUILDS:-target/worker-builds}",
+                      (ROOT / "scripts/executor.sh").read_text(encoding="utf-8"))
+        # The key is the one resolve names from the pins.
+        script = steps["Resolve the dispatch"]["run"]
+        key = script[script.index("printf 'builds="):]
+        with tempfile.TemporaryDirectory() as directory:
+            contract = pathlib.Path(directory) / "target/harness-e2e-contract"
+            contract.mkdir(parents=True)
+
+            def output(execution):
+                (contract / "execution.json").write_text(json.dumps(execution))
+                (pathlib.Path(directory) / "out").write_text("")
+                subprocess.run(["bash", "-c", "set -euo pipefail\n" + key], cwd=directory, check=True,
+                               env={**os.environ, "GITHUB_OUTPUT": f"{directory}/out"})
+                return (pathlib.Path(directory) / "out").read_text()
+
+            self.assertEqual(output({"builds": "worker-builds-0123"}), "builds=worker-builds-0123\n")
+            self.assertEqual(output({"builds": None}), "builds=\n")
+
     def test_groups_start_the_stack_preparation_assembled_and_locked(self):
         workflow = yaml.safe_load((ROOT / ".github/workflows/exact-stack-e2e.yml").read_text(encoding="utf-8"))
         prepare = [step.get("name") for step in workflow["jobs"]["prepare"]["steps"]]
@@ -277,9 +382,8 @@ class WorkflowBoundaryTests(unittest.TestCase):
         self.assertIn("scripts/run_in_image.sh prepare materialize", steps[order[0]]["run"])
         # Assembled with the credentials the groups get, and tried twice.
         assemble = steps["Assemble the stack and lock every contract to it"]
-        for secret in ("ZAI_API_KEY", "DEEPSEEK_API_KEY", "TYPESAFE_API_KEY"):
-            self.assertEqual(assemble["env"][secret], "${{ secrets." + secret + " }}")
-        self.assertIn("scripts/run_in_image.sh prepare assemble", assemble["run"])
+        self.assertIn('scripts/run_in_image.sh --env-file "$RUNNER_TEMP/provider-credentials.env" prepare assemble',
+                      assemble["run"])
         self.assertIn("for attempt in 1 2; do", (ROOT / "scripts/executor.sh").read_text())
         # Its evidence passes the group packaging checks before upload, and
         # never fails a prepared execution.
@@ -424,6 +528,11 @@ class WorkflowBoundaryTests(unittest.TestCase):
         cut = (ROOT / ".github/workflows/cut-release.yml").read_text(encoding="utf-8")
         self.assertNotIn("cherry-pick", cut)
         self.assertIn("git push origin HEAD:main", cut)
+
+    def test_workflows_that_run_iii_outside_the_image_turn_its_telemetry_off(self):
+        for name in ("release.yml", "canonical-gate.yml"):
+            workflow = yaml.safe_load((ROOT / ".github/workflows" / name).read_text(encoding="utf-8"))
+            self.assertEqual(workflow.get("env", {}).get("III_TELEMETRY_ENABLED"), "false", name)
 
     def test_release_control_is_the_only_operational_campaign_dispatch(self):
         for name in (

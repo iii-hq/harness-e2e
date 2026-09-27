@@ -127,12 +127,18 @@ impl PlanStore {
         )
         .await;
         let (ready, account, message) = match output {
-            Err(_) => (false, None, Some("`gh auth status` did not answer in time; try again.".to_owned())),
+            Err(_) => (
+                false,
+                None,
+                Some("`gh auth status` did not answer in time; try again.".to_owned()),
+            ),
             Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => {
                 (false, None, Some(NOT_INSTALLED.to_owned()))
             }
             Ok(Err(error)) => (false, None, Some(format!("Could not run `gh`: {error}"))),
-            Ok(Ok(output)) if !output.status.success() => (false, None, Some(NOT_SIGNED_IN.to_owned())),
+            Ok(Ok(output)) if !output.status.success() => {
+                (false, None, Some(NOT_SIGNED_IN.to_owned()))
+            }
             Ok(Ok(output)) => {
                 let text = format!(
                     "{}{}",
@@ -174,13 +180,22 @@ impl PlanStore {
             &self
                 .gh(
                     self.github.api_timeout,
-                    &["api", &format!("repos/{repository}"), "--jq", ".default_branch"],
+                    &[
+                        "api",
+                        &format!("repos/{repository}"),
+                        "--jq",
+                        ".default_branch",
+                    ],
                 )
                 .await?,
         )
         .trim()
         .to_owned();
-        let branch = if branch.is_empty() { "main".to_owned() } else { branch };
+        let branch = if branch.is_empty() {
+            "main".to_owned()
+        } else {
+            branch
+        };
         let mut fields = vec![
             format!("ref={branch}"),
             format!("inputs[suite]={}", dispatch_suite(&parameters, master)?),
@@ -191,7 +206,14 @@ impl PlanStore {
             fields.push(format!("inputs[profile]={agent}"));
         }
         let endpoint = format!("repos/{repository}/actions/workflows/{WORKFLOW}/dispatches");
-        let mut args = vec!["api", "-X", "POST", endpoint.as_str(), "-F", "return_run_details=true"];
+        let mut args = vec![
+            "api",
+            "-X",
+            "POST",
+            endpoint.as_str(),
+            "-F",
+            "return_run_details=true",
+        ];
         for field in &fields {
             args.push("-f");
             args.push(field);
@@ -267,7 +289,9 @@ impl PlanStore {
                     &["api", &format!("repos/{repository}/actions/runs/{run_id}")],
                 )
                 .await
-                .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).context("decode the GitHub run"));
+                .and_then(|bytes| {
+                    serde_json::from_slice::<Value>(&bytes).context("decode the GitHub run")
+                });
             match run {
                 Err(error) => {
                     // A passing network or API failure: the next look retries.
@@ -398,7 +422,10 @@ impl PlanStore {
         let jobs = self
             .gh(
                 self.github.api_timeout,
-                &["api", &format!("repos/{repository}/actions/runs/{run_id}/jobs?per_page=100")],
+                &[
+                    "api",
+                    &format!("repos/{repository}/actions/runs/{run_id}/jobs?per_page=100"),
+                ],
             )
             .await?;
         let jobs: Value = serde_json::from_slice(&jobs).context("decode the run's jobs")?;
@@ -457,4 +484,3 @@ fn signed_in_account(text: &str) -> Option<String> {
         rest.split_whitespace().next().map(str::to_owned)
     })
 }
-

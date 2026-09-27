@@ -398,6 +398,21 @@ describe('comparing two executions', () => {
       'local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
     )
     expect(comparison.parameters).toEqual([])
+    // A stack that pinned harness to a commit ran that commit, whatever
+    // version its Cargo manifest reports.
+    const pinned = imported()
+    const workers = pinned.plan_execution?.stack ?? []
+    workers.push({
+      name: 'harness',
+      source: 'package',
+      requested: null,
+      observed: '1.8.37-rc.1',
+      commit: '3f2a9c1dddddddddddddddddddddddddddddddd',
+      dirty: null,
+    })
+    expect(compareExecutions(pinned, local()).a.origin).toBe(
+      'GitHub run 35823421664 · RC 366030b3 · harness @3f2a9c1 · runner 0.9.3',
+    )
     // Workers from a checkout are one line per commit; the requested version
     // is never a difference.
     expect(comparison.stack).toEqual({
@@ -694,6 +709,28 @@ describe('comparing two executions', () => {
     expect(stackSummary(stack)).toBe(
       '2 workers from your code @a1b2c3d (uncommitted changes) · 1 version difference · 1 only in A · 1 only in B',
     )
+  })
+
+  it('compares a worker built from a commit by the commit, not its Cargo version', () => {
+    const harness = (detail: DashboardExecutionDetail, commit: string | null) =>
+      detail.plan_execution?.stack.push({
+        name: 'harness',
+        source: 'package',
+        requested: null,
+        observed: '1.8.8-rc.3',
+        commit,
+        dirty: null,
+      })
+    const a = imported()
+    const b = local()
+    harness(a, '3f2a9c1dddddddddddddddddddddddddddddddd')
+    harness(b, null)
+    expect(compareExecutions(a, b).stack.versions).toEqual([
+      { field: 'harness', a: '@3f2a9c1', b: '1.8.8-rc.3' },
+    ])
+    const same = local()
+    harness(same, '3f2a9c1dddddddddddddddddddddddddddddddd')
+    expect(compareExecutions(a, same).stack.versions).toEqual([])
   })
 })
 
