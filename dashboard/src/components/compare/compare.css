@@ -631,10 +631,12 @@ button.cmp-highlight:hover {
   padding: calc(var(--spacing) * 1) calc(var(--spacing) * 3.5);
 }
 
-/* A figure table: label, A, B, difference. */
+/* A figure table: label, A, B, difference. legacy.css styles every th and
+   td; these set them back to the canvas. */
 .cmp-metrics {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
   font-variant-numeric: tabular-nums;
 }
 
@@ -642,12 +644,31 @@ button.cmp-highlight:hover {
 .cmp-metrics td {
   height: calc(var(--spacing) * 8);
   padding: 0 0 0 calc(var(--spacing) * 3);
+  overflow: hidden;
   border-bottom: 1px solid var(--color-edge);
+  color: var(--color-ink);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-weight: 400;
+  letter-spacing: normal;
   text-align: right;
+  text-overflow: ellipsis;
+  text-transform: none;
   white-space: nowrap;
+}
+
+.cmp-metrics thead th:nth-child(2),
+.cmp-metrics thead th:nth-child(3) {
+  width: calc(var(--spacing) * 20);
+}
+
+.cmp-metrics thead th:nth-child(4) {
+  width: calc(var(--spacing) * 34);
+}
+
+.cmp-stack-table thead th:nth-child(2),
+.cmp-stack-table thead th:nth-child(3) {
+  width: 30%;
 }
 
 .cmp-metrics th:first-child {
@@ -666,6 +687,10 @@ button.cmp-highlight:hover {
   color: var(--color-ink-faint);
   font-family: var(--font-sans);
   font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.cmp-metrics .cmp-faint-num {
+  color: var(--color-ink-faint);
 }
 
 .cmp-metrics .cmp-delta {
@@ -727,7 +752,7 @@ button.cmp-highlight:hover {
   table-layout: fixed;
 }
 
-.cmp-table thead th {
+.cmp-table > thead > tr > th {
   height: calc(var(--spacing) * 7);
   padding: 0 calc(var(--spacing) * 2);
   border-bottom: 0;
@@ -735,17 +760,18 @@ button.cmp-highlight:hover {
   font-family: var(--font-sans);
   font-size: var(--text-xs);
   font-weight: 500;
+  letter-spacing: normal;
   text-align: right;
   text-transform: none;
 }
 
-.cmp-table thead th:first-child {
+.cmp-table > thead > tr > th:first-child {
   width: 30%;
   padding-inline-start: calc(var(--spacing) * 9);
   text-align: left;
 }
 
-.cmp-table thead th:nth-child(2) {
+.cmp-table > thead > tr > th:nth-child(2) {
   width: calc(var(--spacing) * 58);
   text-align: left;
 }
@@ -768,7 +794,12 @@ button.cmp-highlight:hover {
   height: calc(var(--spacing) * 13);
   padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
   border-bottom: 0;
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--text-xs);
   font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
   vertical-align: middle;
 }
 
@@ -778,6 +809,7 @@ button.cmp-highlight:hover {
 
 .cmp-row-toggle {
   display: inline-flex;
+  min-width: 0;
   max-width: 100%;
   align-items: center;
   gap: calc(var(--spacing) * 2);
@@ -829,6 +861,7 @@ button.cmp-highlight:hover {
 
 .cmp-score-cell {
   display: flex;
+  width: 100%;
   align-items: center;
   justify-content: space-between;
   gap: calc(var(--spacing) * 3);
@@ -888,12 +921,21 @@ button.cmp-highlight:hover {
 
 .cmp-pair {
   display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
   flex-direction: column;
   align-items: flex-end;
   font-family: var(--font-mono);
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.cmp-pair-values,
+.cmp-pair-delta {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .cmp-pair-delta {
@@ -928,9 +970,11 @@ button.cmp-highlight:hover {
   padding: calc(var(--spacing) * 3.5);
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   font-size: var(--ds-text-sm, 0.8125rem);
   text-align: left;
+  white-space: normal;
 }
 
 .cmp-detail-bar {
@@ -1353,16 +1397,47 @@ button.cmp-highlight:hover {
     display: none;
   }
 
-  .cmp-table thead th:first-child {
+  /* Rows become a two-column grid (Test, Score); an open row's detail
+     spans the width. */
+  .cmp-table,
+  .cmp-table > thead,
+  .cmp-table > tbody {
+    display: block;
+  }
+
+  .cmp-table > thead > tr,
+  .cmp-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 50);
+    align-items: center;
+  }
+
+  .cmp-table > thead > tr > th:nth-child(n) {
     width: auto;
   }
 
-  .cmp-table thead th:nth-child(2) {
-    width: calc(var(--spacing) * 50);
+  .cmp-table > thead > tr > th:first-child {
+    padding-inline-start: calc(var(--spacing) * 9);
+  }
+
+  .cmp-row > th,
+  .cmp-row > td {
+    display: flex;
+    min-width: 0;
+    align-items: center;
+  }
+
+  .cmp-row > .cmp-wide {
+    display: none;
+  }
+
+  .cmp-detail-row:not([hidden]),
+  .cmp-detail-row > td {
+    display: block;
   }
 
   .cmp-track {
-    width: calc(var(--spacing) * 20);
+    width: calc(var(--spacing) * 16);
   }
 
   .cmp-detail-row > td {

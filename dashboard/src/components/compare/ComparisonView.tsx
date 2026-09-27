@@ -91,11 +91,19 @@ export function deltaText(metric: ComparedMetric): string {
   if (metric.format === 'score') return `${sign}${Number(size.toFixed(1))} pts`
   if (metric.format === 'percent_points')
     return `${sign}${Number(size.toFixed(1))} pp`
+  // A count of runs moves by runs, not by a share of them.
   const relative =
-    metric.delta_percent === null
+    metric.delta_percent === null ||
+    metric.id === 'completed' ||
+    metric.id === 'technical_failures'
       ? ''
       : ` · ${sign}${Math.abs(metric.delta_percent).toFixed(Math.abs(metric.delta_percent) < 10 ? 1 : 0)}%`
   return `${sign}${metricFigure(metric.format, size)}${relative}`
+}
+
+/** A run's state where its score would be: `infrastructure error`. */
+function stateText(state: string | null) {
+  return state ? state.replaceAll('_', ' ') : '—'
 }
 
 function metricOf(scenario: ScenarioComparison, id: string) {
@@ -569,7 +577,7 @@ const CELLS: Array<[string, string]> = [
 function Pair({ a, b, delta }: { a: string; b: string; delta: string }) {
   return (
     <span className="cmp-pair">
-      <span>
+      <span className="cmp-pair-values" title={`${a} → ${b}`}>
         <span className="cmp-faint-num">{a} → </span>
         {b}
       </span>
@@ -738,12 +746,12 @@ function Results({
                         a={
                           score?.baseline != null
                             ? valueText(score, 'baseline')
-                            : (scenario.sides.a.state ?? '—')
+                            : stateText(scenario.sides.a.state)
                         }
                         b={
                           score?.candidate != null
                             ? valueText(score, 'candidate')
-                            : (scenario.sides.b.state ?? '—')
+                            : stateText(scenario.sides.b.state)
                         }
                         delta={score ? deltaText(score) : ''}
                       />

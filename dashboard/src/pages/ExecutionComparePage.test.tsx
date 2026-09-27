@@ -116,7 +116,7 @@ describe('execution comparison page', () => {
       [...html.matchAll(/data-scenario="([^"]+)"/g)].map((match) => match[1]),
     ).toEqual(['persistent_state', 'minimal_path', 'shell_coder_sandbox'])
     expect(html).toContain('technically invalid</span>')
-    expect(html).toContain('infrastructure_error → </span>40')
+    expect(html).toContain('infrastructure error → </span>40')
     expect(html).toContain('data-cell="tokens"')
     expect(html).toContain('data-layer="comparison-stack"')
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
