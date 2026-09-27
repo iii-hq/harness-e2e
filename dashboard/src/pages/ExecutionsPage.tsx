@@ -630,6 +630,9 @@ export type LedgerTableProps = {
   actions: LedgerActions
   /** A narrow pane keeps execution, result, tests and the menu. */
   narrow?: boolean
+  /** A phone stacks title, result and where in one cell, so the title is
+   *  not cut to a few letters; selection and the menu stay. */
+  phone?: boolean
 }
 
 /** One table: the header is read once, each group is a body of its own
@@ -640,8 +643,10 @@ export function LedgerTable({
   selected,
   onSelect,
   actions,
-  narrow = false,
+  narrow: narrowPane = false,
+  phone = false,
 }: LedgerTableProps) {
+  const narrow = narrowPane || phone
   const shown = groups.flatMap((group) => group.rows.map((row) => row.id))
   const all = shownSelection(selected, shown)
   const side = (id: string) =>
@@ -661,6 +666,7 @@ export function LedgerTable({
           inset
           className="ex-table"
           data-narrow={narrow || undefined}
+          data-phone={phone || undefined}
           data-ledger-table
         >
           <TableCaption className="ds-visually-hidden">{caption}</TableCaption>
@@ -675,17 +681,21 @@ export function LedgerTable({
                 />
               </TableHead>
               <TableHead scope="col">Execution</TableHead>
-              <TableHead className="ex-col-result" scope="col">
-                Result
-              </TableHead>
+              {phone ? null : (
+                <TableHead className="ex-col-result" scope="col">
+                  Result
+                </TableHead>
+              )}
               {narrow ? null : (
                 <TableHead className="ex-col-model" scope="col">
                   Model
                 </TableHead>
               )}
-              <TableHead className="ex-col-tests ex-num" scope="col">
-                Tests
-              </TableHead>
+              {phone ? null : (
+                <TableHead className="ex-col-tests ex-num" scope="col">
+                  Tests
+                </TableHead>
+              )}
               {narrow ? null : (
                 <>
                   <TableHead className="ex-col-score ex-num" scope="col">
@@ -714,7 +724,10 @@ export function LedgerTable({
               aria-label={group.label}
             >
               <TableRow className="ex-group">
-                <TableHead colSpan={narrow ? 5 : 10} scope="colgroup">
+                <TableHead
+                  colSpan={phone ? 3 : narrow ? 5 : 10}
+                  scope="colgroup"
+                >
                   {/* Spaced and named, so it is not read as "Sep 248". */}
                   <span className="ds-label">{group.label}</span>{' '}
                   <span className="ex-group-count">
@@ -728,6 +741,20 @@ export function LedgerTable({
               {group.rows.map((row) => {
                 const ticked = selected.includes(row.id)
                 const letter = side(row.id)
+                const result = (
+                  <>
+                    <StatusLabel
+                      className="ex-result"
+                      state={row.result.state}
+                      label={row.result.label}
+                    />
+                    {row.issue ? (
+                      <span className="ex-sub" title={row.issue}>
+                        {row.issue}
+                      </span>
+                    ) : null}
+                  </>
+                )
                 return (
                   <TableRow
                     key={row.id}
@@ -762,27 +789,23 @@ export function LedgerTable({
                           {row.title}
                         </a>
                       </span>
+                      {phone ? (
+                        <span className="ex-result-line">{result}</span>
+                      ) : null}
                       <span className="ex-sub ex-mono">{row.meta}</span>
                     </TableCell>
-                    <TableCell className="ex-cell-stack">
-                      <StatusLabel
-                        className="ex-result"
-                        state={row.result.state}
-                        label={row.result.label}
-                      />
-                      {row.issue ? (
-                        <span className="ex-sub" title={row.issue}>
-                          {row.issue}
-                        </span>
-                      ) : null}
-                    </TableCell>
+                    {phone ? null : (
+                      <TableCell className="ex-cell-stack">{result}</TableCell>
+                    )}
                     {narrow ? null : (
                       <TableCell className="ex-cell-stack" title={row.models}>
                         <span className="ex-mono ex-model">{row.model}</span>
                         <span className="ex-sub ex-mono">{row.profile}</span>
                       </TableCell>
                     )}
-                    <TableCell className="ex-num">{row.tests}</TableCell>
+                    {phone ? null : (
+                      <TableCell className="ex-num">{row.tests}</TableCell>
+                    )}
                     {narrow ? null : (
                       <>
                         <TableCell className="ex-num">{row.score}</TableCell>
@@ -1128,7 +1151,9 @@ function menuButton(id: string) {
 }
 
 export function ExecutionsPage() {
-  const narrow = useDashboardChrome()?.narrow ?? false
+  const chrome = useDashboardChrome()
+  const narrow = chrome?.narrow ?? false
+  const phone = chrome?.phone ?? false
   const [runnerOpen, setRunnerOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [runnerScope, setRunnerScope] = useState<string[]>([])
@@ -1585,6 +1610,7 @@ export function ExecutionsPage() {
           <LedgerTable
             caption={shownText}
             narrow={narrow}
+            phone={phone}
             groups={groups}
             selected={ticked}
             onSelect={setSelected}

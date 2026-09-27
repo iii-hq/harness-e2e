@@ -515,6 +515,30 @@ describe('the executions table', () => {
     expect(html).toContain('colSpan="5"')
   })
 
+  it('stacks title, result and where in one cell on a phone', () => {
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        caption="Executions, 16 of 16 loaded"
+        narrow
+        phone
+        groups={groupLedgerRows(rows, LEDGER_NOW)}
+        selected={[]}
+        onSelect={noop}
+        actions={actions}
+      />,
+    )
+    for (const header of ['Execution', 'Actions'])
+      expect(html).toContain(`>${header}<`)
+    for (const header of ['Result', 'Tests', 'Model'])
+      expect(html).not.toContain(`>${header}<`)
+    expect(html).toContain('colSpan="3"')
+    // Selection and the menu stay; the result sits between title and where.
+    expect(html).toContain('aria-label="Select no profile"')
+    expect(html).toMatch(
+      /class="ex-title">.*?class="ex-result-line">.*?Running.*?class="ex-sub ex-mono">/,
+    )
+  })
+
   it('marks A and B when exactly two are ticked', () => {
     const a = ledgerExecution('plan-81960bf0').id
     const b = ledgerExecution('plan-cf6ab5f9').id

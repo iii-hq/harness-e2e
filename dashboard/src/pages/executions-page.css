@@ -76,8 +76,16 @@
   translate: 0 -50%;
 }
 
+/* Segments scroll sideways and never wrap (LyMenus). */
 .ex-segments {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ex-segments > * {
+  flex: none;
 }
 
 /* A space separates it from its label; this adds the rest of the gap. */
@@ -398,6 +406,56 @@
 
 .harness-e2e-shell[data-narrow="true"] .ex-selection {
   align-self: stretch;
+}
+
+/* Touch sizes (LyButtons): 44 in a pane under 720 px, 48 on a phone. */
+.harness-e2e-shell[data-narrow="true"] .ex-search .ds-input,
+.harness-e2e-shell[data-narrow="true"] .ex-toolbar .ex-sort {
+  min-height: calc(var(--spacing) * 11);
+}
+
+.harness-e2e-shell[data-narrow="true"] .ex-row .ds-row-menu-trigger {
+  width: calc(var(--spacing) * 11);
+  height: calc(var(--spacing) * 11);
+}
+
+@media (max-width: 639px) {
+  .harness-e2e-shell[data-narrow="true"] .ex-search .ds-input,
+  .harness-e2e-shell[data-narrow="true"] .ex-toolbar .ex-sort {
+    min-height: calc(var(--spacing) * 12);
+  }
+
+  .harness-e2e-shell[data-narrow="true"] .ex-row .ds-row-menu-trigger {
+    width: calc(var(--spacing) * 12);
+    height: calc(var(--spacing) * 12);
+  }
+}
+
+/* A phone: title, result and where stack in one cell. */
+.ex-table[data-phone] .ex-row {
+  height: auto;
+}
+
+.ex-table.iii-ui-table[data-phone] .ex-cell-stack {
+  display: grid;
+  gap: calc(var(--spacing) * 0.5);
+  padding-block: calc(var(--spacing) * 2.5);
+}
+
+.ex-table[data-phone] .ex-col-select,
+.ex-table[data-phone] .ex-col-menu {
+  vertical-align: top;
+}
+
+.ex-result-line {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.ex-result-line > .ex-result {
+  flex: none;
 }
 
 .ex-selection-count {
