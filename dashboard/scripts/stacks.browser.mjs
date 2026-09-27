@@ -295,6 +295,11 @@ try {
     .waitFor()
   await editor.getByRole('button', { name: 'Save stack', exact: true }).click()
   await editor.getByText('Saved with 2 warnings.', { exact: true }).waitFor()
+  // Saving never disables what was focused: focus stays on Save stack.
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Save stack',
+  )
   const warnings = [
     'harness runs path://../harness, a path on this machine; the stack runs it only here.',
     'harness pins a commit, but only a package:// worker is built from one; the executor refuses it.',

@@ -208,7 +208,8 @@ export function StackSheet({
                   value={draft.label}
                   maxLength={160}
                   autoComplete="off"
-                  disabled={saving}
+                  readOnly={saving}
+                  aria-disabled={saving || undefined}
                   onChange={(event) =>
                     setDraft({ ...draft, label: event.target.value })
                   }
@@ -378,7 +379,8 @@ export function StackSheet({
                     autoCorrect="off"
                     wrap="off"
                     value={draft.yaml}
-                    disabled={saving}
+                    readOnly={saving}
+                    aria-disabled={saving || undefined}
                     style={{ '--sk-lines': editorLines } as CSSProperties}
                     onChange={(event) => {
                       setCopied(false)
@@ -428,8 +430,9 @@ export function StackSheet({
                 <button
                   type="button"
                   className="sk-btn"
-                  disabled={saving}
+                  aria-disabled={saving || undefined}
                   onClick={() => {
+                    if (saving) return
                     if (!dirty) return onClose()
                     setDraft({ label: stack.label, yaml: stack.yaml })
                     setError(null)
@@ -440,9 +443,12 @@ export function StackSheet({
                 <button
                   type="button"
                   className="sk-btn sk-btn-primary"
-                  disabled={saving || !bridge}
+                  disabled={!bridge}
+                  aria-disabled={saving || undefined}
                   aria-busy={saving || undefined}
-                  onClick={() => void save()}
+                  onClick={() => {
+                    if (!saving) void save()
+                  }}
                 >
                   {saving ? 'Saving…' : 'Save stack'}
                 </button>
@@ -455,9 +461,12 @@ export function StackSheet({
                 <button
                   type="button"
                   className="sk-btn sk-btn-primary"
-                  disabled={busy || !bridge}
+                  disabled={!bridge}
+                  aria-disabled={busy || undefined}
                   aria-busy={busy || undefined}
-                  onClick={onCopy}
+                  onClick={() => {
+                    if (!busy) onCopy()
+                  }}
                 >
                   {busy ? 'Copying…' : 'Copy to edit'}
                 </button>
@@ -600,8 +609,11 @@ function StackRow({
           })}
           aria-label={`Copy ${stack.label}`}
           title="Copy into this Console"
-          disabled={!ready || busy}
-          onClick={() => onCopy(stack)}
+          disabled={!ready}
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) onCopy(stack)
+          }}
         >
           <Copy size={16} aria-hidden="true" />
         </button>
@@ -613,8 +625,11 @@ function StackRow({
             })}
             aria-label={`Delete ${stack.label}`}
             title="Delete stack"
-            disabled={!ready || busy}
-            onClick={() => onDelete(stack)}
+            disabled={!ready}
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onDelete(stack)
+            }}
           >
             <Trash2 size={16} aria-hidden="true" />
           </button>
@@ -765,8 +780,10 @@ export function NewStackDialog({
                       name="sk-from"
                       value={stack.id}
                       checked={stack.id === from}
-                      disabled={busy}
-                      onChange={() => setFrom(stack.id)}
+                      aria-disabled={busy || undefined}
+                      onChange={() => {
+                        if (!busy) setFrom(stack.id)
+                      }}
                     />
                     <span className="sk-option-text">
                       <span className="sk-option-label">{stack.label}</span>
@@ -792,7 +809,8 @@ export function NewStackDialog({
               autoComplete="off"
               placeholder={source ? `${source.label} copy` : ''}
               aria-describedby="sk-new-name-hint"
-              disabled={busy}
+              readOnly={busy}
+              aria-disabled={busy || undefined}
               onChange={(event) => setName(event.target.value)}
             />
             <span id="sk-new-name-hint" className="sk-hint">
@@ -813,8 +831,10 @@ export function NewStackDialog({
           <button
             type="button"
             className="sk-btn"
-            disabled={busy}
-            onClick={onClose}
+            aria-disabled={busy || undefined}
+            onClick={() => {
+              if (!busy) onClose()
+            }}
           >
             Cancel
           </button>
@@ -822,7 +842,8 @@ export function NewStackDialog({
             type="submit"
             form="sk-new-form"
             className="sk-btn sk-btn-primary"
-            disabled={busy || !source}
+            disabled={!source}
+            aria-disabled={busy || undefined}
             aria-busy={busy || undefined}
           >
             {busy ? 'Creating…' : 'Create and edit'}

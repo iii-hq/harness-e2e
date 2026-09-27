@@ -60,7 +60,7 @@ function CredentialDialog({
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!NAME.test(name) || value.trim() === '') return
+    if (saving || !NAME.test(name) || value.trim() === '') return
     setSaving(true)
     setError(null)
     try {
@@ -117,8 +117,8 @@ function CredentialDialog({
               placeholder="OPENAI_API_KEY"
               autoComplete="off"
               spellCheck={false}
-              readOnly={Boolean(fixed)}
-              disabled={saving}
+              readOnly={Boolean(fixed) || saving}
+              aria-disabled={saving || undefined}
               aria-invalid={nameError || undefined}
               aria-describedby="credential-name-hint"
               onChange={(event) => setName(event.target.value.trim())}
@@ -145,7 +145,8 @@ function CredentialDialog({
               placeholder="Paste the key"
               autoComplete="off"
               spellCheck={false}
-              disabled={saving}
+              readOnly={saving}
+              aria-disabled={saving || undefined}
               aria-invalid={error ? true : undefined}
               aria-describedby={
                 error
@@ -174,8 +175,10 @@ function CredentialDialog({
           <button
             type="button"
             className="sk-btn"
-            disabled={saving}
-            onClick={onClose}
+            aria-disabled={saving || undefined}
+            onClick={() => {
+              if (!saving) onClose()
+            }}
           >
             Cancel
           </button>
@@ -183,7 +186,8 @@ function CredentialDialog({
             type="submit"
             form="credential-form"
             className="sk-btn sk-btn-primary"
-            disabled={saving || !NAME.test(name) || value.trim() === ''}
+            disabled={!NAME.test(name) || value.trim() === ''}
+            aria-disabled={saving || undefined}
             aria-busy={saving || undefined}
           >
             {saving ? 'Saving…' : 'Save credential'}
@@ -278,8 +282,11 @@ export function ProviderCredentials({
         <button
           className="sk-btn sk-btn-small"
           type="button"
-          disabled={!bridge || busy}
-          onClick={() => void importFromMachine()}
+          disabled={!bridge}
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) void importFromMachine()
+          }}
         >
           <Download size={14} aria-hidden="true" />
           Import from this machine
@@ -287,8 +294,11 @@ export function ProviderCredentials({
         <button
           className="sk-btn sk-btn-small sk-btn-fill"
           type="button"
-          disabled={!bridge || busy}
-          onClick={() => setEditing({ name: null })}
+          disabled={!bridge}
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) setEditing({ name: null })
+          }}
         >
           <Plus size={14} aria-hidden="true" />
           Add credential
@@ -350,8 +360,11 @@ export function ProviderCredentials({
                     className="sk-btn sk-btn-small"
                     type="button"
                     aria-label={`${credential.source === 'console' ? 'Replace' : 'Set'} ${credential.name}`}
-                    disabled={!bridge || busy}
-                    onClick={() => setEditing({ name: credential.name })}
+                    disabled={!bridge}
+                    aria-disabled={busy || undefined}
+                    onClick={() => {
+                      if (!busy) setEditing({ name: credential.name })
+                    }}
                   >
                     {credential.source === 'console' ? 'Replace' : 'Set'}
                   </button>
@@ -361,8 +374,11 @@ export function ProviderCredentials({
                       type="button"
                       aria-label={`Delete ${credential.name}`}
                       title="Delete credential"
-                      disabled={!bridge || busy}
-                      onClick={() => setDeleting(credential)}
+                      disabled={!bridge}
+                      aria-disabled={busy || undefined}
+                      onClick={() => {
+                        if (!busy) setDeleting(credential)
+                      }}
                     >
                       <Trash2 size={14} aria-hidden="true" />
                     </button>

@@ -746,9 +746,33 @@
   background: color-mix(in srgb, var(--color-ink) 90%, var(--color-panel));
 }
 
-.sk-btn:disabled {
+/* Busy controls keep their focus: aria-disabled, drawn as disabled. */
+.sk-btn:disabled,
+.sk-btn[aria-disabled="true"] {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.sk-btn[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.sk-btn-primary[aria-disabled="true"]:hover {
+  background: var(--color-ink);
+}
+
+.sk-btn-fill[aria-disabled="true"]:hover {
+  background: var(--color-surface);
+}
+
+.sk-row-actions .harness-e2e-header-action[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.sk-input[aria-disabled="true"],
+.sk-textarea[aria-disabled="true"] {
+  opacity: 0.6;
 }
 
 .sk-btn:focus-visible {
