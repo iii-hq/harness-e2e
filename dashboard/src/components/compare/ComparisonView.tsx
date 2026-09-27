@@ -15,6 +15,7 @@ import {
   type MouseEvent,
   type ReactNode,
   useMemo,
+  useRef,
   useState,
 } from 'react'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
@@ -1156,6 +1157,8 @@ function ScreenshotPairs({
   const [viewer, setViewer] = useState<{ which: Which; index: number } | null>(
     null,
   )
+  // Focus goes back to the screenshot the viewer opened from.
+  const trigger = useRef<HTMLElement | null>(null)
   const pairs = pairByCaption(shots.a, shots.b)
   if (pairs.length === 0) return null
   const evidence = (which: Which, screenshot: ScreenshotEntry | null) =>
@@ -1191,13 +1194,15 @@ function ScreenshotPairs({
                     screenshot={screenshot}
                     image={screenshot ? images[screenshot.key] : undefined}
                     evidenceHref={evidence(which, screenshot)}
-                    onOpen={() =>
-                      screenshot &&
+                    onOpen={() => {
+                      if (!screenshot) return
+                      trigger.current =
+                        document.activeElement as HTMLElement | null
                       setViewer({
                         which,
                         index: shots[which].indexOf(screenshot),
                       })
-                    }
+                    }}
                     onSize={(size) =>
                       setSizes((known) =>
                         known[key] ? known : { ...known, [key]: size },
@@ -1216,7 +1221,10 @@ function ScreenshotPairs({
           images={images}
           index={viewer.index}
           onIndex={(index) => setViewer({ which: viewer.which, index })}
-          onClose={() => setViewer(null)}
+          onClose={() => {
+            setViewer(null)
+            trigger.current?.focus()
+          }}
           evidenceHref={evidence(viewer.which, current) ?? undefined}
         />
       ) : null}

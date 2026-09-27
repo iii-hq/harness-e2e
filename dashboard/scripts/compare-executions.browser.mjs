@@ -346,6 +346,13 @@ try {
   await viewer.getByRole('link', { name: 'Evidence record' }).waitFor()
   await page.keyboard.press('Escape')
   await viewer.waitFor({ state: 'detached' })
+  // Focus is back on the screenshot it opened from.
+  assert.equal(
+    await page.evaluate(() =>
+      document.activeElement?.getAttribute('aria-label'),
+    ),
+    'Open A · board full size',
+  )
 
   // Run again: B's parameters, on the tests B scored lower on.
   await page.getByRole('button', { name: 'Run again · 1 test' }).click()
