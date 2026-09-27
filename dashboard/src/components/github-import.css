@@ -36,6 +36,10 @@
   flex: 0 0 auto;
 }
 
+.gi-skel-title {
+  width: 5.5rem;
+}
+
 .gi-skel-thin {
   height: 0.5rem;
 }

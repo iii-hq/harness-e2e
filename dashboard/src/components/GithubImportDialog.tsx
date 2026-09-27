@@ -297,7 +297,7 @@ export function GithubRunRow({
           <span className="gi-line">
             {pending ? (
               <span
-                className="rd-skel gi-skel"
+                className="rd-skel gi-skel gi-skel-title"
                 role="status"
                 aria-label="Reading the run’s contract"
               />
