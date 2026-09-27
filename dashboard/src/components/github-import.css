@@ -26,6 +26,12 @@
   font-size: 0.75rem;
 }
 
+/* Controls that wait for GitHub, and rows being imported, read as off. */
+.gi-dialog .rd-input:disabled,
+.gi-dialog .rd-box-input:disabled + .rd-box-face {
+  opacity: 0.4;
+}
+
 /* Placeholders sit on the day's fill: one step darker than it. */
 .gi-dialog .rd-skel {
   background: var(--rd-selected);
