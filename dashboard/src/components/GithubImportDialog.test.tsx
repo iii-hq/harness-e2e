@@ -61,10 +61,11 @@ describe('GitHub import model', () => {
       run({ run_id: 1, contract_pending: true, suite_label: null }),
       run({ run_id: 2 }),
     ]
+    const asked = [{ run_id: 1, run_attempt: 1 }]
     const read = withContracts(
       listed,
       [{ run_id: 1, suite_label: 'Regression', runner_version: '0.11.28' }],
-      [1],
+      asked,
     )
     expect(read[0]).toMatchObject({
       contract_pending: false,
@@ -73,9 +74,18 @@ describe('GitHub import model', () => {
       contract_error: undefined,
     })
     expect(read[1]).toBe(listed[1])
-    expect(withContracts(listed, [], [1])[0].contract_error).toBe(
+    expect(withContracts(listed, [], asked)[0].contract_error).toBe(
       'The contract could not be read',
     )
+    // A contract read for another attempt leaves a re-run's row waiting.
+    const rerun = [{ ...listed[0], run_attempt: 2 }]
+    expect(
+      withContracts(
+        rerun,
+        [{ run_id: 1, run_attempt: 1, suite_label: 'Regression' }],
+        asked,
+      )[0],
+    ).toBe(rerun[0])
   })
 
   it('names what each row stands at', () => {

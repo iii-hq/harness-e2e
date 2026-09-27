@@ -72,16 +72,23 @@ export function sortGithubRuns(runs: GithubRun[]): GithubRun[] {
   )
 }
 
-/** Runs with what their contracts said merged in; a run the answer left out
- *  stops waiting and says its contract could not be read. */
+type RunAttempt = Pick<GithubRun, 'run_id' | 'run_attempt'>
+
+const sameAttempt = (left: Partial<RunAttempt>, right: RunAttempt) =>
+  left.run_id === right.run_id &&
+  (left.run_attempt ?? right.run_attempt) === right.run_attempt
+
+/** Runs with what their contracts said merged in, by run and attempt (a
+ *  re-run's row waits for its own); a run the answer left out stops waiting
+ *  and says its contract could not be read. */
 export function withContracts(
   runs: GithubRun[],
   read: Array<Partial<GithubRun> & { run_id: number }>,
-  asked: number[],
+  asked: RunAttempt[],
 ): GithubRun[] {
   return runs.map((run) => {
-    if (!asked.includes(run.run_id)) return run
-    const contract = read.find((entry) => entry.run_id === run.run_id)
+    if (!asked.some((entry) => sameAttempt(entry, run))) return run
+    const contract = read.find((entry) => sameAttempt(entry, run))
     return {
       ...run,
       ...contract,
@@ -519,17 +526,26 @@ export function GithubImportDialog({
     bridge?.getGithubStatus().then(setGithub, () => setGithub(null))
   }, [bridge])
 
+  // Each first page (opening, Refresh, Retry) takes a new turn; answers of
+  // an older turn, a page of older runs included, are dropped.
+  const generation = useRef(0)
+
   const load = useCallback(
     async (page: number) => {
       if (!bridge) return
+      if (page === 1) generation.current += 1
+      const turn = generation.current
+      const current = () => turn === generation.current
       setError(null)
       if (page === 1) {
         setPhase('loading')
+        setLoadingOlder(false)
         setRuns([])
       } else setLoadingOlder(true)
       let pending: GithubRun[] = []
       try {
         const response = await bridge.listGithubRuns(page)
+        if (!current()) return
         setRepository(response.repository)
         setTotal(response.total_count ?? null)
         setNextPage(response.next_page)
@@ -544,20 +560,28 @@ export function GithubImportDialog({
         setPhase('ready')
         pending = response.runs.filter((run) => run.contract_pending)
       } catch (cause) {
+        if (!current()) return
         setError({ page, message: errorText(cause) })
         if (page === 1) setPhase('failed')
       } finally {
-        setLoadingOlder(false)
+        if (current()) setLoadingOlder(false)
       }
       if (pending.length === 0) return
-      const asked = pending.map((run) => run.run_id)
+      const asked = pending.map(({ run_id, run_attempt }) => ({
+        run_id,
+        run_attempt,
+      }))
       const read = await bridge
         .readGithubRunContracts(pending)
         .then((answer) => answer.runs)
         .catch((cause) =>
-          asked.map((run_id) => ({ run_id, contract_error: errorText(cause) })),
+          asked.map((entry) => ({
+            ...entry,
+            contract_error: errorText(cause),
+          })),
         )
-      setRuns((current) => withContracts(current, read, asked))
+      if (!current()) return
+      setRuns((rows) => withContracts(rows, read, asked))
     },
     [bridge],
   )
@@ -1022,7 +1046,7 @@ export function GithubImportDialog({
             type="button"
             className="rd-ghost rd-icon-button"
             aria-label="Refresh runs"
-            disabled={phase === 'loading'}
+            disabled={phase === 'loading' || loadingOlder}
             onClick={() => retry(1)}
           >
             <RefreshCw size={16} aria-hidden="true" />
