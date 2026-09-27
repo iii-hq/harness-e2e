@@ -291,14 +291,14 @@
   max-width: 100%;
   height: 0.25rem;
   overflow: hidden;
-  border-radius: 9999px;
+  border-radius: var(--ds-radius-sm, 6px);
   background: var(--color-surface-selected, var(--surface-selected));
 }
 
 .wr-bar > span {
   position: absolute;
   inset: 0 auto 0 0;
-  border-radius: 9999px;
+  border-radius: var(--ds-radius-sm, 6px);
   background: var(--color-accent, var(--accent));
 }
 
