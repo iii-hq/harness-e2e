@@ -756,7 +756,6 @@
 
 .ds-dialog::backdrop {
   background: var(--backdrop);
-  backdrop-filter: blur(4px);
 }
 
 /* A dialog that lets the host's portaled overlays (z-50) open above it:
@@ -772,7 +771,6 @@
   inset: 0;
   z-index: 40;
   background: var(--backdrop);
-  backdrop-filter: blur(4px);
 }
 
 .ds-dialog-sm {
