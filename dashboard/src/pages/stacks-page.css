@@ -755,3 +755,150 @@
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 1px;
 }
+
+/* ------------------------------------------------------------ new stack */
+
+.sk-new {
+  display: flex;
+  flex-direction: column;
+  width: min(calc(var(--spacing) * 180), calc(100vw - var(--spacing) * 12));
+  max-width: none;
+  max-height: min(
+    calc(var(--spacing) * 215),
+    calc(100dvh - var(--spacing) * 12)
+  );
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-raised);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: var(--ds-text-sm, 0.8125rem);
+  line-height: calc(var(--spacing) * 5);
+}
+
+.sk-new[data-narrow] {
+  max-height: none;
+}
+
+.sk-new-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  line-height: calc(var(--spacing) * 5.5);
+}
+
+.sk-new-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 4.5);
+  min-height: 0;
+  overflow: auto;
+  padding: var(--spacing) calc(var(--spacing) * 5) calc(var(--spacing) * 5);
+}
+
+.sk-from {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2.5);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.sk-from legend {
+  padding: 0 0 calc(var(--spacing) * 2);
+}
+
+.sk-from-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.5);
+}
+
+.sk-from-group > .ds-label {
+  padding: 0 calc(var(--spacing) * 2.5) var(--spacing);
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  letter-spacing: var(--ds-tracking-label, 0.06em);
+}
+
+.sk-from-empty {
+  padding: var(--spacing) calc(var(--spacing) * 2.5);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+}
+
+.sk-option {
+  display: grid;
+  grid-template-columns: calc(var(--spacing) * 4.5) minmax(0, 1fr);
+  align-items: start;
+  gap: calc(var(--spacing) * 2.5);
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2.5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sk-option:hover {
+  background: var(--color-surface-hover);
+}
+
+.sk-option[data-selected],
+.sk-option[data-selected]:hover {
+  background: var(--color-surface-selected);
+}
+
+.sk-radio {
+  appearance: none;
+  width: calc(var(--spacing) * 4);
+  height: calc(var(--spacing) * 4);
+  margin: calc(var(--spacing) * 0.5) 0 0;
+  border: 1.5px solid color-mix(in srgb, var(--color-ink) 32%, transparent);
+  border-radius: var(--radius-full);
+  background: transparent;
+  cursor: pointer;
+}
+
+.sk-radio:checked {
+  border: calc(var(--spacing) * 1.25) solid var(--color-accent);
+}
+
+.sk-radio:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: 1px;
+}
+
+.sk-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.25);
+  min-width: 0;
+}
+
+.sk-option-label {
+  font-weight: 600;
+}
+
+.sk-option .sk-faint {
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sk-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+}
+
+.sk-optional {
+  color: var(--color-ink-faint);
+  font-weight: 400;
+}
+
+.sk-hint {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}

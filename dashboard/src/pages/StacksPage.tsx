@@ -48,6 +48,7 @@ import {
   iiiHint,
   pinOf,
   savedStatus,
+  stackDeclares,
   stackDiff,
   stackFile,
   stackSub,
@@ -679,6 +680,159 @@ export function StackList({ stacks, onNew, ...row }: StackListProps) {
   ))
 }
 
+/** New stack: a stack of this Console starts as a copy of another, named
+ *  after it unless a name is given; its YAML opens next to edit. */
+export function NewStackDialog({
+  stacks,
+  narrow,
+  busy,
+  error,
+  onCreate,
+  onClose,
+}: {
+  stacks: Stack[]
+  narrow: boolean
+  busy: boolean
+  /** Why the last try did not go through. */
+  error: string | null
+  onCreate: (from: string, label: string) => void
+  onClose: () => void
+}) {
+  const [from, setFrom] = useState(
+    () =>
+      (stacks.find((stack) => stack.id === BASE_STACK) ?? stacks[0])?.id ?? '',
+  )
+  const [name, setName] = useState('')
+  const source = stacks.find((stack) => stack.id === from)
+  const groups = [
+    {
+      key: 'repository',
+      label: 'Repository',
+      stacks: stacks.filter((stack) => stack.source !== 'local'),
+    },
+    {
+      key: 'local',
+      label: 'This Console',
+      stacks: stacks.filter((stack) => stack.source === 'local'),
+    },
+  ]
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open && !busy) onClose()
+      }}
+    >
+      <DialogContent className="sk-new" data-narrow={narrow || undefined}>
+        <header className="sk-sheet-head">
+          <DialogTitle className="sk-new-title">New stack</DialogTitle>
+          <DialogDescription className="sk-sheet-desc">
+            A stack of this Console starts as a copy. Its YAML opens next, to
+            change what you need.
+          </DialogDescription>
+        </header>
+        <form
+          id="sk-new-form"
+          className="sk-new-body"
+          noValidate
+          onSubmit={(event) => {
+            event.preventDefault()
+            if (source && !busy) onCreate(source.id, name.trim())
+          }}
+        >
+          <fieldset className="sk-from">
+            <legend className="sk-field-label">Copy of</legend>
+            {groups.map((group) => (
+              // biome-ignore lint/a11y/useSemanticElements: a labelled part of one radio group, inside its fieldset
+              <div
+                key={group.key}
+                role="group"
+                aria-labelledby={`sk-from-${group.key}`}
+                className="sk-from-group"
+              >
+                <span className="ds-label" id={`sk-from-${group.key}`}>
+                  {group.label}
+                </span>
+                {group.stacks.map((stack) => (
+                  <label
+                    key={stack.id}
+                    className="sk-option"
+                    data-selected={stack.id === from || undefined}
+                  >
+                    <input
+                      type="radio"
+                      className="sk-radio"
+                      name="sk-from"
+                      value={stack.id}
+                      checked={stack.id === from}
+                      disabled={busy}
+                      onChange={() => setFrom(stack.id)}
+                    />
+                    <span className="sk-option-text">
+                      <span className="sk-option-label">{stack.label}</span>
+                      <span className="sk-faint">{stackDeclares(stack)}</span>
+                    </span>
+                  </label>
+                ))}
+                {group.stacks.length === 0 ? (
+                  <span className="sk-from-empty">None yet.</span>
+                ) : null}
+              </div>
+            ))}
+          </fieldset>
+          <div className="sk-field">
+            <label className="sk-field-label" htmlFor="sk-new-name">
+              Name <span className="sk-optional">optional</span>
+            </label>
+            <input
+              id="sk-new-name"
+              className="sk-input"
+              value={name}
+              maxLength={160}
+              autoComplete="off"
+              placeholder={source ? `${source.label} copy` : ''}
+              aria-describedby="sk-new-name-hint"
+              disabled={busy}
+              onChange={(event) => setName(event.target.value)}
+            />
+            <span id="sk-new-name-hint" className="sk-hint">
+              Empty names it after what it copies. Rename it any time.
+            </span>
+          </div>
+        </form>
+        <footer className="sk-new-foot">
+          <span
+            className="sk-status"
+            aria-live="polite"
+            role={error ? 'alert' : undefined}
+            data-tone={error ? 'alert' : 'faint'}
+          >
+            {error ??
+              (source ? `Copies ${source.label} into this Console.` : '')}
+          </span>
+          <button
+            type="button"
+            className="sk-btn"
+            disabled={busy}
+            onClick={onClose}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            form="sk-new-form"
+            className="sk-btn sk-btn-primary"
+            disabled={busy || !source}
+            aria-busy={busy || undefined}
+          >
+            {busy ? 'Creating…' : 'Create and edit'}
+          </button>
+        </footer>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** Stacks: the repository's, read-only, and this Console's. Any stack is
  *  copied into one of this Console to edit it. Below them, the provider
  *  credentials a Docker execution's stack receives. */
@@ -696,7 +850,8 @@ export function StacksPage() {
     created?: boolean
   } | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
-  const [, setCreating] = useState(false)
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const beginRequest = useLatestRequest()
 
@@ -717,13 +872,17 @@ export function StacksPage() {
     void load()
   }, [load])
 
+  const openNew = useCallback(() => {
+    setCreateError(null)
+    setCreating(true)
+  }, [])
   const headerActions = useMemo(
     () =>
       stacksHeaderActions(
-        bridge ? () => setCreating(true) : undefined,
+        bridge ? openNew : undefined,
         bridge ? () => setRunning(true) : undefined,
       ),
-    [bridge],
+    [bridge, openNew],
   )
 
   const copy = async (stack: Stack) => {
@@ -737,6 +896,22 @@ export function StacksPage() {
       void load()
     } catch (cause) {
       setActionError(errorText(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const create = async (from: string, label: string) => {
+    if (!bridge) return
+    setBusy(true)
+    setCreateError(null)
+    try {
+      const created = await bridge.createStack(from, label)
+      setStacks((current) => upsertStack(current, created))
+      setCreating(false)
+      setSheet({ id: created.id, mode: 'edit', created: true })
+      void load()
+    } catch (cause) {
+      setCreateError(errorText(cause))
     } finally {
       setBusy(false)
     }
@@ -839,7 +1014,7 @@ export function StacksPage() {
           }
           onCopy={(stack) => void copy(stack)}
           onDelete={setDeleting}
-          onNew={() => setCreating(true)}
+          onNew={openNew}
         />
       )}
       <ProviderCredentials bridge={bridge} />
@@ -860,6 +1035,16 @@ export function StacksPage() {
             void load()
           }}
           onClose={() => setSheet(null)}
+        />
+      ) : null}
+      {creating && stacks ? (
+        <NewStackDialog
+          stacks={stacks}
+          narrow={narrow}
+          busy={busy}
+          error={createError}
+          onCreate={(from, label) => void create(from, label)}
+          onClose={() => setCreating(false)}
         />
       ) : null}
       <ConfirmDialog
