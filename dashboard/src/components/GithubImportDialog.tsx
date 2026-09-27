@@ -243,6 +243,11 @@ export function importSummary({
   }
 }
 
+/** The selection kept by a fresh first page: only runs it still lists. */
+export function keepListed(selected: number[], runs: GithubRun[]) {
+  return selected.filter((runId) => runs.some((run) => run.run_id === runId))
+}
+
 /** The line under the list: asking, unavailable, or how many are loaded. */
 export function listStatus(
   phase: Phase,
@@ -549,6 +554,8 @@ export function GithubImportDialog({
         setRepository(response.repository)
         setTotal(response.total_count ?? null)
         setNextPage(response.next_page)
+        if (page === 1)
+          setSelected((current) => keepListed(current, response.runs))
         setRuns((current) => {
           const known = page === 1 ? [] : current
           // A run created meanwhile shifts the pages by one.
@@ -777,6 +784,14 @@ export function GithubImportDialog({
             </div>
           </div>
           <div className="rd-actions">
+            {hidden > 0 ? (
+              <span
+                className="rd-meta"
+                title="Selected runs the filters hide are imported too"
+              >
+                {hidden} hidden
+              </span>
+            ) : null}
             <button
               type="button"
               className="rd-ghost rd-button rd-cancel"

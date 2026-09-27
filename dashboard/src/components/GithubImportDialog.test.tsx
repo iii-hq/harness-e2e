@@ -6,6 +6,7 @@ import {
   GithubRunRow,
   githubRunAction,
   importSummary,
+  keepListed,
   listStatus,
   runDays,
   runMatches,
@@ -176,6 +177,13 @@ describe('GitHub import model', () => {
     expect(failed[1].execution_error).toBe(
       'This run keeps no e2e-contract artifact',
     )
+  })
+
+  it('keeps only the selected runs a fresh first page still lists', () => {
+    expect(
+      keepListed([1, 2, 3], [run({ run_id: 3 }), run({ run_id: 1 })]),
+    ).toEqual([1, 3])
+    expect(keepListed([7], [])).toEqual([])
   })
 
   it('groups runs by the local day they were created', () => {
