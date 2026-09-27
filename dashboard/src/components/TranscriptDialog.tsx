@@ -201,14 +201,14 @@ export function TranscriptDialog({
                 count={events.length}
                 onClick={() => setFilter('all')}
               >
-                all
+                All
               </FilterChip>
               <FilterChip
                 active={filter === 'messages'}
                 count={summary.messages}
                 onClick={() => setFilter('messages')}
               >
-                messages
+                Messages
               </FilterChip>
               {/* Audit TR-03: no "next error" control when there are none. */}
               {summary.errors > 0 ? (
@@ -217,7 +217,7 @@ export function TranscriptDialog({
                   count={summary.errors}
                   onClick={() => setFilter('errors')}
                 >
-                  errors
+                  Errors
                 </FilterChip>
               ) : null}
             </FilterChipGroup>
@@ -230,7 +230,7 @@ export function TranscriptDialog({
                 type="button"
                 onClick={focusNextError}
               >
-                next error
+                Next error
               </button>
             ) : null}
             <span className="ms-auto font-mono text-label text-ink-muted">

@@ -1610,13 +1610,6 @@ ol.ep-events {
   text-align: right;
 }
 
-.ep-results-table .ds-status-badge,
-.ep-totals .ds-button,
-.ep-attention .ds-button,
-.ep-segments button {
-  text-transform: none;
-}
-
 tr.ep-detail-row,
 tr.ep-detail-row:hover {
   background: transparent;
@@ -1634,16 +1627,9 @@ tr.ep-detail-row:hover {
   opacity: 0.55;
 }
 
-/* Canvas header: status in sentence case with its dot, sentence-case actions */
+/* Canvas header: the status word in ink beside its dot */
 .execution-header .ds-status-badge {
   color: var(--color-ink, var(--text));
-  font-family: var(--font-sans);
-  font-weight: 500;
-  text-transform: none;
-}
-
-.execution-header .ds-button {
-  text-transform: none;
 }
 
 /* Facts band: 24 px chips, sans label, mono value */
@@ -1829,14 +1815,6 @@ tr.ep-detail-row:hover {
 /* The dot keeps the status colour; the word is ink (canvas header). */
 .execution-header .ds-status-badge .ds-status-dot {
   background: var(--ds-status-color);
-}
-
-/* Canvas controls are sans; mono stays for ids and figures. */
-.execution-header .ds-button,
-.ep-attention .ds-button,
-.ep-totals .ds-button,
-.ep-segments button {
-  font-family: var(--font-sans);
 }
 
 /* Stack panel (canvas: Execution detail · Stack) */

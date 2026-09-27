@@ -71,7 +71,7 @@ describe('run this scenario again', () => {
       'href="https://github.com/iii-hq/harness-e2e/actions/runs/42"',
     )
     expect(html).toContain('Release Control execution 12d5f973')
-    expect(html).toContain('>run again<')
+    expect(html).toContain('>Run again<')
   })
 
   it('says a Docker test runs again as the next attempt', () => {

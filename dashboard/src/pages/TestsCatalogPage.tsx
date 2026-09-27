@@ -657,7 +657,7 @@ export function TestsCatalogPage() {
               type="button"
               onClick={() => void load()}
             >
-              try again
+              Try again
             </button>
           </span>
         </Callout>
@@ -834,7 +834,7 @@ export function TestsCatalogPage() {
               type="button"
               onClick={() => void load()}
             >
-              try again
+              Try again
             </button>
           }
         />

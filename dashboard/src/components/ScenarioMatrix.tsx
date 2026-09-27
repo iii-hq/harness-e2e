@@ -801,7 +801,7 @@ function PreviousAttempts({ previous }: { previous: PreviousAttempt[] }) {
                   item.primaryRun.run_id,
                 )}
               >
-                evidence record
+                Evidence record
               </a>
             ) : null}
           </li>

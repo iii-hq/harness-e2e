@@ -352,7 +352,7 @@ function ProvenanceSection({
             })
           }}
         >
-          {copied ? 'copied' : 'copy json'}
+          {copied ? 'Copied' : 'Copy JSON'}
         </button>
       </div>
       <pre className="m-0 min-w-0 max-h-[480px] overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-xs leading-5 text-ink-soft">
@@ -415,7 +415,7 @@ function LiveState({
             onClick={onCancel}
             disabled={cancelling}
           >
-            {cancelling ? 'cancelling…' : 'cancel execution'}
+            {cancelling ? 'Cancelling…' : 'Cancel execution'}
           </button>
         ) : null}
       </div>
@@ -624,7 +624,7 @@ export function ExecutionPage({
                     void load()
                   }}
                 >
-                  retry
+                  Retry
                 </button>
                 <a
                   className={buttonClassName({
@@ -633,7 +633,7 @@ export function ExecutionPage({
                   })}
                   href={hashForWorkspace('executions')}
                 >
-                  back to executions
+                  Back to Executions
                 </a>
               </>
             }
@@ -1150,7 +1150,7 @@ export function ExecutionPage({
               disabled={deleting}
               onClick={() => setDeleteOpen(false)}
             >
-              cancel
+              Cancel
             </button>
             <button
               type="button"
@@ -1159,7 +1159,7 @@ export function ExecutionPage({
               aria-busy={deleting}
               onClick={() => void deleteExecution()}
             >
-              {deleting ? 'deleting…' : 'delete execution'}
+              {deleting ? 'Deleting…' : 'Delete execution'}
             </button>
           </div>
         }

@@ -85,7 +85,7 @@ export function ScenarioRerunDialog({
               })}
               href={hashForExecution(running.id)}
             >
-              open {running.title}
+              Open {running.title}
             </a>
           ) : null}
           <button
@@ -94,7 +94,7 @@ export function ScenarioRerunDialog({
             disabled={submitting}
             onClick={close}
           >
-            cancel
+            Cancel
           </button>
           <button
             type="button"
@@ -103,7 +103,7 @@ export function ScenarioRerunDialog({
             aria-busy={submitting}
             onClick={() => void run()}
           >
-            {submitting ? 'starting…' : 'run again'}
+            {submitting ? 'Starting…' : 'Run again'}
           </button>
         </div>
       }

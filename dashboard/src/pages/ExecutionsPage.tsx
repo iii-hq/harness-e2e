@@ -1422,7 +1422,7 @@ export function ExecutionsPage() {
               type="button"
               onClick={() => void load()}
             >
-              try again
+              Try again
             </button>
           </span>
         </Callout>
@@ -1507,7 +1507,7 @@ export function ExecutionsPage() {
               type="button"
               onClick={() => setActionError(null)}
             >
-              dismiss
+              Dismiss
             </button>
           </span>
         </Callout>
@@ -1532,7 +1532,7 @@ export function ExecutionsPage() {
               type="button"
               onClick={() => void load()}
             >
-              try again
+              Try again
             </button>
           }
         />
@@ -1555,7 +1555,7 @@ export function ExecutionsPage() {
                 type="button"
                 onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
               >
-                clear filters
+                Clear filters
               </button>
             ) : rows.length === 0 && bridge ? (
               <>
@@ -1567,14 +1567,14 @@ export function ExecutionsPage() {
                     setRunnerOpen(true)
                   }}
                 >
-                  run tests
+                  Run tests
                 </button>
                 <button
                   className={buttonClassName({ variant: 'secondary' })}
                   type="button"
                   onClick={() => setImportOpen(true)}
                 >
-                  import from GitHub
+                  Import from GitHub
                 </button>
               </>
             ) : null

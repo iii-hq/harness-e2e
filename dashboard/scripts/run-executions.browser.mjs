@@ -617,7 +617,7 @@ try {
   assert.equal(await empty.getByText(/new plan/i).count(), 0)
 
   // Without an earlier execution Run tests picks no model for the user.
-  await empty.getByRole('button', { name: 'run tests', exact: true }).click()
+  await empty.getByRole('button', { name: 'Run tests', exact: true }).click()
   const fresh = page.getByRole('dialog', { name: 'Run tests' })
   await fresh.getByText('catalog ready').waitFor()
   await fresh
@@ -633,7 +633,7 @@ try {
   // on the worker's machine, and Retry lists the runs once it is fixed.
   githubDown = true
   await empty
-    .getByRole('button', { name: 'import from GitHub', exact: true })
+    .getByRole('button', { name: 'Import from GitHub', exact: true })
     .click()
   const importDialog = page.getByRole('dialog', { name: 'Import from GitHub' })
   const githubError = importDialog.getByRole('alert')
@@ -1138,7 +1138,7 @@ try {
   await page.getByRole('button', { name: 'More actions', exact: true }).click()
   await page.getByRole('menuitem', { name: 'Delete…' }).click()
   await page
-    .getByRole('button', { name: 'delete execution', exact: true })
+    .getByRole('button', { name: 'Delete execution', exact: true })
     .click()
   await page.waitForFunction(() => location.hash.endsWith('/executions'))
   assert.deepEqual(deleted, [imported.id])

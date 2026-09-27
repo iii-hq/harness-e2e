@@ -19,6 +19,7 @@ import type {
   JsonObject,
 } from '@/lib/dashboard-data-source'
 import { shortDefinition } from '@/lib/definition-digest'
+import { sentenceCase } from '@/lib/format'
 import { formatFull, formatSpan, formatUsd } from './ExecutionTotals'
 import './execution-page.css'
 
@@ -275,7 +276,7 @@ export function EvidenceRecordPage({
           <>
             <StatusBadge
               status={passed ? 'passed' : 'failed'}
-              label={passed ? 'Passed' : run.systemStatus.replaceAll('_', ' ')}
+              label={passed ? 'Passed' : sentenceCase(run.systemStatus)}
             />{' '}
             <span data-result-line>{resultLine}</span>
           </>

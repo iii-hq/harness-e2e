@@ -48,7 +48,7 @@ describe('about test panel', () => {
     const html = renderToStaticMarkup(
       <AboutTestPanel spec={spec} testId="chess_engine_build" />,
     )
-    expect(html).toContain('about this test')
+    expect(html).toContain('About this test')
     expect(html).toContain('over a frozen fixture repository')
     expect(html).toContain('prompt handed to the subject')
     expect(html).toContain('perft(fen, depth)')
@@ -72,7 +72,7 @@ describe('about test panel', () => {
     // The length stands in for the fade this design system does not allow.
     expect(html).toContain('show full prompt · 3 lines')
     expect(html).toContain('aria-expanded="false"')
-    expect(html).toContain('copy prompt')
+    expect(html).toContain('Copy prompt')
   })
 
   it('renders backticked identifiers as code, not as literal backticks', () => {

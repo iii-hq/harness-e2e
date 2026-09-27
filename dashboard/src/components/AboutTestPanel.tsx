@@ -184,7 +184,7 @@ function PromptBlock({ prompt, testId }: { prompt: string; testId: string }) {
             type="button"
           >
             <Copy aria-hidden="true" size={13} />
-            {copied ? 'copied' : 'copy prompt'}
+            {copied ? 'Copied' : 'Copy prompt'}
           </button>
         </div>
         <pre
@@ -253,7 +253,7 @@ export function AboutTestPanel({
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <h2 className="m-0 text-sm font-semibold text-ink" id={headingId}>
-          about this test
+          About this test
         </h2>
         <button
           aria-expanded={open}
@@ -261,7 +261,7 @@ export function AboutTestPanel({
           onClick={toggle}
           type="button"
         >
-          {open ? 'collapse' : 'expand'}
+          {open ? 'Collapse' : 'Expand'}
           {open ? (
             <ChevronUp aria-hidden="true" size={13} />
           ) : (
