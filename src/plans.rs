@@ -25,13 +25,25 @@ pub(crate) struct LocalSuite {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+/// A new suite of this Console: a copy of another suite (`from`) or the
+/// tests given (`tests`), exactly one of the two.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub(crate) struct SuiteCreateRequest {
     /// The suite it starts as a copy of: one of the master plan or of this Console.
-    pub from: String,
-    /// Empty or absent names it after that suite.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// The test ids it holds; sequential groups are completed.
+    #[serde(default)]
+    pub tests: Option<Vec<String>>,
+    /// Empty or absent names a copy after its suite; a suite of tests needs one.
     #[serde(default)]
     pub label: String,
+    /// Runs of each test: the copied suite's, else 1.
+    #[serde(default)]
+    pub repetitions: Option<u32>,
+    /// Technical retries a crash gets: the copied suite's, else 1.
+    #[serde(default)]
+    pub technical_retries: Option<u8>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]

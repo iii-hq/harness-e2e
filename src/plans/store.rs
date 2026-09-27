@@ -216,6 +216,10 @@ pub(crate) struct SuiteView {
     /// execution of it records.
     pub sha256: Option<String>,
     pub updated_at: Option<String>,
+    /// What creating it changed or left out (a completed group, an unknown
+    /// test); only on the suite `suite-create` returns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Where an execution came from; shown and used to deduplicate imports.
@@ -606,6 +610,7 @@ impl PlanStore {
                 technical_retries: suite.technical_retries,
                 sha256: Some(snapshot.profile_sha256),
                 updated_at: None,
+                warnings: Vec::new(),
             });
         }
         for suite in self.local_suites().await? {
@@ -630,35 +635,72 @@ impl PlanStore {
                 technical_retries: suite.technical_retries,
                 sha256,
                 updated_at: Some(suite.updated_at),
+                warnings: Vec::new(),
             });
         }
         Ok(suites)
     }
 
-    /// A local suite that starts as a copy of another one, repository or local.
+    /// A local suite that starts as a copy of another one, repository or
+    /// local, or that holds the tests given. What it changed or left out of
+    /// the tests comes back as warnings.
     pub(crate) async fn create_suite(&self, request: SuiteCreateRequest) -> Result<SuiteView> {
-        let source = self
-            .suites()
-            .await?
-            .into_iter()
-            .find(|suite| suite.id == request.from)
-            .with_context(|| format!("unknown suite {}", request.from))?;
-        let label = match request.label.trim() {
-            "" => format!("{} copy", source.label),
-            label => label.to_owned(),
+        let label = request.label.trim().to_owned();
+        let mut warnings = Vec::new();
+        let (label, scenarios, repetitions, technical_retries) = match (request.from, request.tests)
+        {
+            (Some(from), None) => {
+                let source = self
+                    .suites()
+                    .await?
+                    .into_iter()
+                    .find(|suite| suite.id == from)
+                    .with_context(|| format!("unknown suite {from}"))?;
+                (
+                    if label.is_empty() {
+                        format!("{} copy", source.label)
+                    } else {
+                        label
+                    },
+                    source.scenarios,
+                    request.repetitions.unwrap_or(source.repetitions),
+                    request
+                        .technical_retries
+                        .unwrap_or(source.technical_retries),
+                )
+            }
+            (None, Some(tests)) => {
+                let (known, unknown): (Vec<_>, Vec<_>) = tests
+                    .into_iter()
+                    .partition(|id| id.parse::<crate::scenarios::ScenarioId>().is_ok());
+                warnings.extend(unknown.iter().map(|id| {
+                    format!("This runner does not know the test '{id}'; the suite leaves it out.")
+                }));
+                (
+                    label,
+                    known,
+                    request.repetitions.unwrap_or(1),
+                    request.technical_retries.unwrap_or(1),
+                )
+            }
+            _ => anyhow::bail!(
+                "Give either the suite to copy (from) or the tests, exactly one of the two."
+            ),
         };
         let id = format!("suite-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
         let suite = LocalSuite {
             id: id.clone(),
             label,
-            scenarios: source.scenarios,
-            repetitions: source.repetitions,
-            technical_retries: source.technical_retries,
+            scenarios,
+            repetitions,
+            technical_retries,
             created_at: now(),
             updated_at: now(),
         };
-        self.save_suite(suite).await?;
-        self.suite_view(&id).await
+        warnings.extend(self.save_suite(suite).await?);
+        let mut view = self.suite_view(&id).await?;
+        view.warnings = warnings;
+        Ok(view)
     }
 
     pub(crate) async fn update_suite(&self, update: SuiteUpdateRequest) -> Result<SuiteView> {
@@ -684,12 +726,15 @@ impl PlanStore {
     }
 
     /// Stored in the canonical order, with whole sequential groups, so the
-    /// same scenarios always materialize to the same digest.
-    async fn save_suite(&self, mut suite: LocalSuite) -> Result<()> {
+    /// same scenarios always materialize to the same digest. Returns a note
+    /// for each group it completed.
+    async fn save_suite(&self, mut suite: LocalSuite) -> Result<Vec<String>> {
         let groups = sequential_groups(&test_plan::embedded()?);
-        suite.scenarios = whole_groups(&canonical(&suite.scenarios), &groups).0;
+        let (scenarios, notes) = whole_groups(&canonical(&suite.scenarios), &groups);
+        suite.scenarios = scenarios;
         suite.validate()?;
-        self.write_suite(&suite).await
+        self.write_suite(&suite).await?;
+        Ok(notes)
     }
 
     async fn suite_view(&self, id: &str) -> Result<SuiteView> {
@@ -2468,8 +2513,9 @@ pub(super) mod tests {
         });
         let suite = manager
             .create_suite(SuiteCreateRequest {
-                from: "pr".into(),
+                from: Some("pr".into()),
                 label: String::new(),
+                ..SuiteCreateRequest::default()
             })
             .await
             .unwrap();
@@ -2567,8 +2613,9 @@ pub(super) mod tests {
         let manager = manager(root.path(), runner.clone());
         let created = manager
             .create_suite(SuiteCreateRequest {
-                from: "pr".into(),
+                from: Some("pr".into()),
                 label: "  ".into(),
+                ..SuiteCreateRequest::default()
             })
             .await
             .unwrap();
@@ -2676,6 +2723,88 @@ pub(super) mod tests {
     }
 
     #[tokio::test]
+    async fn a_suite_made_of_tests_completes_groups_and_warns_what_it_left_out() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        let suite = manager
+            .create_suite(SuiteCreateRequest {
+                tests: Some(vec![
+                    "registry_verification".into(),
+                    "minimal_path".into(),
+                    "retired_scenario".into(),
+                    "minimal_path".into(),
+                ]),
+                label: " Picked ".into(),
+                repetitions: Some(3),
+                ..SuiteCreateRequest::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(suite.label, "Picked");
+        assert_eq!(suite.source, "local");
+        // Canonical order, each once, the group whole and in its order.
+        assert_eq!(
+            suite.scenarios,
+            vec![
+                "minimal_path",
+                "registry_implementation",
+                "registry_verification"
+            ]
+        );
+        assert_eq!((suite.repetitions, suite.technical_retries), (3, 1));
+        assert_eq!(suite.warnings.len(), 2, "{:?}", suite.warnings);
+        assert!(suite.warnings[0].contains("'retired_scenario'"));
+        assert!(suite.warnings[1].contains("the whole group was added"));
+        // The warnings travel with the answer only; the list has none.
+        let listed = manager.suites().await.unwrap();
+        let stored = listed.iter().find(|entry| entry.id == suite.id).unwrap();
+        assert_eq!(stored.scenarios, suite.scenarios);
+        assert!(stored.warnings.is_empty());
+
+        // A copy warns of nothing.
+        let copy = manager
+            .create_suite(SuiteCreateRequest {
+                from: Some(suite.id.clone()),
+                ..SuiteCreateRequest::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(copy.label, "Picked copy");
+        assert!(copy.warnings.is_empty());
+
+        for (request, reason) in [
+            (
+                SuiteCreateRequest {
+                    from: Some("pr".into()),
+                    tests: Some(vec!["minimal_path".into()]),
+                    label: "Both".into(),
+                    ..SuiteCreateRequest::default()
+                },
+                "exactly one",
+            ),
+            (SuiteCreateRequest::default(), "exactly one"),
+            (
+                SuiteCreateRequest {
+                    tests: Some(vec!["minimal_path".into()]),
+                    ..SuiteCreateRequest::default()
+                },
+                "Name the suite",
+            ),
+            (
+                SuiteCreateRequest {
+                    tests: Some(vec!["retired_scenario".into()]),
+                    label: "Nothing known".into(),
+                    ..SuiteCreateRequest::default()
+                },
+                "at least one test",
+            ),
+        ] {
+            let error = manager.create_suite(request).await.unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+    }
+
+    #[tokio::test]
     async fn suites_list_the_master_plan_then_this_console_and_copy_either() {
         let root = tempfile::tempdir().unwrap();
         let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
@@ -2694,8 +2823,9 @@ pub(super) mod tests {
         }
         let copy = manager
             .create_suite(SuiteCreateRequest {
-                from: "software-engineering".into(),
+                from: Some("software-engineering".into()),
                 label: "Mine".into(),
+                ..SuiteCreateRequest::default()
             })
             .await
             .unwrap();
@@ -2710,8 +2840,9 @@ pub(super) mod tests {
         assert!(copy.sha256.is_some() && copy.sha256 != expected.sha256);
         let again = manager
             .create_suite(SuiteCreateRequest {
-                from: copy.id.clone(),
+                from: Some(copy.id.clone()),
                 label: String::new(),
+                ..SuiteCreateRequest::default()
             })
             .await
             .unwrap();
@@ -2772,8 +2903,9 @@ pub(super) mod tests {
                 "delete" => manager.delete_suite(id).await,
                 _ => manager
                     .create_suite(SuiteCreateRequest {
-                        from: id.into(),
+                        from: Some(id.into()),
                         label: String::new(),
+                        ..SuiteCreateRequest::default()
                     })
                     .await
                     .map(|_| ()),

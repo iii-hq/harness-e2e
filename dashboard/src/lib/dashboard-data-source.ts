@@ -37,6 +37,9 @@ export type Suite = {
   /** Digest of the snapshot this runner materializes it to. */
   sha256: string | null
   updated_at: string | null
+  /** Only on a suite just created: a group it completed, a test it left
+   *  out. */
+  warnings?: string[]
 }
 
 /** A container a stack declares, with the version or commit it pins. */
@@ -700,6 +703,9 @@ export type DashboardDataBridge = {
   listSuites(): Promise<{ suites: Suite[] }>
   /** A suite of this Console that starts as a copy of `from`. */
   createSuite(from: string, label?: string): Promise<Suite>
+  /** A suite of this Console holding these tests; sequential groups are
+   *  completed and unknown tests left out, each said in `warnings`. */
+  createSuiteOfTests(tests: string[], label: string): Promise<Suite>
   updateSuite(
     suiteId: string,
     changes: Partial<
@@ -825,6 +831,8 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
     listSuites: () => call(runtime.functions.suites_list, {}),
     createSuite: (from, label = '') =>
       call(runtime.functions.suite_create, { from, label }),
+    createSuiteOfTests: (tests, label) =>
+      call(runtime.functions.suite_create, { tests, label }),
     updateSuite: (suiteId, changes) =>
       call(runtime.functions.suite_update, { ...changes, suite_id: suiteId }),
     deleteSuite: (suiteId) =>

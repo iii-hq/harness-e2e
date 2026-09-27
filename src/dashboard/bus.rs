@@ -655,7 +655,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         SUITE_CREATE,
-        "Create a suite of this Console as a copy of another suite.",
+        "Create a suite of this Console as a copy of another suite, or holding the tests given.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: SuiteCreateRequest| {

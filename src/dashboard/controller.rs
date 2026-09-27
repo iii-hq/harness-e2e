@@ -305,7 +305,9 @@ impl Controller {
     }
 
     pub(super) async fn create_suite(&self, request: SuiteCreateRequest) -> Result<SuiteView> {
-        validate_suite_id(&request.from)?;
+        if let Some(from) = &request.from {
+            validate_suite_id(from)?;
+        }
         self.plan_store.create_suite(request).await
     }
 
