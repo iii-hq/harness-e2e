@@ -26,6 +26,22 @@ export function suitesSummary(suites: Suite[]) {
   return `${repository} in the repository, read-only · ${local || 'none'} in this Console · a suite holds tests, runs of each and retries; model and stack are picked when it runs`
 }
 
+/** The suite the page opens: the one the hash names, or none when it is not
+ *  listed (`missing`); without a name, the first one on a wide pane and the
+ *  list alone on a narrow one. */
+export function openSuite(
+  suites: Suite[] | null,
+  param: string | null,
+  narrow: boolean,
+): { suite: Suite | null; missing: boolean } {
+  if (!suites) return { suite: null, missing: false }
+  if (param) {
+    const suite = suites.find((entry) => entry.id === param) ?? null
+    return { suite, missing: suite === null }
+  }
+  return { suite: narrow ? null : (suites[0] ?? null), missing: false }
+}
+
 /** `9 tests · 1 run each · 1 retry` */
 export function suiteHolds(tests: number, runs: number, retries: number) {
   return [

@@ -8,6 +8,7 @@ import {
   draftChanges,
   draftDirty,
   draftProblem,
+  openSuite,
   sequenceSteps,
   suiteDraft,
   suiteHolds,
@@ -216,6 +217,30 @@ describe('suites view', () => {
     ]
     expect(testSuggestions('val', views, draft)).toEqual(['validation_chain'])
     expect(testSuggestions('  ', views, draft)).toEqual([])
+  })
+})
+
+describe('the suite the page opens', () => {
+  const suites = [suite('regression'), suite('pr')]
+
+  it('opens the suite the hash names, and never another in its place', () => {
+    expect(openSuite(suites, 'pr', false)).toEqual({
+      suite: suites[1],
+      missing: false,
+    })
+    expect(openSuite(suites, 'suite-gone', false)).toEqual({
+      suite: null,
+      missing: true,
+    })
+    expect(openSuite(null, 'suite-gone', false)).toEqual({
+      suite: null,
+      missing: false,
+    })
+  })
+
+  it('opens the first suite on a wide pane, the list alone on a narrow one', () => {
+    expect(openSuite(suites, null, false).suite).toBe(suites[0])
+    expect(openSuite(suites, null, true).suite).toBeNull()
   })
 })
 

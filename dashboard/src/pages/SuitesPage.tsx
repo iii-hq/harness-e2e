@@ -52,6 +52,7 @@ import {
   draftChanges,
   draftDirty,
   draftProblem,
+  openSuite,
   type SuiteDraft,
   type SuiteListItem,
   type SuiteRun,
@@ -796,6 +797,28 @@ export function SuiteDetail({
   )
 }
 
+/** A hash naming a suite that is not listed: said, with the way back. */
+export function MissingSuite() {
+  return (
+    <section
+      className="st-detail"
+      aria-labelledby="st-missing"
+      data-suite-missing
+    >
+      <h2 id="st-missing" className="st-title">
+        That suite is not here any more
+      </h2>
+      <p className="st-purpose">
+        It was deleted, or the link names a suite of another Console.
+      </p>
+      <a className="st-back" href={hashForSuites()}>
+        <ChevronLeft size={16} aria-hidden="true" />
+        All the suites
+      </a>
+    </section>
+  )
+}
+
 function DeleteSuiteDialog({
   suite,
   deleting,
@@ -1006,10 +1029,7 @@ export function SuitesPage() {
     [suites, runsBySuite, views],
   )
 
-  const named = suites?.find((suite) => suite.id === param) ?? null
-  // Wide, a suite is always open (the first by default); narrow, the list
-  // shows until one is picked.
-  const selected = named ?? (narrow ? null : (suites?.[0] ?? null))
+  const { suite: selected, missing } = openSuite(suites, param, narrow)
   const failedFirstLoad = Boolean(error) && suites === null
   const draft = selected ? (drafts.get(selected.id) ?? null) : null
   const dirty = Boolean(selected && draft && draftDirty(draft, selected))
@@ -1171,7 +1191,7 @@ export function SuitesPage() {
         )
       ) : (
         <div className="st-layout" data-narrow={narrow || undefined}>
-          {narrow && selected ? null : (
+          {narrow && (selected || missing) ? null : (
             <SuiteList
               suites={suites}
               items={items}
@@ -1213,6 +1233,8 @@ export function SuitesPage() {
               onRun={() => openRunner(selected.id)}
               onDelete={() => setDeleting(selected)}
             />
+          ) : missing ? (
+            <MissingSuite />
           ) : null}
         </div>
       )}

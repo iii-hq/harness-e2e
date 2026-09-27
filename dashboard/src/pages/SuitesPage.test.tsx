@@ -11,6 +11,7 @@ import {
 import type { TestCatalogRow } from '@/lib/test-catalog'
 import { catalogRowView } from '@/lib/test-catalog-view'
 import {
+  MissingSuite,
   SuiteDetail,
   type SuiteDetailProps,
   SuiteList,
@@ -348,6 +349,14 @@ describe('editing a suite of this Console', () => {
     expect(html).toContain('Unsaved changes')
     expect(html).toMatch(/data-test-id="minimal_path" data-off="true"/)
     expect(html).toContain('2 tests · 1 run each · 1 retry')
+  })
+})
+
+describe('a suite that is not here', () => {
+  it('says so, with the way back to the list', () => {
+    const html = renderToStaticMarkup(<MissingSuite />)
+    expect(html).toContain('That suite is not here any more')
+    expect(html).toContain(`href="${hashForSuites()}"`)
   })
 })
 
