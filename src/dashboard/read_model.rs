@@ -1763,6 +1763,7 @@ fn public_observation(observation: &&Observation) -> TestObservation {
                 status: run.status,
                 completion: run.completion,
                 score: run.score,
+                duration_seconds: run.duration_seconds,
                 turns: run.turns,
                 function_calls: run.function_calls,
                 function_call_errors: run.function_call_errors,

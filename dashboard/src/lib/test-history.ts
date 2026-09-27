@@ -65,6 +65,7 @@ export type HistoryRun = {
   status: string
   completion: CompletionState
   score: number | null
+  duration_seconds: number | null
   turns: number | null
   function_calls: number | null
   function_call_errors: number | null
@@ -132,20 +133,22 @@ export function shortModel(observation: HistoryObservation) {
   return modelText(observation).split('/').at(-1) ?? modelText(observation)
 }
 
+/** A run as the canvas's verdict() reads it; one that scored nothing reads
+ *  as failed, as the canvas paints it. */
+export function runState(run: HistoryRun): ResultState {
+  const state = runResultState({
+    status: run.status,
+    completion: run.completion,
+    score: run.score,
+  })
+  return state === 'lost_points' && run.score === 0 ? 'failed' : state
+}
+
 /** The run as the canvas's verdict() reads it: a single run by its own
  *  status, several (or a legacy observation) by their mean score. */
 export function observationState(observation: HistoryObservation): ResultState {
   const runs = observation.runs ?? []
-  if (runs.length === 1) {
-    const [run] = runs
-    const state = runResultState({
-      status: run.status,
-      completion: run.completion,
-      score: run.score,
-    })
-    // A run that scored nothing reads as failed, as the canvas paints it.
-    return state === 'lost_points' && run.score === 0 ? 'failed' : state
-  }
+  if (runs.length === 1) return runState(runs[0])
   const score = observation.mean_score
   if (typeof score !== 'number') return 'inconclusive'
   return score >= 100 ? 'passed' : 'lost_points'

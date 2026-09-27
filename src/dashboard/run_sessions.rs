@@ -25,6 +25,7 @@ pub(super) struct HistoryRun {
     pub status: RunStatus,
     pub completion: CompletionState,
     pub score: Option<f64>,
+    pub duration_seconds: Option<f64>,
     pub turns: Option<f64>,
     pub function_calls: Option<f64>,
     pub function_call_errors: Option<f64>,

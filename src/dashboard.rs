@@ -810,6 +810,7 @@ pub(crate) mod tests {
         assert_eq!(history.total, 1);
         // Before the native results are read, a run has its retained totals.
         assert_eq!(history.observations[0].runs[0].run_id, "run");
+        assert_eq!(history.observations[0].runs[0].duration_seconds, Some(1.5));
         assert!(history.observations[0].runs[0].details.is_none());
 
         model.attach_run_details(&mut history, &model.summaries, root.path());

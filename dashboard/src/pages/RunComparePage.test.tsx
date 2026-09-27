@@ -5,8 +5,10 @@ import {
   comparability,
   criteriaChanges,
   metricRows,
+  pairFromHash,
   RunComparison,
   side,
+  sideScore,
   workerCalls,
 } from '@/pages/RunComparePage'
 import { formFlowRow, run } from '@/test-fixtures/test-history'
@@ -48,7 +50,7 @@ describe('two runs of a test', () => {
       metricRows(a, b).map((row) => [row.label, row]),
     )
     expect(rows.Score).toMatchObject({ a: 90, b: 100 })
-    expect(rows['Criteria met'].format(8)).toBe('8/9')
+    expect(rows['Criteria met'].text).toEqual({ a: '8/9', b: '9/9' })
     expect(rows.Sessions).toMatchObject({ a: 4, b: 1 })
     const html = renderToStaticMarkup(
       <RunComparison
@@ -64,6 +66,34 @@ describe('two runs of a test', () => {
     expect(html).toContain('+1 · +13%')
     expect(html).toContain('−29m 19s · −78%')
     expect(html).not.toMatch(/Improved|Regressed|better|worse/)
+  })
+
+  it('reads every figure from the chosen runs, each over its own criteria', () => {
+    // Two attempts: the observation's mean and median are not the run's.
+    const twice = run('9:13')
+    const last = structuredClone(twice.runs?.[0] ?? never())
+    last.run_id = 'second'
+    last.score = 70
+    last.duration_seconds = 60
+    last.details = {
+      ...(last.details ?? never()),
+      criteria: (last.details ?? never()).criteria.slice(0, 8),
+    }
+    twice.runs = [...(twice.runs ?? []), last]
+    const rows = Object.fromEntries(
+      metricRows(side(twice), b).map((row) => [row.label, row]),
+    )
+    expect(rows.Score).toMatchObject({ a: 70, b: 100 })
+    expect(rows.Duration).toMatchObject({ a: 60_000 })
+    expect(rows['Criteria met'].text).toEqual({ a: '7/8', b: '9/9' })
+    expect(sideScore(side(twice))).toBe(70)
+  })
+
+  it('follows A and B in the hash', () => {
+    expect(
+      pairFromHash('#/ext/harness-e2e/tests/t/compare?a=x%3Ac1&b=y'),
+    ).toEqual(['x:c1', 'y'])
+    expect(pairFromHash('#/ext/harness-e2e/tests/t/compare')).toEqual(['', ''])
   })
 
   it('shows the criteria that changed with each run’s reason', () => {
@@ -104,3 +134,7 @@ describe('two runs of a test', () => {
     )
   })
 })
+
+function never(): never {
+  throw new Error('fixture is missing a value')
+}

@@ -16,8 +16,8 @@ import {
   StatusLabel,
 } from '@/design-system'
 import {
+  hashForRunComparison,
   hashForTestHistory,
-  replaceRouteParams,
   routeParams,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
@@ -41,7 +41,7 @@ import {
   keyExecution,
   modelText,
   observationState,
-  scoreText,
+  runState,
 } from '@/lib/test-history'
 import '@/design-system/styles.css'
 import '@/components/compare/compare.css'
@@ -101,14 +101,19 @@ type Row = {
   label: string
   a: number | null
   b: number | null
-  format: (value: number) => string
-  /** How the difference is written, when not like the values. */
+  /** Each side's figure as written, `8/9` for criteria met. */
+  text: Record<Which, string>
+  /** How the difference is written. */
   delta: (value: number) => string
   points?: boolean
 }
 
 function count(value: number) {
   return String(Math.round(value))
+}
+
+function number(value: number | null | undefined) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function met(run: HistoryRun | null) {
@@ -118,28 +123,32 @@ function met(run: HistoryRun | null) {
     : null
 }
 
-/** The metrics side by side, B minus A beside them, no verdict. */
+/** The side's score: the run's, where its criteria and tokens come from. */
+export function sideScore(value: Side) {
+  return number(value.run ? value.run.score : value.observation.mean_score)
+}
+
+function sideDuration(value: Side) {
+  const seconds = value.run
+    ? value.run.duration_seconds
+    : value.observation.median_duration_seconds
+  return seconds == null ? null : seconds * 1000
+}
+
+/** The metrics side by side, B minus A beside them, no verdict. Every
+ *  figure is the chosen run's, not the observation's mean or median. */
 export function metricRows(a: Side, b: Side): Row[] {
-  const both = <T,>(read: (value: Side) => T) => [read(a), read(b)] as const
-  const number = (value: number | null | undefined) =>
-    typeof value === 'number' && Number.isFinite(value) ? value : null
+  const both = (read: (value: Side) => number | null | undefined) =>
+    [number(read(a)), number(read(b))] as const
   const rows: Array<
     [string, readonly [number | null, number | null], Row['delta'], boolean?]
   > = [
-    ['Score', both((s) => number(s.observation.mean_score)), count, true],
+    ['Score', both(sideScore), count, true],
     ['Criteria met', both((s) => met(s.run)), count],
-    [
-      'Duration',
-      both((s) =>
-        s.observation.median_duration_seconds == null
-          ? null
-          : s.observation.median_duration_seconds * 1000,
-      ),
-      formatDuration,
-    ],
+    ['Duration', both(sideDuration), formatDuration],
     [
       'Turns',
-      both((s) => number(s.run?.turns ?? s.observation.median_turns)),
+      both((s) => (s.run ? s.run.turns : s.observation.median_turns)),
       count,
     ],
     [
@@ -150,59 +159,50 @@ export function metricRows(a: Side, b: Side): Row[] {
     [
       'Function calls',
       both((s) =>
-        number(s.run?.function_calls ?? s.observation.median_function_calls),
+        s.run ? s.run.function_calls : s.observation.median_function_calls,
       ),
       count,
     ],
     [
       'Function call errors',
       both((s) =>
-        number(
-          s.run?.function_call_errors ??
-            s.observation.median_function_call_errors,
-        ),
+        s.run
+          ? s.run.function_call_errors
+          : s.observation.median_function_call_errors,
       ),
       count,
     ],
-    [
-      'Input tokens',
-      both((s) => number(s.run?.details?.input_tokens)),
-      formatTokens,
-    ],
-    [
-      'Output tokens',
-      both((s) => number(s.run?.details?.output_tokens)),
-      formatTokens,
-    ],
+    ['Input tokens', both((s) => s.run?.details?.input_tokens), formatTokens],
+    ['Output tokens', both((s) => s.run?.details?.output_tokens), formatTokens],
     [
       'Cache read',
-      both((s) => number(s.run?.details?.cache_read_tokens)),
+      both((s) => s.run?.details?.cache_read_tokens),
       formatTokens,
     ],
     [
       'Cache written',
-      both((s) => number(s.run?.details?.cache_write_tokens)),
+      both((s) => s.run?.details?.cache_write_tokens),
       formatTokens,
     ],
   ]
+  // Criteria met reads `8/9`, each side over its own criteria.
+  const total = (value: Side) => value.run?.details?.criteria.length ?? '?'
+  const write = (label: string, value: number | null, side: Side) =>
+    value === null
+      ? NOT_REPORTED
+      : label === 'Criteria met'
+        ? `${value}/${total(side)}`
+        : (rows.find((row) => row[0] === label)?.[2] ?? count)(value)
   return rows
     .filter(([, [left, right]]) => left !== null || right !== null)
-    .map(([label, [left, right], format, points]) => {
-      // Criteria met reads `8/9`; its difference is a count.
-      const total =
-        a.run?.details?.criteria.length ?? b.run?.details?.criteria.length
-      return {
-        label,
-        a: left,
-        b: right,
-        format:
-          label === 'Criteria met'
-            ? (value: number) => `${value}/${total ?? '?'}`
-            : format,
-        delta: format,
-        points,
-      }
-    })
+    .map(([label, [left, right], delta, points]) => ({
+      label,
+      a: left,
+      b: right,
+      text: { a: write(label, left, a), b: write(label, right, b) },
+      delta,
+      points,
+    }))
 }
 
 export type CriterionChange = {
@@ -305,8 +305,12 @@ function SideCard({ which, value }: { which: Which; value: Side }) {
         <span className="cmp-faint">{ROLE[which]}</span>
         <StatusLabel
           className="cmp-side-state"
-          state={observationState(observation)}
-          label={scoreText(observation)}
+          state={run ? runState(run) : observationState(observation)}
+          label={
+            sideScore(value) === null
+              ? NOT_REPORTED
+              : String(Math.round(sideScore(value) as number))
+          }
         />
       </div>
       <p className="cmp-side-title">
@@ -431,10 +435,8 @@ export function RunComparison({
                 {metricRows(a, b).map((row) => (
                   <tr key={row.label} data-metric={row.label}>
                     <th scope="row">{row.label}</th>
-                    <td className="cmp-faint-num">
-                      {row.a === null ? NOT_REPORTED : row.format(row.a)}
-                    </td>
-                    <td>{row.b === null ? NOT_REPORTED : row.format(row.b)}</td>
+                    <td className="cmp-faint-num">{row.text.a}</td>
+                    <td>{row.text.b}</td>
                     <td className="cmp-delta">
                       {differenceText(
                         row.a,
@@ -578,18 +580,42 @@ export function RunComparison({
   )
 }
 
+/** A and B as the hash names them. */
+export function pairFromHash(hash: string) {
+  const params = routeParams(hash)
+  return [params.get('a') ?? '', params.get('b') ?? '']
+}
+
+/** Follows the hash: back, forward or a pasted link change the pair. */
+function useRoutePair() {
+  const [pair, setPair] = useState<string[]>(() =>
+    typeof window === 'undefined'
+      ? ['', '']
+      : pairFromHash(window.location.hash),
+  )
+  useEffect(() => {
+    const follow = () =>
+      setPair((current) => {
+        const next = pairFromHash(window.location.hash)
+        return next.join('|') === current.join('|') ? current : next
+      })
+    window.addEventListener('hashchange', follow)
+    return () => window.removeEventListener('hashchange', follow)
+  }, [])
+  return pair
+}
+
 export function RunComparePage({ testId }: { testId: string }) {
-  const [pair, setPair] = useState<string[]>(() => {
-    const params =
-      typeof window === 'undefined'
-        ? new URLSearchParams()
-        : routeParams(window.location.hash)
-    return [params.get('a') ?? '', params.get('b') ?? '']
-  })
-  const [history, setHistory] = useState<HistoryResponse | null>(null)
+  const pair = useRoutePair()
+  // What was loaded, and for which executions, so a new pair never shows
+  // the previous one's runs.
+  const [loaded, setLoaded] = useState<{
+    wanted: string
+    history: HistoryResponse
+  } | null>(null)
   const [spec, setSpec] = useState<TestSpec | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<boolean | null>(null)
   const beginRequest = useLatestRequest()
   // Swapping A and B asks for nothing new.
   const wanted = [...new Set(pair.filter(Boolean).map(keyExecution))]
@@ -599,6 +625,7 @@ export function RunComparePage({ testId }: { testId: string }) {
   useEffect(() => {
     if (!wanted) return
     const request = beginRequest()
+    setError(null)
     void getDashboardDataBridge()
       .then(async (bridge) => {
         const [data, tests] = await Promise.all([
@@ -612,7 +639,7 @@ export function RunComparePage({ testId }: { testId: string }) {
           bridge.listTests({ limit: 100 }).catch(() => null),
         ])
         if (!request.isCurrent()) return
-        setHistory(data as HistoryResponse)
+        setLoaded({ wanted, history: data as HistoryResponse })
         setSpec(
           tests?.rows.find((item) => item.test_id === testId)?.spec ?? null,
         )
@@ -623,10 +650,7 @@ export function RunComparePage({ testId }: { testId: string }) {
       })
   }, [beginRequest, testId, wanted])
 
-  useEffect(() => {
-    replaceRouteParams(new URLSearchParams({ a: pair[0], b: pair[1] }))
-  }, [pair])
-
+  const history = loaded?.wanted === wanted ? loaded.history : null
   const sides = useMemo(() => {
     const [a, b] = pair.map((key) => findRun(history?.observations ?? [], key))
     return a && b ? { a: side(a), b: side(b) } : null
@@ -733,7 +757,9 @@ export function RunComparePage({ testId }: { testId: string }) {
         a={sides.a}
         b={sides.b}
         spec={spec}
-        onSwap={() => setPair(([a, b]) => [b, a])}
+        onSwap={() => {
+          window.location.hash = hashForRunComparison(testId, pair[1], pair[0])
+        }}
       />
     </>,
   )

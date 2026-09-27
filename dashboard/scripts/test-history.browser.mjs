@@ -197,6 +197,21 @@ try {
       `\\?a=${encodeURIComponent(key(solo))}&b=${encodeURIComponent(key(tree))}$`,
     ),
   )
+  // Back returns to the order before the swap; a link with the executions
+  // alone, as older links carry, opens their first cases.
+  await page.goBack()
+  await page.getByText('+10 pts').waitFor()
+  await page.evaluate(
+    ([a, b]) => {
+      location.hash = `#/ext/harness-e2e/tests/form_flow_build/compare?a=${a}&b=${b}`
+    },
+    [solo.execution_id, tree.execution_id],
+  )
+  await page.getByText('−10 pts').waitFor()
+  await page
+    .getByRole('article', { name: 'A · Reference' })
+    .getByText('profile ade-solo-builder', { exact: false })
+    .waitFor()
   await page.getByRole('link', { name: 'Back to form_flow_build' }).click()
   await page
     .getByRole('heading', { name: 'form_flow_build', level: 1 })

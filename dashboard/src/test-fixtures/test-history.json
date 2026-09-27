@@ -182,7 +182,8 @@
                   "reason": "met"
                 }
               ]
-            }
+            },
+            "duration_seconds": 1033
           }
         ],
         "plan_execution_id": "plan-bc0664bbbcff463cfe00bbecfce283f9",
@@ -332,7 +333,8 @@
                   "reason": "met"
                 }
               ]
-            }
+            },
+            "duration_seconds": 509
           }
         ],
         "plan_execution_id": "plan-cf6ab5f943136bb54a954bc763a26eff",
@@ -512,7 +514,8 @@
                   "reason": "met"
                 }
               ]
-            }
+            },
+            "duration_seconds": 2268
           }
         ],
         "plan_execution_id": "plan-f811eb1f31c9ab47bca5de86e3c895e5",
@@ -654,7 +657,8 @@
                   "reason": "met"
                 }
               ]
-            }
+            },
+            "duration_seconds": 446
           }
         ],
         "plan_execution_id": "plan-81960bf0afbe493e793920f06fe3a169",
@@ -784,7 +788,8 @@
                   "reason": "the Worker never started"
                 }
               ]
-            }
+            },
+            "duration_seconds": 200
           }
         ],
         "plan_execution_id": "plan-684b8f754aa50b61006e2415b061b254",
@@ -930,7 +935,8 @@
                   "reason": "no screenshot of the Canvas graph"
                 }
               ]
-            }
+            },
+            "duration_seconds": 623
           }
         ],
         "plan_execution_id": "plan-1d32074494c8ae86a7fec7e2c0f96447",
