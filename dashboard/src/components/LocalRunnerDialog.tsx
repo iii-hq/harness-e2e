@@ -178,6 +178,20 @@ export function runnerForm(
   }
 }
 
+/** A GitHub import from before stacks were recorded runs again on this
+ *  harness (neither GitHub nor a recorded stack is possible): the line under
+ *  Where that says so, while Where is still this harness. */
+export function unrecordedStackNote(
+  parameters: ExecutionParameters | null,
+  where: RunnerForm['where'],
+): string | null {
+  return parameters?.where === 'github' &&
+    !parameters.stack &&
+    where === 'harness'
+    ? 'Imported before stacks were recorded, so it runs on this harness.'
+    : null
+}
+
 /** Run tests starts from the model of the newest execution (newest first)
  *  whose model this stack still lists; without one, no model is chosen. */
 export function lastUsedModel(
@@ -801,6 +815,7 @@ export function LocalRunnerDialog({
       : `Starts a new execution with the suite and parameters of ${label ? `“${label}”` : 'this one'}. Change anything first.`
     : 'Starts a new execution on this harness, in Docker or on GitHub.'
   const busy = running !== null && where === 'harness'
+  const whereNote = unrecordedStackNote(parameters, where)
 
   return (
     <Dialog
@@ -983,6 +998,11 @@ export function LocalRunnerDialog({
               ))}
             </div>
             <p className="rd-hint">{whereHint(where, dockerGroups)}</p>
+            {whereNote ? (
+              <p className="rd-hint" data-where-note>
+                {whereNote}
+              </p>
+            ) : null}
           </div>
 
           {needsStack ? (

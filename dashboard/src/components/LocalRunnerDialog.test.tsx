@@ -11,6 +11,7 @@ import {
   runningExecutionId,
   stackChoices,
   suiteChoices,
+  unrecordedStackNote,
   withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
 import type {
@@ -155,6 +156,17 @@ describe('where and stack fields', () => {
     expect(runnerForm({ ...docker, where: 'github', stack: null }).where).toBe(
       'harness',
     )
+    // ...and the dialog says why it is not GitHub, until Where changes.
+    const unrecorded = { ...docker, where: 'github' as const, stack: null }
+    expect(unrecordedStackNote(unrecorded, 'harness')).toBe(
+      'Imported before stacks were recorded, so it runs on this harness.',
+    )
+    expect(unrecordedStackNote(unrecorded, 'docker')).toBeNull()
+    expect(unrecordedStackNote({ ...docker, where: 'github' }, 'github')).toBe(
+      null,
+    )
+    expect(unrecordedStackNote(docker, 'docker')).toBeNull()
+    expect(unrecordedStackNote(null, 'harness')).toBeNull()
   })
 
   it('names a listed stack by its id or name and sends its YAML', () => {
