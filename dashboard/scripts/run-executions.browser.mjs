@@ -927,6 +927,11 @@ try {
     .locator('[data-where-line]')
     .getByText('Running · on this harness', { exact: false })
     .waitFor()
+  // The status line says tests · where · when, live as finished.
+  await page
+    .locator('[data-status-line]')
+    .getByText(/^2 tests · on this harness · started /)
+    .waitFor()
   // While it runs the header cancels it; Run again waits for the end.
   assert.equal(
     await page.getByRole('button', { name: 'Run again', exact: true }).count(),

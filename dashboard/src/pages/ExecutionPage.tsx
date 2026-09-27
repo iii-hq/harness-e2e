@@ -747,7 +747,9 @@ export function ExecutionPage({
   const docker = detail.plan_execution?.source.kind === 'docker'
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
-    : executionStatus(presentation)
+    : detail.plan_execution?.state === 'cancelling'
+      ? { status: 'cancelling' as const, label: 'Cancelling' }
+      : executionStatus(presentation)
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const rerunScenarios = new Set(
     detail.plan_execution?.slots
@@ -755,6 +757,24 @@ export function ExecutionPage({
       .map((slot) => slot.scenario_id),
   ).size
   const { title } = executionTitle(presentation)
+  // Tests · where · when, live or not (canvas: Execution detail): a live
+  // execution counts what it plans, GitHub's from when it was dispatched.
+  const tests = Math.max(
+    scenarioSummary?.total ?? 0,
+    live ? new Set(detail.plan_execution?.parameters?.scenarios).size : 0,
+  )
+  const statusLine = [
+    `${tests} ${tests === 1 ? 'test' : 'tests'}`,
+    statusWhere(detail),
+    presentation.startedAt
+      ? `${live ? (detail.plan_execution?.source.kind === 'github' ? 'dispatched ' : 'started ') : ''}${formatDate(presentation.startedAt)}`
+      : null,
+    rerunScenarios > 0
+      ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const loadStacks = bridge ? () => bridge.listStacks() : undefined
   // Facts the band shows beside what the plan execution recorded.
   const identity: Array<[string, ReactNode]> = [
@@ -829,31 +849,14 @@ export function ExecutionPage({
           summary={
             <>
               <StatusBadge status={status.status} label={status.label} />{' '}
-              <span>
-                {detail.live_progress
-                  ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
-                  : live
-                    ? 'Execution in progress · results are provisional'
-                    : [
-                        `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'}`,
-                        statusWhere(detail),
-                        presentation.startedAt
-                          ? formatDate(presentation.startedAt)
-                          : null,
-                        rerunScenarios > 0
-                          ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-              </span>
+              <span data-status-line>{statusLine}</span>
             </>
           }
           headingId="execution-title"
-          breadcrumb={[
-            { label: 'executions', href: hashForWorkspace('executions') },
-            { label: title },
-          ]}
+          back={{
+            label: 'Back to Executions',
+            href: hashForWorkspace('executions'),
+          }}
           titleAction={
             ready && detail.plan_execution ? (
               <ExecutionNameControl
