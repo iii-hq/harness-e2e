@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import { NeedsAttention } from '@/components/execution/NeedsAttention'
 import type { AssessmentRunView } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { buildExecutionPresentation } from '@/lib/execution-view'
@@ -10,6 +11,7 @@ import {
   provenanceEntries,
   rerunParameters,
   stackVersions,
+  testRerunOffered,
 } from '@/pages/ExecutionPage'
 
 const detail = {
@@ -277,5 +279,36 @@ describe('versions in the header', () => {
       parameters: { suite: { id: 'pr', label: 'pr', sha256: '' } },
     } as unknown as DashboardExecutionDetail
     expect(executionSuite(byId)).toBe('pr')
+  })
+})
+
+describe('running a test again', () => {
+  it('is not offered in Needs attention while a Docker execution still runs', () => {
+    const docker = {
+      plan_execution: { source: { kind: 'docker' } },
+    } as unknown as DashboardExecutionDetail
+    const attention = (live: boolean) =>
+      renderToStaticMarkup(
+        <NeedsAttention
+          items={[
+            {
+              kind: 'test',
+              key: 'k',
+              scenarioId: 'kanban_c7_live',
+              tone: 'error',
+              summary: 'left no run: compose::add failed',
+              detail: null,
+            },
+          ]}
+          onShow={() => {}}
+          onRerun={testRerunOffered(docker, true, live) ? () => {} : undefined}
+        />,
+      )
+    expect(attention(true)).not.toContain('data-attention-rerun')
+    expect(attention(true)).toContain('Show test')
+    expect(attention(false)).toContain('data-attention-rerun="kanban_c7_live"')
+    // Nor without the Console, nor for an execution that is no plan.
+    expect(testRerunOffered(docker, false, false)).toBe(false)
+    expect(testRerunOffered(detail, true, false)).toBe(false)
   })
 })

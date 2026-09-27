@@ -118,6 +118,16 @@ function summaryFromDetail(
   }
 }
 
+/** Running one test again is offered once the execution finished: a Docker
+ *  execution shows its tests, and what needs attention, while it still runs. */
+export function testRerunOffered(
+  detail: Pick<DashboardExecutionDetail, 'plan_execution'>,
+  ready: boolean,
+  live: boolean,
+) {
+  return ready && !live && Boolean(detail.plan_execution)
+}
+
 /** What running an execution again starts from: its recorded parameters (a
  *  native run's are its own request), or when nothing was recorded, the
  *  scenarios and model it reports with the form's defaults. */
@@ -688,7 +698,7 @@ export function ExecutionPage({
             backHref={backHref}
             transcriptHref={transcriptHref}
             onRerun={
-              bridge && detail.plan_execution
+              testRerunOffered(detail, Boolean(bridge), live)
                 ? () => setScenarioRerun(evidenceRun.scenarioId)
                 : undefined
             }
@@ -1037,7 +1047,9 @@ export function ExecutionPage({
               ...(detail.plan_execution?.warnings ?? []),
             ])}
             onRerun={
-              ready && detail.plan_execution ? setScenarioRerun : undefined
+              testRerunOffered(detail, ready, live)
+                ? setScenarioRerun
+                : undefined
             }
             onShow={(key) => {
               setOpenScenario(key)
@@ -1095,9 +1107,8 @@ export function ExecutionPage({
                   )
                 }}
                 showContract={false}
-                // Offered once finished.
                 onRerun={
-                  ready && !live && detail.plan_execution
+                  testRerunOffered(detail, ready, live)
                     ? setScenarioRerun
                     : undefined
                 }
