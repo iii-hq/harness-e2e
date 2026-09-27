@@ -42,9 +42,11 @@ export type Suite = {
   warnings?: string[]
 }
 
-/** A container a stack declares, with the version or commit it pins. */
+/** A container a stack declares: its worker as written (`package://…`,
+ *  `path://…`) and the version or commit it pins. */
 export type StackContainer = {
   name: string
+  worker: string | null
   version: string | null
   commit: string | null
 }

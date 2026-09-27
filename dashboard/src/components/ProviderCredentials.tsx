@@ -1,18 +1,19 @@
-import { useCallback, useEffect, useState } from 'react'
 import {
-  buttonClassName,
-  DataTable,
+  ConfirmDialog,
   Dialog,
-  Field,
-  fieldDescribedBy,
-  Input,
-  PageHeader,
-} from '@/design-system'
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@iii-dev/console-ui'
+import { Download, Plus, Trash2 } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   Credential,
   CredentialsImport,
   DashboardDataBridge,
 } from '@/lib/dashboard-data-source'
+
+// Drawn by pages/stacks-page.css, the one page that shows it.
 
 const NAME = /^[A-Z][A-Z0-9_]*$/
 
@@ -30,10 +31,10 @@ export function importSummary({ found, not_found }: CredentialsImport) {
 }
 
 export function credentialStatus(credential: Credential) {
-  if (credential.source === 'console') return 'set here'
+  if (credential.source === 'console') return 'Set here'
   if (credential.source === 'provider_env_file')
-    return 'set by the worker’s provider_env_file'
-  return 'not set'
+    return 'Set by the worker’s provider_env_file'
+  return 'Not set'
 }
 
 /** Sets one credential: its name (fixed when it is a row's) and its value,
@@ -41,11 +42,13 @@ export function credentialStatus(credential: Credential) {
 function CredentialDialog({
   bridge,
   name: fixed,
+  narrow,
   onClose,
   onSaved,
 }: {
   bridge: DashboardDataBridge
   name: string | null
+  narrow: boolean
   onClose: () => void
   onSaved: (credentials: Credential[], name: string) => void
 }) {
@@ -53,19 +56,15 @@ function CredentialDialog({
   const [value, setValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const nameError =
-    name !== '' && !NAME.test(name)
-      ? 'Capital letters, digits and _, starting with a letter.'
-      : undefined
+  const nameError = name !== '' && !NAME.test(name)
 
   const save = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!NAME.test(name) || value.trim() === '') return
+    if (saving || !NAME.test(name) || value.trim() === '') return
     setSaving(true)
     setError(null)
     try {
       const { credentials } = await bridge.setCredential(name, value)
-      setValue('')
       onSaved(credentials, name)
     } catch (cause) {
       setError(errorText(cause))
@@ -76,83 +75,128 @@ function CredentialDialog({
   return (
     <Dialog
       open
-      onClose={() => !saving && onClose()}
-      size="sm"
-      kicker="Provider credential"
-      title={fixed ? 'Set credential' : 'Add a credential'}
-      description="Docker executions receive it as an environment variable. The value stays on this machine, readable only by the worker, and is never shown again; it is sent once, as a field the iii SDKs leave out of the traces they record."
-      closeLabel="Close credential"
-      className="ds-root"
-      footer={
-        <div className="flex justify-end gap-2">
+      onOpenChange={(open) => {
+        if (!open && !saving) onClose()
+      }}
+    >
+      <DialogContent
+        className="sk-new sk-cred-dialog"
+        data-narrow={narrow || undefined}
+        onOpenAutoFocus={(event) => {
+          // A row's name is fixed: the value is what is left to type.
+          if (!fixed) return
+          event.preventDefault()
+          document.getElementById('credential-value')?.focus()
+        }}
+      >
+        <header className="sk-sheet-head">
+          <DialogTitle className="sk-new-title">
+            {fixed ? `Set ${fixed}` : 'Add a credential'}
+          </DialogTitle>
+          <DialogDescription className="sk-sheet-desc">
+            Docker executions receive it as an environment variable. The value
+            stays on this machine, readable only by the worker, and is never
+            shown again.
+          </DialogDescription>
+        </header>
+        <form
+          id="credential-form"
+          className="sk-new-body"
+          onSubmit={save}
+          noValidate
+        >
+          <div className="sk-field">
+            <label className="sk-field-label" htmlFor="credential-name">
+              Name
+            </label>
+            <input
+              id="credential-name"
+              className="sk-input sk-input-mono"
+              value={name}
+              placeholder="OPENAI_API_KEY"
+              autoComplete="off"
+              spellCheck={false}
+              readOnly={Boolean(fixed) || saving}
+              aria-disabled={saving || undefined}
+              aria-invalid={nameError || undefined}
+              aria-describedby="credential-name-hint"
+              onChange={(event) => setName(event.target.value.trim())}
+            />
+            <span
+              id="credential-name-hint"
+              className="sk-hint"
+              data-tone={nameError ? 'warn' : undefined}
+            >
+              {nameError
+                ? 'Capital letters, digits and _, starting with a letter.'
+                : 'The environment variable a provider reads, as OPENAI_API_KEY.'}
+            </span>
+          </div>
+          <div className="sk-field">
+            <label className="sk-field-label" htmlFor="credential-value">
+              Value
+            </label>
+            {/* Masked by CSS, not type=password, so the browser does not
+                offer to save the key; uncontrolled, so React never writes
+                it to the value attribute. */}
+            <input
+              id="credential-value"
+              className="sk-input sk-input-mono sk-secret"
+              type="text"
+              placeholder="Paste the key"
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              readOnly={saving}
+              aria-disabled={saving || undefined}
+              aria-invalid={error ? true : undefined}
+              aria-describedby={
+                error
+                  ? 'credential-value-hint credential-error'
+                  : 'credential-value-hint'
+              }
+              onChange={(event) => setValue(event.target.value)}
+            />
+            <span id="credential-value-hint" className="sk-hint">
+              Sent once, as a field the iii SDKs leave out of the traces they
+              record.
+            </span>
+            {error ? (
+              <span
+                id="credential-error"
+                className="sk-hint"
+                role="alert"
+                data-tone="alert"
+              >
+                {error}
+              </span>
+            ) : null}
+          </div>
+        </form>
+        <footer className="sk-new-foot sk-cred-foot">
           <button
-            className={buttonClassName({ variant: 'secondary' })}
             type="button"
-            onClick={onClose}
-            disabled={saving}
+            className="sk-btn"
+            aria-disabled={saving || undefined}
+            onClick={() => {
+              if (!saving) onClose()
+            }}
           >
-            cancel
+            Cancel
           </button>
           <button
-            className={buttonClassName({ variant: 'primary' })}
             type="submit"
             form="credential-form"
-            disabled={saving || !NAME.test(name) || value.trim() === ''}
-            aria-busy={saving}
+            className="sk-btn sk-btn-primary"
+            disabled={!NAME.test(name) || value.trim() === ''}
+            aria-disabled={saving || undefined}
+            aria-busy={saving || undefined}
           >
-            {saving ? 'saving…' : 'save credential'}
+            {saving ? 'Saving…' : 'Save credential'}
           </button>
-        </div>
-      }
-    >
-      <form
-        id="credential-form"
-        className="grid min-w-0 gap-4"
-        onSubmit={save}
-        noValidate
-      >
-        <Field
-          label="Name"
-          htmlFor="credential-name"
-          hint={
-            fixed
-              ? undefined
-              : 'The environment variable a provider reads, as OPENAI_API_KEY.'
-          }
-          error={nameError}
-        >
-          <Input
-            id="credential-name"
-            value={name}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={nameError ? true : undefined}
-            aria-describedby={fieldDescribedBy('credential-name', {
-              hint: !fixed,
-              error: Boolean(nameError),
-            })}
-            onChange={(event) => setName(event.target.value.trim())}
-            readOnly={Boolean(fixed)}
-            className={fixed ? 'font-mono' : undefined}
-            disabled={saving}
-          />
-        </Field>
-        <Field label="Value" htmlFor="credential-value" error={error}>
-          <Input
-            id="credential-value"
-            type="password"
-            value={value}
-            autoComplete="off"
-            spellCheck={false}
-            aria-invalid={error ? true : undefined}
-            aria-describedby={fieldDescribedBy('credential-value', {
-              error: Boolean(error),
-            })}
-            onChange={(event) => setValue(event.target.value)}
-            disabled={saving}
-          />
-        </Field>
-      </form>
+        </footer>
+      </DialogContent>
     </Dialog>
   )
 }
@@ -162,8 +206,10 @@ function CredentialDialog({
  *  environment. No value ever comes back. */
 export function ProviderCredentials({
   bridge,
+  narrow = false,
 }: {
   bridge: DashboardDataBridge | null
+  narrow?: boolean
 }) {
   const [credentials, setCredentials] = useState<Credential[] | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -203,130 +249,160 @@ export function ProviderCredentials({
       setCredentials(result.credentials)
       setNotice(importSummary(result))
     })
-  const remove = (credential: Credential) =>
-    act(async () => {
-      if (!bridge) return
-      setCredentials(
-        (await bridge.deleteCredential(credential.name)).credentials,
-      )
-      setDeleting(null)
-      setNotice(`${credential.name} deleted.`)
-    })
+  // A delete in flight: a second confirmation of it is ignored.
+  const removing = useRef(false)
+  const remove = async (credential: Credential) => {
+    if (!bridge || removing.current) return
+    removing.current = true
+    setDeleting(null)
+    try {
+      await act(async () => {
+        setCredentials(
+          (await bridge.deleteCredential(credential.name)).credentials,
+        )
+        setNotice(`${credential.name} deleted.`)
+      })
+    } finally {
+      removing.current = false
+    }
+  }
 
   return (
     <section
-      className="mt-10"
+      className="sk-block"
       aria-labelledby="provider-credentials-heading"
       data-credentials
     >
-      <PageHeader
-        headingLevel={2}
-        headingId="provider-credentials-heading"
-        title="provider credentials"
-        summary="What the providers of a Docker execution read, as environment variables: kept on this machine, readable only by the worker, never in an execution's folder or evidence. Only names are shown."
-        actions={
-          <span className="inline-flex flex-wrap gap-2">
-            <button
-              className={buttonClassName({ variant: 'secondary' })}
-              type="button"
-              disabled={!bridge || busy}
-              onClick={() => void importFromMachine()}
-            >
-              import from this machine
-            </button>
-            <button
-              className={buttonClassName({ variant: 'primary' })}
-              type="button"
-              disabled={!bridge || busy}
-              onClick={() => setEditing({ name: null })}
-            >
-              add credential
-            </button>
-          </span>
-        }
-      />
-      <p className="mt-3 text-sm text-ink-soft" role="status">
-        {notice}
-      </p>
+      <div className="sk-block-head sk-cred-head">
+        <h2 className="ds-label" id="provider-credentials-heading">
+          Provider credentials
+        </h2>
+        <span className="sk-block-note sk-cred-note">
+          What a Docker execution's providers read, as environment variables.
+          Kept on this machine, readable only by the worker; only names are
+          shown.
+        </span>
+        <button
+          className="sk-btn sk-btn-small"
+          type="button"
+          disabled={!bridge}
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) void importFromMachine()
+          }}
+        >
+          <Download size={14} aria-hidden="true" />
+          Import from this machine
+        </button>
+        <button
+          className="sk-btn sk-btn-small sk-btn-fill"
+          type="button"
+          disabled={!bridge}
+          aria-disabled={busy || undefined}
+          onClick={() => {
+            if (!busy) setEditing({ name: null })
+          }}
+        >
+          <Plus size={14} aria-hidden="true" />
+          Add credential
+        </button>
+      </div>
+      {notice ? (
+        <p className="sk-cred-notice" role="status">
+          {notice}
+        </p>
+      ) : null}
       {error ? (
-        <p className="mt-2 text-sm text-danger" role="alert">
+        <p className="sk-cred-notice" role="alert" data-tone="alert">
           {error}
         </p>
       ) : null}
       {credentials === null ? null : (
-        <div className="mt-4">
-          <DataTable caption="Provider credentials" collapse minWidth="40rem">
-            <thead>
-              <tr>
-                <th scope="col">Name</th>
-                <th scope="col">Status</th>
-                <th scope="col">Read by</th>
-                <th scope="col">
-                  <span className="ds-visually-hidden">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {credentials.map((credential) => (
-                <tr key={credential.name} data-credential={credential.name}>
-                  <td data-label="Name" className="font-mono text-xs text-ink">
-                    {credential.name}
-                  </td>
-                  <td
-                    data-label="Status"
-                    className={
-                      credential.set
-                        ? 'text-xs text-ink'
-                        : 'text-xs text-ink-muted'
-                    }
+        <table
+          className="sk-creds"
+          aria-labelledby="provider-credentials-heading"
+          data-narrow={narrow || undefined}
+        >
+          <thead>
+            <tr className="sk-cred-row sk-cred-columns">
+              <th scope="col">Name</th>
+              <th scope="col">Status</th>
+              <th scope="col">Read by</th>
+              <th scope="col">
+                <span className="ds-visually-hidden">Actions</span>
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {credentials.map((credential) => (
+              <tr
+                key={credential.name}
+                className="sk-cred-row"
+                data-credential={credential.name}
+              >
+                <td className="sk-cred-name">{credential.name}</td>
+                <td
+                  className="sk-cred-status"
+                  data-status
+                  data-set={credential.set || undefined}
+                >
+                  <span
+                    className="sk-dot"
+                    data-tone={credential.set ? 'ok' : undefined}
+                    aria-hidden="true"
+                  />
+                  {credentialStatus(credential)}
+                </td>
+                <td className="sk-cred-by">
+                  {credential.providers.length
+                    ? credential.providers.join(', ')
+                    : '—'}
+                </td>
+                <td className="sk-cred-actions">
+                  <button
+                    className="sk-btn sk-btn-small"
+                    type="button"
+                    aria-label={`${credential.source === 'console' ? 'Replace' : 'Set'} ${credential.name}`}
+                    disabled={!bridge}
+                    aria-disabled={busy || undefined}
+                    onClick={() => {
+                      if (!busy) setEditing({ name: credential.name })
+                    }}
                   >
-                    {credentialStatus(credential)}
-                  </td>
-                  <td data-label="Read by" className="text-xs text-ink-soft">
-                    {credential.providers.length
-                      ? credential.providers.join(', ')
-                      : '—'}
-                  </td>
-                  <td className="text-right">
-                    <span className="inline-flex flex-wrap justify-end gap-2">
-                      <button
-                        className={buttonClassName({
-                          variant: 'secondary',
-                          size: 'compact',
-                        })}
-                        type="button"
-                        aria-label={`${credential.source === 'console' ? 'Replace' : 'Set'} ${credential.name}`}
-                        disabled={!bridge || busy}
-                        onClick={() => setEditing({ name: credential.name })}
-                      >
-                        {credential.source === 'console' ? 'replace' : 'set'}
-                      </button>
-                      {credential.source === 'console' ? (
-                        <button
-                          className={buttonClassName({
-                            variant: 'quiet',
-                            size: 'compact',
-                          })}
-                          type="button"
-                          aria-label={`Delete ${credential.name}`}
-                          disabled={!bridge || busy}
-                          onClick={() => setDeleting(credential)}
-                        >
-                          delete
-                        </button>
-                      ) : null}
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </DataTable>
-        </div>
+                    {credential.source === 'console' ? 'Replace' : 'Set'}
+                  </button>
+                  {credential.source === 'console' ? (
+                    <button
+                      className="sk-btn sk-btn-small sk-btn-icon"
+                      type="button"
+                      aria-label={`Delete ${credential.name}`}
+                      title="Delete credential"
+                      disabled={!bridge}
+                      aria-disabled={busy || undefined}
+                      onClick={() => {
+                        if (!busy) setDeleting(credential)
+                      }}
+                    >
+                      <Trash2 size={14} aria-hidden="true" />
+                    </button>
+                  ) : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
+      <p className="sk-cred-foot-note">
+        Subscription providers (openai-codex, claude-code) need nothing here:
+        each group gets an access token from this machine's <code>codex</code>{' '}
+        or <code>claude</code> login, refreshed when it would not last the
+        group.
+      </p>
       {editing && bridge ? (
         <CredentialDialog
           bridge={bridge}
           name={editing.name}
+          narrow={narrow}
           onClose={() => setEditing(null)}
           onSaved={(next, name) => {
             setCredentials(next)
@@ -335,33 +411,16 @@ export function ProviderCredentials({
           }}
         />
       ) : null}
-      <Dialog
+      <ConfirmDialog
         open={deleting !== null}
-        onClose={() => !busy && setDeleting(null)}
-        size="sm"
+        onOpenChange={(open) => {
+          if (!open) setDeleting(null)
+        }}
         title={`Delete ${deleting?.name ?? 'credential'}?`}
         description="Docker executions started afterwards no longer receive it."
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={busy}
-              onClick={() => setDeleting(null)}
-            >
-              cancel
-            </button>
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={busy}
-              aria-busy={busy}
-              onClick={() => deleting && void remove(deleting)}
-            >
-              {busy ? 'deleting…' : 'delete credential'}
-            </button>
-          </div>
-        }
+        confirmLabel="Delete credential"
+        tone="danger"
+        onConfirm={() => deleting && void remove(deleting)}
       />
     </section>
   )
