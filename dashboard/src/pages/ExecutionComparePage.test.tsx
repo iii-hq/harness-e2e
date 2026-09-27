@@ -1,19 +1,45 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
+import {
+  byScoreChange,
+  ComparisonView,
+  deltaText,
+  pairByCaption,
+  RowDetail,
+  ScreenshotFigure,
+} from '@/components/compare/ComparisonView'
 import { compareExecutions } from '@/lib/execution-comparison'
+import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
 import {
   ComparisonPlaceholder,
-  ComparisonView,
+  choiceCounting,
   choiceFromParams,
   choiceToParams,
   ExecutionComparePage,
   loadExecutionPair,
-  ScreenshotFigure,
-  screenshotSource,
-  screenshotsOf,
-  toggleCounted,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
+
+function withRunners(a = imported(), b = local()) {
+  for (const [detail, version] of [
+    [a, '0.11.24'],
+    [b, '0.11.27'],
+  ] as const)
+    for (const worker of detail.plan_execution?.stack ?? [])
+      if (worker.name === 'harness-e2e') worker.observed = version
+  return { a, b }
+}
+
+const view = (a = imported(), b = local(), choice = {}) =>
+  renderToStaticMarkup(
+    <ComparisonView
+      comparison={compareExecutions(a, b, choice)}
+      sides={{ a, b }}
+      swap="#swap"
+      onCount={() => undefined}
+      onRunTest={() => undefined}
+    />,
+  )
 
 describe('execution comparison page', () => {
   it('keeps the reader’s choices in the hash', () => {
@@ -30,84 +56,121 @@ describe('execution comparison page', () => {
     expect(choiceToParams({ include: [], exclude: [] }).toString()).toBe('')
   })
 
-  it('toggles a scenario in and out of the totals, automatic or not', () => {
-    const a = imported()
-    const b = local()
-    let choice = { include: [] as string[], exclude: [] as string[] }
-    const scenario = (id: string) => {
-      const found = compareExecutions(a, b, choice).scenarios.find(
-        (entry) => entry.id === id,
-      )
-      if (!found) throw new Error(id)
-      return found
-    }
-    // An automatic exclusion comes back, then leaves again.
-    choice = toggleCounted(choice, scenario('shell_coder_sandbox'))
-    expect(choice).toEqual({ include: ['shell_coder_sandbox'], exclude: [] })
-    expect(scenario('shell_coder_sandbox').counted).toBe(true)
-    choice = toggleCounted(choice, scenario('shell_coder_sandbox'))
-    expect(scenario('shell_coder_sandbox').counted).toBe(false)
-    // A counted scenario leaves by the reader's hand and comes back.
-    choice = toggleCounted(choice, scenario('minimal_path'))
+  it('counts exactly the tests the reader keeps, automatic exclusions included', () => {
+    const { scenarios } = compareExecutions(imported(), local())
+    // The rule took shell_coder_sandbox out: keeping it brings it back.
+    expect(
+      choiceCounting(scenarios, [
+        'minimal_path',
+        'persistent_state',
+        'shell_coder_sandbox',
+      ]),
+    ).toEqual({ include: ['shell_coder_sandbox'], exclude: [] })
+    // Leaving a counted test out is the reader's exclusion.
+    const choice = choiceCounting(scenarios, ['persistent_state'])
     expect(choice).toEqual({ include: [], exclude: ['minimal_path'] })
-    expect(scenario('minimal_path')).toMatchObject({
-      counted: false,
-      leftOut: true,
-    })
-    choice = toggleCounted(choice, scenario('minimal_path'))
-    expect(scenario('minimal_path').counted).toBe(true)
+    const after = compareExecutions(imported(), local(), choice)
+    expect(
+      after.scenarios.map((scenario) => [scenario.id, scenario.counted]),
+    ).toEqual([
+      ['minimal_path', false],
+      ['persistent_state', true],
+      ['shell_coder_sandbox', false],
+    ])
+    expect(
+      after.scenarios.find((scenario) => scenario.id === 'minimal_path'),
+    ).toMatchObject({ leftOut: true })
   })
 
-  it('shows what changed, the totals and every scenario, without a verdict', () => {
-    const a = imported()
-    const b = local()
-    for (const [detail, version] of [
-      [a, '0.11.24'],
-      [b, '0.11.27'],
-    ] as const)
-      for (const worker of detail.plan_execution?.stack ?? [])
-        if (worker.name === 'harness-e2e') worker.observed = version
-    const html = renderToStaticMarkup(
-      <ComparisonView
-        comparison={compareExecutions(a, b)}
-        sides={{ a, b }}
-        onToggleCounted={() => undefined}
-        onRunAgain={() => undefined}
-        onTranscript={() => undefined}
-      />,
-    )
-    expect(html).toContain('A (base)')
+  it('shows both sides, what changed, the tests counted, highlights, totals and every test, without a verdict', () => {
+    const { a, b } = withRunners()
+    const html = view(a, b)
+    // Each side: its role, title, model, profile, suite and where it ran.
+    expect(html).toContain('aria-label="A · Reference"')
+    expect(html).toContain('deepseek/flash · no profile · suite not recorded')
     expect(html).toContain('GitHub run 35823421664 · RC 366030b3')
+    expect(html).toContain('href="#swap"')
+    expect(html).toContain('aria-label="Swap A and B"')
+    // What changed: the runner and the stack, and the warning.
+    expect(html).toContain('data-change="runner"')
+    expect(html).toContain('0.11.24 → 0.11.27')
+    expect(html).toContain('2 workers changed · 1 only in B')
+    expect(html).toContain('Same tests, model and profile.')
     expect(html).toContain(
       'Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ.',
     )
-    // One line for the stack at the top; its groups below the totals.
+    // The rule took a test out by itself, in its runs' words.
+    expect(html).toContain('2 of 3 counted · totals recomputed from them')
     expect(html).toContain(
-      'stack · 2 workers from your code @a1b2c3d (uncommitted changes) · 1 only in B',
+      'Out by itself · technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
     )
-    expect(html.indexOf('data-comparison-metrics')).toBeLessThan(
-      html.indexOf('data-layer="comparison-stack"'),
-    )
-    expect(html).toContain('llm-router, session-manager (only in B)</dd>')
-    expect(html).not.toContain('data-stack-group="only in B"')
-    // Out of the totals, with the run's own reason, and its state where a
-    // score would be.
-    expect(html).toContain(
-      'technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
-    )
-    expect(html).toContain('>infrastructure_error</td>')
-    expect(html).not.toMatch(/Not reported|Not comparable/)
-    expect(html).toContain('1 (1 run out of the totals)')
-    expect(html).toContain('data-metric-id="cache_read"')
-    expect(html).not.toContain('Tokens (incl. cache)')
-    expect(html.match(/data-scenario="/g)).toHaveLength(3)
-    // Checkbox and name share one cell.
-    expect(html).toMatch(
-      /<td><span class="flex items-center gap-2"><input type="checkbox" aria-label="Select minimal_path to run again"/,
-    )
-    expect(html).toContain('+ answer cites the source')
-    expect(html).toContain('rerun selected')
+    expect(html).toContain('1 test did here.')
+    expect(html).toContain('>Automatic<')
+    // Highlights and totals.
+    expect(html).toContain('B scored 13 points lower')
+    expect(html).toContain('lost 38 points in B: state_after_restart')
+    expect(html).toContain('data-kpi="score"')
+    // Every test, largest score change first; the one out says why, with
+    // its state where a score would be.
+    expect(
+      [...html.matchAll(/data-scenario="([^"]+)"/g)].map((match) => match[1]),
+    ).toEqual(['persistent_state', 'minimal_path', 'shell_coder_sandbox'])
+    expect(html).toContain('technically invalid</span>')
+    expect(html).toContain('infrastructure_error → </span>40')
+    expect(html).toContain('data-cell="tokens"')
+    expect(html).toContain('data-layer="comparison-stack"')
     expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
+  })
+
+  it('writes a difference as B minus A, never a judgement', () => {
+    const { scenarios } = compareExecutions(imported(), local())
+    const [persistent] = byScoreChange(scenarios)
+    const metric = (id: string) => {
+      const found = persistent.metrics.find((entry) => entry.id === id)
+      if (!found) throw new Error(id)
+      return found
+    }
+    expect(deltaText(metric('score'))).toBe('−38 pts')
+    expect(deltaText(metric('turns'))).toBe('no change')
+    const sandbox = scenarios.find(
+      (scenario) => scenario.id === 'shell_coder_sandbox',
+    )
+    const score = sandbox?.metrics.find((entry) => entry.id === 'score')
+    expect(score && deltaText(score)).toBe('not comparable')
+  })
+
+  it('opens a test on the criteria that moved, those lost on both sides, its metrics and runs', () => {
+    const a = imported()
+    const b = local()
+    const minimal = compareExecutions(a, b).scenarios.find(
+      (scenario) => scenario.id === 'minimal_path',
+    )
+    if (!minimal) throw new Error('minimal_path')
+    const html = renderToStaticMarkup(
+      <RowDetail
+        scenario={minimal}
+        sides={{ a, b }}
+        bridge={null}
+        onRunTest={() => undefined}
+      />,
+    )
+    expect(html).toContain('1 criterion changed · B gained 12 points')
+    expect(html).toContain('Run this test again')
+    expect(html).toContain('data-criterion="cites_source:20"')
+    expect(html).toContain('answer cites the source')
+    expect(html).toContain('no source named')
+    expect(html).toContain('names the source')
+    expect(html).toContain('Lost points on both sides')
+    expect(html).toContain('A 74/80 · B 74/80')
+    expect(html).toContain('data-metric-id="cache_read"')
+    // A run of each side, its transcript and evidence record.
+    expect(html).toContain('data-run-side="a"')
+    expect(html).toContain(
+      'href="#/ext/harness-e2e/execution/local-b/run/local-b-0/transcript"',
+    )
+    expect(html).toContain(
+      'href="#/ext/harness-e2e/execution/import-a/run/import-a-0"',
+    )
   })
 
   it('loads both executions and names the side that failed', async () => {
@@ -129,9 +192,11 @@ describe('execution comparison page', () => {
   })
 
   it('asks for two executions, shows loading, then the error', () => {
-    expect(
-      renderToStaticMarkup(<ExecutionComparePage left="a" right={null} />),
-    ).toContain('Choose two executions')
+    const empty = renderToStaticMarkup(
+      <ExecutionComparePage left="a" right={null} />,
+    )
+    expect(empty).toContain('Choose two executions')
+    expect(empty).toContain('Back to Executions')
     const loading = renderToStaticMarkup(
       <ExecutionComparePage left="a" right="b" />,
     )
@@ -141,13 +206,44 @@ describe('execution comparison page', () => {
       <ComparisonPlaceholder
         missing={false}
         error="B (gone) could not be loaded: Execution not found"
+        onRetry={() => undefined}
       />,
     )
     expect(failed).toContain('The comparison could not be loaded')
     expect(failed).toContain('B (gone) could not be loaded')
+    expect(failed).toContain('Retry')
   })
 
-  it('reads each declared screenshot from its native run and shows it', async () => {
+  it('says a side is still running and its figures are partial', () => {
+    const b = local()
+    b.status = 'running'
+    const html = view(local(), b)
+    expect(html).toContain('data-comparison-live')
+    expect(html).toContain('B is still running')
+    expect(html).toContain('(partial)')
+  })
+
+  it('pairs both sides’ screenshots by caption and shows each', () => {
+    const shot = (runId: string, caption: string): ScreenshotEntry => ({
+      key: `${runId}:${caption}`,
+      executionId: 'x',
+      runId,
+      path: 'deliverables/board.json',
+      pointer: `/attachments/${caption}.png`,
+      caption,
+    })
+    const pairs = pairByCaption(
+      [shot('a1', 'board'), shot('a1', 'only in A')],
+      [shot('b1', 'list'), shot('b1', 'board')],
+    )
+    expect(
+      pairs.map((pair) => [pair.caption, pair.a?.runId, pair.b?.runId]),
+    ).toEqual([
+      ['board', 'a1', 'b1'],
+      ['only in A', 'a1', undefined],
+      ['list', undefined, 'b1'],
+    ])
+
     const b = local()
     const record = b.reports[1]
     record.native_execution_id = '0123456789abcdef0123456789abcdef'
@@ -167,52 +263,33 @@ describe('execution comparison page', () => {
         },
       ]
     const [screenshot] = screenshotsOf(b, 'persistent_state')
-    expect(screenshot).toMatchObject({
-      executionId: '0123456789abcdef0123456789abcdef',
-      path: 'deliverables/r/a/board.json',
-      pointer: '/attachments/board-desktop.png',
-      caption: 'board, desktop',
-    })
-    const requests: unknown[] = []
-    const source = await screenshotSource(async (input) => {
-      requests.push(input)
-      return { media_type: 'image/png', base64: 'iVBORw0K' }
-    }, screenshot)
-    expect(requests).toEqual([
-      {
-        execution_id: '0123456789abcdef0123456789abcdef',
-        path: 'deliverables/r/a/board.json',
-        pointer: '/attachments/board-desktop.png',
-      },
-    ])
-    expect(source).toBe('data:image/png;base64,iVBORw0K')
-
-    const shown = renderToStaticMarkup(
-      <ScreenshotFigure
-        screenshot={screenshot}
-        image={{ source }}
-        evidenceHref="#run"
-      />,
-    )
+    const figure = (image: Parameters<typeof ScreenshotFigure>[0]['image']) =>
+      renderToStaticMarkup(
+        <ScreenshotFigure
+          which="b"
+          screenshot={screenshot}
+          image={image}
+          evidenceHref="#run"
+        />,
+      )
+    const shown = figure({ source: 'data:image/png;base64,iVBORw0K' })
     expect(shown).toContain('src="data:image/png;base64,iVBORw0K"')
-    expect(shown).toContain('alt="board, desktop"')
+    expect(shown).toContain('alt="B · board, desktop"')
+    expect(shown).toContain('aria-label="Open B · board, desktop full size"')
+    expect(shown).toContain('Evidence record')
+    expect(figure(undefined)).toContain('Loading screenshot')
+    expect(figure({ error: 'Evidence is 11000000 bytes' })).toContain(
+      'Evidence is 11000000 bytes',
+    )
     expect(
       renderToStaticMarkup(
         <ScreenshotFigure
-          screenshot={screenshot}
+          which="a"
+          screenshot={null}
           image={undefined}
-          evidenceHref="#run"
+          evidenceHref={null}
         />,
       ),
-    ).toContain('loading screenshot')
-    expect(
-      renderToStaticMarkup(
-        <ScreenshotFigure
-          screenshot={screenshot}
-          image={{ error: 'Evidence is 11000000 bytes' }}
-          evidenceHref="#run"
-        />,
-      ),
-    ).toContain('Evidence is 11000000 bytes')
+    ).toContain('No screenshot with this caption in A')
   })
 })
