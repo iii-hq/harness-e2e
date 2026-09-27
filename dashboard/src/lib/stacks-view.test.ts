@@ -54,7 +54,7 @@ describe('stacks view', () => {
     )
   })
 
-  it('pins a commit before a version, and flags a path or missing worker', () => {
+  it('pins a commit before a version, and flags any worker but package://', () => {
     expect(pinOf(container('a', { commit: '8c02f93a1d4e5f6a' }))).toBe(
       'commit 8c02f93a1d4e',
     )
@@ -62,6 +62,7 @@ describe('stacks view', () => {
     expect(workerWarns(container('a'))).toBe(false)
     expect(workerWarns(container('a', { worker: 'path://../a' }))).toBe(true)
     expect(workerWarns(container('a', { worker: null }))).toBe(true)
+    expect(workerWarns(container('a', { worker: 'docker://a' }))).toBe(true)
   })
 
   it('says how a stack differs from the default', () => {

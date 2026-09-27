@@ -35,9 +35,10 @@ export function pinOf(container: StackContainer) {
   return container.version ?? 'no version'
 }
 
-/** A worker that runs only on this machine, or none at all. */
+/** A worker the runner warns about, as it does: anything but package://
+ *  (a path on this machine, another scheme, or none at all). */
 export function workerWarns(container: StackContainer) {
-  return !container.worker || container.worker.startsWith('path://')
+  return !container.worker?.startsWith('package://')
 }
 
 /** What a stack declares, in one line: `iii latest · template harness · 5
