@@ -455,6 +455,8 @@ let githubGone = []
 let staleGithubList = null
 const started = []
 const deleted = []
+// The first delete from the detail is refused, to see it said.
+let refuseDelete = true
 const cancelled = []
 /** A started execution, cancelled once its cancel arrived. */
 const startedExecution = (id) => {
@@ -548,6 +550,10 @@ const trigger = async (name, request = {}) => {
   }
   if (id === 'stacks-list') return { stacks }
   if (id === 'execution-delete') {
+    if (refuseDelete) {
+      refuseDelete = false
+      throw new Error('execution is locked by an import')
+    }
     deleted.push(request.execution_id)
     return {}
   }
@@ -1157,12 +1163,23 @@ try {
   assert.equal(started[3].parameters.where, 'docker')
 
   // A finished execution can be deleted, from the ⋯ menu, after a confirm.
+  // A refusal closes the dialog and is said once, not as a refresh error.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
-  await page.getByRole('button', { name: 'More actions', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Delete…' }).click()
-  await page
-    .getByRole('button', { name: 'Delete execution', exact: true })
-    .click()
+  const deleteFromMenu = async () => {
+    await page
+      .getByRole('button', { name: 'More actions', exact: true })
+      .click()
+    await page.getByRole('menuitem', { name: 'Delete…' }).click()
+    await page
+      .getByRole('button', { name: 'Delete execution', exact: true })
+      .click()
+  }
+  await deleteFromMenu()
+  const refusal = page.locator('[data-delete-error]')
+  await refusal.getByText('execution is locked by an import').waitFor()
+  assert.equal(await page.getByRole('alertdialog').count(), 0)
+  assert.equal(await page.getByText('Refresh failed').count(), 0)
+  await deleteFromMenu()
   await page.waitForFunction(() => location.hash.endsWith('/executions'))
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])

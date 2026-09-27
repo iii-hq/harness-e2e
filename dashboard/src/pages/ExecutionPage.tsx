@@ -522,6 +522,8 @@ export function ExecutionPage({
   const [openScenario, setOpenScenario] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // A delete the worker refused: said once, apart from refresh errors.
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   // The parameters the Run again form opened with; null while it is closed.
   const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
   // Open apart from the parameters, so Run again keeps its title while the
@@ -859,12 +861,14 @@ export function ExecutionPage({
   const deleteExecution = async () => {
     if (!bridge || !detail) return
     setDeleting(true)
-    setError(null)
+    setDeleteError(null)
     try {
       await bridge.deleteExecution(detail.id)
       window.location.hash = hashForWorkspace('executions')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      // As the list: the dialog closes and the page says why, once.
+      setDeleteOpen(false)
+      setDeleteError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setDeleting(false)
     }
@@ -1012,6 +1016,28 @@ export function ExecutionPage({
           />
         ) : null}
 
+        {deleteError ? (
+          <Callout
+            className="mt-4"
+            tone="danger"
+            title={`Couldn’t delete “${title}”`}
+            data-delete-error
+          >
+            <span className="ex-callout-line">
+              {deleteError}
+              <button
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() => setDeleteError(null)}
+              >
+                Dismiss
+              </button>
+            </span>
+          </Callout>
+        ) : null}
         {detail.evidence_error ? (
           <EvidenceBundleUnavailable detail={detail} />
         ) : null}
