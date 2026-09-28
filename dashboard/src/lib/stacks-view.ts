@@ -35,12 +35,6 @@ export function pinOf(container: StackContainer) {
   return container.version ?? 'no version'
 }
 
-/** A worker the runner warns about, as it does: anything but package://
- *  (a path on this machine, another scheme, or none at all). */
-export function workerWarns(container: StackContainer) {
-  return !container.worker?.startsWith('package://')
-}
-
 /** What a stack declares, in one line: `iii latest · template harness · 5
  *  workers · 1 warning`. */
 export function stackDeclares(stack: Stack) {
@@ -93,7 +87,7 @@ export function warningsTitle(count: number) {
 }
 
 /** The YAML's lines as shown, without the last newline. */
-export function yamlLines(yaml: string) {
+function yamlLines(yaml: string) {
   return yaml.replace(/\n$/, '').split('\n')
 }
 
@@ -122,16 +116,6 @@ export function iiiHint(iii: string | null) {
   return iii === 'latest'
     ? 'The newest release candidate of iii-hq/iii, resolved when an execution starts.'
     : 'This release, every run.'
-}
-
-export function templateHint(template: string) {
-  return template.includes('@')
-    ? 'The iii-hq/templates project the groups start from, at that revision.'
-    : 'The iii-hq/templates project the groups start from, as main has it when the execution starts.'
-}
-
-export function templateUrl(template: string) {
-  return `https://github.com/iii-hq/templates/tree/main/iii/${encodeURIComponent(template.split('@')[0])}`
 }
 
 /** A saved stack's status in its editor. */

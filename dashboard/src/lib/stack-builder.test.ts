@@ -8,7 +8,6 @@ import {
   judge,
   type Lookups,
   lookupOf,
-  markedLines,
   orderTemplates,
   pickerGroups,
   pinLabel,
@@ -17,6 +16,7 @@ import {
   yamlOf,
   yamlScalar,
 } from '@/lib/stack-builder'
+import { blockedLines } from '@/lib/stack-sheet'
 
 const HARNESS = [
   'queue',
@@ -187,12 +187,12 @@ describe('stack builder', () => {
       true,
       true,
     ])
-    const lines = markedLines(
-      yamlOf('latest', 'harness', declared),
+    const lines = blockedLines(
+      yamlOf('latest', 'harness', declared).join('\n'),
       new Set(['fp']),
     )
     expect(
-      lines.flatMap((line, index) => (line.blocked ? [index + 1] : [])),
+      lines.flatMap((blocked, index) => (blocked ? [index + 1] : [])),
     ).toEqual([8, 9, 10])
     expect(status([pinned], harness).text).toBe(
       'Runs the harness project with 1 pinned.',

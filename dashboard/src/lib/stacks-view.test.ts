@@ -6,7 +6,6 @@ import {
   stackDiff,
   stackSub,
   stacksSummary,
-  workerWarns,
   yamlLine,
   yamlMeta,
 } from '@/lib/stacks-view'
@@ -54,15 +53,11 @@ describe('stacks view', () => {
     )
   })
 
-  it('pins a commit before a version, and flags any worker but package://', () => {
+  it('pins a commit before a version', () => {
     expect(pinOf(container('a', { commit: '8c02f93a1d4e5f6a' }))).toBe(
       'commit 8c02f93a1d4e',
     )
     expect(pinOf(container('a', { version: null }))).toBe('no version')
-    expect(workerWarns(container('a'))).toBe(false)
-    expect(workerWarns(container('a', { worker: 'path://../a' }))).toBe(true)
-    expect(workerWarns(container('a', { worker: null }))).toBe(true)
-    expect(workerWarns(container('a', { worker: 'docker://a' }))).toBe(true)
   })
 
   it('says how a stack differs from the default', () => {

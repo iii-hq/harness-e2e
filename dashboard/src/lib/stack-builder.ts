@@ -290,17 +290,6 @@ export function pinLine(entry: Declared) {
     : `    version: ${yamlScalar(entry.version)}`
 }
 
-/** The YAML's lines, each container's block marked when it stops Create. */
-export function markedLines(lines: string[], blocked: Set<string>) {
-  let inBad = false
-  return lines.map((text) => {
-    const head = /^ {2}([^\s:]+):$/.exec(text)
-    if (head) inBad = blocked.has(head[1])
-    else if (!text.startsWith('    ')) inBad = false
-    return { text, blocked: inBad }
-  })
-}
-
 /** What a declared worker's version button says. */
 export function pinLabel(entry: Declared) {
   if (entry.commit !== null)
