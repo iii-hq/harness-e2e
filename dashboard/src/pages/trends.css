@@ -160,9 +160,6 @@
 }
 
 .tr-menu {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--spacing) * 0.5);
   max-width: calc(100vw - var(--spacing) * 4);
   padding: calc(var(--spacing) * 1);
 }
@@ -683,6 +680,8 @@
 }
 
 .tr-grid-scroll {
+  /* Holds the cells' visually hidden notes, so they scroll with it. */
+  position: relative;
   overflow-x: auto;
   padding-bottom: calc(var(--spacing) * 1);
 }
@@ -849,8 +848,42 @@
   font-variant-numeric: tabular-nums;
 }
 
+.tr-table.iii-ui-table {
+  width: 100%;
+  min-width: 64rem;
+  table-layout: fixed;
+}
+
+.tr-table.iii-ui-table[data-narrow] {
+  min-width: 0;
+}
+
 .tr-table .tr-col-open {
   width: calc(var(--spacing) * 8);
+}
+
+.tr-table .tr-w-14 {
+  width: calc(var(--spacing) * 14);
+}
+
+.tr-table .tr-w-16 {
+  width: calc(var(--spacing) * 16);
+}
+
+.tr-table .tr-w-18 {
+  width: calc(var(--spacing) * 18);
+}
+
+.tr-table .tr-w-26 {
+  width: calc(var(--spacing) * 26);
+}
+
+.tr-table .tr-w-30 {
+  width: calc(var(--spacing) * 30);
+}
+
+.tr-table .tr-w-38 {
+  width: calc(var(--spacing) * 38);
 }
 
 .tr-cell-stack {
@@ -859,7 +892,9 @@
 
 .tr-cell-stack > a {
   display: block;
+  overflow: hidden;
   color: var(--color-ink);
+  text-overflow: ellipsis;
   text-decoration: none;
   white-space: nowrap;
 }

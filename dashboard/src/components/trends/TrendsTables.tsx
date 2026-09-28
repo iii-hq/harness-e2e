@@ -224,32 +224,38 @@ export function ExecutionsTable({
                 <TableHead scope="col">When</TableHead>
                 {narrow ? null : (
                   <>
-                    <TableHead scope="col">iii</TableHead>
-                    <TableHead scope="col">Runner</TableHead>
-                    <TableHead scope="col">Stack</TableHead>
+                    <TableHead scope="col" className="tr-w-26">
+                      iii
+                    </TableHead>
+                    <TableHead scope="col" className="tr-w-30">
+                      Runner
+                    </TableHead>
+                    <TableHead scope="col" className="tr-w-38">
+                      Stack
+                    </TableHead>
                   </>
                 )}
-                <TableHead scope="col" className="tr-num">
+                <TableHead scope="col" className="tr-num tr-w-14">
                   Score
                 </TableHead>
-                <TableHead scope="col" className="tr-num">
+                <TableHead scope="col" className="tr-num tr-w-16">
                   Tests
                 </TableHead>
                 {narrow ? null : (
                   <>
-                    <TableHead scope="col" className="tr-num">
+                    <TableHead scope="col" className="tr-num tr-w-18">
                       Duration
                     </TableHead>
-                    <TableHead scope="col" className="tr-num">
+                    <TableHead scope="col" className="tr-num tr-w-18">
                       Input
                     </TableHead>
-                    <TableHead scope="col" className="tr-num">
+                    <TableHead scope="col" className="tr-num tr-w-14">
                       Calls
                     </TableHead>
-                    <TableHead scope="col" className="tr-num">
+                    <TableHead scope="col" className="tr-num tr-w-16">
                       Errors
                     </TableHead>
-                    <TableHead scope="col" className="tr-num">
+                    <TableHead scope="col" className="tr-num tr-w-14">
                       Turns
                     </TableHead>
                   </>
