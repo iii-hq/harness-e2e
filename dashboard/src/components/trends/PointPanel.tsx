@@ -240,7 +240,7 @@ export function PointPanel({
       <div className="tr-actions">
         <a
           className={buttonClassName({
-            variant: 'primary',
+            variant: 'secondary',
             className: 'no-underline',
           })}
           href={hashForExecution(point.execution_id)}

@@ -34,6 +34,7 @@ import {
   counted,
   emptyText,
   NOT_RECORDED_STACK,
+  pointTime,
   previousCounted,
   profileText,
   sameSeries,
@@ -414,6 +415,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   const latest = points.at(-1) ?? null
   const metric = trendMetric(focus)
   const note = stackNote(points)
+  const empty = emptyText(points)
   const point = selected >= 0 ? points[selected] : undefined
 
   return (
@@ -480,7 +482,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                 bridge ? (
                   <button
                     type="button"
-                    className={buttonClassName({ variant: 'primary' })}
+                    className={buttonClassName({ variant: 'secondary' })}
                     onClick={() => openRunner({ parameters: null, label: '' })}
                   >
                     Run tests
@@ -502,29 +504,29 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                 className="tr-empty"
                 icon={<ChartLine size={24} />}
                 title="Nothing to draw yet"
-                description={emptyText(points)}
-                actions={
-                  latest ? (
+                description={
+                  empty ? (
                     <>
+                      {empty.before}
                       <a
-                        className={buttonClassName({
-                          variant: 'secondary',
-                          className: 'no-underline',
-                        })}
-                        href={hashForExecution(latest.execution_id)}
+                        className="tr-inline-link"
+                        href={hashForExecution(empty.point.execution_id)}
                       >
-                        Open the execution
+                        {pointTime(empty.point)}
                       </a>
-                      {bridge ? (
-                        <button
-                          type="button"
-                          className={buttonClassName({ variant: 'primary' })}
-                          onClick={() => void runAgain(latest)}
-                        >
-                          Run again
-                        </button>
-                      ) : null}
+                      {empty.after}
                     </>
+                  ) : null
+                }
+                actions={
+                  latest && bridge ? (
+                    <button
+                      type="button"
+                      className={buttonClassName({ variant: 'secondary' })}
+                      onClick={() => void runAgain(latest)}
+                    >
+                      Run again
+                    </button>
                   ) : null
                 }
               />

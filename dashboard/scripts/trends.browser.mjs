@@ -272,12 +272,13 @@ try {
     .getByRole('menuitemradio', { name: /^Regression · anthropic/ })
     .click()
   await page.getByRole('heading', { name: 'Nothing to draw yet' }).waitFor()
+  // One action; the execution is a link in the sentence.
+  const empty = page.locator('.tr-empty')
   assert.match(
-    await page
-      .getByRole('link', { name: 'Open the execution' })
-      .getAttribute('href'),
+    await empty.getByRole('link').getAttribute('href'),
     new RegExp(`/execution/${opusDetail.id}$`),
   )
+  assert.equal(await empty.getByRole('button').count(), 1)
   await page.getByRole('button', { name: 'Run again' }).click()
   await page.getByRole('dialog', { name: 'Run again' }).waitFor()
   assert.equal(requests('execution-get').at(-1).execution_id, opusDetail.id)

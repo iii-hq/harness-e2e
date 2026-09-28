@@ -771,17 +771,27 @@ const WHERE_PHRASE: Record<TrendPoint['source']['kind'], string> = {
   github: 'on GitHub',
 }
 
-/** Why there is nothing to draw: no execution has a counted run. */
+/** Why there is nothing to draw: no execution has a counted run. The
+ *  latest execution goes between `before` and `after`, as a link. */
 export function emptyText(points: TrendPoint[]) {
+  const point = points.at(-1)
+  if (!point) return null
   const tail = 'A trend starts at two executions with counted runs.'
-  if (points.length === 1) {
-    const [point] = points
-    return `This series has one execution, ${pointTime(point)} ${WHERE_PHRASE[point.source.kind]}, and none of its ${plural(point.runs, 'run')} counted. ${point.reason ?? ''} ${tail}`.replace(
-      /\s+/g,
-      ' ',
-    )
+  if (points.length === 1)
+    return {
+      before: 'This series has one execution, ',
+      point,
+      after:
+        ` ${WHERE_PHRASE[point.source.kind]}, and none of its ${plural(point.runs, 'run')} counted. ${point.reason ?? ''} ${tail}`.replace(
+          /\s+/g,
+          ' ',
+        ),
+    }
+  return {
+    before: `None of this series’ ${points.length} executions has a counted run yet; the latest is `,
+    point,
+    after: `. ${tail}`,
   }
-  return `None of this series’ ${points.length} executions has a counted run yet. ${tail}`
 }
 
 /** The versions under the panel: iii, the Harness, the runner, the stack. */

@@ -84,6 +84,8 @@ describe('trends page parts', () => {
       />,
     )
     expect(html).toContain('GitHub #36381232467 · Release Control cd674932')
+    // Run tests in the header is the view's one primary.
+    expect(html).not.toContain('ds-button-primary')
     expect(html).toContain('data-change="runner"')
     expect(html).toContain('0.16.2 → 0.17.0')
     expect(html).toContain('>no change<')

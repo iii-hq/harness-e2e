@@ -610,6 +610,11 @@
   height: calc(var(--spacing) * 1.75);
 }
 
+.tr-inline-link {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
 .tr-link {
   display: inline-flex;
   align-items: center;

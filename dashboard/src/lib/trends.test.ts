@@ -349,11 +349,17 @@ describe('the view', () => {
 
   it('says why there is nothing to draw', () => {
     const opus = seriesPoints('opus')
-    expect(emptyText(opus)).toMatch(
-      /^This series has one execution, .+ on this harness, and none of its 9 runs counted\. Every run is technically invalid, so none of the 9 counts\. A trend starts at two executions with counted runs\.$/,
-    )
-    expect(emptyText([...opus, ...opus])).toBe(
-      'None of this series’ 2 executions has a counted run yet. A trend starts at two executions with counted runs.',
-    )
+    expect(emptyText(opus)).toEqual({
+      before: 'This series has one execution, ',
+      point: opus[0],
+      after:
+        ' on this harness, and none of its 9 runs counted. Every run is technically invalid, so none of the 9 counts. A trend starts at two executions with counted runs.',
+    })
+    expect(emptyText([...opus, ...opus])).toMatchObject({
+      before:
+        'None of this series’ 2 executions has a counted run yet; the latest is ',
+      after: '. A trend starts at two executions with counted runs.',
+    })
+    expect(emptyText([])).toBeNull()
   })
 })
