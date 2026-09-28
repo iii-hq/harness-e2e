@@ -352,11 +352,12 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('quality')
     expect(html).not.toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
-    expect(html).toContain('data-status="passed"')
-    expect(html).toContain('data-status="incomplete"')
+    expect(html).toContain('data-state="passed" data-tone="ok"')
+    expect(html).toContain('data-state="incomplete" data-tone="warn"')
     expect(html).not.toContain('hard gate')
-    expect(html).toContain('data-status="inconclusive"')
-    expect(html).toContain('data-status="unavailable"')
+    expect(html).toContain('data-state="inconclusive" data-tone="warn"')
+    // No report reads as not run, as the filter counts it, in its own word.
+    expect(html).toMatch(/data-state="not_run"[^>]*>(?:(?!<\/td>).)*<span>Unavailable</)
     expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
@@ -575,6 +576,18 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-row-state="queued"')
     expect(html).toContain('data-row-state="cancelled"')
     expect(html).toContain('Stopped before it finished')
+    // The result word as the canvas paints it (RESULT): tinted, so alert
+    // states read in strong alert and queued or cancelled faint; the dot
+    // carries the tone.
+    for (const [state, tone] of [
+      ['running', 'accent'],
+      ['queued', 'ghost'],
+      ['not_run', 'alert'],
+      ['cancelled', 'ghost'],
+    ])
+      expect(html).toContain(
+        `data-state="${state}" data-tone="${tone}" data-tinted="true"`,
+      )
     const notRun = model.items
       .filter((item) => matchesFilter(item, 'notrun'))
       .map((item) => item.scenarioId)
@@ -603,7 +616,7 @@ describe('ScenarioMatrix', () => {
     expect(panelId).toBeTruthy()
     expect(html).toContain(`id="${panelId}" hidden=""`)
     expect(html).toContain('title="persistent_state · definition b2b2b2b2"')
-    expect(html).toContain('data-status="incomplete"')
+    expect(html).toContain('data-state="incomplete"')
     expect(html).not.toContain('completion evaluator')
   })
 })

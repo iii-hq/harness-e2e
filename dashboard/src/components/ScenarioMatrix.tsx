@@ -22,6 +22,7 @@ import {
   type OperationalStatus,
   Panel,
   StatusBadge,
+  StatusLabel,
 } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
 import {
@@ -48,6 +49,7 @@ import {
   stepSignals,
   unreported,
 } from '@/lib/scenario-matrix'
+import type { ResultState } from '@/lib/result-status'
 import { screenshotsOf } from '@/lib/screenshots'
 
 export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
@@ -446,6 +448,23 @@ export function rowNote(item: ScenarioMatrixItem): string {
   return [prefix, suffix].filter(Boolean).join(' · ')
 }
 
+/** A row's result in the canvas's vocabulary (RESULT): the tone paints the
+ *  dot and, tinted, the word. A slot that left no report reads as not run,
+ *  as the Not run filter counts it; cancelling is still live. */
+const ROW_RESULT: Record<OperationalStatus, ResultState> = {
+  passed: 'passed',
+  failed: 'failed',
+  inconclusive: 'inconclusive',
+  unavailable: 'not_run',
+  'not-run': 'not_run',
+  recommendation: 'inconclusive',
+  running: 'running',
+  cancelling: 'running',
+  cancelled: 'cancelled',
+  incomplete: 'incomplete',
+  queued: 'queued',
+}
+
 function ScenarioResult({
   detail,
   item,
@@ -583,8 +602,9 @@ function ScenarioResult({
           </button>
         </th>
         <td className="ep-cell" data-label="Result">
-          <StatusBadge
-            status={item.objective.status}
+          <StatusLabel
+            tinted
+            state={ROW_RESULT[item.objective.status]}
             label={item.objective.label}
           />
         </td>
