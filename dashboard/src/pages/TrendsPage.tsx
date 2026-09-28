@@ -292,7 +292,7 @@ function Legend() {
       </li>
       <li>
         <span className="tr-change-dot" data-major="true" aria-hidden="true" />
-        iii, Harness, runner, tests or stack changed
+        iii, Harness, tests or stack changed
       </li>
       <li>
         <span className="tr-change-dot" data-major="false" aria-hidden="true" />

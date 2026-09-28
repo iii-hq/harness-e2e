@@ -928,10 +928,6 @@
   width: calc(var(--spacing) * 26);
 }
 
-.tr-table .tr-w-30 {
-  width: calc(var(--spacing) * 30);
-}
-
 .tr-table .tr-w-38 {
   width: calc(var(--spacing) * 38);
 }

@@ -44,26 +44,22 @@ describe('what changed between executions', () => {
     const changes = changesAt(regression, index)
     expect(changes.map((change) => change.text)).toEqual([
       '0.24.2-rc.2 → 0.24.3-rc.1',
-      '0.14.0 → 0.15.0',
     ])
     expect(changes[0]).toMatchObject({
       kind: 'iii',
       major: true,
       compare: { name: 'iii', base: '0.24.2-rc.2', head: '0.24.3-rc.1' },
     })
-    expect(changes[1].compare).toEqual({
-      name: 'harness-e2e',
-      base: '0.14.0',
-      head: '0.15.0',
-    })
-    expect(laneLabel(changes)).toBe('iii 0.24.3-rc.1 +1')
+    expect(laneLabel(changes)).toBe('iii 0.24.3-rc.1')
+    // The runner (harness-e2e) is not part of Trends: Sep 26 11:16 AM only
+    // moved it, so nothing changed there.
+    expect(changesAt(regression, index + 1)).toEqual([])
   })
 
-  it('labels the Harness 1.8.31 → 1.8.34 before the runner, and outlines other workers and definitions', () => {
+  it('labels the Harness 1.8.31 → 1.8.34, and outlines other workers and definitions', () => {
     const index = at(regression, 'github-36010839787-2')
     const changes = changesAt(regression, index)
     expect(names(regression, index)).toEqual([
-      'runner:harness-e2e',
       'worker:ade',
       'harness:harness',
       'worker:iii-directory',
@@ -75,21 +71,17 @@ describe('what changed between executions', () => {
       changes.filter((change) => !change.major).map((change) => change.kind),
     ).toEqual(['worker', 'worker', 'definition'])
     expect(changes.at(-1)?.text).toBe('7fbb3d6e → 6f93023f')
-    expect(laneLabel(changes)).toBe('harness 1.8.34 +1')
+    expect(laneLabel(changes)).toBe('harness 1.8.34')
   })
 
   it('compares workers with the last execution that recorded them', () => {
     // Sep 26 10:23 PM: the two executions before it recorded no workers.
     const index = at(regression, 'github-36285373498-1')
     const changes = changesAt(regression, index)
-    expect(changes[0]).toMatchObject({
-      kind: 'runner',
-      text: '0.15.1 → 0.16.2',
-    })
     expect(changes.find((change) => change.name === 'harness')?.text).toBe(
       '1.8.35 → 1.8.36',
     )
-    expect(laneLabel(changes)).toBe('harness 1.8.36 +1')
+    expect(laneLabel(changes)).toBe('harness 1.8.36')
   })
 
   it('says a worker joined the stack, with nothing to count', () => {
@@ -113,22 +105,25 @@ describe('what changed between executions', () => {
     expect(tests?.text).toBe(
       'left: minimal_path, performance_regression, git_regression_forensics · joined: validation_self_repair, context_pressure, prompt_injection_resilience',
     )
-    expect(laneLabel(changesAt(regression, index))).toBe('runner 0.12.4 +1')
+    expect(laneLabel(changesAt(regression, index))).toBe('tests changed')
   })
 
-  it('counts commits between two checkouts of the runner on this harness', () => {
-    const local = seriesPoints('local')
-    const [runner] = changesAt(local, 2)
-    expect(runner).toMatchObject({
-      kind: 'runner',
-      text: '0.14.0@7a16130* → 0.14.0@2f8826a*',
-      compare: { name: 'harness-e2e', base: '@7a16130', head: '@2f8826a' },
+  it('counts commits between two checkouts of a worker on this harness', () => {
+    const local = structuredClone(seriesPoints('local').slice(0, 2))
+    expect(changesAt(local, 1)).toEqual([])
+    if (local[1].workers) local[1].workers.harness = '@2f8826a*'
+    const [harness] = changesAt(local, 1)
+    expect(harness).toMatchObject({
+      kind: 'harness',
+      text: '@852b87e* → @2f8826a*',
+      compare: { name: 'harness', base: '@852b87e', head: '@2f8826a' },
       note: '* the checkout also had uncommitted edits',
     })
-    expect(laneLabel([runner])).toBe('runner @2f8826a*')
-    expect(commitsLinkText(runner, 1)).toBe('1 commit between them on GitHub')
-    expect(commitsLinkText(runner, null)).toBe('Commits between them on GitHub')
-    expect(changesAt(local, 1)).toEqual([])
+    expect(laneLabel([harness])).toBe('harness @2f8826a*')
+    expect(commitsLinkText(harness, 1)).toBe('1 commit between them on GitHub')
+    expect(commitsLinkText(harness, null)).toBe(
+      'Commits between them on GitHub',
+    )
     expect(changesAt(local, 0)).toEqual([])
   })
 
@@ -169,7 +164,6 @@ describe('what changed between executions', () => {
     )
     const moved = structuredClone(regression.slice(-2))
     moved[1].stack = { name: 'lean', matched_by_workers: false }
-    moved[1].runner = moved[0].runner
     expect(changesAt(moved, 1)).toEqual([
       expect.objectContaining({ kind: 'stack', text: 'default → lean' }),
     ])
@@ -247,7 +241,7 @@ describe('measures', () => {
     const done = metric('completed')
     expect(done.figure(9, latest)).toBe('9 of 9 planned')
     expect(versionsText(latest)).toBe(
-      'iii 0.24.3-rc.1 · harness 1.8.36 · runner 0.17.0 · stack default (22 workers)',
+      'iii 0.24.3-rc.1 · harness 1.8.36 · stack default (21 workers)',
     )
   })
 })

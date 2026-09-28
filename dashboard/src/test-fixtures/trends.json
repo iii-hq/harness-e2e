@@ -29,7 +29,6 @@
             "matched_by_workers": false
           },
           "engine": null,
-          "runner": "0.11.21",
           "workers": null,
           "planned": [
             "minimal_path",
@@ -119,7 +118,6 @@
             "matched_by_workers": true
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.11.21",
           "workers": {
             "ade": "1.9.38",
             "browser": "0.2.23",
@@ -239,7 +237,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.11.21",
           "workers": null,
           "planned": [
             "minimal_path",
@@ -339,7 +336,6 @@
             "matched_by_workers": true
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.11.24",
           "workers": {
             "ade": "1.9.38",
             "browser": "0.2.23",
@@ -459,7 +455,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.11.24",
           "workers": null,
           "planned": [
             "minimal_path",
@@ -559,7 +554,6 @@
             "matched_by_workers": true
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.11.24",
           "workers": {
             "ade": "1.9.39",
             "browser": "0.2.23",
@@ -679,7 +673,6 @@
             "matched_by_workers": true
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.12.4",
           "workers": {
             "ade": "1.9.41",
             "browser": "0.2.23",
@@ -799,7 +792,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.14.0",
           "workers": {
             "ade": "1.9.42",
             "browser": "0.2.23",
@@ -919,7 +911,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.14.0",
           "workers": {
             "ade": "1.9.43",
             "browser": "0.2.23",
@@ -1041,7 +1032,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.3-rc.1",
-          "runner": "0.15.0",
           "workers": null,
           "planned": [
             "persistent_state",
@@ -1131,7 +1121,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.3-rc.1",
-          "runner": "0.15.1",
           "workers": null,
           "planned": [
             "persistent_state",
@@ -1221,7 +1210,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.3-rc.1",
-          "runner": "0.16.2",
           "workers": {
             "ade": "1.9.44",
             "browser": "0.2.24",
@@ -1343,7 +1331,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.3-rc.1",
-          "runner": "0.16.2",
           "workers": {
             "ade": "1.9.44",
             "browser": "0.2.24",
@@ -1465,7 +1452,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.3-rc.1",
-          "runner": "0.17.0",
           "workers": {
             "ade": "1.9.44",
             "browser": "0.2.24",
@@ -1598,7 +1584,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.17.0",
           "workers": {
             "ade": "@01d628e",
             "browser": "0.2.20",
@@ -1722,7 +1707,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.14.0@7a16130*",
           "workers": {
             "ade": "@ba3f954",
             "browser": "0.2.20",
@@ -1789,7 +1773,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.14.0@7a16130*",
           "workers": {
             "ade": "@ba3f954",
             "browser": "0.2.20",
@@ -1856,7 +1839,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.14.0@2f8826a*",
           "workers": {
             "ade": "@ba3f954",
             "browser": "0.2.20",
@@ -1923,7 +1905,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.14.0@2f8826a*",
           "workers": {
             "ade": "@ba3f954",
             "browser": "0.2.20",
@@ -1990,7 +1971,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.0",
-          "runner": "0.14.0@2f8826a*",
           "workers": {
             "ade": "@ba3f954",
             "browser": "0.2.20",
@@ -2076,7 +2056,6 @@
             "matched_by_workers": false
           },
           "engine": null,
-          "runner": "0.11.28",
           "workers": null,
           "planned": [
             "kanban_c1_foundation",
@@ -2204,7 +2183,6 @@
             "matched_by_workers": false
           },
           "engine": "0.24.2-rc.2",
-          "runner": "0.12.6",
           "workers": null,
           "planned": [
             "kanban_c1_foundation",

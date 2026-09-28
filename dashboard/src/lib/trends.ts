@@ -86,8 +86,8 @@ export type TrendPoint = {
   }
   stack: { name: string | null; matched_by_workers: boolean }
   engine: string | null
-  runner: string | null
-  /** Identity per worker, runner and engine left out; null = not recorded. */
+  /** Identity per worker, the engine and harness-e2e left out; null = not
+   *  recorded. */
   workers: Record<string, string> | null
   planned: string[] | null
   runs: number
@@ -228,7 +228,6 @@ export function notRun(point: Pick<TrendPoint, 'tests'>) {
 export type ChangeKind =
   | 'iii'
   | 'harness'
-  | 'runner'
   | 'tests'
   | 'stack'
   | 'worker'
@@ -236,10 +235,10 @@ export type ChangeKind =
 
 export type TrendChange = {
   kind: ChangeKind
-  /** A filled diamond: iii, the Harness, the runner, the tests or the
-   *  stack; another worker or a definition is outlined. */
+  /** A filled diamond: iii, the Harness, the tests or the stack; another
+   *  worker or a definition is outlined. */
   major: boolean
-  /** `iii`, `harness-e2e`, a worker, `tests`, `stack` or a test id. */
+  /** `iii`, a worker, `tests`, `stack` or a test id. */
   name: string
   text: string
   note: string | null
@@ -250,7 +249,6 @@ export type TrendChange = {
 export const CHANGE_KIND_TEXT: Record<ChangeKind, string> = {
   iii: 'engine',
   harness: 'the Harness under test',
-  runner: 'runner',
   tests: 'suite',
   stack: 'stack',
   worker: 'worker',
@@ -309,8 +307,8 @@ function lastBefore(
   return null
 }
 
-/** What changed at point `index`: iii, the runner and the stack against the
- *  execution right before it; workers, planned tests and definitions against
+/** What changed at point `index`: iii and the stack against the execution
+ *  right before it; workers, planned tests and definitions against
  *  the last one that recorded them. */
 export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
   if (index <= 0) return []
@@ -319,10 +317,6 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
   const out: TrendChange[] = []
   if (previous.engine && current.engine && previous.engine !== current.engine)
     out.push(versionChange('iii', 'iii', previous.engine, current.engine))
-  if (previous.runner && current.runner && previous.runner !== current.runner)
-    out.push(
-      versionChange('runner', 'harness-e2e', previous.runner, current.runner),
-    )
   // Only two recorded stacks say the stack changed: one not recorded may
   // have run the same workers.
   if (
@@ -412,16 +406,10 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
   return out
 }
 
-const LANE_RANK: ChangeKind[] = ['iii', 'harness', 'runner', 'tests', 'stack']
-
-/** `0.14.0@2f8826a*` → `@2f8826a*`: the lane has no room for both. */
-function shortRunner(identity: string) {
-  const at = identity.indexOf('@')
-  return at > 0 ? identity.slice(at) : identity
-}
+const LANE_RANK: ChangeKind[] = ['iii', 'harness', 'tests', 'stack']
 
 /** The label over a diamond: the first major change by iii > harness >
- *  runner > tests > stack, and how many more. Minor changes go unlabelled. */
+ *  tests > stack, and how many more. Minor changes go unlabelled. */
 export function laneLabel(changes: TrendChange[]) {
   const majors = changes
     .filter((change) => change.major)
@@ -436,11 +424,9 @@ export function laneLabel(changes: TrendChange[]) {
       ? `iii ${to}`
       : first.kind === 'harness'
         ? `harness ${to}`
-        : first.kind === 'runner'
-          ? `runner ${shortRunner(to)}`
-          : first.kind === 'tests'
-            ? 'tests changed'
-            : 'stack changed'
+        : first.kind === 'tests'
+          ? 'tests changed'
+          : 'stack changed'
   return majors.length > 1 ? `${text} +${majors.length - 1}` : text
 }
 
@@ -452,10 +438,7 @@ export function commitsLinkText(
   const count = commits === null ? null : plural(commits, 'commit')
   if (change.compare?.base.startsWith('@'))
     return `${count ?? 'Commits'} between them on GitHub`
-  const where =
-    change.name === 'iii' || change.name === 'harness-e2e'
-      ? ''
-      : ' in iii-hq/workers'
+  const where = change.name === 'iii' ? '' : ' in iii-hq/workers'
   return `${count ? `${count} between the tags` : 'The commits between the tags'}${where}`
 }
 
@@ -834,13 +817,12 @@ export function emptyText(points: TrendPoint[]) {
   }
 }
 
-/** The versions under the panel: iii, the Harness, the runner, the stack. */
+/** The versions under the panel: iii, the Harness, the stack. */
 export function versionsText(point: TrendPoint) {
-  const workers = point.workers ? Object.keys(point.workers).length + 1 : null
+  const workers = point.workers ? Object.keys(point.workers).length : null
   return [
     `iii ${point.engine ?? 'not recorded'}`,
     `harness ${point.workers?.harness ?? 'not recorded'}`,
-    `runner ${point.runner ?? 'not recorded'}`,
     `stack ${stackText(point)}${workers ? ` (${workers} workers)` : ''}`,
   ].join(' · ')
 }

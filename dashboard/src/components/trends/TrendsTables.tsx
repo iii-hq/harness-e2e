@@ -233,9 +233,6 @@ export function ExecutionsTable({
                     <TableHead scope="col" className="tr-w-26">
                       iii
                     </TableHead>
-                    <TableHead scope="col" className="tr-w-30">
-                      Runner
-                    </TableHead>
                     <TableHead scope="col" className="tr-w-38">
                       Stack
                     </TableHead>
@@ -326,19 +323,6 @@ export function ExecutionsTable({
                             }
                           >
                             {point.engine ?? '—'}
-                          </span>
-                        </TableCell>
-                        <TableCell>
-                          <span
-                            className="tr-version"
-                            data-new={
-                              (before?.runner &&
-                                point.runner &&
-                                before.runner !== point.runner) ||
-                              undefined
-                            }
-                          >
-                            {point.runner ?? '—'}
                           </span>
                         </TableCell>
                         <TableCell>

@@ -163,7 +163,7 @@ export function PointPanel({
         {changes.length === 0 ? (
           <p className="tr-faint">
             {before
-              ? 'Nothing recorded changed: same iii, runner, stack, workers and test definitions.'
+              ? 'Nothing recorded changed: same iii, stack, workers and test definitions.'
               : 'There is nothing before it to compare with.'}
           </p>
         ) : (

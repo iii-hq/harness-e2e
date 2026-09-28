@@ -57,15 +57,6 @@ export function trendsAnswer(request = {}) {
 // The commits GitHub counted on Sep 28 (Trends.dc.html's COMMITS).
 const COMMITS = {
   'iii|0.24.2-rc.2|0.24.3-rc.1': 9,
-  'harness-e2e|0.11.21|0.11.24': 7,
-  'harness-e2e|0.11.24|0.12.4': 24,
-  'harness-e2e|0.12.4|0.14.0': 17,
-  'harness-e2e|0.14.0|0.15.0': 6,
-  'harness-e2e|0.15.0|0.15.1': 5,
-  'harness-e2e|0.15.1|0.16.2': 15,
-  'harness-e2e|0.16.2|0.17.0': 2,
-  'harness-e2e|0.11.28|0.12.6': 18,
-  'harness-e2e|7a16130|2f8826a': 1,
   'ade|1.9.41|1.9.42': 2,
   'harness|1.8.31|1.8.34': 19,
   'harness|1.8.34|1.8.35': 7,

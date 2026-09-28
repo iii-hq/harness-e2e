@@ -142,12 +142,10 @@ try {
     })
     .waitFor()
 
-  // The Sep 26 diamond: no counted run, iii and the runner moved; the
-  // commits between are asked only now.
+  // The Sep 26 diamond: no counted run, iii moved; the commits between are
+  // asked only now.
   assert.equal(requests('version-compare').length, 0)
-  await page
-    .getByRole('button', { name: /^What changed · .+: iii, harness-e2e$/ })
-    .click()
+  await page.getByRole('button', { name: /^What changed · .+: iii$/ }).click()
   const failed = page.locator('[data-trend-panel="github-36220337119-1"]')
   await failed
     .getByText('did not register e2e::scenarios-list within 300 s', {
@@ -159,9 +157,6 @@ try {
     await iii.getAttribute('href'),
     'https://github.com/iii-hq/iii/compare/iii/v0.24.2-rc.2...iii/v0.24.3-rc.1',
   )
-  await failed
-    .getByRole('link', { name: '6 commits between the tags' })
-    .waitFor()
   assert.deepEqual(requests('version-compare')[0], {
     name: 'iii',
     base: '0.24.2-rc.2',
@@ -172,6 +167,21 @@ try {
     0,
   )
 
+  // The Harness moved on Sep 24: its tags in iii-hq/workers.
+  await page
+    .getByRole('button', {
+      name: /^What changed · .+: ade, harness, iii-directory, shell_coder_sandbox$/,
+    })
+    .click()
+  assert.equal(
+    await page
+      .getByRole('link', {
+        name: '19 commits between the tags in iii-hq/workers',
+      })
+      .getAttribute('href'),
+    'https://github.com/iii-hq/workers/compare/harness/v1.8.31...harness/v1.8.34',
+  )
+
   // The latest point: its measures against the previous counted execution
   // and Compare with that one.
   await page
@@ -180,9 +190,7 @@ try {
     .click()
   const latest = page.locator('[data-trend-panel="github-36381232467-1"]')
   await latest.getByText('−4.4', { exact: false }).first().waitFor()
-  await latest
-    .getByRole('link', { name: '2 commits between the tags' })
-    .waitFor()
+  await latest.getByText('Nothing recorded changed', { exact: false }).waitFor()
   assert.match(
     await latest
       .getByRole('link', { name: /^Compare with/ })
@@ -301,21 +309,12 @@ try {
   assert.match(await stack.innerText(), /default/)
   assert.match(await hash(), /stack=default$/)
 
-  // This harness: the runner moved between two checkouts.
+  // This harness: nothing changed between its executions, no diamond.
   await series.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
   await summary.getByText('5 executions ·', { exact: false }).waitFor()
   assert.match(await stack.innerText(), /this harness/)
-  await page
-    .getByRole('button', { name: /^What changed · .+: harness-e2e$/ })
-    .click()
-  assert.equal(
-    await page
-      .getByRole('link', { name: '1 commit between them on GitHub' })
-      .getAttribute('href'),
-    'https://github.com/iii-hq/harness-e2e/compare/7a16130...2f8826a',
-  )
-  await page.getByText('* the checkout also had uncommitted edits').waitFor()
+  assert.equal(await page.locator('.tr-diamond').count(), 0)
 
   // Nothing counted: say why, open the execution or run it again.
   await series.click()
@@ -340,7 +339,7 @@ try {
   await page.reload()
   await page.locator('[data-trend-executions][data-narrow]').waitFor()
   assert.equal(
-    await page.getByRole('columnheader', { name: 'Runner' }).count(),
+    await page.getByRole('columnheader', { name: 'Stack' }).count(),
     0,
   )
   await page
@@ -352,7 +351,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, commits between two checkouts, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()

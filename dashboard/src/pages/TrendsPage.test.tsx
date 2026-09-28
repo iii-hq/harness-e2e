@@ -124,13 +124,16 @@ describe('trends page parts', () => {
       />,
     )
     expect(html).toContain('data-trend-chart="score"')
-    expect(html.match(/class="tr-diamond"/g)).toHaveLength(10)
-    expect(html).toMatch(/aria-label="What changed · [^"]+: iii, harness-e2e"/)
+    // Every execution with a change but Sep 26 11:16 AM and Sep 28, which
+    // only moved the runner (not part of Trends).
+    expect(html.match(/class="tr-diamond"/g)).toHaveLength(8)
+    expect(html).toMatch(/aria-label="What changed · [^"]+: iii"/)
     expect(html.match(/class="tr-missed"/g)).toHaveLength(2)
     expect(html).toMatch(/aria-label="[^"]+ · Score no counted run"/)
     expect(html.match(/class="tr-point"/g)).toHaveLength(9)
-    expect(html).toContain('>iii 0.24.3-rc.1 +1</text>')
-    expect(html).toContain('>harness 1.8.34 +1</text>')
+    expect(html).toContain('>iii 0.24.3-rc.1</text>')
+    expect(html).toContain('>harness 1.8.34</text>')
+    expect(html).not.toContain('runner')
   })
 
   it('draws a small chart with its direction under the title and crosses as strokes', () => {
@@ -197,11 +200,12 @@ describe('trends page parts', () => {
     expect(html).toContain('GitHub #36381232467 · Release Control cd674932')
     // Run tests in the header is the view's one primary.
     expect(html).not.toContain('ds-button-primary')
-    expect(html).toContain('data-change="runner"')
-    expect(html).toContain('0.16.2 → 0.17.0')
+    expect(html).toContain(
+      'Nothing recorded changed: same iii, stack, workers and test definitions.',
+    )
     expect(html).toContain('>no change<')
     expect(html).toContain(
-      'iii 0.24.3-rc.1 · harness 1.8.36 · runner 0.17.0 · stack default (22 workers)',
+      'iii 0.24.3-rc.1 · harness 1.8.36 · stack default (21 workers)',
     )
     expect(html).toContain(
       'href="#/ext/harness-e2e/execution/github-36381232467-1"',
@@ -266,17 +270,10 @@ describe('trends page parts', () => {
     expect(ids.at(-1)).toBe('github-35742568444-1')
     expect(html).toContain('no counted run · GitHub #36220337119 · RC e63de635')
     expect(html).toMatch(/data-new="true">0\.24\.3-rc\.1</)
-    // A runner that was not recorded is not new.
-    const unrecorded = structuredClone(regression.slice(-2))
-    unrecorded[0].runner = null
-    expect(
-      renderToStaticMarkup(
-        <ExecutionsTable points={unrecorded} selected={-1} narrow={false} />,
-      ),
-    ).not.toContain('data-new="true">0.17.0<')
+    expect(html).not.toContain('>Runner<')
     const narrow = renderToStaticMarkup(
       <ExecutionsTable points={regression} selected={-1} narrow />,
     )
-    expect(narrow).not.toContain('>Runner<')
+    expect(narrow).not.toContain('>Stack<')
   })
 })
