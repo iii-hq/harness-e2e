@@ -3,7 +3,13 @@ import { describe, expect, it } from 'vitest'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
-import { changesAt, previousCounted, trendMetric } from '@/lib/trends'
+import {
+  changesAt,
+  latestPair,
+  pointTime,
+  previousCounted,
+  trendMetric,
+} from '@/lib/trends'
 import {
   answeredView,
   requestParams,
@@ -158,6 +164,38 @@ describe('trends page parts', () => {
     )
     expect(html.match(/class="tr-miss-mark"/g)).toHaveLength(2)
     expect(html).not.toContain('×')
+  })
+
+  it('says which executions the latest value and its delta are', () => {
+    const metric = trendMetric('duration')
+    const { current, previous } = latestPair(regression, metric)
+    if (!current || !previous) throw new Error('the fixture has two measured')
+    const html = renderToStaticMarkup(
+      <SmallChart
+        metric={metric}
+        points={regression}
+        changes={changes}
+        selected={-1}
+        narrow={false}
+        onFocus={() => undefined}
+      />,
+    )
+    expect(html).toContain(
+      `<p class="tr-footnote tr-reference">${pointTime(current)} against ${pointTime(previous)}</p>`,
+    )
+    const alone = renderToStaticMarkup(
+      <SmallChart
+        metric={metric}
+        points={[current]}
+        changes={[[]]}
+        selected={-1}
+        narrow={false}
+        onFocus={() => undefined}
+      />,
+    )
+    expect(alone).toContain(
+      `<p class="tr-footnote tr-reference">${pointTime(current)}</p>`,
+    )
   })
 
   it('crosses an execution without a counted run, and leaves a gap where a counted one did not measure', () => {

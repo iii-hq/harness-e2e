@@ -578,6 +578,12 @@
   margin: 0;
 }
 
+/* Under the latest value: which execution it is, against which one. */
+.tr-reference {
+  margin: 0;
+  text-align: right;
+}
+
 /* The panel */
 .tr-panel {
   display: flex;

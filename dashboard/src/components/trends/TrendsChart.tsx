@@ -24,18 +24,15 @@ import {
 export function DeltaPill({
   metric,
   value,
-  title,
 }: {
   metric: TrendMetric
   value: number | null
-  title?: string
 }) {
   if (value === null) return null
   return (
     <span
       className="tr-delta"
       data-tone={deltaTone(deltaDirection(value), metric.better)}
-      title={title}
     >
       {value === 0 ? (
         'no change'
@@ -81,9 +78,26 @@ function Latest({
       <DeltaPill
         metric={metric}
         value={current && previous ? deltaOf(metric, current, previous) : null}
-        title={previous ? `against ${pointTime(previous)}` : undefined}
       />
     </>
+  )
+}
+
+/** Which executions the latest value and its delta are, said under them. */
+function Reference({
+  metric,
+  points,
+}: {
+  metric: TrendMetric
+  points: TrendPoint[]
+}) {
+  const { current, previous } = latestPair(points, metric)
+  if (!current) return null
+  return (
+    <p className="tr-footnote tr-reference">
+      {pointTime(current)}
+      {previous ? ` against ${pointTime(previous)}` : null}
+    </p>
   )
 }
 
@@ -329,6 +343,7 @@ export function LargeChart({
         <span className="tr-spacer" />
         <Latest metric={metric} points={points} />
       </div>
+      <Reference metric={metric} points={points} />
       <Plot
         metric={metric}
         points={points}
@@ -376,6 +391,7 @@ export function SmallChart({
         <span className="tr-spacer" />
         <Latest metric={metric} points={points} />
       </div>
+      <Reference metric={metric} points={points} />
       <p className="tr-footnote">
         <Direction better={metric.better} /> · {metric.note}
       </p>
