@@ -128,6 +128,35 @@ describe('what changed between executions', () => {
     expect(changesAt(local, 0)).toEqual([])
   })
 
+  it('finds a changed definition across an execution where the test did not run', () => {
+    const three = structuredClone(regression.slice(-3))
+    const skipped = three[1].tests.find((test) => test.id === 'timer_wake')
+    if (skipped) {
+      skipped.state = 'not_run'
+      skipped.score = null
+      skipped.behavior_sha256 = null
+    }
+    const moved = three[2].tests.find((test) => test.id === 'timer_wake')
+    if (moved) moved.behavior_sha256 = `sha256:${'ab'.repeat(32)}`
+    expect(changesAt(three, 2)).toContainEqual(
+      expect.objectContaining({
+        kind: 'definition',
+        name: 'timer_wake',
+        text: '1450c4b9 → abababab',
+      }),
+    )
+  })
+
+  it('shows a worker that ran more than one build without a lookup', () => {
+    const two = structuredClone(regression.slice(-2))
+    if (two[1].workers) two[1].workers.ide = '0.12.20, 0.12.21'
+    const ide = changesAt(two, 1).find((change) => change.name === 'ide')
+    expect(ide).toMatchObject({
+      text: '0.12.20 → 0.12.20, 0.12.21',
+      compare: null,
+    })
+  })
+
   it('says a stack changed only between two recorded stacks', () => {
     const any = seriesPoints('regression')
     // Sep 22, 11:49 AM ran on a stack the Console did not record.

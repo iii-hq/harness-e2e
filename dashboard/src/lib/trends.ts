@@ -276,6 +276,8 @@ function versionChange(
       ...change,
       note: from ? 'removed from the stack' : 'added to the stack',
     }
+  // More than one build of a worker in one execution ("a, b"): no one range.
+  if (from.includes(', ') || to.includes(', ')) return change
   const base = commitOf(from)
   const head = commitOf(to)
   if (base && head)
@@ -372,10 +374,20 @@ export function changesAt(points: TrendPoint[], index: number): TrendChange[] {
         compare: null,
       })
   }
-  const withCounted = lastBefore(points, index, counted)
-  if (counted(current) && withCounted) {
+  // Each test against the last counted execution that ran it: one where it
+  // did not run (not_run, no definition) is skipped, not taken as the same.
+  if (counted(current)) {
     for (const test of current.tests) {
-      const before = withCounted.tests.find((item) => item.id === test.id)
+      const digestOf = (point: TrendPoint) =>
+        point.tests.find((item) => item.id === test.id)?.behavior_sha256
+      const earlier = test.behavior_sha256
+        ? lastBefore(points, index, (point) =>
+            Boolean(counted(point) && digestOf(point)),
+          )
+        : null
+      const before = earlier
+        ? earlier.tests.find((item) => item.id === test.id)
+        : undefined
       if (
         test.behavior_sha256 &&
         before?.behavior_sha256 &&
