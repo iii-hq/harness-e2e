@@ -39,5 +39,8 @@ describe('provider credentials', () => {
         source: 'provider_env_file',
       }),
     ).toBe('Set by the worker’s provider_env_file')
+    expect(
+      credentialStatus({ ...credential, set: true, source: 'environment' }),
+    ).toBe('Set by the worker’s environment')
   })
 })

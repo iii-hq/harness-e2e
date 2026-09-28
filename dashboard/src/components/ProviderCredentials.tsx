@@ -34,6 +34,8 @@ export function credentialStatus(credential: Credential) {
   if (credential.source === 'console') return 'Set here'
   if (credential.source === 'provider_env_file')
     return 'Set by the worker’s provider_env_file'
+  if (credential.source === 'environment')
+    return 'Set by the worker’s environment'
   return 'Not set'
 }
 

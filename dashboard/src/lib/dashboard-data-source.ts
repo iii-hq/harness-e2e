@@ -92,11 +92,12 @@ export type ExecutionWhere = 'harness' | 'docker' | 'github'
 
 /** A provider credential Docker executions receive, by name: the worker
  *  never answers with a value. `source` is where it is set from: this
- *  Console, or only the worker's `provider_env_file`. */
+ *  Console, the worker's `provider_env_file`, or only the worker's own
+ *  environment. */
 export type Credential = {
   name: string
   set: boolean
-  source?: 'console' | 'provider_env_file'
+  source?: 'console' | 'provider_env_file' | 'environment'
   /** The providers that read it. */
   providers: string[]
 }
