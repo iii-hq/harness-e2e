@@ -221,37 +221,41 @@ export function EvidenceRecordPage({
   const dimensionOf = new Map(
     run.assessments.map((entry) => [entry.criterionId, entry.dimension]),
   )
-  // A criterion's evidence (Evidence per criterion): the transcript as its
-  // page, another file by opening it, nothing when neither is at hand.
+  // A criterion's evidence (Evidence per criterion), from the first of its
+  // references that resolves: the transcript as its page, another file by
+  // opening it; nothing when none is at hand.
   const evidenceLink = (criterionId: string) => {
-    const [ref] = run.assessments
+    const refs = run.assessments
       .filter((entry) => entry.criterionId === criterionId)
       .flatMap((entry) => entry.evidence ?? [])
-    if (!ref) return null
     const label = `Evidence for ${criterionId}`
-    if (ref.artifact_id === 'transcript' && transcriptHref && run.transcript)
-      return (
-        <a
-          className="er-evidence-link"
-          href={transcriptHref}
-          aria-label={label}
-        >
-          Evidence
-        </a>
+    for (const ref of refs) {
+      if (ref.artifact_id === 'transcript' && transcriptHref && run.transcript)
+        return (
+          <a
+            className="er-evidence-link"
+            href={transcriptHref}
+            aria-label={label}
+          >
+            Evidence
+          </a>
+        )
+      const path = text(
+        files.find((file) => file.sha256 === ref.artifact_sha256)?.path,
       )
-    const path = text(
-      files.find((file) => file.sha256 === ref.artifact_sha256)?.path,
-    )
-    return path && onOpenFile ? (
-      <button
-        type="button"
-        className="er-evidence-link"
-        aria-label={label}
-        onClick={() => open(path)}
-      >
-        Evidence
-      </button>
-    ) : null
+      if (path && onOpenFile)
+        return (
+          <button
+            type="button"
+            className="er-evidence-link"
+            aria-label={label}
+            onClick={() => open(path)}
+          >
+            Evidence
+          </button>
+        )
+    }
+    return null
   }
   const groups = new Map<string, typeof criteria>()
   for (const criterion of criteria) {

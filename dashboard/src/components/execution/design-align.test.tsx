@@ -342,6 +342,38 @@ describe('evidence record (canvas)', () => {
     expect(html).toMatch(
       /<button[^>]*aria-label="Evidence for domain_primary"[^>]*>Evidence<\/button>/,
     )
+    // The first reference that resolves: without the transcript at hand, a
+    // criterion citing it and then a file opens the file.
+    const noTranscript = renderToStaticMarkup(
+      <EvidenceRecordPage
+        run={
+          {
+            ...(run as object),
+            transcript: undefined,
+            assessments: [
+              {
+                criterionId: 'runtime_contract',
+                dimension: 'deliverable',
+                evidence: [
+                  { artifact_id: 'transcript', artifact_sha256: 'sha256:gone' },
+                  {
+                    artifact_id: 'metrics',
+                    artifact_sha256: 'sha256:2a4c32ffaaaa',
+                  },
+                ],
+              },
+            ],
+          } as never
+        }
+        detail={detail}
+        backHref="#"
+        transcriptHref="#/transcript"
+        onOpenFile={async () => {}}
+      />,
+    )
+    expect(noTranscript).toMatch(
+      /<button[^>]*aria-label="Evidence for runtime_contract"[^>]*>Evidence<\/button>/,
+    )
     expect(text).toContain('browser::act ×3')
     expect(text).toContain('Show flags')
     expect(text).toContain('1 of 2 criteria met')
