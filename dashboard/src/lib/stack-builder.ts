@@ -11,6 +11,7 @@ import type {
   StackTemplate,
   WorkerResolution,
 } from '@/lib/dashboard-data-source'
+import { plural } from '@/lib/format'
 
 /** A container the stack declares. */
 export type Declared = {
@@ -487,7 +488,7 @@ export function builderStatus({
     ? declared.length
       ? `Runs the ${templateId(template)} project with ${declared.length} pinned.`
       : `Runs the ${templateId(template)} project with every worker at the template’s version.`
-    : `Runs the ${declared.length} workers declared, plus what they depend on.`
+    : `Runs the ${plural(declared.length, 'worker')} declared, plus what they depend on.`
   return {
     text:
       tpl || !template

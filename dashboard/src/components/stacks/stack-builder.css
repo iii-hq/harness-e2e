@@ -67,7 +67,10 @@
   scrollbar-width: thin;
 }
 
-.sb[data-narrow] .sb-form {
+/* In one scrolling column each part keeps its whole height. */
+.sb[data-narrow] .sb-form,
+.sb[data-narrow] .sb-side {
+  min-height: auto;
   overflow: visible;
 }
 

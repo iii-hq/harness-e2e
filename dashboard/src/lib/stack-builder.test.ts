@@ -175,6 +175,9 @@ describe('stack builder', () => {
       'Can’t create it yet: browser already arrives with another worker.',
       true,
     ])
+    expect(status([pkg('fp')], null, lookups).text).toBe(
+      'Runs the 1 worker declared, plus what they depend on.',
+    )
     const fine = status([pkg('harness'), pkg('fp')], null, lookups)
     expect([fine.text, fine.blocked]).toEqual([
       'Runs the 2 workers declared, plus what they depend on.',
