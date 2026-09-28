@@ -922,9 +922,12 @@ export function StackSheet({
                     )}
                   </div>
                   {template ? (
-                    <label className="sb-revision">
-                      <span className="sk-field-label">Revision</span>
+                    <div className="sb-revision">
+                      <label className="sk-field-label" htmlFor="sb-revision">
+                        Revision
+                      </label>
                       <input
+                        id="sb-revision"
                         className="sk-input sk-input-mono"
                         value={revision}
                         placeholder="main"
@@ -953,7 +956,7 @@ export function StackSheet({
                             ? `Fixed at ${revision}: the template's workers as that commit, tag or branch has them.`
                             : 'Follows main each time it runs. Type a commit or a tag to fix it.')}
                       </span>
-                    </label>
+                    </div>
                   ) : null}
                   <Locked id="sb-template-lock" reason={locks.template} />
                 </div>
