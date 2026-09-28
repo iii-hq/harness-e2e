@@ -97,6 +97,36 @@ describe('trends page parts', () => {
     expect(html).not.toContain('×')
   })
 
+  it('crosses an execution without a counted run, and leaves a gap where a counted one did not measure', () => {
+    const unmeasured = structuredClone(regression)
+    const last = unmeasured.at(-1)
+    if (last?.measures) last.measures.duration_ms_mean = null
+    const html = renderToStaticMarkup(
+      <LargeChart
+        metric={trendMetric('duration')}
+        points={unmeasured}
+        changes={changes}
+        selected={-1}
+        narrow={false}
+        onPick={() => undefined}
+      />,
+    )
+    expect(html.match(/class="tr-missed"/g)).toHaveLength(2)
+    expect(html.match(/class="tr-point"/g)).toHaveLength(8)
+    const small = renderToStaticMarkup(
+      <SmallChart
+        metric={trendMetric('duration')}
+        points={unmeasured}
+        changes={changes}
+        selected={-1}
+        narrow={false}
+        onFocus={() => undefined}
+      />,
+    )
+    expect(small.match(/class="tr-miss-mark"/g)).toHaveLength(2)
+    expect(small.match(/class="tr-dot"/g)).toHaveLength(8)
+  })
+
   it('says what changed, the measures and where to go from one execution', () => {
     const index = regression.length - 1
     const html = renderToStaticMarkup(

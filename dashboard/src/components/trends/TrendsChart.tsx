@@ -2,6 +2,7 @@ import { ArrowDown, ArrowUp, Maximize2, X } from 'lucide-react'
 import { DeltaValue, deltaDirection, deltaTone } from '@/design-system'
 import { useMeasuredWidth } from '@/hooks/use-measured-width'
 import {
+  counted,
   dayMarks,
   deltaFormat,
   deltaOf,
@@ -230,6 +231,8 @@ function Plot({
               // A cross drawn as two strokes, above the floor line.
               const x = xAt(index)
               const y = bottom - 5
+              // Counted but not measured: a gap in the line, no mark.
+              if (value === null && counted(point)) return null
               return value === null ? (
                 <g key={point.execution_id} className="tr-miss-mark">
                   <line x1={x - 3} y1={y - 3} x2={x + 3} y2={y + 3} />
@@ -264,6 +267,9 @@ function Plot({
       {large
         ? points.map((point, index) => {
             const value = values[index]
+            // Only an execution without a counted run gets the cross; one
+            // that counted but did not measure this leaves a gap.
+            if (value === null && counted(point)) return null
             const label = `${pointTime(point)} · ${metric.label} ${value === null ? 'no counted run' : metric.figure(value, point)}`
             return (
               <button
