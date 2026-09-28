@@ -4,7 +4,10 @@ import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
 import { createConsoleTestHost } from './console-test-host.mjs'
 
-function run(id, { score = 80, technical = 'valid', failure = null } = {}) {
+function run(
+  id,
+  { score = 80, technical = 'valid', failure = null, criteria = [] } = {},
+) {
   return {
     run_id: id,
     attempt_id: `${id}-attempt`,
@@ -16,7 +19,7 @@ function run(id, { score = 80, technical = 'valid', failure = null } = {}) {
     efficiency: { total_tokens: 100, root_turns: 2, function_calls: 3 },
     metrics: { complete: true, totals: { cache_read_tokens: 10 } },
     cost: { subject_usd: 0.01 },
-    criteria: [],
+    criteria,
     failures: failure ? [{ phase: 'setup', message: failure }] : [],
   }
 }
@@ -147,7 +150,23 @@ function localExecution(phase) {
     source,
     stack: [],
     reports: [
-      report('minimal_path', 'native-minimal', run('minimal-1', { score: 90 })),
+      report(
+        'minimal_path',
+        'native-minimal',
+        run('minimal-1', {
+          score: 90,
+          criteria: [
+            {
+              id: 'concise_report',
+              description: 'The report stays within budget',
+              awarded: 0,
+              possible: 10,
+              gate: false,
+              reason: 'observed 1197 character(s); budget 1000',
+            },
+          ],
+        }),
+      ),
       timer,
       report('registry_implementation', 'native-group', run('group-1')),
       report('registry_verification', 'native-group', run('group-2')),
@@ -278,6 +297,33 @@ try {
   ])
     assert.ok((await again.getAttribute('class')).includes('ep-row-act'))
 
+  // The open row as the canvas draws it: lost criteria as cards, the run
+  // with its attempt, six figure cards with their captions.
+  const minimal = page.locator(
+    '[data-scenario-row*=":minimal_path:"] + .ep-detail-row',
+  )
+  await minimal
+    .getByRole('heading', { name: 'Criteria that lost points' })
+    .waitFor()
+  const lost = minimal.locator('[data-lost-criterion="concise_report"]')
+  await lost.getByText('−10', { exact: true }).waitFor()
+  await lost.getByText('observed 1197 character(s); budget 1000').waitFor()
+  await minimal.getByText('run 1 · attempt 1', { exact: true }).waitFor()
+  const tiles = minimal.getByRole('list', { name: 'Run metrics' })
+  assert.deepEqual(await tiles.locator('.ep-kpi-label').allTextContents(), [
+    'Duration',
+    'Cost',
+    'Tokens',
+    'Cache',
+    'Turns',
+    'Function calls',
+  ])
+  await tiles.getByText('sum of attempts', { exact: true }).waitFor()
+  await minimal
+    .getByRole('group', { name: 'Run actions' })
+    .getByRole('link', { name: 'Evidence record for Minimal Path' })
+    .waitFor()
+
   // A scenario of a sequential group says its group runs with it.
   await page
     .getByRole('button', { name: 'Run Registry Verification again' })
@@ -393,7 +439,7 @@ try {
   assert.equal(reruns[1].execution_id, importedId)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it among the run’s bordered actions, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, the job of an imported execution re-run on GitHub.',
+    'Rerun scenario browser flow passed: every row offers it among the run’s bordered actions, the open row as the canvas draws it, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, the job of an imported execution re-run on GitHub.',
   )
 } finally {
   await browser.close()
