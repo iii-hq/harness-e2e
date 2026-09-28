@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  comparisonOrigin,
   hashForComparison,
   hashForExecution,
   hashForStacks,
@@ -7,9 +8,34 @@ import {
   hashForTestHistory,
   hashForVersionComparison,
   hashForWorkspace,
+  hashFrom,
   routeFromHash,
   routeRenderIdentity,
 } from '@/hooks/use-hash-route'
+
+describe('a run page opened from a comparison', () => {
+  const comparison = `${hashForComparison('plan-a', 'plan-b')}?exclude=minimal_path`
+  const run = hashForExecution('plan-b', null, 'run-1', 'transcript')
+
+  it('carries the comparison, its choice included, and gives it back', () => {
+    const linked = hashFrom(run, comparison)
+    expect(routeFromHash(linked)).toEqual(routeFromHash(run))
+    expect(comparisonOrigin(linked)).toBe(comparison)
+    expect(comparisonOrigin(run)).toBeNull()
+  })
+
+  it('accepts only a comparison of this dashboard, never any hash or URL', () => {
+    for (const from of [
+      'https://example.com/',
+      'javascript:alert(1)',
+      '#/compare/plan-a/plan-b',
+      hashForExecution('plan-a'),
+      hashForComparison('plan-a'),
+      `${hashForComparison('plan-a', 'plan-b')}/../../stacks`,
+    ])
+      expect(comparisonOrigin(hashFrom(run, from))).toBeNull()
+  })
+})
 
 describe('dashboard hash routes', () => {
   it('opens executions in the Console and rejects standalone routes', () => {

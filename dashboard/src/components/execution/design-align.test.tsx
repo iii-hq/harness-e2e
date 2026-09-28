@@ -210,11 +210,13 @@ describe('evidence record (canvas)', () => {
       run_id: 'run-1',
       attempt_id: 'att-1',
       attempt_number: 1,
+      session_id: 'session-1',
       completion: 'completed',
       audit: {
         flags: [1, 2, 3].map(() => ({
           kind: 'out_of_scope_session_access',
-          summary: 'The subject used browser session b64.',
+          // The worker's summary may end without a full stop.
+          summary: 'The subject used browser session b64',
           evidence: [{ function_id: 'browser::act', detail: 'session b64' }],
         })),
       },
@@ -294,9 +296,25 @@ describe('evidence record (canvas)', () => {
       },
       systemStatus: 'passed',
       score: 15,
+      transcript: { messages: [] },
       assessments: [
-        { criterionId: 'runtime_contract', dimension: 'deliverable' },
-        { criterionId: 'domain_primary', dimension: 'structural_integrity' },
+        {
+          criterionId: 'runtime_contract',
+          dimension: 'deliverable',
+          evidence: [
+            {
+              artifact_id: 'transcript',
+              artifact_sha256: 'sha256:2a4c32ffaaaa',
+            },
+          ],
+        },
+        {
+          criterionId: 'domain_primary',
+          dimension: 'structural_integrity',
+          evidence: [
+            { artifact_id: 'metrics', artifact_sha256: 'sha256:2a4c32ffaaaa' },
+          ],
+        },
       ],
       evidence: [],
     } as never
@@ -305,11 +323,57 @@ describe('evidence record (canvas)', () => {
         run={run}
         detail={detail}
         backHref="#"
+        transcriptHref="#/transcript"
         onOpenFile={async () => {}}
       />,
     )
     const text = html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ')
     expect(text).toContain('3 audit warnings, one cause')
+    // The summary ends its sentence before the next one starts.
+    expect(text).toContain(
+      'The subject used browser session b64. Audit flags don’t change the score.',
+    )
+    // Ask in chat says so; each criterion links to its evidence: the
+    // transcript as its page, a file by opening it.
+    expect(text).toContain('Ask in chat')
+    expect(html).toMatch(
+      /<a[^>]*href="#\/transcript"[^>]*aria-label="Evidence for runtime_contract"[^>]*>Evidence<\/a>/,
+    )
+    expect(html).toMatch(
+      /<button[^>]*aria-label="Evidence for domain_primary"[^>]*>Evidence<\/button>/,
+    )
+    // The first reference that resolves: without the transcript at hand, a
+    // criterion citing it and then a file opens the file.
+    const noTranscript = renderToStaticMarkup(
+      <EvidenceRecordPage
+        run={
+          {
+            ...(run as object),
+            transcript: undefined,
+            assessments: [
+              {
+                criterionId: 'runtime_contract',
+                dimension: 'deliverable',
+                evidence: [
+                  { artifact_id: 'transcript', artifact_sha256: 'sha256:gone' },
+                  {
+                    artifact_id: 'metrics',
+                    artifact_sha256: 'sha256:2a4c32ffaaaa',
+                  },
+                ],
+              },
+            ],
+          } as never
+        }
+        detail={detail}
+        backHref="#"
+        transcriptHref="#/transcript"
+        onOpenFile={async () => {}}
+      />,
+    )
+    expect(noTranscript).toMatch(
+      /<button[^>]*aria-label="Evidence for runtime_contract"[^>]*>Evidence<\/button>/,
+    )
     expect(text).toContain('browser::act ×3')
     expect(text).toContain('Show flags')
     expect(text).toContain('1 of 2 criteria met')

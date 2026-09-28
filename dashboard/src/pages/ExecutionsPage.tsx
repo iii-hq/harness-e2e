@@ -5,8 +5,11 @@ import {
   DialogContent,
   DialogDescription,
   DialogTitle,
+  EmptyState as HostEmptyState,
   Input as HostInput,
+  Select as HostSelect,
   SegmentedControl,
+  StatusPanel,
   Table,
   TableBody,
   TableCaption,
@@ -18,12 +21,15 @@ import {
   TableViewport,
 } from '@iii-dev/console-ui'
 import {
+  AlertCircle,
   AlertTriangle,
   ArrowRight,
   Check,
   Copy,
+  Download,
   ExternalLink,
   GitCompare,
+  Inbox,
   Minus,
   Pencil,
   RotateCcw,
@@ -51,12 +57,10 @@ import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import {
   buttonClassName,
   Callout,
-  EmptyState,
   Input,
   isInteractiveTarget,
   RowMenu,
   type RowMenuItem,
-  Select,
   StatusLabel,
 } from '@/design-system'
 import {
@@ -495,7 +499,7 @@ export function rowMenuItems(
   ]
   if (renamable(row))
     items.push({
-      label: 'Rename',
+      label: 'Rename…',
       icon: icon(Pencil),
       onSelect: () => actions.rename(row),
     })
@@ -619,6 +623,83 @@ export function deletedMessage(titles: string[]) {
     : `Deleted ${titles.length} executions with their runs and evidence.`
 }
 
+/* ------------------------------------------------------------- states */
+
+/** Nothing to show: the host's EmptyState, at most one ghost action (the
+ *  header already offers Run tests). */
+export function LedgerEmpty({
+  retained,
+  filtered,
+  onClear,
+  onImport,
+}: {
+  /** Whether any execution is retained at all. */
+  retained: boolean
+  filtered: boolean
+  onClear: () => void
+  /** Absent without a bridge: nothing can be imported. */
+  onImport?: () => void
+}) {
+  return (
+    <HostEmptyState
+      icon={filtered ? Search : Inbox}
+      title={
+        retained
+          ? 'No executions match these filters'
+          : 'No executions retained yet'
+      }
+      description={
+        retained
+          ? 'Widen the result filter, clear the search or load older executions.'
+          : 'Run tests here or import a run from GitHub to start retaining execution evidence.'
+      }
+      action={
+        filtered
+          ? { label: 'Clear filters', onClick: onClear }
+          : !retained && onImport
+            ? { label: 'Import from GitHub', onClick: onImport }
+            : undefined
+      }
+    />
+  )
+}
+
+/** A load that failed: what failed, what to do, the worker's message under
+ *  them in mono, and Retry (the host's StatusPanel, alert). */
+export function LedgerLoadFailure({
+  reload,
+  message,
+  onRetry,
+}: {
+  /** Rows are still shown from an earlier load. */
+  reload: boolean
+  message: string
+  onRetry: () => void
+}) {
+  return (
+    <StatusPanel
+      variant="alert"
+      icon={<AlertCircle size={18} />}
+      headline={
+        reload
+          ? 'Couldn’t reload the executions'
+          : 'Couldn’t load the executions'
+      }
+      detail={
+        <>
+          Check that the harness worker is running on this stack, then retry.
+          <span className="ex-error-message">{message}</span>
+        </>
+      }
+      action={
+        <Button type="button" variant="ghost" size="sm" onClick={onRetry}>
+          Retry
+        </Button>
+      }
+    />
+  )
+}
+
 /* -------------------------------------------------------------- table */
 
 export type LedgerTableProps = {
@@ -630,6 +711,9 @@ export type LedgerTableProps = {
   actions: LedgerActions
   /** A narrow pane keeps execution, result, tests and the menu. */
   narrow?: boolean
+  /** A phone stacks title, result and where in one cell, so the title is
+   *  not cut to a few letters; selection and the menu stay. */
+  phone?: boolean
 }
 
 /** One table: the header is read once, each group is a body of its own
@@ -640,8 +724,10 @@ export function LedgerTable({
   selected,
   onSelect,
   actions,
-  narrow = false,
+  narrow: narrowPane = false,
+  phone = false,
 }: LedgerTableProps) {
+  const narrow = narrowPane || phone
   const shown = groups.flatMap((group) => group.rows.map((row) => row.id))
   const all = shownSelection(selected, shown)
   const side = (id: string) =>
@@ -661,6 +747,7 @@ export function LedgerTable({
           inset
           className="ex-table"
           data-narrow={narrow || undefined}
+          data-phone={phone || undefined}
           data-ledger-table
         >
           <TableCaption className="ds-visually-hidden">{caption}</TableCaption>
@@ -675,17 +762,21 @@ export function LedgerTable({
                 />
               </TableHead>
               <TableHead scope="col">Execution</TableHead>
-              <TableHead className="ex-col-result" scope="col">
-                Result
-              </TableHead>
+              {phone ? null : (
+                <TableHead className="ex-col-result" scope="col">
+                  Result
+                </TableHead>
+              )}
               {narrow ? null : (
                 <TableHead className="ex-col-model" scope="col">
                   Model
                 </TableHead>
               )}
-              <TableHead className="ex-col-tests ex-num" scope="col">
-                Tests
-              </TableHead>
+              {phone ? null : (
+                <TableHead className="ex-col-tests ex-num" scope="col">
+                  Tests
+                </TableHead>
+              )}
               {narrow ? null : (
                 <>
                   <TableHead className="ex-col-score ex-num" scope="col">
@@ -714,7 +805,10 @@ export function LedgerTable({
               aria-label={group.label}
             >
               <TableRow className="ex-group">
-                <TableHead colSpan={narrow ? 5 : 10} scope="colgroup">
+                <TableHead
+                  colSpan={phone ? 3 : narrow ? 5 : 10}
+                  scope="colgroup"
+                >
                   {/* Spaced and named, so it is not read as "Sep 248". */}
                   <span className="ds-label">{group.label}</span>{' '}
                   <span className="ex-group-count">
@@ -728,6 +822,20 @@ export function LedgerTable({
               {group.rows.map((row) => {
                 const ticked = selected.includes(row.id)
                 const letter = side(row.id)
+                const result = (
+                  <>
+                    <StatusLabel
+                      className="ex-result"
+                      state={row.result.state}
+                      label={row.result.label}
+                    />
+                    {row.issue ? (
+                      <span className="ex-sub" title={row.issue}>
+                        {row.issue}
+                      </span>
+                    ) : null}
+                  </>
+                )
                 return (
                   <TableRow
                     key={row.id}
@@ -762,27 +870,23 @@ export function LedgerTable({
                           {row.title}
                         </a>
                       </span>
+                      {phone ? (
+                        <span className="ex-result-line">{result}</span>
+                      ) : null}
                       <span className="ex-sub ex-mono">{row.meta}</span>
                     </TableCell>
-                    <TableCell className="ex-cell-stack">
-                      <StatusLabel
-                        className="ex-result"
-                        state={row.result.state}
-                        label={row.result.label}
-                      />
-                      {row.issue ? (
-                        <span className="ex-sub" title={row.issue}>
-                          {row.issue}
-                        </span>
-                      ) : null}
-                    </TableCell>
+                    {phone ? null : (
+                      <TableCell className="ex-cell-stack">{result}</TableCell>
+                    )}
                     {narrow ? null : (
                       <TableCell className="ex-cell-stack" title={row.models}>
                         <span className="ex-mono ex-model">{row.model}</span>
                         <span className="ex-sub ex-mono">{row.profile}</span>
                       </TableCell>
                     )}
-                    <TableCell className="ex-num">{row.tests}</TableCell>
+                    {phone ? null : (
+                      <TableCell className="ex-num">{row.tests}</TableCell>
+                    )}
                     {narrow ? null : (
                       <>
                         <TableCell className="ex-num">{row.score}</TableCell>
@@ -1128,7 +1232,9 @@ function menuButton(id: string) {
 }
 
 export function ExecutionsPage() {
-  const narrow = useDashboardChrome()?.narrow ?? false
+  const chrome = useDashboardChrome()
+  const narrow = chrome?.narrow ?? false
+  const phone = chrome?.phone ?? false
   const [runnerOpen, setRunnerOpen] = useState(false)
   const [importOpen, setImportOpen] = useState(false)
   const [runnerScope, setRunnerScope] = useState<string[]>([])
@@ -1369,6 +1475,7 @@ export function ExecutionsPage() {
             {
               id: 'import',
               label: importLabel,
+              icon: Download,
               onSelect: () => setImportOpen(true),
             },
             {
@@ -1411,21 +1518,7 @@ export function ExecutionsPage() {
       </p>
 
       {error && !failedFirstLoad ? (
-        <Callout tone="danger" title="Executions could not be reloaded">
-          <span className="ex-callout-line">
-            {error}
-            <button
-              className={buttonClassName({
-                variant: 'secondary',
-                size: 'compact',
-              })}
-              type="button"
-              onClick={() => void load()}
-            >
-              Try again
-            </button>
-          </span>
-        </Callout>
+        <LedgerLoadFailure reload message={error} onRetry={() => void load()} />
       ) : null}
 
       {failedFirstLoad ? null : (
@@ -1466,20 +1559,13 @@ export function ExecutionsPage() {
               ),
             }))}
           />
-          <Select
+          <HostSelect
             aria-label="Sort executions"
             className="ex-sort"
             value={filters.sort}
-            onChange={(event) =>
-              setFilter('sort', event.target.value as LedgerSort)
-            }
-          >
-            {SORTS.map((sort) => (
-              <option key={sort.value} value={sort.value}>
-                {sort.label}
-              </option>
-            ))}
-          </Select>
+            onChange={(value) => setFilter('sort', value)}
+            options={SORTS}
+          />
         </section>
       )}
 
@@ -1522,69 +1608,24 @@ export function ExecutionsPage() {
           ))}
         </div>
       ) : failedFirstLoad ? (
-        <EmptyState
-          tone="error"
-          title="Executions could not be loaded"
-          description={error}
-          actions={
-            <button
-              className={buttonClassName({ variant: 'secondary' })}
-              type="button"
-              onClick={() => void load()}
-            >
-              Try again
-            </button>
-          }
+        <LedgerLoadFailure
+          reload={false}
+          message={error ?? ''}
+          onRetry={() => void load()}
         />
       ) : visible.length === 0 ? (
-        <EmptyState
-          title={
-            rows.length === 0
-              ? 'No executions retained yet'
-              : 'No executions match these filters'
-          }
-          description={
-            rows.length === 0
-              ? 'Run tests here or import a run from GitHub to start retaining execution evidence.'
-              : 'Widen the result filter, clear the search or load older executions.'
-          }
-          actions={
-            filtered ? (
-              <button
-                className={buttonClassName({ variant: 'secondary' })}
-                type="button"
-                onClick={() => setFilters(LEDGER_DEFAULT_FILTERS)}
-              >
-                Clear filters
-              </button>
-            ) : rows.length === 0 && bridge ? (
-              <>
-                <button
-                  className={buttonClassName({ variant: 'primary' })}
-                  type="button"
-                  onClick={() => {
-                    setRunnerScope([])
-                    setRunnerOpen(true)
-                  }}
-                >
-                  Run tests
-                </button>
-                <button
-                  className={buttonClassName({ variant: 'secondary' })}
-                  type="button"
-                  onClick={() => setImportOpen(true)}
-                >
-                  Import from GitHub
-                </button>
-              </>
-            ) : null
-          }
+        <LedgerEmpty
+          retained={rows.length > 0}
+          filtered={filtered}
+          onClear={() => setFilters(LEDGER_DEFAULT_FILTERS)}
+          onImport={bridge ? () => setImportOpen(true) : undefined}
         />
       ) : (
         <div className="ex-ledger" data-ledger>
           <LedgerTable
             caption={shownText}
             narrow={narrow}
+            phone={phone}
             groups={groups}
             selected={ticked}
             onSelect={setSelected}

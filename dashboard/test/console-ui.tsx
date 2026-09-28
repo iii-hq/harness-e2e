@@ -232,18 +232,21 @@ export function StatusPanel({
   variant = 'info',
   headline,
   detail,
+  action,
   className,
 }: {
   variant?: string
   icon?: ReactNode
   headline: ReactNode
   detail?: ReactNode
+  action?: ReactNode
   className?: string
 }) {
   return (
     <div data-ui="status-panel" data-variant={variant} className={className}>
       <strong>{headline}</strong>
       {detail}
+      {action}
     </div>
   )
 }

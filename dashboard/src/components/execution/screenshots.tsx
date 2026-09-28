@@ -207,6 +207,9 @@ export function ScreenshotViewer({
       role="dialog"
       aria-modal="true"
       aria-labelledby={titleId}
+      // Always dark, as the canvas draws it: the host's dark tokens apply
+      // under any [data-theme=dark].
+      data-theme="dark"
       tabIndex={-1}
       onKeyDown={onKeyDown}
     >
@@ -224,46 +227,48 @@ export function ScreenshotViewer({
               .join(' · ')}
           </span>
         </div>
-        <span className="ep-faint ep-mono">
+        <span className="ep-viewer-position ep-faint ep-mono">
           {index + 1} of {screenshots.length}
         </span>
-        <fieldset className="ep-viewer-zoom">
-          <legend className="ep-sr">Zoom</legend>
-          <button
-            type="button"
-            className="ep-viewer-button"
-            aria-label="Zoom out"
-            disabled={zoom === 0}
-            onClick={() => setScale(zoom - 1)}
-          >
-            <Minus size={16} aria-hidden="true" />
-          </button>
-          <output className="ep-viewer-pct ep-mono" aria-live="polite">
-            {`${Math.round(scale * (dims?.fit ?? 1) * 100)}%`}
-          </output>
-          <button
-            type="button"
-            className="ep-viewer-button"
-            aria-label="Zoom in"
-            disabled={zoom === ZOOMS.length - 1}
-            onClick={() => setScale(zoom + 1)}
-          >
-            <Plus size={16} aria-hidden="true" />
-          </button>
-          <button
-            type="button"
-            className="ep-viewer-button ep-viewer-fit"
-            aria-pressed={zoom === 0}
-            onClick={() => setScale(0)}
-          >
-            Fit
-          </button>
-        </fieldset>
-        {evidenceHref ? (
-          <a className="ep-viewer-button ep-viewer-link" href={evidenceHref}>
-            Evidence record
-          </a>
-        ) : null}
+        <div className="ep-viewer-tools">
+          <fieldset className="ep-viewer-zoom">
+            <legend className="ep-sr">Zoom</legend>
+            <button
+              type="button"
+              className="ep-viewer-button"
+              aria-label="Zoom out"
+              disabled={zoom === 0}
+              onClick={() => setScale(zoom - 1)}
+            >
+              <Minus size={16} aria-hidden="true" />
+            </button>
+            <output className="ep-viewer-pct ep-mono" aria-live="polite">
+              {`${Math.round(scale * (dims?.fit ?? 1) * 100)}%`}
+            </output>
+            <button
+              type="button"
+              className="ep-viewer-button"
+              aria-label="Zoom in"
+              disabled={zoom === ZOOMS.length - 1}
+              onClick={() => setScale(zoom + 1)}
+            >
+              <Plus size={16} aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              className="ep-viewer-button ep-viewer-fit"
+              aria-pressed={zoom === 0}
+              onClick={() => setScale(0)}
+            >
+              Fit
+            </button>
+          </fieldset>
+          {evidenceHref ? (
+            <a className="ep-viewer-button ep-viewer-link" href={evidenceHref}>
+              Evidence record
+            </a>
+          ) : null}
+        </div>
         {source ? (
           <a
             className="ep-viewer-button"

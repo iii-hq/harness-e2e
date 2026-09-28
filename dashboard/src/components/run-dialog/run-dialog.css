@@ -444,12 +444,16 @@
   outline: 1px solid var(--color-edge, var(--line));
 }
 
+/* A group's name: the eyebrow (LyMenus), mono caps. */
 .rd-popover-label {
   padding: 0.5rem 0.5rem 0.25rem 2rem;
   color: var(--rd-faint);
-  font-size: 0.6875rem;
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
   font-weight: 500;
+  letter-spacing: var(--ds-tracking-label, 0.06em);
   line-height: 1rem;
+  text-transform: uppercase;
 }
 
 .rd-option {
@@ -877,6 +881,24 @@
 
 .rd-summary-line[data-tone="alert"] svg {
   color: var(--rd-alert);
+}
+
+/* A missing thing, as a link that focuses its field (LyForms). */
+.rd-pend {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-ink, var(--text));
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--rd-faint);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.rd-pend:focus-visible {
+  outline: 2px solid var(--rd-focus);
+  outline-offset: 1px;
 }
 
 .rd-actions {

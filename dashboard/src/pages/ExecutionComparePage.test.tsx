@@ -4,6 +4,7 @@ import {
   byScoreChange,
   ComparisonView,
   deltaText,
+  metricTone,
   outsideText,
   pairByCaption,
   RowDetail,
@@ -120,7 +121,10 @@ describe('execution comparison page', () => {
     expect(html).toContain('infrastructure error → </span>40')
     expect(html).toContain('data-cell="tokens"')
     expect(html).toContain('data-layer="comparison-stack"')
-    expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
+    // No verdict in words; the colour of a difference is an attribute.
+    expect(html.replace(/<[^>]*>/g, ' ')).not.toMatch(
+      /better|worse|improv|regress|winner/i,
+    )
   })
 
   it('never calls uncommitted builds the same stack', () => {
@@ -176,6 +180,42 @@ describe('execution comparison page', () => {
     expect(invalid && outsideText(invalid)).toBe('1 run in A out of the totals')
   })
 
+  it('colours a difference green or red (Compare.dc.html), the sign kept', () => {
+    const { scenarios } = compareExecutions(imported(), local())
+    const [persistent] = byScoreChange(scenarios)
+    const metric = (id: string) => {
+      const found = persistent.metrics.find((entry) => entry.id === id)
+      if (!found) throw new Error(id)
+      return found
+    }
+    // Each measure's own direction (the design system's deltaTone): more
+    // score is better, fewer tokens and function calls are, cache figures
+    // are neither; no change is neutral; nothing to compare has no colour.
+    expect(metricTone(metric('score'))).toBe('negative')
+    expect(metricTone({ ...metric('tokens'), delta: -10 })).toBe('positive')
+    expect(metricTone({ ...metric('tokens'), delta: 10 })).toBe('negative')
+    expect(metricTone({ ...metric('completed'), delta: 1 })).toBe('positive')
+    expect(metricTone({ ...metric('function_calls'), delta: -2 })).toBe(
+      'positive',
+    )
+    expect(metricTone({ ...metric('cache_read'), delta: 500 })).toBe('neutral')
+    expect(metricTone(metric('turns'))).toBe('neutral')
+    expect(metricTone({ ...metric('score'), delta: null })).toBe('unavailable')
+    // A score or percent difference that rounds to 0 reads, and colours, as
+    // no change.
+    const tiny = { ...metric('score'), delta: 0.04 }
+    expect(deltaText(tiny)).toBe('no change')
+    expect(metricTone(tiny)).toBe('neutral')
+    expect(
+      metricTone({
+        ...metric('score'),
+        format: 'percent_points',
+        delta: -0.02,
+      }),
+    ).toBe('neutral')
+    expect(view()).toMatch(/data-tone="negative"[^>]*>−38 pts</)
+  })
+
   it('opens a test on the criteria that moved, those lost on both sides, its metrics and runs', () => {
     const a = imported()
     const b = local()
@@ -200,13 +240,15 @@ describe('execution comparison page', () => {
     expect(html).toContain('Lost points on both sides')
     expect(html).toContain('A 74/80 · B 74/80')
     expect(html).toContain('data-metric-id="cache_read"')
-    // A run of each side, its transcript and evidence record.
+    // A run of each side, its transcript and evidence record, which come
+    // back to this comparison.
+    const back = `?from=${encodeURIComponent('#/ext/harness-e2e/compare/import-a/local-b')}`
     expect(html).toContain('data-run-side="a"')
     expect(html).toContain(
-      'href="#/ext/harness-e2e/execution/local-b/run/local-b-0/transcript"',
+      `href="#/ext/harness-e2e/execution/local-b/run/local-b-0/transcript${back}"`,
     )
     expect(html).toContain(
-      'href="#/ext/harness-e2e/execution/import-a/run/import-a-0"',
+      `href="#/ext/harness-e2e/execution/import-a/run/import-a-0${back}"`,
     )
   })
 

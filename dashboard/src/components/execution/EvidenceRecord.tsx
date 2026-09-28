@@ -93,6 +93,11 @@ export function runProjection(
   return null
 }
 
+/** A worker's phrase as a sentence: its full stop when it has none. */
+function sentence(value: string) {
+  return /[.!?…]$/.test(value.trim()) ? value : `${value}.`
+}
+
 function AuditSection({ flags }: { flags: JsonObject[] }) {
   const [open, setOpen] = useState(false)
   const listId = useId()
@@ -118,8 +123,8 @@ function AuditSection({ flags }: { flags: JsonObject[] }) {
             {causes.size === 1 ? 'one cause' : `${causes.size} causes`}
           </p>
           <p className="ep-faint">
-            {text(first?.summary) ?? [...causes.keys()].join(', ')} Audit flags
-            don’t change the score.
+            {sentence(text(first?.summary) ?? [...causes.keys()].join(', '))}{' '}
+            Audit flags don’t change the score.
           </p>
         </div>
         <button
@@ -172,6 +177,7 @@ export function EvidenceRecordPage({
   run,
   detail,
   backHref,
+  backLabel = 'Back to the execution',
   transcriptHref,
   onRerun,
   onOpenFile,
@@ -180,6 +186,8 @@ export function EvidenceRecordPage({
   run: AssessmentRunView
   detail?: DashboardExecutionDetail | null
   backHref: string
+  /** "Back to comparison" when it was opened from one. */
+  backLabel?: string
   transcriptHref?: string
   onRerun?: () => void
   /** Open a file the run's report declares (evidence or a deliverable). */
@@ -213,6 +221,42 @@ export function EvidenceRecordPage({
   const dimensionOf = new Map(
     run.assessments.map((entry) => [entry.criterionId, entry.dimension]),
   )
+  // A criterion's evidence (Evidence per criterion), from the first of its
+  // references that resolves: the transcript as its page, another file by
+  // opening it; nothing when none is at hand.
+  const evidenceLink = (criterionId: string) => {
+    const refs = run.assessments
+      .filter((entry) => entry.criterionId === criterionId)
+      .flatMap((entry) => entry.evidence ?? [])
+    const label = `Evidence for ${criterionId}`
+    for (const ref of refs) {
+      if (ref.artifact_id === 'transcript' && transcriptHref && run.transcript)
+        return (
+          <a
+            className="er-evidence-link"
+            href={transcriptHref}
+            aria-label={label}
+          >
+            Evidence
+          </a>
+        )
+      const path = text(
+        files.find((file) => file.sha256 === ref.artifact_sha256)?.path,
+      )
+      if (path && onOpenFile)
+        return (
+          <button
+            type="button"
+            className="er-evidence-link"
+            aria-label={label}
+            onClick={() => open(path)}
+          >
+            Evidence
+          </button>
+        )
+    }
+    return null
+  }
   const groups = new Map<string, typeof criteria>()
   for (const criterion of criteria) {
     const key = dimensionOf.get(criterion.id) ?? 'criteria'
@@ -269,7 +313,7 @@ export function EvidenceRecordPage({
       <PageHeader
         variant="detail"
         mono
-        back={{ label: 'Back to the execution', href: backHref }}
+        back={{ label: backLabel, href: backHref }}
         context="Evidence record"
         title={run.scenarioId}
         summary={
@@ -296,7 +340,8 @@ export function EvidenceRecordPage({
               </a>
             ) : null}
             <ScenarioChatAction
-              compact
+              label="Ask in chat"
+              buttonClass={buttonClassName({ variant: 'quiet' })}
               detail={detail}
               scenarioId={run.scenarioId}
               subjectId={run.subjectId}
@@ -397,6 +442,7 @@ export function EvidenceRecordPage({
                               {c.awarded}/{c.possible}
                             </span>
                           </span>
+                          {evidenceLink(c.id)}
                         </div>
                       )
                     })}

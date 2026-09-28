@@ -598,7 +598,7 @@ button.cmp-highlight:hover {
 }
 
 .cmp-kpi-arrow {
-  color: var(--color-ink-ghost);
+  color: var(--color-ink-faint);
   font-size: var(--text-xs);
 }
 
@@ -779,8 +779,9 @@ button.cmp-highlight:hover {
   background: var(--color-surface-hover);
 }
 
+/* Outside the totals: faint text (AA), not a dimmed faint (2.2:1). */
 .cmp-row[data-counted="false"] > * {
-  opacity: 0.55;
+  color: var(--color-ink-faint);
 }
 
 .cmp-row > th,
@@ -901,8 +902,9 @@ button.cmp-highlight:hover {
 
 .cmp-track-a {
   background: var(--color-panel-raised);
-  outline: 1.5px solid var(--color-ink-faint);
-  outline-offset: -1.5px;
+  /* A ring, as the status dot draws one (1px, inset). */
+  outline: 1px solid var(--color-ink-faint);
+  outline-offset: -1px;
 }
 
 .cmp-track-b {
@@ -952,7 +954,8 @@ button.cmp-highlight:hover {
 }
 
 .cmp-detail-row > td {
-  padding: 2px calc(var(--spacing) * 1) calc(var(--spacing) * 2.5);
+  padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 1)
+    calc(var(--spacing) * 2.5);
   border-bottom: 0;
 }
 
@@ -1114,7 +1117,7 @@ button.cmp-highlight:hover {
 }
 
 .cmp-inset {
-  padding: 2px calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 0.5) calc(var(--spacing) * 3);
   border-radius: var(--radius-sm);
   background: var(--color-panel-raised);
 }
@@ -1441,4 +1444,29 @@ button.cmp-highlight:hover {
   .cmp-shot-frame img {
     max-height: calc(var(--spacing) * 75);
   }
+}
+
+/* A difference in colour (Compare.dc.html): green where B did better, red
+   where worse (lower is better for every measure but the score, completed
+   tasks and coverage), faint for no change. The sign or the icon stays, so
+   colour never says it alone. Red is the design system's danger text: the
+   host has no light --color-alert-strong. Both pass AA in both themes. */
+.cmp-tone[data-tone="positive"] {
+  color: var(--color-ok);
+}
+
+.cmp-tone[data-tone="negative"] {
+  color: var(--ds-danger-text, var(--color-alert));
+}
+
+.cmp-tone[data-tone="neutral"] {
+  color: var(--color-ink-faint);
+}
+
+.cmp-tag.cmp-tone[data-tone="positive"] {
+  background: var(--color-ok-muted);
+}
+
+.cmp-tag.cmp-tone[data-tone="negative"] {
+  background: var(--color-alert-muted);
 }

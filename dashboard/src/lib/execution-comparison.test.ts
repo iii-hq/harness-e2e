@@ -534,22 +534,29 @@ describe('comparing two executions', () => {
       {
         test: 'persistent_state',
         direction: 'down',
+        metric: 'score',
         text: 'lost 38 points in B: state_after_restart went from 50/50 to 12/50.',
       },
       {
         test: 'minimal_path',
         direction: 'up',
+        metric: 'score',
         text: 'gained 12 points in B: cites_source went from 8/20 to 20/20.',
       },
       {
         test: 'minimal_path',
         direction: 'down',
+        metric: 'tokens',
         text: 'used 17% fewer tokens in B (1.2K → 1K).',
       },
     ])
-    expect(JSON.stringify(highlights)).not.toMatch(
-      /better|worse|improv|regress|winner/i,
-    )
+    // The words never judge; only the colour (tone) does, as the canvas asks.
+    expect(
+      JSON.stringify({
+        ...highlights,
+        items: highlights.items.map(({ text }) => text),
+      }),
+    ).not.toMatch(/better|worse|improv|regress|winner/i)
     // With every test out, nothing is compared.
     const none = compareExecutions(imported(), local(), {
       exclude: ['minimal_path', 'persistent_state'],
@@ -585,6 +592,7 @@ describe('comparing two executions', () => {
       {
         test: null,
         direction: 'same',
+        metric: null,
         text: 'All 3 counted tests kept their scores.',
       },
     ])

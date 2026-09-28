@@ -281,6 +281,8 @@ declare module '@iii-dev/console-ui' {
     icon?: React.ReactNode
     headline: React.ReactNode
     detail?: React.ReactNode
+    /** On the right, centred: the host's ghost or pill buttons. */
+    action?: React.ReactNode
     className?: string
   }
   export const StatusPanel: React.ComponentType<StatusPanelProps>

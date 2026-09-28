@@ -614,15 +614,18 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  // An empty ledger offers every way in: run, import.
+  // An empty ledger offers every way in: the header runs and imports, the
+  // empty state adds one ghost Import, never a second primary Run tests.
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page.getByText('No executions retained yet').waitFor()
   const empty = page.locator('main, body').first()
-  // The header's and the empty state's, by the same names.
-  for (const action of ['Run tests', 'Import from GitHub'])
+  for (const [action, count] of [
+    ['Run tests', 1],
+    ['Import from GitHub', 2],
+  ])
     assert.equal(
       await empty.getByRole('button', { name: action, exact: true }).count(),
-      2,
+      count,
     )
   assert.equal(await empty.getByText(/new plan/i).count(), 0)
 
@@ -636,6 +639,19 @@ try {
   await fresh
     .getByText('Before running, choose a model and tick at least one test.')
     .waitFor()
+  // Each missing thing is a link to its field.
+  await fresh.getByRole('button', { name: 'choose a model' }).click()
+  assert.ok(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('.rd-model')),
+    ),
+  )
+  await fresh.getByRole('button', { name: 'tick at least one test' }).click()
+  assert.ok(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('.rd-tests')),
+    ),
+  )
   assert.equal(
     await fresh.getByText('The model of your last execution.').count(),
     0,

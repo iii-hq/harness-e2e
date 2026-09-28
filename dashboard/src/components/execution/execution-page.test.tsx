@@ -98,6 +98,11 @@ describe('transcript page', () => {
     expect(html).toContain('Copy all')
     expect(html).toContain('Download JSON')
     expect(html).toContain('Consecutive tool calls are grouped')
+    // The group names what it holds and starts closed; the count of a cause
+    // is its own pill, not the section's faint count.
+    expect(html).toContain('<span class="ep-strong">1 tool call</span>')
+    expect(html).toMatch(/<details class="ep-tools">/)
+    expect(html).toContain('<span class="ep-cause-count">1×</span>')
   })
 })
 
@@ -230,5 +235,32 @@ describe('screenshot viewer', () => {
     expect(html).toContain('<kbd>Esc</kbd> close')
     expect(html).toContain('aria-label="Screenshots of this run"')
     expect(html).toContain('aria-label="Download form filled"')
+  })
+
+  it('is always dark and keeps Close in the top row', () => {
+    const html = renderToStaticMarkup(
+      <ScreenshotViewer
+        screenshots={[
+          {
+            key: 'a',
+            executionId: 'e',
+            runId: 'r',
+            path: 'p',
+            pointer: '/0',
+            caption: 'form filled',
+          },
+        ]}
+        images={{ a: { source: 'data:image/png;base64,AA==' } }}
+        index={0}
+        onIndex={() => {}}
+        onClose={() => {}}
+      />,
+    )
+    expect(html).toMatch(/role="dialog"[^>]*data-theme="dark"/)
+    // Zoom and the evidence link wrap to their own row on a phone; the
+    // title, Download and Close stay together on the first one.
+    expect(html).toMatch(
+      /class="ep-viewer-tools">.*aria-label="Zoom out".*<\/div><a[^>]*aria-label="Download form filled".*aria-label="Close"/,
+    )
   })
 })

@@ -17,6 +17,8 @@ import {
   importLedgerExecutionAgain,
   LEDGER_DEFAULT_FILTERS,
   type LedgerActions,
+  LedgerEmpty,
+  LedgerLoadFailure,
   type LedgerRow,
   LedgerTable,
   ledgerFiltersFromParams,
@@ -351,14 +353,14 @@ describe('the row menu', () => {
   it('runs again what ran here, and imports again what came from GitHub', () => {
     expect(menu('plan-cf6ab5f9')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Run again',
       'Copy execution id',
       '—Delete…',
     ])
     expect(menu('plan-1d320744')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Open on GitHub',
       'Import again(Replaces its evidence with the run’s)',
       'Copy execution id',
@@ -376,7 +378,7 @@ describe('the row menu', () => {
   it('cancels what runs, and says why it cannot be deleted yet', () => {
     expect(menu('plan-2b7e41c0')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Copy execution id',
       '—Cancel execution',
       'Delete…[Finish or cancel it first]',
@@ -384,7 +386,7 @@ describe('the row menu', () => {
     expect(menu('plan-9c41d07b')).toContain('—Cancel execution')
     expect(menu('plan-e5b0a2c4')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Open on GitHub',
       'Copy execution id',
       '—Delete…[Wait for the import to finish]',
@@ -515,6 +517,30 @@ describe('the executions table', () => {
     expect(html).toContain('colSpan="5"')
   })
 
+  it('stacks title, result and where in one cell on a phone', () => {
+    const html = renderToStaticMarkup(
+      <LedgerTable
+        caption="Executions, 16 of 16 loaded"
+        narrow
+        phone
+        groups={groupLedgerRows(rows, LEDGER_NOW)}
+        selected={[]}
+        onSelect={noop}
+        actions={actions}
+      />,
+    )
+    for (const header of ['Execution', 'Actions'])
+      expect(html).toContain(`>${header}<`)
+    for (const header of ['Result', 'Tests', 'Model'])
+      expect(html).not.toContain(`>${header}<`)
+    expect(html).toContain('colSpan="3"')
+    // Selection and the menu stay; the result sits between title and where.
+    expect(html).toContain('aria-label="Select no profile"')
+    expect(html).toMatch(
+      /class="ex-title">.*?class="ex-result-line">.*?Running.*?class="ex-sub ex-mono">/,
+    )
+  })
+
   it('marks A and B when exactly two are ticked', () => {
     const a = ledgerExecution('plan-81960bf0').id
     const b = ledgerExecution('plan-cf6ab5f9').id
@@ -548,6 +574,57 @@ function bridgeDouble(overrides: Partial<DashboardDataBridge> = {}) {
   } as unknown as DashboardDataBridge
   return { bridge, calls }
 }
+
+describe('the list when there is nothing to show', () => {
+  it('uses the host EmptyState with one ghost action, never a second primary', () => {
+    const empty = renderToStaticMarkup(
+      <LedgerEmpty
+        retained={false}
+        filtered={false}
+        onClear={noop}
+        onImport={noop}
+      />,
+    )
+    expect(empty).toContain('data-ui="empty-state"')
+    expect(empty).toContain('<h2>No executions retained yet</h2>')
+    expect(empty).toContain('>Import from GitHub</button>')
+    expect(empty).not.toContain('Run tests</button>')
+    const filtered = renderToStaticMarkup(
+      <LedgerEmpty retained filtered onClear={noop} onImport={noop} />,
+    )
+    expect(filtered).toContain('<h2>No executions match these filters</h2>')
+    expect(filtered).toContain('>Clear filters</button>')
+    expect(filtered).not.toContain('Import from GitHub')
+    // Without a bridge there is nothing to offer.
+    expect(
+      renderToStaticMarkup(
+        <LedgerEmpty retained={false} filtered={false} onClear={noop} />,
+      ),
+    ).not.toContain('<button')
+  })
+
+  it('says a failed load on the host StatusPanel, the message under it', () => {
+    const html = renderToStaticMarkup(
+      <LedgerLoadFailure
+        reload={false}
+        message="harness worker timed out"
+        onRetry={noop}
+      />,
+    )
+    expect(html).toContain('data-ui="status-panel" data-variant="alert"')
+    expect(html).toContain('<strong>Couldn’t load the executions</strong>')
+    expect(html).toContain(
+      '<span class="ex-error-message">harness worker timed out</span>',
+    )
+    expect(html).toContain('data-variant="ghost"')
+    expect(html).toContain('>Retry</button>')
+    expect(
+      renderToStaticMarkup(
+        <LedgerLoadFailure reload message="x" onRetry={noop} />,
+      ),
+    ).toContain('Couldn’t reload the executions')
+  })
+})
 
 describe('what the list does through the bridge', () => {
   it('deletes what it can and titles each refusal in the worker’s words', async () => {

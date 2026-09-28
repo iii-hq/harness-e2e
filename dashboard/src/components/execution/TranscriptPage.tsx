@@ -1,6 +1,7 @@
 import { Copy as CopyIcon, Download, Search, SkipForward } from 'lucide-react'
 import { useMemo, useRef, useState } from 'react'
 import { PageHeader } from '@/design-system'
+import { plural } from '@/lib/format'
 import {
   formatTranscriptPayload,
   normalizeTranscript,
@@ -457,14 +458,18 @@ export function TranscriptPage({
                   </li>
                 ) : (
                   <li key={block.id}>
+                    {/* Closed at first, errors or not: the outline, Next
+                        error and each summary's error count lead in. Open
+                        when filtered to errors or searched, so what matched
+                        shows. */}
                     <details
                       className="ep-tools"
-                      open={
-                        block.events.some((event) => event.isError) || undefined
-                      }
+                      open={filter === 'errors' || Boolean(needle) || undefined}
                     >
                       <summary>
-                        <span className="ep-strong">{block.events.length}</span>
+                        <span className="ep-strong">
+                          {plural(block.events.length, 'tool call')}
+                        </span>
                         <span className="ep-mono ep-tools-fns">
                           {[
                             ...new Set(
@@ -504,8 +509,8 @@ export function TranscriptPage({
                                   className="ep-cause"
                                   onClick={() => reveal(cause.ids[0])}
                                 >
-                                  <span className="ep-count">
-                                    {cause.ids.length}
+                                  <span className="ep-cause-count">
+                                    {cause.ids.length}×
                                   </span>
                                   <span className="ep-mono">
                                     {cause.functionId}

@@ -153,6 +153,9 @@
   inset: 0;
   z-index: 45;
   display: grid;
+  /* One column no wider than the screen: an auto track grew to the
+     thumbnail strip and pushed Download and Close off a phone. */
+  grid-template-columns: minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--color-bg, var(--bg));
   color: var(--color-ink, var(--text));
@@ -165,10 +168,15 @@
 .ep-viewer-bar {
   display: flex;
   align-items: center;
-  gap: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  background: var(--color-panel, var(--surface));
-  font-size: 0.8125rem;
+  gap: var(--ds-space-3);
+  padding: var(--ds-space-2) var(--ds-space-3) var(--ds-space-2)
+    var(--ds-space-4);
+  background: var(--color-panel-raised, var(--surface-raised));
+  font-size: var(--ds-text-sm);
+}
+
+.ep-viewer-bar > .ep-viewer-button {
+  color: var(--color-ink-faint, var(--text-soft));
 }
 
 .ep-viewer-title {
@@ -224,7 +232,14 @@
 }
 
 .ep-viewer-foot {
+  /* The legacy page footer (a centred column with a rule) stays out. */
+  width: auto;
+  flex-direction: row;
   justify-content: center;
+  margin: 0;
+  border-top: 0;
+  color: inherit;
+  font-size: var(--ds-text-sm);
 }
 
 /* Transcript */
@@ -276,7 +291,8 @@
 .ep-cause {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
   gap: 0.125rem 0.5rem;
   padding: 0.375rem 0.5rem;
   border: 0;
@@ -288,16 +304,19 @@
   cursor: pointer;
 }
 
+/* The cause under its function, the count alone in its column. */
 .ep-cause > .ep-faint {
-  grid-column: 1 / -1;
+  grid-column: 2;
 }
 
-.ep-count {
-  padding: 0 0.375rem;
+.ep-cause-count {
+  justify-self: start;
+  padding: 0 var(--ds-space-1);
   border-radius: var(--ds-radius-pill, 9999px);
   background: var(--color-alert-muted, var(--surface-soft));
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--ds-text-label);
+  font-variant-numeric: tabular-nums;
 }
 
 .ep-events {
@@ -369,17 +388,24 @@
   padding: 0 0.5rem;
 }
 
-.ep-tool[data-error] > summary .ep-mono {
-  color: var(--color-alert, var(--danger));
-}
-
 .ep-tool-state {
   font-size: 0.6875rem;
   font-weight: 500;
 }
 
+/* An error reads in ink; the dot carries the colour (state vocabulary). */
 .ep-tool-state[data-tone="alert"] {
-  color: var(--color-alert, var(--danger));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+}
+
+.ep-tool-state[data-tone="alert"]::before {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--ds-radius-pill, 9999px);
+  background: var(--color-alert, var(--danger));
+  content: "";
 }
 
 .ep-pre {
@@ -1024,6 +1050,8 @@
 
 .er-criterion-copy {
   display: grid;
+  /* Two rows tall, so the evidence link sits right under the points. */
+  grid-row: span 2;
   min-width: 0;
   gap: 0.125rem;
   overflow-wrap: anywhere;
@@ -1035,12 +1063,36 @@
   gap: 0.5rem;
 }
 
+/* Under the points, as the canvas puts it: the criterion's evidence. */
+.er-evidence-link {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  margin-top: calc(var(--ds-space-2) * -1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-ink-faint, var(--text-soft));
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.er-evidence-link:hover {
+  color: var(--color-ink, var(--text));
+  text-decoration: underline;
+}
+
 .er-ok {
   color: var(--color-ok, var(--success));
 }
 
+/* The design system's danger text (AA on the panel in both themes), where
+   the canvas uses --alert-strong: the host has no light one. */
 .er-miss {
-  color: var(--color-alert, var(--danger));
+  color: var(--ds-danger-text, var(--color-alert, var(--danger)));
 }
 
 .er-deliverable {
@@ -1249,19 +1301,40 @@ ol.ep-events {
 .ep-viewer-heading .ep-viewer-title {
   margin: 0;
   overflow: hidden;
-  font-size: 0.875rem;
+  font-family: var(--font-sans);
+  font-size: var(--ds-text-sm);
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.ep-viewer-heading > .ep-faint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ep-viewer-position {
+  flex: none;
+  white-space: nowrap;
+}
+
+.ep-viewer-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--ds-space-3);
+}
+
 .ep-viewer-zoom {
   display: inline-flex;
   align-items: center;
-  gap: 0.25rem;
+  gap: var(--ds-space-1);
   margin: 0;
-  padding: 0;
+  padding: 0.125rem;
   border: 0;
+  border-radius: var(--ds-radius-sm, 6px);
+  background: var(--color-surface, var(--surface-fill));
 }
 
 .ep-viewer-pct {
@@ -1283,6 +1356,9 @@ ol.ep-events {
 .ep-viewer-next {
   position: absolute;
   top: 50%;
+  min-width: 2.5rem;
+  height: 2.5rem;
+  background: var(--color-surface, var(--surface-fill));
   transform: translateY(-50%);
 }
 
@@ -1364,6 +1440,40 @@ ol.ep-events {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   text-align: center;
+}
+
+/* A phone: the title, the position, Download and Close share the first row;
+   zoom and the evidence link take their own, so Close never leaves the
+   screen. The viewer covers the viewport, so the viewport decides. */
+@media (max-width: 639px) {
+  .ep-viewer-bar {
+    flex-wrap: wrap;
+    row-gap: var(--ds-space-1);
+    padding-inline: var(--ds-space-3) var(--ds-space-1);
+  }
+
+  .ep-viewer-heading {
+    flex: 1 1 0;
+  }
+
+  .ep-viewer-bar > .ep-viewer-button {
+    min-width: 3rem;
+    height: 3rem;
+  }
+
+  .ep-viewer-tools {
+    order: 1;
+    flex-basis: 100%;
+    justify-content: space-between;
+    padding-inline-end: var(--ds-space-2);
+  }
+
+  .ep-viewer-tools .ep-viewer-button,
+  .ep-viewer-prev,
+  .ep-viewer-next {
+    min-width: 2.75rem;
+    height: 2.75rem;
+  }
 }
 
 @container harness (max-width: 720px) {

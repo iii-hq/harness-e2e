@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   choiceValue,
+  describeStartError,
   executionStartRequest,
   formOnSuite,
   lastUsedModel,
@@ -11,9 +12,11 @@ import {
   runningExecutionId,
   stackChoices,
   suiteChoices,
+  unrecordedStackNote,
   withSequentialGroups,
 } from '@/components/LocalRunnerDialog'
 import type {
+  DashboardDataBridge,
   DashboardExecutionSummary,
   ExecutionParameters,
   Stack,
@@ -155,6 +158,17 @@ describe('where and stack fields', () => {
     expect(runnerForm({ ...docker, where: 'github', stack: null }).where).toBe(
       'harness',
     )
+    // ...and the dialog says why it is not GitHub, until Where changes.
+    const unrecorded = { ...docker, where: 'github' as const, stack: null }
+    expect(unrecordedStackNote(unrecorded, 'harness')).toBe(
+      'Imported before stacks were recorded, so it runs on this harness.',
+    )
+    expect(unrecordedStackNote(unrecorded, 'docker')).toBeNull()
+    expect(unrecordedStackNote({ ...docker, where: 'github' }, 'github')).toBe(
+      null,
+    )
+    expect(unrecordedStackNote(docker, 'docker')).toBeNull()
+    expect(unrecordedStackNote(null, 'harness')).toBeNull()
   })
 
   it('names a listed stack by its id or name and sends its YAML', () => {
@@ -315,6 +329,54 @@ describe('Run tests from scratch', () => {
       ),
     ).toBe('0123456789abcdef0123456789abcdef')
     expect(runningExecutionId('Select an execution model.')).toBeNull()
+  })
+
+  it('names the execution a busy harness is running', async () => {
+    const message =
+      'handler error: "Nightly" (plan-0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.'
+    const bridge = {
+      getExecution: async () => ({
+        id: 'plan-0123456789abcdef0123456789abcdef',
+        label: 'Nightly',
+        status: 'running',
+        availability: 'full',
+        subjects: [],
+        reports: [],
+      }),
+    } as unknown as DashboardDataBridge
+    const described = await describeStartError(bridge, new Error(message))
+    expect(described.running).toEqual({
+      id: 'plan-0123456789abcdef0123456789abcdef',
+      title: 'Nightly',
+    })
+    expect(described.error).toBe(
+      '"Nightly" is still running. Wait for it to finish or cancel it.',
+    )
+    const other = await describeStartError(bridge, new Error('stack missing'))
+    expect(other).toEqual({ error: 'stack missing', running: null })
+    // The execution unreadable: still busy, named from the refusal itself
+    // (its quoted title, else its id), so the alert and Run in Docker show.
+    const unreadable = {
+      getExecution: async () => {
+        throw new Error('engine unavailable')
+      },
+    } as unknown as DashboardDataBridge
+    expect(
+      (await describeStartError(unreadable, new Error(message))).running,
+    ).toEqual({ id: 'plan-0123456789abcdef0123456789abcdef', title: 'Nightly' })
+    expect(
+      (
+        await describeStartError(
+          unreadable,
+          new Error(
+            'Another execution (0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.',
+          ),
+        )
+      ).running,
+    ).toEqual({
+      id: '0123456789abcdef0123456789abcdef',
+      title: '0123456789abcdef0123456789abcdef',
+    })
   })
 
   it('ticks and unticks a sequential group whole', () => {

@@ -11,9 +11,11 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import {
+  createContext,
   Fragment,
   type MouseEvent,
   type ReactNode,
+  useContext,
   useMemo,
   useRef,
   useState,
@@ -25,17 +27,25 @@ import {
   useScreenshotImages,
 } from '@/components/execution/screenshots'
 import {
+  type DeltaTone,
+  deltaDirection,
+  deltaTone,
   FactChip,
   FactList,
   isInteractiveTarget,
   StatusLabel,
 } from '@/design-system'
-import { hashForExecution } from '@/hooks/use-hash-route'
+import {
+  hashForComparison,
+  hashForExecution,
+  hashFrom,
+} from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   DashboardExecutionDetail,
 } from '@/lib/dashboard-data-source'
 import {
+  betterWhen,
   type ComparedMetric,
   type ComparisonSide,
   compareRuns,
@@ -101,15 +111,16 @@ export function outsideText(metric: ComparedMetric): string | null {
  *  difference: no side is called better. A side short of runs is partial,
  *  and no difference is taken from it. */
 export function deltaText(metric: ComparedMetric): string {
-  if (metric.delta === null)
+  const delta = shownDelta(metric)
+  if (delta === null)
     return metric.partial.baseline || metric.partial.candidate
       ? `${sidesText(metric.partial)} partial`
       : metric.baseline === null && metric.candidate === null
         ? ''
         : 'not comparable'
-  if (Math.abs(metric.delta) < 1e-9) return 'no change'
-  const sign = metric.delta > 0 ? '+' : '−'
-  const size = Math.abs(metric.delta)
+  if (delta === 0) return 'no change'
+  const sign = delta > 0 ? '+' : '−'
+  const size = Math.abs(delta)
   if (metric.format === 'score') return `${sign}${Number(size.toFixed(1))} pts`
   if (metric.format === 'percent_points')
     return `${sign}${Number(size.toFixed(1))} pp`
@@ -121,6 +132,40 @@ export function deltaText(metric: ComparedMetric): string {
       ? ''
       : ` · ${sign}${Math.abs(metric.delta_percent).toFixed(Math.abs(metric.delta_percent) < 10 ? 1 : 0)}%`
   return `${sign}${metricFigure(metric.format, size)}${relative}`
+}
+
+/** This comparison's own hash, choice included, for a run's page opened from
+ *  it to come back to; without one, the plain pair. */
+const ComparisonHash = createContext<string | null>(null)
+
+/** A link to a run's page (transcript or evidence record) that comes back to
+ *  this comparison. */
+function useRunHref(sides: Sides) {
+  const here =
+    useContext(ComparisonHash) ?? hashForComparison(sides.a.id, sides.b.id)
+  return (
+    which: Which,
+    runId: string,
+    view: 'evidence' | 'transcript' = 'evidence',
+  ) => hashFrom(hashForExecution(sides[which].id, null, runId, view), here)
+}
+
+/** The difference as it is written: points and percentage points to one
+ *  decimal, so what reads 0 did not move; a float's dust is 0 too. */
+function shownDelta(metric: ComparedMetric): number | null {
+  if (metric.delta === null) return null
+  const shown =
+    metric.format === 'score' || metric.format === 'percent_points'
+      ? Number(metric.delta.toFixed(1))
+      : metric.delta
+  return Math.abs(shown) < 1e-9 ? 0 : shown
+}
+
+/** The colour of a difference (Compare.dc.html): the design system's tone
+ *  for the measure's own direction, rounded like its text. The sign stays
+ *  in the text, so colour never says it alone. */
+export function metricTone(metric: ComparedMetric): DeltaTone {
+  return deltaTone(deltaDirection(shownDelta(metric)), betterWhen(metric.id))
 }
 
 /** A run's state where its score would be: `infrastructure error`. */
@@ -379,7 +424,10 @@ function TestPicker({
                           {score ? valueText(score, 'baseline') : '—'} →{' '}
                           {score ? valueText(score, 'candidate') : '—'}
                         </span>
-                        <span className="cmp-pick-delta">
+                        <span
+                          className="cmp-pick-delta cmp-tone"
+                          data-tone={score ? metricTone(score) : undefined}
+                        >
                           {score ? deltaText(score) : ''}
                         </span>
                       </>
@@ -439,7 +487,11 @@ function Highlights({
             const body = (
               <>
                 <Icon
-                  className="cmp-highlight-icon"
+                  className="cmp-highlight-icon cmp-tone"
+                  data-tone={deltaTone(
+                    item.direction === 'same' ? 'flat' : item.direction,
+                    item.metric ? betterWhen(item.metric) : 'neither',
+                  )}
                   size={16}
                   aria-hidden="true"
                 />
@@ -511,7 +563,12 @@ function Totals({ comparison }: { comparison: ExecutionComparison }) {
                 </span>
                 <span className="cmp-kpi-b">{b}</span>
               </span>
-              <span className="cmp-kpi-delta">{deltaText(metric) || '—'}</span>
+              <span
+                className="cmp-kpi-delta cmp-tone"
+                data-tone={metricTone(metric)}
+              >
+                {deltaText(metric) || '—'}
+              </span>
             </div>,
           ]
         })}
@@ -575,7 +632,9 @@ function MetricTable({
             </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
-            <td className="cmp-delta">{deltaText(metric) || '—'}</td>
+            <td className="cmp-delta cmp-tone" data-tone={metricTone(metric)}>
+              {deltaText(metric) || '—'}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -593,14 +652,26 @@ const CELLS: Array<[string, string]> = [
   ['turns', 'Turns'],
 ]
 
-function Pair({ a, b, delta }: { a: string; b: string; delta: string }) {
+function Pair({
+  a,
+  b,
+  delta,
+  tone,
+}: {
+  a: string
+  b: string
+  delta: string
+  tone?: DeltaTone
+}) {
   return (
     <span className="cmp-pair">
       <span className="cmp-pair-values" title={`${a} → ${b}`}>
         <span className="cmp-faint-num">{a} → </span>
         {b}
       </span>
-      <span className="cmp-pair-delta">{delta}</span>
+      <span className="cmp-pair-delta cmp-tone" data-tone={tone}>
+        {delta}
+      </span>
     </span>
   )
 }
@@ -641,6 +712,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
         a={a.runs ? `${metric.baseline ?? 0}/${a.runs}` : '—'}
         b={b.runs ? `${metric.candidate ?? 0}/${b.runs}` : '—'}
         delta={deltaText(metric)}
+        tone={metricTone(metric)}
       />
     )
   }
@@ -649,6 +721,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
       a={valueText(metric, 'baseline')}
       b={valueText(metric, 'candidate')}
       delta={deltaText(metric)}
+      tone={metricTone(metric)}
     />
   )
 }
@@ -773,6 +846,7 @@ function Results({
                             : stateText(scenario.sides.b.state)
                         }
                         delta={score ? deltaText(score) : ''}
+                        tone={score ? metricTone(score) : undefined}
                       />
                     </span>
                   </td>
@@ -857,6 +931,7 @@ export function RowDetail({
   bridge: DashboardDataBridge | null
   onRunTest?: (scenarioId: string) => void
 }) {
+  const runHref = useRunHref(sides)
   const runs = useMemo(
     () =>
       (['a', 'b'] as const).flatMap((which) =>
@@ -915,7 +990,13 @@ export function RowDetail({
                   </span>
                   {points(criterion.b)}/{criterion.possible}
                 </span>
-                <span className="cmp-tag">
+                <span
+                  className="cmp-tag cmp-tone"
+                  data-tone={deltaTone(
+                    deltaDirection(criterion.delta),
+                    'higher',
+                  )}
+                >
                   {criterion.delta > 0 ? '+' : '−'}
                   {points(Math.abs(criterion.delta))}
                 </span>
@@ -1005,23 +1086,11 @@ export function RowDetail({
                     <>
                       <a
                         className="cmp-act"
-                        href={hashForExecution(
-                          sides[which].id,
-                          null,
-                          run.runId,
-                          'transcript',
-                        )}
+                        href={runHref(which, run.runId, 'transcript')}
                       >
                         Transcript
                       </a>
-                      <a
-                        className="cmp-act"
-                        href={hashForExecution(
-                          sides[which].id,
-                          null,
-                          run.runId,
-                        )}
-                      >
+                      <a className="cmp-act" href={runHref(which, run.runId)}>
                         Evidence
                       </a>
                     </>
@@ -1068,6 +1137,13 @@ export function pairByCaption(
   })
 }
 
+/** Scrolls to a part of the page and moves focus to its control, so the
+ *  keyboard and a screen reader land where the page moved. */
+function reach(target: Element | null, control: string) {
+  target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  target?.querySelector<HTMLElement>(control)?.focus({ preventScroll: true })
+}
+
 /** One side of a pair: the image, which opens full size, and its record. */
 export function ScreenshotFigure({
   which,
@@ -1076,6 +1152,7 @@ export function ScreenshotFigure({
   evidenceHref,
   onOpen,
   onSize,
+  buttonRef,
 }: {
   which: Which
   screenshot: ScreenshotEntry | null
@@ -1083,6 +1160,8 @@ export function ScreenshotFigure({
   evidenceHref: string | null
   onOpen?: () => void
   onSize?: (size: string) => void
+  /** The thumbnail's button, for focus to come back to. */
+  buttonRef?: (button: HTMLButtonElement | null) => void
 }) {
   const side = which.toUpperCase()
   return (
@@ -1093,6 +1172,7 @@ export function ScreenshotFigure({
     >
       {screenshot ? (
         <button
+          ref={buttonRef}
           type="button"
           className="cmp-shot-frame"
           aria-label={`Open ${side} · ${screenshot.caption} full size`}
@@ -1140,6 +1220,7 @@ function ScreenshotPairs({
   sides: Sides
   scenarioId: string
 }) {
+  const runHref = useRunHref(sides)
   const shots = useMemo(
     () => ({
       a: screenshotsOf(sides.a, scenarioId),
@@ -1154,14 +1235,14 @@ function ScreenshotPairs({
   const [viewer, setViewer] = useState<{ which: Which; index: number } | null>(
     null,
   )
-  // Focus goes back to the screenshot the viewer opened from.
-  const trigger = useRef<HTMLElement | null>(null)
+  // Focus goes back to the thumbnail of the screenshot the viewer shows, by
+  // a ref per button: WebKit does not focus a clicked button, so the active
+  // element at the click is not it.
+  const triggers = useRef(new Map<string, HTMLButtonElement>())
   const pairs = pairByCaption(shots.a, shots.b)
   if (pairs.length === 0) return null
   const evidence = (which: Which, screenshot: ScreenshotEntry | null) =>
-    screenshot
-      ? hashForExecution(sides[which].id, null, screenshot.runId)
-      : null
+    screenshot ? runHref(which, screenshot.runId) : null
   const current = viewer ? shots[viewer.which][viewer.index] : null
   return (
     <section className="cmp-shots" aria-label="Screenshots">
@@ -1191,10 +1272,13 @@ function ScreenshotPairs({
                     screenshot={screenshot}
                     image={screenshot ? images[screenshot.key] : undefined}
                     evidenceHref={evidence(which, screenshot)}
+                    buttonRef={(button) => {
+                      if (!screenshot) return
+                      if (button) triggers.current.set(screenshot.key, button)
+                      else triggers.current.delete(screenshot.key)
+                    }}
                     onOpen={() => {
                       if (!screenshot) return
-                      trigger.current =
-                        document.activeElement as HTMLElement | null
                       setViewer({
                         which,
                         index: shots[which].indexOf(screenshot),
@@ -1220,7 +1304,7 @@ function ScreenshotPairs({
           onIndex={(index) => setViewer({ which: viewer.which, index })}
           onClose={() => {
             setViewer(null)
-            trigger.current?.focus()
+            triggers.current.get(current.key)?.focus()
           }}
           evidenceHref={evidence(viewer.which, current) ?? undefined}
         />
@@ -1378,6 +1462,7 @@ export function ComparisonView({
   sides,
   bridge = null,
   swap,
+  here,
   refreshError = null,
   onCount,
   onRunTest,
@@ -1385,6 +1470,9 @@ export function ComparisonView({
   comparison: ExecutionComparison
   sides: Sides
   bridge?: DashboardDataBridge | null
+  /** This comparison's hash, its choice included: where a run's transcript
+   *  or evidence record opened from it goes back to. */
+  here?: string
   /** Why the last refresh failed; what was loaded stays on screen. */
   refreshError?: string | null
   /** The link to the same comparison with A and B swapped. */
@@ -1410,9 +1498,10 @@ export function ComparisonView({
     setOpen((current) => new Set(current).add(id))
     window.setTimeout(
       () =>
-        document
-          .querySelector(`[data-scenario="${CSS.escape(id)}"]`)
-          ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+        reach(
+          document.querySelector(`[data-scenario="${CSS.escape(id)}"]`),
+          '.cmp-row-toggle',
+        ),
       0,
     )
   }
@@ -1450,7 +1539,7 @@ export function ComparisonView({
       : []),
   ]
   return (
-    <>
+    <ComparisonHash.Provider value={here ?? null}>
       {refreshError ? (
         <p className="cmp-warning" role="status" data-comparison-refresh-error>
           <AlertTriangle size={16} aria-hidden="true" />
@@ -1502,9 +1591,7 @@ export function ComparisonView({
               setStackOpen(true)
               window.setTimeout(
                 () =>
-                  document
-                    .getElementById('comparison-stack')
-                    ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                  reach(document.getElementById('comparison-stack'), 'summary'),
                 0,
               )
             }}
@@ -1558,6 +1645,6 @@ export function ComparisonView({
           <Methodology comparison={comparison} />
         </DisclosureLayer>
       </section>
-    </>
+    </ComparisonHash.Provider>
   )
 }

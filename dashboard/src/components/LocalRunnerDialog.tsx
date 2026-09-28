@@ -7,10 +7,19 @@ import {
   Plus,
   TriangleAlert,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { GithubCard } from '@/components/run-dialog/GithubCard'
 import { Picker, type PickerGroup } from '@/components/run-dialog/Picker'
 import {
+  listSeparator,
+  type PendingField,
   pendingReasons,
   pendingText,
   plural,
@@ -176,6 +185,20 @@ export function runnerForm(
           : 'harness',
     stack: parameters.stack ? RECORDED_STACK : '',
   }
+}
+
+/** A GitHub import from before stacks were recorded runs again on this
+ *  harness (neither GitHub nor a recorded stack is possible): the line under
+ *  Where that says so, while Where is still this harness. */
+export function unrecordedStackNote(
+  parameters: ExecutionParameters | null,
+  where: RunnerForm['where'],
+): string | null {
+  return parameters?.where === 'github' &&
+    !parameters.stack &&
+    where === 'harness'
+    ? 'Imported before stacks were recorded, so it runs on this harness.'
+    : null
 }
 
 /** Run tests starts from the model of the newest execution (newest first)
@@ -410,9 +433,13 @@ export async function describeStartError(
 ): Promise<{ error: string; running: { id: string; title: string } | null }> {
   const message = errorMessage(cause)
   const id = runningExecutionId(message)
-  const detail = id ? await bridge.getExecution(id).catch(() => null) : null
-  if (!id || !detail) return { error: message, running: null }
-  const { title } = executionTitle(buildExecutionPresentation(detail))
+  if (!id) return { error: message, running: null }
+  const detail = await bridge.getExecution(id).catch(() => null)
+  // Unreadable, it is still what holds the harness: named from the refusal
+  // itself, its quoted title or else its id.
+  const title = detail
+    ? executionTitle(buildExecutionPresentation(detail)).title
+    : (/"([^"]+)" \(/.exec(message)?.[1] ?? id)
   return {
     error: `"${title}" is still running. Wait for it to finish or cancel it.`,
     running: { id, title },
@@ -427,6 +454,14 @@ const SUITE_SOURCE: Record<string, string> = {
 
 function shortSha(sha?: string) {
   return sha ? sha.replace('sha256:', '').slice(0, 12) : ''
+}
+
+/** Where each missing thing is filled in, inside the dialog's form. */
+const PENDING_FIELD: Record<PendingField, string> = {
+  stack: '#run-dialog-stack',
+  github: '.rd-github button',
+  model: '.rd-model button, .rd-model select',
+  tests: '.rd-tests input[type="checkbox"]',
 }
 
 /** Run tests and Run again: one dialog that starts an execution on this
@@ -699,7 +734,7 @@ export function LocalRunnerDialog({
     } catch (cause) {
       const described = await describeStartError(bridge, cause)
       setRunning(described.running)
-      setError(described.error)
+      setError(described.running ? null : described.error)
     } finally {
       setSubmitting(false)
     }
@@ -801,6 +836,12 @@ export function LocalRunnerDialog({
       : `Starts a new execution with the suite and parameters of ${label ? `“${label}”` : 'this one'}. Change anything first.`
     : 'Starts a new execution on this harness, in Docker or on GitHub.'
   const busy = running !== null && where === 'harness'
+  const focusPending = (field: PendingField) =>
+    document
+      .getElementById(id('form'))
+      ?.querySelector<HTMLElement>(PENDING_FIELD[field])
+      ?.focus()
+  const whereNote = unrecordedStackNote(parameters, where)
 
   return (
     <Dialog
@@ -871,7 +912,27 @@ export function LocalRunnerDialog({
               ) : !ready || pending.length > 0 ? (
                 <p className="rd-summary-line rd-faint">
                   <Info size={16} aria-hidden="true" />
-                  {pendingText(ready, pending)}
+                  {ready ? (
+                    // LyForms: one sentence, each item a link to its field.
+                    <span>
+                      Before running,{' '}
+                      {pending.map((item, index) => (
+                        <Fragment key={item.field}>
+                          {listSeparator(index, pending.length)}
+                          <button
+                            type="button"
+                            className="rd-pend"
+                            onClick={() => focusPending(item.field)}
+                          >
+                            {item.text}
+                          </button>
+                        </Fragment>
+                      ))}
+                      .
+                    </span>
+                  ) : (
+                    pendingText(ready, pending)
+                  )}
                 </p>
               ) : (
                 <p className="rd-summary-line rd-faint rd-ellipsis">
@@ -983,6 +1044,11 @@ export function LocalRunnerDialog({
               ))}
             </div>
             <p className="rd-hint">{whereHint(where, dockerGroups)}</p>
+            {whereNote ? (
+              <p className="rd-hint" data-where-note>
+                {whereNote}
+              </p>
+            ) : null}
           </div>
 
           {needsStack ? (

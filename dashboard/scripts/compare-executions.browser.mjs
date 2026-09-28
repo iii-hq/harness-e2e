@@ -24,6 +24,12 @@ function run(
     metrics: { complete: true, totals: { cache_read_tokens: 10 } },
     cost: { subject_usd: 0.01 },
     criteria: [],
+    // Enough of an assessment for the run's own pages to open.
+    assessment: {
+      run_id: id,
+      system_status: technical === 'valid' ? 'passed' : 'infrastructure_error',
+      assessments: [],
+    },
     failures: failure ? [{ phase: 'setup', message: failure }] : [],
     deliverables: screenshot
       ? [
@@ -321,9 +327,12 @@ try {
     await page.locator('[data-change="stack"] .ds-fact-value').innerText(),
     '1 worker changed · 1 only in B',
   )
-  // Stack details opens the stack worker by worker.
+  // Stack details opens the stack worker by worker, and focus lands on it.
   await page.getByRole('button', { name: 'Stack details' }).click()
   await page.locator('[data-stack-worker="harness-e2e"]').waitFor()
+  await page.waitForFunction(
+    () => document.activeElement?.closest('#comparison-stack') !== null,
+  )
   assert.equal(
     await page.locator('[data-stack-only="b"] dd').innerText(),
     'llm-router',
@@ -349,7 +358,11 @@ try {
       '/attachments/board.png',
     ]),
   )
-  await page.getByRole('button', { name: 'Open A · board full size' }).click()
+  // Opened without focusing the button, as WebKit clicks: focus still
+  // comes back to it.
+  await page
+    .getByRole('button', { name: 'Open A · board full size' })
+    .dispatchEvent('click')
   const viewer = page.getByRole('dialog', { name: 'board' })
   await viewer.getByRole('link', { name: 'Evidence record' }).waitFor()
   await page.keyboard.press('Escape')
@@ -360,6 +373,19 @@ try {
       document.activeElement?.getAttribute('aria-label'),
     ),
     'Open A · board full size',
+  )
+
+  // A run's transcript opened from the comparison goes back to it.
+  await page
+    .locator('[data-run-side="b"]')
+    .getByRole('link', { name: 'Transcript', exact: true })
+    .first()
+    .click()
+  await page.getByRole('link', { name: 'Back to comparison' }).click()
+  await page.locator('[data-comparison-scenarios]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    /^#\/ext\/harness-e2e\/compare\//,
   )
 
   // Run again: B's parameters, on the tests B scored lower on.
@@ -459,7 +485,7 @@ try {
   await page
     .getByRole('button', { name: 'Actions for smoke', exact: true })
     .click()
-  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  await page.getByRole('menuitem', { name: 'Rename…' }).click()
   const rename = page
     .getByRole('dialog')
     .filter({ hasText: 'Rename execution' })
@@ -543,7 +569,7 @@ try {
   await page
     .getByRole('button', { name: 'Actions for smoke rerun', exact: true })
     .click()
-  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  await page.getByRole('menuitem', { name: 'Rename…' }).click()
   await rename.getByRole('button', { name: 'Save', exact: true }).click()
   await rename.waitFor({ state: 'detached' })
   await page.waitForTimeout(300)
@@ -551,7 +577,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, a run’s transcript that goes back to the comparison, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()
