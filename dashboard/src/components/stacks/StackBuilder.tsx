@@ -420,10 +420,15 @@ export function StackBuilder({
         data-narrow={narrow || undefined}
         data-stack-builder=""
         onEscapeKeyDown={(event) => {
-          if (!menu) return
-          event.preventDefault()
-          setMenu(null)
-          menuButton.current?.focus()
+          // Escape closes what is open inside first: the menu, the picker.
+          if (menu) {
+            event.preventDefault()
+            setMenu(null)
+            menuButton.current?.focus()
+          } else if (picker) {
+            event.preventDefault()
+            closePicker()
+          }
         }}
       >
         <header className="sk-sheet-head sb-head">
@@ -808,12 +813,6 @@ export function StackBuilder({
                   spellCheck={false}
                   autoFocus
                   onChange={(event) => setQuery(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key !== 'Escape') return
-                    event.preventDefault()
-                    event.stopPropagation()
-                    closePicker()
-                  }}
                 />
               </div>
               <div className="sb-picks">

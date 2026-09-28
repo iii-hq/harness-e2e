@@ -728,9 +728,10 @@ try {
     calls.resolve.filter((worker) => worker === 'nope-worker'),
     ['nope-worker'],
   )
-  await picker
-    .getByRole('button', { name: 'Done, back to the YAML', exact: true })
-    .click()
+  // Escape closes the picker, not the builder.
+  await search.press('Escape')
+  await picker.waitFor({ state: 'detached' })
+  await builder.getByRole('complementary', { name: 'YAML' }).waitFor()
 
   // Edit as YAML hands what the form wrote to the editor, unsaved; Save
   // stack creates it.
