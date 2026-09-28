@@ -353,7 +353,9 @@ impl Controller {
     }
 
     pub(super) async fn create_stack(&self, request: StackCreateRequest) -> Result<StackView> {
-        validate_stack_id(&request.from)?;
+        if let Some(from) = &request.from {
+            validate_stack_id(from)?;
+        }
         self.plan_store.create_stack(request).await
     }
 

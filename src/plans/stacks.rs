@@ -40,11 +40,18 @@ pub(crate) struct LocalStack {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+/// A new stack of this Console: a copy of another stack (`from`) or the YAML
+/// given (`yaml`), exactly one of the two.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 pub(crate) struct StackCreateRequest {
     /// The stack it starts as a copy of: one of the repository or of this Console.
-    pub from: String,
-    /// Empty or absent names it after that stack.
+    #[serde(default)]
+    pub from: Option<String>,
+    /// The whole stack as YAML, kept exactly as written; refused and warned
+    /// about as `stack-update` does.
+    #[serde(default)]
+    pub yaml: Option<String>,
+    /// Empty or absent names a copy after its stack; a stack of YAML needs one.
     #[serde(default)]
     pub label: String,
 }

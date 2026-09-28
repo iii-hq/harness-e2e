@@ -713,7 +713,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         STACK_CREATE,
-        "Create a stack of this Console as a copy of another stack.",
+        "Create a stack of this Console as a copy of another stack, or from its YAML, refused only as stack-update refuses it.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: StackCreateRequest| {

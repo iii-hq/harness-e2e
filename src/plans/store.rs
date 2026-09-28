@@ -780,23 +780,35 @@ impl PlanStore {
         Ok(listed)
     }
 
-    /// A local stack that starts as a copy of another one, repository or local.
+    /// A local stack that starts as a copy of another one, repository or
+    /// local, or as the YAML given.
     pub(crate) async fn create_stack(&self, request: StackCreateRequest) -> Result<StackView> {
-        let source = self
-            .stacks()
-            .await?
-            .into_iter()
-            .find(|stack| stack.id == request.from)
-            .with_context(|| format!("unknown stack {}", request.from))?;
-        let label = match request.label.trim() {
-            "" => format!("{} copy", source.label),
-            label => label.to_owned(),
+        let label = request.label.trim();
+        let (label, yaml) = match (request.from, request.yaml) {
+            (Some(from), None) => {
+                let source = self
+                    .stacks()
+                    .await?
+                    .into_iter()
+                    .find(|stack| stack.id == from)
+                    .with_context(|| format!("unknown stack {from}"))?;
+                let label = if label.is_empty() {
+                    format!("{} copy", source.label)
+                } else {
+                    label.to_owned()
+                };
+                (label, source.yaml)
+            }
+            (None, Some(yaml)) => (label.to_owned(), yaml),
+            _ => anyhow::bail!(
+                "Give either the stack to copy (from) or its YAML, exactly one of the two."
+            ),
         };
         let id = format!("stack-{}", &uuid::Uuid::new_v4().simple().to_string()[..12]);
         let stack = LocalStack {
             id: id.clone(),
             label,
-            yaml: source.yaml,
+            yaml,
             created_at: now(),
             updated_at: now(),
         };
@@ -2974,8 +2986,9 @@ pub(crate) mod tests {
         assert!(listed.iter().all(|stack| stack.warnings.is_empty()));
         let copy = manager
             .create_stack(StackCreateRequest {
-                from: "default".into(),
+                from: Some("default".into()),
                 label: " ".into(),
+                ..StackCreateRequest::default()
             })
             .await
             .unwrap();
@@ -3026,8 +3039,9 @@ pub(crate) mod tests {
         assert_eq!(manager.stacks().await.unwrap()[2].yaml, yaml);
         let again = manager
             .create_stack(StackCreateRequest {
-                from: copy.id.clone(),
+                from: Some(copy.id.clone()),
                 label: "Again".into(),
+                ..StackCreateRequest::default()
             })
             .await
             .unwrap();
@@ -3061,8 +3075,8 @@ pub(crate) mod tests {
                 "delete" => manager.delete_stack(id).await,
                 _ => manager
                     .create_stack(StackCreateRequest {
-                        from: id.into(),
-                        label: String::new(),
+                        from: Some(id.into()),
+                        ..StackCreateRequest::default()
                     })
                     .await
                     .map(|_| ()),
@@ -3081,6 +3095,89 @@ pub(crate) mod tests {
                 .collect::<Vec<_>>(),
             vec!["default".to_owned(), "harness-template".into(), again.id]
         );
+    }
+
+    #[tokio::test]
+    async fn a_stack_is_created_from_its_yaml_refused_and_warned_about_as_an_edit_is() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        // What the stack builder writes, kept exactly as written, with the
+        // warnings an edit would get.
+        let yaml = "iii: latest\ntemplate: harness\n\ncontainers:\n  harness:\n    worker: package://harness\n    commit: \"8c02f93a1d4e\"\n  local:\n    worker: path://../local\n\nstartup_timeout: 5m\nstop_timeout: 30s\n";
+        let made = manager
+            .create_stack(StackCreateRequest {
+                yaml: Some(yaml.into()),
+                label: " Built ".into(),
+                ..StackCreateRequest::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                made.label.as_str(),
+                made.source.as_str(),
+                made.yaml.as_str()
+            ),
+            ("Built", "local", yaml)
+        );
+        assert!(made.id.starts_with("stack-"));
+        assert_eq!(made.template.as_deref(), Some("harness"));
+        assert_eq!(
+            made.containers
+                .iter()
+                .map(|container| (container.name.as_str(), container.commit.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("harness", Some("8c02f93a1d4e")), ("local", None)]
+        );
+        assert_eq!(made.warnings.len(), 1, "{:?}", made.warnings);
+        assert!(made.warnings[0].contains("a path on this machine"));
+
+        // Refused as an edit is, and then nothing is created; a stack of YAML
+        // needs a name, and exactly one of `from` and `yaml` is given.
+        for (request, reason) in [
+            (
+                StackCreateRequest {
+                    yaml: Some("containers: [".into()),
+                    label: "Broken".into(),
+                    ..StackCreateRequest::default()
+                },
+                "not YAML",
+            ),
+            (
+                StackCreateRequest {
+                    yaml: Some("iii: latest\n".into()),
+                    label: "Empty".into(),
+                    ..StackCreateRequest::default()
+                },
+                "`containers` mapping",
+            ),
+            (
+                StackCreateRequest {
+                    yaml: Some(yaml.into()),
+                    ..StackCreateRequest::default()
+                },
+                "Name the stack",
+            ),
+            (
+                StackCreateRequest {
+                    label: "Nothing".into(),
+                    ..StackCreateRequest::default()
+                },
+                "exactly one of the two",
+            ),
+            (
+                StackCreateRequest {
+                    from: Some("default".into()),
+                    yaml: Some(yaml.into()),
+                    label: "Both".into(),
+                },
+                "exactly one of the two",
+            ),
+        ] {
+            let error = manager.create_stack(request).await.unwrap_err();
+            assert!(error.to_string().contains(reason), "{error}");
+        }
+        assert_eq!(manager.stacks().await.unwrap().len(), 3);
     }
 
     #[tokio::test]
