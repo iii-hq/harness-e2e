@@ -275,7 +275,8 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [selected, setSelected] = useState(-1)
+  // The picked execution, by id, so a reload keeps it while it is listed.
+  const [picked, setPicked] = useState<string | null>(null)
   const [focus, setFocus] = useState<TrendMetricId>('score')
   const [runner, setRunner] = useState<Runner | null>(null)
   const [runnerOpen, setRunnerOpen] = useState(false)
@@ -303,9 +304,32 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   }, [beginRequest, query])
 
   useEffect(() => {
-    setSelected(-1)
+    setPicked(null)
     void load()
   }, [load])
+
+  // The trend follows new executions quietly, as the executions list does.
+  useEffect(() => {
+    if (!bridge) return
+    let cancelled = false
+    let dispose: (() => void) | undefined
+    let timer: number | undefined
+    bridge
+      .subscribeRunChanges(() => {
+        if (timer) window.clearTimeout(timer)
+        timer = window.setTimeout(() => void load(), 400)
+      })
+      .then((off) => {
+        if (cancelled) off()
+        else dispose = off
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+      if (timer) window.clearTimeout(timer)
+      dispose?.()
+    }
+  }, [bridge, load])
 
   useEffect(() => {
     replaceRouteParams(requestParams(query))
@@ -317,8 +341,11 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     [points],
   )
   const here = hashForTrends(requestParams(query))
-  const pick = (index: number) =>
-    setSelected((current) => (current === index ? -1 : index))
+  const selected = points.findIndex((item) => item.execution_id === picked)
+  const pick = (index: number) => {
+    const id = points[index]?.execution_id ?? null
+    setPicked((current) => (current === id ? null : id))
+  }
 
   const openRunner = useCallback((next: Runner) => {
     setRunner(next)
@@ -527,7 +554,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                     previous={previousCounted(points, selected)}
                     bridge={bridge}
                     here={here}
-                    onClose={() => setSelected(-1)}
+                    onClose={() => setPicked(null)}
                   />
                 ) : null}
               </div>

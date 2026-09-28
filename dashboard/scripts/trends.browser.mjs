@@ -30,13 +30,32 @@ const opusDetail = {
   },
 }
 
+// An execution that lands while the page is open.
+const regression = fixture.series.find((item) => item.key === 'regression')
+const newer = {
+  ...structuredClone(regression.points.at(-1)),
+  execution_id: 'github-36400000001-1',
+  started_at: '2026-09-28T14:17:00-03:00',
+}
+let landed = false
+
 const calls = []
 const requests = (id) =>
   calls.filter((call) => call.id === id).map((call) => call.request)
 const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   calls.push({ id, request })
-  if (id === 'trends-get') return trendsAnswer(request)
+  if (id === 'trends-get') {
+    const answer = trendsAnswer(request)
+    if (
+      landed &&
+      answer.selected.provider === 'deepseek' &&
+      answer.stack !== 'not_recorded' &&
+      answer.selected.suite === 'regression'
+    )
+      answer.points = [...answer.points, newer]
+    return answer
+  }
   if (id === 'version-compare') return compareAnswer(request)
   if (id === 'execution-get' && request.execution_id === opusDetail.id)
     return { detail: opusDetail }
@@ -145,6 +164,16 @@ try {
     await page.locator('[data-by-test] [aria-pressed="true"]').count(),
     1,
   )
+  // A run lands: the trend reloads quietly and keeps the picked execution.
+  const asked = requests('trends-get').length
+  landed = true
+  await page.evaluate(() => {
+    for (const handler of window.__changeHandlers ?? []) handler({})
+  })
+  await summary.getByText('12 executions ·', { exact: false }).waitFor()
+  assert.deepEqual(requests('trends-get').at(asked), requests('trends-get')[0])
+  await latest.getByRole('button', { name: 'Close' }).waitFor()
+  landed = false
   await latest.getByRole('button', { name: 'Close' }).click()
   assert.equal(await page.locator('[data-trend-panel]').count(), 0)
 
@@ -249,7 +278,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, commits between two checkouts, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, a run landing reloaded quietly with the pick kept, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, commits between two checkouts, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()
