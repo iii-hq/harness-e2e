@@ -757,7 +757,7 @@ function ScenarioResult({
                     type="button"
                     className="ep-act ep-act-ctl"
                     data-rerun-scenario={item.scenarioId}
-                    aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                    aria-label={`Run this test again: ${item.scenarioId}`}
                     onClick={() => onRerun(item.scenarioId)}
                   >
                     Run this test again
@@ -812,7 +812,7 @@ function ScenarioResult({
                     // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
                     role="list"
                     className="ep-kpis ep-run-kpis"
-                    aria-label="Run metrics"
+                    aria-label={`Run metrics · ${item.scenarioId}`}
                   >
                     {runTiles.map((kpi) => (
                       <KpiTile key={kpi.label} kpi={kpi} as="li" />
@@ -822,7 +822,7 @@ function ScenarioResult({
                   <div
                     role="group"
                     className="ep-run-actions"
-                    aria-label="Run actions"
+                    aria-label={`Run actions · ${item.scenarioId}`}
                   >
                     {primaryAssessment?.transcript ? (
                       <button
@@ -861,7 +861,7 @@ function ScenarioResult({
                       <button
                         type="button"
                         className="ep-act ep-row-act"
-                        aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                        aria-label={`Run again: ${item.scenarioId}`}
                         data-rerun-scenario={item.scenarioId}
                         onClick={() => onRerun(item.scenarioId)}
                       >

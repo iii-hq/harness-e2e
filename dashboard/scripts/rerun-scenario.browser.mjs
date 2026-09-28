@@ -285,7 +285,7 @@ try {
   for (const id of ['timer_wake', 'minimal_path', 'registry_verification'])
     await openRow(id)
   const timerAgain = page.getByRole('button', {
-    name: 'Run Timer Wake again',
+    name: 'Run again: timer_wake',
     exact: true,
   })
   await timerAgain.waitFor()
@@ -293,7 +293,7 @@ try {
   // same whether the test passed or not.
   for (const again of [
     timerAgain,
-    page.getByRole('button', { name: 'Run Minimal Path again', exact: true }),
+    page.getByRole('button', { name: 'Run again: minimal_path', exact: true }),
   ])
     assert.ok((await again.getAttribute('class')).includes('ep-row-act'))
 
@@ -311,7 +311,9 @@ try {
   await minimal
     .getByText('run 1 · minimal- · attempt 1', { exact: true })
     .waitFor()
-  const tiles = minimal.getByRole('list', { name: 'Run metrics' })
+  const tiles = minimal.getByRole('list', {
+    name: 'Run metrics · minimal_path',
+  })
   assert.deepEqual(await tiles.locator('.ep-kpi-label').allTextContents(), [
     'Duration',
     'Cost',
@@ -322,13 +324,13 @@ try {
   ])
   await tiles.getByText('sum of runs', { exact: true }).waitFor()
   await minimal
-    .getByRole('group', { name: 'Run actions' })
+    .getByRole('group', { name: 'Run actions · minimal_path' })
     .getByRole('link', { name: 'Evidence record for Minimal Path' })
     .waitFor()
 
   // A scenario of a sequential group says its group runs with it.
   await page
-    .getByRole('button', { name: 'Run Registry Verification again' })
+    .getByRole('button', { name: 'Run again: registry_verification' })
     .click()
   const group = page.getByRole('dialog', {
     name: 'Run registry_verification again?',
@@ -418,7 +420,7 @@ try {
     .locator('[data-scenario-row*=":timer_wake:"] .ep-row-toggle')
     .click()
   await page
-    .getByRole('button', { name: 'Run Timer Wake again', exact: true })
+    .getByRole('button', { name: 'Run again: timer_wake', exact: true })
     .click()
   const github = page.getByRole('dialog', {
     name: 'Run timer_wake again?',

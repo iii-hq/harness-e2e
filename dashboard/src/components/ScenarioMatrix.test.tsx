@@ -412,8 +412,8 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('$0.0123')
     expect(html).toContain('data-primary-metric="Runtime"')
     expect(html).toContain('data-primary-metric="Total tokens"')
-    expect(html).toContain('aria-label="Run metrics"')
-    expect(html).toContain('aria-label="Run actions"')
+    expect(html).toContain('aria-label="Run metrics · security_review"')
+    expect(html).toContain('aria-label="Run actions · security_review"')
     expect(html).toContain('run 1 · run-secu · attempt 1')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
@@ -494,7 +494,11 @@ describe('ScenarioMatrix', () => {
     expect(html).toMatch(/href="[^"]*execution\/old-native\/run\/run-old"/)
     expect(html).toContain('fixture repository unavailable')
     // Every row can run again; one that did not pass says so in words.
-    expect(html).toContain('aria-label="Run Security Review again"')
+    // Names start with what the control shows (label in name), and the
+    // run's groups say whose they are.
+    expect(html).toContain('aria-label="Run again: security_review"')
+    expect(html).toContain('aria-label="Run metrics · security_review"')
+    expect(html).toContain('aria-label="Run actions · security_review"')
     expect(html).toMatch(
       /data-rerun-scenario="persistent_state"[^>]*>.*?Run again<\/button>/,
     )
