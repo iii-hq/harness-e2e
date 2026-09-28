@@ -1,0 +1,707 @@
+/* New stack as the redesign canvas draws it (StackBuilder.dc.html): the
+   form beside the YAML it writes (or the picker, in its place), the status
+   and Create below. It builds on the sheet recipe of stacks-page.css and,
+   rendering in the host's portal, uses host token names only, with the
+   extension's sizes carried as fallbacks. Every branch written out. */
+
+.sk-sheet.sb {
+  width: min(calc(var(--spacing) * 330), calc(100vw - var(--spacing) * 12));
+  height: min(calc(var(--spacing) * 290), calc(100dvh - var(--spacing) * 12));
+}
+
+.sk-sheet.sb[data-narrow] {
+  width: 100vw;
+  height: 100dvh;
+}
+
+.sk-sheet-head.sb-head {
+  gap: calc(var(--spacing) * 1.5);
+  border-bottom: var(--ds-row-divider, 1px solid var(--color-edge));
+}
+
+.sb-title {
+  margin: 0;
+  font-size: var(--text-base);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: calc(var(--spacing) * 5.5);
+}
+
+.sb-name {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  max-width: calc(var(--spacing) * 130);
+}
+
+.sb-name-input {
+  font-weight: 500;
+}
+
+/* ------------------------------------------------------------- the body */
+
+.sb-body {
+  display: grid;
+  flex: 1 1 0;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.sb[data-narrow] .sb-body {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(calc(var(--spacing) * 105), auto);
+  align-content: start;
+  overflow: auto;
+}
+
+.sb-form {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 5.5);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: calc(var(--spacing) * 4) calc(var(--spacing) * 5)
+    calc(var(--spacing) * 6);
+  scrollbar-color: var(--color-surface-selected) transparent;
+  scrollbar-width: thin;
+}
+
+/* In one scrolling column each part keeps its whole height. */
+.sb[data-narrow] .sb-form,
+.sb[data-narrow] .sb-side {
+  min-height: auto;
+  overflow: visible;
+}
+
+.sb-form p,
+.sb-side p {
+  margin: 0;
+}
+
+.sb-field {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+}
+
+.sb-meta {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-weight: 400;
+}
+
+.sb-eyebrow {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-weight: 500;
+  letter-spacing: var(--ds-tracking-label, 0.06em);
+  line-height: calc(var(--spacing) * 4);
+  text-transform: uppercase;
+}
+
+/* Start from: three choices in one row. */
+.sb-sources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--spacing) * 0.75);
+  padding: calc(var(--spacing) * 0.75);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.sb-source {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.25);
+  padding: calc(var(--spacing) * 1.75) calc(var(--spacing) * 2.5);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.sb-source:hover {
+  background: var(--color-surface-hover);
+}
+
+.sb-source[data-selected],
+.sb-source[data-selected]:hover {
+  background: var(--color-surface-selected);
+}
+
+.sb-source > input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  appearance: none;
+  border-radius: inherit;
+  cursor: pointer;
+}
+
+.sb-source > input:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: 1px;
+}
+
+.sb-source-label {
+  font-weight: 500;
+}
+
+.sb-source-sub {
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+/* Templates and stacks to copy: one radio each. */
+.sk-from.sb-list {
+  gap: var(--spacing);
+}
+
+.sk-from > .sb-legend {
+  display: flex;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 2);
+  padding: 0 0 calc(var(--spacing) * 1.5);
+}
+
+.sb-copy-note {
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5) 0;
+}
+
+.sk-option.sb-template {
+  grid-template-columns: calc(var(--spacing) * 4.5) minmax(0, 1fr) auto;
+}
+
+.sk-option[data-off] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sk-option[data-off] .sk-radio {
+  cursor: not-allowed;
+}
+
+.sb-template-name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 calc(var(--spacing) * 2);
+}
+
+.sb-count {
+  line-height: calc(var(--spacing) * 5);
+  white-space: nowrap;
+}
+
+.sk-alert.sb-alert {
+  align-items: center;
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-alert > span {
+  flex: 1 1 auto;
+}
+
+.sb-chosen {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+  background: var(--color-panel);
+}
+
+.sb-chosen > .sk-option-text {
+  flex: 1 1 auto;
+}
+
+.sb-chosen .sk-faint {
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sb-iii {
+  display: grid;
+  grid-template-columns: calc(var(--spacing) * 35) auto minmax(0, 1fr);
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5) calc(var(--spacing) * 2.5);
+}
+
+.sb-iii-value {
+  display: inline-flex;
+  align-items: center;
+  height: calc(var(--spacing) * 8);
+  padding: 0 calc(var(--spacing) * 2.5);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+}
+
+/* Workers: the template's, what this stack declares, what is added. */
+.sb-workers {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+}
+
+.sb-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 calc(var(--spacing) * 2);
+}
+
+.sb-heading h3 {
+  margin: 0;
+  font-size: var(--ds-text-sm, 0.8125rem);
+  font-weight: 600;
+  line-height: calc(var(--spacing) * 5);
+}
+
+.sb-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.sb-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sb-chips > li {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  height: calc(var(--spacing) * 6);
+  padding: 0 calc(var(--spacing) * 2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.sb-chips > li[data-pinned] {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+  background: var(--color-accent-muted);
+}
+
+.sb-chip-pin {
+  color: var(--color-ink-faint);
+}
+
+.sb-chips > li[data-pinned] .sb-chip-pin {
+  color: var(--color-accent);
+}
+
+.sb-declared {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--radius-sm);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+  background: var(--color-panel);
+  list-style: none;
+}
+
+.sb-declared > li {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+}
+
+.sb-declared > li + li {
+  border-top: var(--ds-row-divider, 1px solid var(--color-edge));
+}
+
+.sb-declared > li[data-tone="block"] {
+  background: var(--color-alert-muted);
+}
+
+.sb-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5);
+}
+
+.sb-row-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.25);
+}
+
+.sb-ref {
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+  overflow-wrap: anywhere;
+}
+
+.sb-pin {
+  position: relative;
+}
+
+.sb-pin > .sk-btn > svg {
+  color: var(--color-ink-faint);
+}
+
+/* The version menu: over the rows, under its button. */
+.sb-menu {
+  position: absolute;
+  top: calc(100% + var(--spacing));
+  right: 0;
+  z-index: 5;
+  display: flex;
+  width: calc(var(--spacing) * 90);
+  flex-direction: column;
+  padding: calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-md, var(--radius-sm));
+  outline: 1px solid var(--color-edge);
+  background: var(--color-panel-raised);
+}
+
+.sb-option-label {
+  font-weight: 500;
+}
+
+.sb-menu .sk-faint {
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sk-input.sb-menu-input {
+  height: calc(var(--spacing) * 8);
+  margin-top: var(--spacing);
+  font-size: var(--text-xs);
+}
+
+.sb-menu-note {
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5) var(--spacing);
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+/* What a declared worker does: a dot and a sentence. */
+.sb-note {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--spacing) * 2);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-note strong {
+  font-weight: 600;
+}
+
+.sb-dot {
+  flex: none;
+  width: calc(var(--spacing) * 1.5);
+  height: calc(var(--spacing) * 1.5);
+  margin-top: calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-full);
+  background: var(--color-ok);
+}
+
+.sb-note[data-tone="block"] {
+  color: var(--ds-danger-text);
+}
+
+.sb-note[data-tone="block"] .sb-dot {
+  background: var(--ds-danger-text);
+}
+
+.sb-note[data-tone="warn"] {
+  color: color-mix(in srgb, var(--color-warn) 75%, var(--color-ink));
+}
+
+.sb-note[data-tone="warn"] .sb-dot {
+  background: var(--color-warn);
+}
+
+.sb-note[data-tone="pending"] .sb-dot {
+  background: var(--color-ink-ghost);
+}
+
+.sk-btn.sb-retry {
+  flex: none;
+  height: calc(var(--spacing) * 6);
+  margin-left: auto;
+}
+
+.sb-empty {
+  padding: calc(var(--spacing) * 3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-add,
+.sb-outline {
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+}
+
+.sk-btn.sb-add {
+  align-self: flex-start;
+  padding: 0 calc(var(--spacing) * 2.5);
+}
+
+.sb-add:focus-visible,
+.sb-outline:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: 1px;
+}
+
+.sb-added {
+  display: grid;
+  grid-template-columns: calc(var(--spacing) * 37.5) minmax(0, 1fr);
+  gap: var(--spacing) calc(var(--spacing) * 3);
+  margin: 0;
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-added > div {
+  display: contents;
+}
+
+.sb-added dt {
+  font-family: var(--font-mono);
+}
+
+.sb-added dd {
+  margin: 0;
+  color: var(--color-ink-faint);
+}
+
+.sb-timeouts summary {
+  font-size: var(--text-xs);
+  font-weight: 500;
+  line-height: calc(var(--spacing) * 4);
+  cursor: pointer;
+}
+
+.sb-timeouts summary .sk-faint {
+  font-weight: 400;
+}
+
+.sb-timeouts > p {
+  padding-top: calc(var(--spacing) * 2);
+}
+
+/* ------------------------------------------- the right side: YAML, picker */
+
+.sb-side {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: var(--ds-row-divider, 1px solid var(--color-edge));
+  background: var(--color-panel);
+}
+
+.sb[data-narrow] .sb-side {
+  border-top: var(--ds-row-divider, 1px solid var(--color-edge));
+  border-left: 0;
+}
+
+.sb-side-bar {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-height: calc(var(--spacing) * 12);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3.5)
+    calc(var(--spacing) * 2.5) calc(var(--spacing) * 4);
+  border-bottom: var(--ds-row-divider, 1px solid var(--color-edge));
+  font-size: var(--text-xs);
+}
+
+.sb-side[data-picker] .sb-side-bar {
+  padding-bottom: calc(var(--spacing) * 2);
+  border-bottom: 0;
+}
+
+.sb-side-title {
+  font-size: var(--ds-text-sm, 0.8125rem);
+  font-weight: 600;
+}
+
+.sb-push {
+  margin-left: auto;
+}
+
+.sb-side .sk-code {
+  scrollbar-color: var(--color-surface-selected) transparent;
+  scrollbar-width: thin;
+}
+
+.sb[data-narrow] .sb-side .sk-code {
+  flex: 1 1 auto;
+}
+
+.sb-side .sk-line[data-blocked] {
+  background: var(--color-alert-muted);
+}
+
+.sb-side .sk-line[data-blocked] > .sk-ln {
+  border-left: calc(var(--spacing) * 0.5) solid var(--ds-danger-text);
+}
+
+.sb-side-foot {
+  flex: none;
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 4);
+  border-top: var(--ds-row-divider, 1px solid var(--color-edge));
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-search {
+  position: relative;
+  flex: none;
+  padding: 0 calc(var(--spacing) * 3.5) calc(var(--spacing) * 2.5)
+    calc(var(--spacing) * 4);
+  border-bottom: var(--ds-row-divider, 1px solid var(--color-edge));
+}
+
+.sb-search > svg {
+  position: absolute;
+  top: calc(var(--spacing) * 2.5);
+  left: calc(var(--spacing) * 6.5);
+  color: var(--color-ink-faint);
+  pointer-events: none;
+}
+
+.sb-search > .sk-input {
+  width: 100%;
+  padding-left: calc(var(--spacing) * 8.5);
+}
+
+.sb-picks {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: auto;
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
+  scrollbar-color: var(--color-surface-selected) transparent;
+  scrollbar-width: thin;
+}
+
+.sb[data-narrow] .sb-picks {
+  flex: none;
+  overflow: visible;
+}
+
+.sb-pick-group {
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--spacing) * 1.5) 0;
+}
+
+.sb-pick-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 calc(var(--spacing) * 2);
+  padding: var(--spacing) calc(var(--spacing) * 2);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.sb-pick {
+  display: grid;
+  width: 100%;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(var(--spacing) * 2.5);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sb-pick:hover {
+  background: var(--color-surface-hover);
+}
+
+.sb-pick[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.sb-pick[aria-disabled="true"]:hover {
+  background: transparent;
+}
+
+.sb-pick:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: -2px;
+}
+
+.sb-pick-name {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.sb-pick-name > .sk-mono {
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 5);
+}
+
+.sb-pick-sub,
+.sb-pick-tag {
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+  overflow-wrap: anywhere;
+}
+
+.sb-pick-tag {
+  white-space: nowrap;
+}
+
+.sb-pick-tag[data-alert] {
+  color: var(--ds-danger-text);
+}
+
+.sk-status.sb-status {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--spacing) * 2);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-status > svg {
+  flex: none;
+  margin-top: calc(var(--spacing) * 0.25);
+}

@@ -3,6 +3,7 @@
 //! The master plan's suites are read-only; a local one starts as a copy of
 //! another suite and is edited here.
 pub(crate) mod credentials;
+pub(crate) mod stack_sources;
 pub(crate) mod stacks;
 pub(crate) mod store;
 

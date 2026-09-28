@@ -1,0 +1,1 @@
+{"error":{"available":[],"code":"worker_not_found","dependency_path":"nope-not-a-worker","fix":"Publish 'nope-not-a-worker' or remove it from the dependency list.","message":"Worker 'nope-not-a-worker' was not found in the registry.","requested":["latest"],"scope":"worker","worker":"nope-not-a-worker"}}

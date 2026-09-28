@@ -1,0 +1,363 @@
+{
+ "edges": [
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "ade"
+  },
+  {
+   "from": "ade",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "context-manager"
+  },
+  {
+   "from": "context-manager",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "context-manager",
+   "range": "latest",
+   "to": "llm-router"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "cron"
+  },
+  {
+   "from": "cron",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "ide"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "iii-directory"
+  },
+  {
+   "from": "iii-directory",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "iii-observability"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "judge"
+  },
+  {
+   "from": "judge",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "judge",
+   "range": "latest",
+   "to": "judge-typesafe"
+  },
+  {
+   "from": "judge-typesafe",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "llm-router"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "provider-anthropic"
+  },
+  {
+   "from": "provider-anthropic",
+   "range": "latest",
+   "to": "llm-router"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "provider-anthropic",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "provider-openai"
+  },
+  {
+   "from": "provider-openai",
+   "range": "latest",
+   "to": "llm-router"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "provider-openai",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "provider-openai-codex"
+  },
+  {
+   "from": "provider-openai-codex",
+   "range": "latest",
+   "to": "llm-router"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "llm-router",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "provider-openai-codex",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "queue"
+  },
+  {
+   "from": "queue",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "session-manager"
+  },
+  {
+   "from": "session-manager",
+   "range": "latest",
+   "to": "configuration"
+  },
+  {
+   "from": "harness",
+   "range": "latest",
+   "to": "state"
+  },
+  {
+   "from": "state",
+   "range": "latest",
+   "to": "configuration"
+  }
+ ],
+ "graph": [
+  {
+   "name": "configuration",
+   "repo": "https://github.com/iii-hq/iii",
+   "type": "engine",
+   "version": "0.24.3"
+  },
+  {
+   "name": "ade",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.9.44"
+  },
+  {
+   "name": "state",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.22.17"
+  },
+  {
+   "name": "llm-router",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.4.27"
+  },
+  {
+   "name": "context-manager",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.1.15"
+  },
+  {
+   "name": "cron",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.21.25"
+  },
+  {
+   "name": "ide",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.12.20"
+  },
+  {
+   "name": "iii-directory",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.2.31"
+  },
+  {
+   "name": "iii-observability",
+   "repo": "https://github.com/iii-hq/iii",
+   "type": "engine",
+   "version": "0.24.3"
+  },
+  {
+   "name": "judge-typesafe",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.2.1"
+  },
+  {
+   "name": "judge",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.2.2"
+  },
+  {
+   "name": "provider-anthropic",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.2.22"
+  },
+  {
+   "name": "provider-openai",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.2.19"
+  },
+  {
+   "name": "provider-openai-codex",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.4.17"
+  },
+  {
+   "name": "queue",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "0.21.17"
+  },
+  {
+   "name": "session-manager",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.0.26"
+  },
+  {
+   "name": "harness",
+   "repo": "https://github.com/iii-hq/workers",
+   "type": "binary",
+   "version": "1.8.36"
+  }
+ ],
+ "root": {
+  "name": "harness",
+  "version": "1.8.36"
+ },
+ "target": "x86_64-unknown-linux-gnu"
+}

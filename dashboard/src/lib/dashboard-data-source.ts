@@ -68,6 +68,38 @@ export type Stack = {
   updated_at: string | null
 }
 
+/** A container an iii-hq/templates project's worker-compose.yaml declares. */
+export type TemplateWorker = {
+  name: string
+  /** As written: `package://…` or `path://…`. */
+  worker: string
+  version: string | null
+}
+
+/** An iii-hq/templates project a stack can start from. */
+export type StackTemplate = {
+  id: string
+  name: string
+  description: string
+  workers: TemplateWorker[]
+  /** Why it declares no workers. */
+  note?: string
+}
+
+/** iii-hq/templates as `main` had it when the worker read it. */
+export type StackTemplates = {
+  repository: string
+  ref: string
+  revision: string
+  templates: StackTemplate[]
+}
+
+/** What the iii registry resolves a worker to: its newest release and the
+ *  workers it brings, or the registry's error (`worker_not_found`). */
+export type WorkerResolution =
+  | { name: string; version: string; dependencies: string[] }
+  | { error: { code: string; message: string } }
+
 /** Whether the worker's `gh` can dispatch executions to GitHub. */
 export type GithubStatus = {
   ready: boolean
@@ -667,6 +699,8 @@ export type RuntimeConfig = {
     stack_create: string
     stack_update: string
     stack_delete: string
+    stack_templates_list: string
+    worker_resolve: string
     credentials_list: string
     credential_set: string
     credential_delete: string
@@ -725,6 +759,12 @@ export type DashboardDataBridge = {
   listStacks(): Promise<{ stacks: Stack[] }>
   /** A stack of this Console that starts as a copy of `from`. */
   createStack(from: string, label?: string): Promise<Stack>
+  /** A stack of this Console of this YAML; refused as `updateStack` is. */
+  createStackFromYaml(label: string, yaml: string): Promise<Stack>
+  /** The iii-hq/templates projects; the worker keeps them ten minutes. */
+  listStackTemplates(): Promise<StackTemplates>
+  /** What the iii registry resolves `<worker>@latest` to. */
+  resolveWorker(worker: string): Promise<WorkerResolution>
   /** Refused only when the YAML does not parse or declares no containers. */
   updateStack(
     stackId: string,
@@ -849,6 +889,11 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
     getGithubStatus: () => call(runtime.functions.github_status_get, {}),
     createStack: (from, label = '') =>
       call(runtime.functions.stack_create, { from, label }),
+    createStackFromYaml: (label, yaml) =>
+      call(runtime.functions.stack_create, { label, yaml }),
+    listStackTemplates: () => call(runtime.functions.stack_templates_list, {}),
+    resolveWorker: (worker) =>
+      call(runtime.functions.worker_resolve, { worker }),
     updateStack: (stackId, changes) =>
       call(runtime.functions.stack_update, { ...changes, stack_id: stackId }),
     deleteStack: (stackId) =>
