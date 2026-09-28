@@ -93,6 +93,11 @@ export function runProjection(
   return null
 }
 
+/** A worker's phrase as a sentence: its full stop when it has none. */
+function sentence(value: string) {
+  return /[.!?…]$/.test(value.trim()) ? value : `${value}.`
+}
+
 function AuditSection({ flags }: { flags: JsonObject[] }) {
   const [open, setOpen] = useState(false)
   const listId = useId()
@@ -118,8 +123,8 @@ function AuditSection({ flags }: { flags: JsonObject[] }) {
             {causes.size === 1 ? 'one cause' : `${causes.size} causes`}
           </p>
           <p className="ep-faint">
-            {text(first?.summary) ?? [...causes.keys()].join(', ')} Audit flags
-            don’t change the score.
+            {sentence(text(first?.summary) ?? [...causes.keys()].join(', '))}{' '}
+            Audit flags don’t change the score.
           </p>
         </div>
         <button
@@ -216,6 +221,38 @@ export function EvidenceRecordPage({
   const dimensionOf = new Map(
     run.assessments.map((entry) => [entry.criterionId, entry.dimension]),
   )
+  // A criterion's evidence (Evidence per criterion): the transcript as its
+  // page, another file by opening it, nothing when neither is at hand.
+  const evidenceLink = (criterionId: string) => {
+    const [ref] = run.assessments
+      .filter((entry) => entry.criterionId === criterionId)
+      .flatMap((entry) => entry.evidence ?? [])
+    if (!ref) return null
+    const label = `Evidence for ${criterionId}`
+    if (ref.artifact_id === 'transcript' && transcriptHref && run.transcript)
+      return (
+        <a
+          className="er-evidence-link"
+          href={transcriptHref}
+          aria-label={label}
+        >
+          Evidence
+        </a>
+      )
+    const path = text(
+      files.find((file) => file.sha256 === ref.artifact_sha256)?.path,
+    )
+    return path && onOpenFile ? (
+      <button
+        type="button"
+        className="er-evidence-link"
+        aria-label={label}
+        onClick={() => open(path)}
+      >
+        Evidence
+      </button>
+    ) : null
+  }
   const groups = new Map<string, typeof criteria>()
   for (const criterion of criteria) {
     const key = dimensionOf.get(criterion.id) ?? 'criteria'
@@ -299,7 +336,8 @@ export function EvidenceRecordPage({
               </a>
             ) : null}
             <ScenarioChatAction
-              compact
+              label="Ask in chat"
+              buttonClass={buttonClassName({ variant: 'quiet' })}
               detail={detail}
               scenarioId={run.scenarioId}
               subjectId={run.subjectId}
@@ -400,6 +438,7 @@ export function EvidenceRecordPage({
                               {c.awarded}/{c.possible}
                             </span>
                           </span>
+                          {evidenceLink(c.id)}
                         </div>
                       )
                     })}

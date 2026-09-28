@@ -1048,6 +1048,8 @@
 
 .er-criterion-copy {
   display: grid;
+  /* Two rows tall, so the evidence link sits right under the points. */
+  grid-row: span 2;
   min-width: 0;
   gap: 0.125rem;
   overflow-wrap: anywhere;
@@ -1057,6 +1059,28 @@
   display: inline-flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/* Under the points, as the canvas puts it: the criterion's evidence. */
+.er-evidence-link {
+  grid-column: 3;
+  grid-row: 2;
+  justify-self: end;
+  margin-top: calc(var(--ds-space-2) * -1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-ink-faint, var(--text-soft));
+  font: inherit;
+  font-size: var(--ds-text-xs);
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.er-evidence-link:hover {
+  color: var(--color-ink, var(--text));
+  text-decoration: underline;
 }
 
 .er-ok {
