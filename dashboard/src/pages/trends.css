@@ -201,17 +201,13 @@
   width: calc(var(--spacing) * 85);
 }
 
+/* The host's radio item keeps its padding: the left gutter holds the check. */
 .tr-menu-item {
   display: flex;
   min-height: calc(var(--spacing) * 11);
   align-items: center;
   gap: calc(var(--spacing) * 3);
-  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5);
   font-size: var(--ds-text-sm, 0.8125rem);
-}
-
-.tr-menu-item[aria-checked="true"] {
-  background: var(--color-surface-selected);
 }
 
 .tr-menu-text {
