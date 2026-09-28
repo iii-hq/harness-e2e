@@ -37,6 +37,7 @@ import { shortDefinition } from '@/lib/definition-digest'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import { titleCase } from '@/lib/execution-view'
 import { sentenceCase } from '@/lib/format'
+import type { ResultState } from '@/lib/result-status'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -49,7 +50,6 @@ import {
   stepSignals,
   unreported,
 } from '@/lib/scenario-matrix'
-import type { ResultState } from '@/lib/result-status'
 import { screenshotsOf } from '@/lib/screenshots'
 
 export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'

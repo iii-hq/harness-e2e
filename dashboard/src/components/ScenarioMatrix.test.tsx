@@ -357,7 +357,9 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('hard gate')
     expect(html).toContain('data-state="inconclusive" data-tone="warn"')
     // No report reads as not run, as the filter counts it, in its own word.
-    expect(html).toMatch(/data-state="not_run"[^>]*>(?:(?!<\/td>).)*<span>Unavailable</)
+    expect(html).toMatch(
+      /data-state="not_run"[^>]*>(?:(?!<\/td>).)*<span>Unavailable</,
+    )
     expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
