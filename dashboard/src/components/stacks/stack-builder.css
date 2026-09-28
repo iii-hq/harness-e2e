@@ -564,11 +564,11 @@
 }
 
 .sb-side .sk-line[data-blocked] {
-  background: linear-gradient(
-    to right,
-    var(--ds-danger-text) calc(var(--spacing) * 0.5),
-    var(--color-alert-muted) calc(var(--spacing) * 0.5)
-  );
+  background: var(--color-alert-muted);
+}
+
+.sb-side .sk-line[data-blocked] > .sk-ln {
+  border-left: calc(var(--spacing) * 0.5) solid var(--ds-danger-text);
 }
 
 .sb-side-foot {

@@ -49,7 +49,7 @@ const bundle = {
   'styles.css': readFileSync(path.join(distDir, 'styles.css')),
 }
 // The functions the dashboard only reads through (console-entry.tsx):
-// lists, gets, evidence and GitHub contracts. Anything else, and anything
+// lists, gets, evidence, GitHub contracts, iii-hq/templates and the registry. Anything else, and anything
 // outside e2e::dashboard::, is refused.
 const READS = [
   'executions-list',
@@ -65,6 +65,8 @@ const READS = [
   'catalog-get',
   'suites-list',
   'stacks-list',
+  'stack-templates-list',
+  'worker-resolve',
   'credentials-list',
 ].map((name) => `e2e::dashboard::${name}`)
 // The Console loads page.js; this one sets the route and guards the calls,
