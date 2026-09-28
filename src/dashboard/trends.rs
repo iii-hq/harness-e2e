@@ -27,8 +27,8 @@ pub(super) struct TrendsRequest {
     /// Null or empty: no profile; absent: any.
     #[serde(default, deserialize_with = "present")]
     pub profile: Option<Option<String>>,
-    /// A stack name, `not_recorded` or `any`; absent: the stack of the
-    /// series' latest execution.
+    /// A stack name, `not_recorded` or `any`; absent, or one the series
+    /// never ran on: the stack of the series' latest execution.
     #[serde(default)]
     pub stack: Option<String>,
 }
@@ -125,7 +125,8 @@ pub(super) struct TrendPoint {
 pub(super) struct TrendMeasures {
     pub score_mean: Option<f64>,
     pub completed: usize,
-    /// The planned tests, else the runs.
+    /// The runs planned (tests × runs per test), else the runs observed:
+    /// what `completed` counts.
     pub planned: usize,
     pub duration_ms_mean: Option<f64>,
     pub input_tokens_mean: Option<f64>,
@@ -233,7 +234,7 @@ pub(super) fn trends(
         return TrendsResponse {
             series,
             selected: None,
-            stack: request.stack.clone().unwrap_or_else(|| ANY.into()),
+            stack: ANY.into(),
             stacks: Vec::new(),
             points: Vec::new(),
         };
@@ -241,11 +242,6 @@ pub(super) fn trends(
 
     let stacks = stacks_of(executions);
     let name = |stack: &TrendStack| stack.name.clone().unwrap_or_else(|| NOT_RECORDED.into());
-    let applied = request
-        .stack
-        .clone()
-        .filter(|stack| !stack.is_empty())
-        .unwrap_or_else(|| name(stacks.last().unwrap()));
     let mut counts = Vec::<StackCount>::new();
     for stack in stacks.iter().rev() {
         let name = name(stack);
@@ -263,6 +259,12 @@ pub(super) fn trends(
         name: ANY.into(),
         executions: executions.len(),
     });
+    // A stack the series never ran on filters nothing: the default applies.
+    let applied = request
+        .stack
+        .clone()
+        .filter(|stack| counts.iter().any(|count| &count.name == stack))
+        .unwrap_or_else(|| name(stacks.last().unwrap()));
     let points = executions
         .iter()
         .zip(stacks)
@@ -368,30 +370,39 @@ fn names(workers: &[StackWorker]) -> BTreeSet<&str> {
     workers.iter().map(|worker| worker.name.as_str()).collect()
 }
 
+/// The release a worker ran: the version its compose lock resolved; on this
+/// harness, which runs from its compose file and no lock, the version the
+/// file pinned when it names one (`latest` does not).
+fn version(worker: &StackWorker, local: bool) -> Option<String> {
+    worker.resolved.clone().or_else(|| {
+        worker
+            .requested
+            .clone()
+            .filter(|version| local && !version.is_empty() && version != "latest")
+    })
+}
+
 /// What identifies the build a worker ran: its commit (`@` and 7 hex, `*`
-/// when the checkout had uncommitted changes), else the version its compose
-/// lock or file pinned. Never `observed`: that is the binary's own Cargo
-/// version, which releases did not always move.
-pub(super) fn identity(worker: &StackWorker) -> Option<String> {
+/// when the checkout had uncommitted changes), else its release. Never
+/// `observed`: that is the binary's own Cargo version, which releases did
+/// not always move.
+pub(super) fn identity(worker: &StackWorker, local: bool) -> Option<String> {
     if let Some(commit) = worker.commit.as_deref().filter(|commit| !commit.is_empty()) {
         let dirty = if worker.dirty == Some(true) { "*" } else { "" };
         return Some(format!("@{}{dirty}", &commit[..commit.len().min(7)]));
     }
-    worker
-        .requested
-        .clone()
-        .filter(|version| !version.is_empty() && version != "latest")
+    version(worker, local)
 }
 
 /// Every worker's identity, runner and engine left out; a worker that ran
 /// different builds in different groups lists them all.
-fn workers(rows: &[StackWorker]) -> Option<BTreeMap<String, String>> {
+fn workers(rows: &[StackWorker], local: bool) -> Option<BTreeMap<String, String>> {
     let mut builds = BTreeMap::<&str, BTreeSet<String>>::new();
     for row in rows
         .iter()
         .filter(|row| ![RUNNER, ENGINE].contains(&row.name.as_str()))
     {
-        if let Some(identity) = identity(row) {
+        if let Some(identity) = identity(row, local) {
             builds.entry(&row.name).or_default().insert(identity);
         }
     }
@@ -408,19 +419,14 @@ fn workers(rows: &[StackWorker]) -> Option<BTreeMap<String, String>> {
     })
 }
 
-/// The runner's version, with the commit it was built from when it ran
+/// The runner's release (its own version when none is recorded: the runner
+/// reports it as released), with the commit it was built from when it ran
 /// from a checkout.
-fn runner(rows: &[StackWorker]) -> Option<String> {
+fn runner(rows: &[StackWorker], local: bool) -> Option<String> {
     let row = rows.iter().find(|row| row.name == RUNNER)?;
-    let version = row
-        .requested
-        .clone()
-        .filter(|version| !version.is_empty() && version != "latest")
-        .or_else(|| row.observed.clone());
-    match (
-        version,
-        row.commit.is_some().then(|| identity(row)).flatten(),
-    ) {
+    let version = version(row, local).or_else(|| row.observed.clone());
+    let commit = row.commit.is_some().then(|| identity(row, local)).flatten();
+    match (version, commit) {
         (Some(version), Some(commit)) => Some(format!("{version}{commit}")),
         (version, commit) => version.or(commit),
     }
@@ -524,7 +530,7 @@ fn point(
         planned: if planned.is_empty() {
             runs.len()
         } else {
-            planned.len()
+            planned.len() * execution.parameters.runs.max(1) as usize
         },
         duration_ms_mean: mean(counted.iter().map(|run| run.duration_ms)),
         input_tokens_mean: mean(counted.iter().map(|run| run.input_tokens)),
@@ -534,6 +540,8 @@ fn point(
         turns_mean: mean(counted.iter().map(|run| run.turns)),
     });
     let summary = execution.summary;
+    let source = source(summary);
+    let local = source.kind == "local";
     TrendPoint {
         execution_id: execution.id.to_owned(),
         label: summary["label"]
@@ -541,11 +549,11 @@ fn point(
             .filter(|label| !label.is_empty())
             .map(str::to_owned),
         started_at: execution.started_at.to_owned(),
-        source: source(summary),
+        source,
         stack,
         engine: engine(execution, natives),
-        runner: runner(&execution.workers),
-        workers: workers(&execution.workers),
+        runner: runner(&execution.workers, local),
+        workers: workers(&execution.workers, local),
         planned: (!planned.is_empty()).then(|| planned.clone()),
         runs: runs.len(),
         counted: counted.len(),
@@ -594,11 +602,13 @@ mod tests {
     use crate::plans::store::WorkerSource;
     use serde_json::json;
 
-    fn worker(name: &str, requested: Option<&str>, observed: Option<&str>) -> StackWorker {
+    /// A packaged worker as a lock that asked for `latest` records it.
+    fn worker(name: &str, resolved: Option<&str>, observed: Option<&str>) -> StackWorker {
         StackWorker {
             name: name.into(),
             source: WorkerSource::Package,
-            requested: requested.map(str::to_owned),
+            requested: Some("latest".into()),
+            resolved: resolved.map(str::to_owned),
             observed: observed.map(str::to_owned),
             commit: None,
             dirty: None,
@@ -641,7 +651,7 @@ mod tests {
 
     /// Software engineering on Sep 24: 15 planned, 13 ran (one of them
     /// technically invalid, one valid but incomplete), two never ran.
-    fn sep_24() -> TrendPoint {
+    fn sep_24(runs_per_test: u32) -> TrendPoint {
         let planned = (1..=15).map(|n| format!("t{n:02}")).collect::<Vec<_>>();
         let mut execution = listed(
             "plan-a",
@@ -650,6 +660,7 @@ mod tests {
             &["harness"],
         );
         execution["parameters"]["scenarios"] = json!(planned);
+        execution["parameters"]["runs"] = json!(runs_per_test);
         let mut runs = planned[..11]
             .iter()
             .map(|test| run(test, true, true, Some(100.0)))
@@ -672,7 +683,7 @@ mod tests {
 
     #[test]
     fn an_invalid_run_is_left_out_of_every_measure() {
-        let point = sep_24();
+        let point = sep_24(1);
         assert_eq!((point.runs, point.counted, point.reason), (13, 12, None));
         let measures = point.measures.unwrap();
         assert_eq!(measures.score_mean, Some((11.0 * 100.0 + 50.0) / 12.0));
@@ -691,7 +702,7 @@ mod tests {
 
     #[test]
     fn tests_completed_counts_valid_completed_runs_over_the_planned_tests() {
-        let point = sep_24();
+        let point = sep_24(1);
         let measures = point.measures.unwrap();
         // t12 did not complete and t13 does not count.
         assert_eq!((measures.completed, measures.planned), (11, 15));
@@ -705,24 +716,32 @@ mod tests {
         assert_eq!(states[11], ("t12", "scored"));
         assert_eq!(&states[13..], [("t14", "not_run"), ("t15", "not_run")]);
         assert_eq!(point.tests[13].behavior_sha256, None);
+        // Runs, as `completed` counts them: each planned test twice.
+        assert_eq!(sep_24(2).measures.unwrap().planned, 30);
     }
 
     #[test]
     fn a_worker_is_its_commit_else_its_lock_version_never_what_it_observed() {
         // The binary reported a frozen Cargo version while 1.8.36 ran.
         let harness = worker("harness", Some("1.8.36"), Some("1.8.8-rc.3"));
-        assert_eq!(identity(&harness).as_deref(), Some("1.8.36"));
-        assert_eq!(
-            identity(&worker("state", Some("latest"), Some("0.22.17"))),
-            None
-        );
-        assert_eq!(identity(&worker("state", None, Some("0.22.17"))), None);
+        assert_eq!(identity(&harness, false).as_deref(), Some("1.8.36"));
+        let latest = worker("state", None, Some("0.22.17"));
+        assert_eq!(identity(&latest, false), None);
+        assert_eq!(identity(&latest, true), None);
+        // This harness runs from its compose file: a concrete pin names the
+        // release there, and only there.
+        let pinned = StackWorker {
+            requested: Some("0.22.17".into()),
+            ..latest.clone()
+        };
+        assert_eq!(identity(&pinned, true).as_deref(), Some("0.22.17"));
+        assert_eq!(identity(&pinned, false), None);
         let built = StackWorker {
             commit: Some(format!("3f2a9c1{}", "d".repeat(33))),
             dirty: Some(true),
             ..harness.clone()
         };
-        assert_eq!(identity(&built).as_deref(), Some("@3f2a9c1*"));
+        assert_eq!(identity(&built, false).as_deref(), Some("@3f2a9c1*"));
 
         let runner = StackWorker {
             commit: Some("abc1234ef".into()),
@@ -730,16 +749,19 @@ mod tests {
         };
         let rows = [
             harness,
-            worker("state", Some("latest"), Some("0.22.17")),
+            latest,
             runner,
             worker(ENGINE, None, Some("0.24.3")),
         ];
         assert_eq!(
-            workers(&rows),
+            workers(&rows, false),
             Some(BTreeMap::from([("harness".into(), "1.8.36".into())]))
         );
-        assert_eq!(super::runner(&rows).as_deref(), Some("0.17.0@abc1234"));
-        assert_eq!(workers(&[]), None);
+        assert_eq!(
+            super::runner(&rows, false).as_deref(),
+            Some("0.17.0@abc1234")
+        );
+        assert_eq!(workers(&[], false), None);
     }
 
     #[test]
@@ -805,6 +827,10 @@ mod tests {
             }
         );
         assert_eq!(trends(&request(ANY), &summaries, &runs).points.len(), 5);
+        // A stack the series never ran on: the default applies, and says so.
+        let gone = trends(&request("gone"), &summaries, &runs);
+        assert_eq!(gone.stack, "18w");
+        assert_eq!(gone.points[0].execution_id, "e5");
     }
 
     #[test]

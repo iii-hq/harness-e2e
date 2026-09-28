@@ -1266,7 +1266,7 @@ mod response_contract_tests {
             json!({"id": "plan-a", "label": "", "started_at": "2026-09-22T14:35:00Z",
                 "source": {"kind": "github", "repository": "iii-hq/harness-e2e", "run_id": 42, "run_attempt": 1,
                     "url": "https://github.com/iii-hq/harness-e2e/actions/runs/42", "release_control_execution_id": "75b03d86"},
-                "stack": [{"name": "harness", "source": "package", "requested": "1.8.31", "observed": "1.8.8", "commit": null, "dirty": null}],
+                "stack": [{"name": "harness", "source": "package", "requested": "latest", "resolved": "1.8.31", "observed": "1.8.8", "commit": null, "dirty": null}],
                 "parameters": {"suite": {"id": "regression", "label": "Regression", "sha256": "sha256:r"},
                     "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0,
                     "model": "flash", "provider": "deepseek", "agent": null, "where": "github",

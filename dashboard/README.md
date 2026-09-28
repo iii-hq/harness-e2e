@@ -134,12 +134,14 @@ opens Run again with B's parameters and only the ticked scenarios.
 **Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
 digest of an unsaved suite, × provider × model × agent profile) over time, from
 what the read model already holds. Each execution is a point measured over its
-technically valid runs only; a planned test with no run is `not_run`. The stack
-filter defaults to the latest execution's; one that recorded no stack joins the
-stack whose first execution ran workers of the same names. A worker is named by
-its commit (`@sha7`, `*` when dirty), else the version its compose lock
-resolved, never the version the engine observed (a binary's Cargo version,
-which releases did not always move). `e2e::dashboard::version-compare` links
+technically valid runs only; completed runs are counted out of the planned ones
+(tests × runs per test), and a planned test with no run is `not_run`. The stack
+filter defaults to the latest execution's, also when it names a stack the
+series never ran on; one that recorded no stack joins the stack whose first
+execution ran workers of the same names. A worker is named by its commit
+(`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
+harness, a concrete version its compose file pins), never the version the
+engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links
 two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
