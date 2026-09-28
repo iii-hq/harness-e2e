@@ -747,11 +747,25 @@ function ScenarioResult({
           <div className="ep-detail">
             {item.runCount === 0 ? (
               <div className="ep-notrun">
-                <p>
-                  {item.reason
-                    ? 'The test didn’t start, so it has no score or evidence. Needs attention above has the error.'
-                    : 'No run was retained for this test, so it has no score or evidence.'}
-                </p>
+                {/* "Didn't start" only for a test that did not; any other
+                    test that left no run says why here. */}
+                {item.objective.status === 'not-run' ? (
+                  <p>
+                    {item.reason
+                      ? 'The test didn’t start, so it has no score or evidence. Needs attention above has the error.'
+                      : 'The test didn’t start, so it has no score or evidence.'}
+                  </p>
+                ) : (
+                  <div className="ep-notrun-text">
+                    <p>
+                      No run was retained for this test, so it has no score or
+                      evidence.
+                    </p>
+                    {item.reason ? (
+                      <p className="ep-notrun-reason">{item.reason}</p>
+                    ) : null}
+                  </div>
+                )}
                 {onRerun ? (
                   <button
                     type="button"

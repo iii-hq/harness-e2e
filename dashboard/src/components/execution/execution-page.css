@@ -793,6 +793,24 @@
   margin: 0;
 }
 
+.ep-notrun > p,
+.ep-notrun-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: var(--color-ink-faint, var(--text-soft));
+}
+
+.ep-notrun-text {
+  display: grid;
+  gap: 4px;
+}
+
+.ep-notrun-reason {
+  color: var(--color-ink, var(--text));
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .ep-row-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);

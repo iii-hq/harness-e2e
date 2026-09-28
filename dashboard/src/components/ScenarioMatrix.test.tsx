@@ -339,6 +339,37 @@ describe('ScenarioMatrix', () => {
     )
   })
 
+  it('says a test didn’t start only when it did not; otherwise why it left no run', () => {
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={detail} onTranscript={() => {}} />,
+    )
+    // missing_report ran and left no report: its reason, in the row.
+    expect(html).not.toContain('didn’t start, so it')
+    expect(html).toMatch(
+      /No run was retained for this test, so it has no score or evidence\.<\/p><p class="ep-notrun-reason">The expected report for this scenario was not retained\.</,
+    )
+    const notStarted = {
+      ...detail,
+      plan_execution: {
+        slots: [
+          { scenario_id: 'missing_report', state: 'not_run', execution_id: '' },
+        ],
+      },
+      reports: detail.reports.map((report) =>
+        report.scenario_id === 'missing_report'
+          ? { ...report, error: 'compose::add failed' }
+          : report,
+      ),
+    } as unknown as DashboardExecutionDetail
+    const started = renderToStaticMarkup(
+      <ScenarioMatrix detail={notStarted} onTranscript={() => {}} />,
+    )
+    expect(started).toContain(
+      'The test didn’t start, so it has no score or evidence. Needs attention above has the error.',
+    )
+    expect(started).not.toContain('class="ep-notrun-reason"')
+  })
+
   it('keeps a small positive cost distinct from zero', () => {
     const assessment = detail.reports[0].report?.scenarios[0].runs[0].assessment
     const evidence = executionMetricsFixture([
