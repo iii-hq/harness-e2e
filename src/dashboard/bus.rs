@@ -21,7 +21,7 @@ use super::read_model::{
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
-use crate::plans::stack_sources::{self, WorkerResolveRequest};
+use crate::plans::stack_sources::{self, IiiReleasesRequest, WorkerResolveRequest};
 use crate::plans::stacks::{
     self, StackCreateRequest, StackPreviewRequest, StackUpdateRequest, StackView,
 };
@@ -60,6 +60,7 @@ pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
 pub(super) const STACK_PREVIEW: &str = "e2e::dashboard::stack-preview";
 pub(super) const STACK_TEMPLATES_LIST: &str = "e2e::dashboard::stack-templates-list";
 pub(super) const WORKER_RESOLVE: &str = "e2e::dashboard::worker-resolve";
+pub(super) const III_RELEASES_LIST: &str = "e2e::dashboard::iii-releases-list";
 pub(super) const CREDENTIALS_LIST: &str = "e2e::dashboard::credentials-list";
 pub(super) const CREDENTIAL_SET: &str = "e2e::dashboard::credential-set";
 pub(super) const CREDENTIAL_DELETE: &str = "e2e::dashboard::credential-delete";
@@ -774,6 +775,16 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
         "List the iii-hq/templates projects a stack can start from, as main has them, each with the workers its worker-compose.yaml declares; kept ten minutes.",
         RegisterFunction::new_async(move |_request: DashboardEmptyRequest| async move {
             stack_sources::templates().await.map_err(handler_error)
+        }),
+    );
+    register(
+        iii,
+        III_RELEASES_LIST,
+        "List the newest iii CLI releases (iii-hq/iii tags iii/v*, alphas left out), each with its date and whether it publishes the CLI, and the newest release candidate `iii: latest` installs; with a version, whether that release exists. Kept ten minutes.",
+        RegisterFunction::new_async(move |request: IiiReleasesRequest| async move {
+            stack_sources::iii_releases(request.version.as_deref())
+                .await
+                .map_err(handler_error)
         }),
     );
     register(

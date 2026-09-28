@@ -1,8 +1,9 @@
 //! What the stack builder reads from outside this Console: the projects of
 //! iii-hq/templates, with the workers each one's `worker-compose.yaml`
-//! declares, and what the iii registry resolves a worker to. Both are public
-//! and read without credentials (a `GITHUB_TOKEN` only raises GitHub's rate
-//! limit); each answer is kept in memory for ten minutes.
+//! declares, the releases of the iii CLI (iii-hq/iii), and what the iii
+//! registry resolves a worker to. All are public and read without
+//! credentials (a `GITHUB_TOKEN` only raises GitHub's rate limit); each
+//! answer is kept in memory for ten minutes.
 use std::collections::BTreeMap;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -23,6 +24,15 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BYTES: usize = 1024 * 1024;
 /// Workers whose resolution is kept at once.
 const MAX_RESOLVED: usize = 256;
+const GITHUB_API: &str = "https://api.github.com";
+const III_REPOSITORY: &str = "iii-hq/iii";
+/// The archive a group installs the iii CLI from (`prepare_execution.py`
+/// `CLI_ASSET`, for `TARGET`).
+const CLI_ASSET: &str = "iii-x86_64-unknown-linux-gnu.tar.gz";
+/// Releases asked for at once: each lists some 70 assets, about 130 KB.
+const RELEASES_PER_PAGE: usize = 20;
+/// The list of releases is past 1 MB at any useful page size.
+const MAX_RELEASES_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct StackTemplates {
@@ -90,6 +100,47 @@ pub(crate) struct RegistryRefusal {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub(crate) struct IiiReleasesRequest {
+    /// A version typed by hand, e.g. `0.24.2`: whether iii-hq/iii has the
+    /// release `iii/v<version>` and it publishes the CLI.
+    #[serde(default)]
+    pub version: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct IiiReleases {
+    /// What `iii: latest` installs: the newest `X.Y.Z-rc.N` tag.
+    pub latest_candidate: Option<String>,
+    /// The newest releases, stable and pre-release, as GitHub lists them;
+    /// alphas (`iii-alpha/…`) and drafts left out.
+    pub releases: Vec<IiiRelease>,
+    /// The version asked about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked: Option<IiiVersionCheck>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct IiiRelease {
+    /// The tag without `iii/v`.
+    pub version: String,
+    pub prerelease: bool,
+    pub published_at: Option<String>,
+    /// Whether it publishes `iii-x86_64-unknown-linux-gnu.tar.gz`, the CLI a
+    /// group installs.
+    pub cli: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct IiiVersionCheck {
+    pub version: String,
+    /// Its release; none when iii-hq/iii has no `iii/v<version>`.
+    pub release: Option<IiiRelease>,
+}
+
+/// The releases of iii-hq/iii and until when they are kept, held while read.
+static RELEASES: tokio::sync::Mutex<Option<(Instant, IiiReleases)>> =
+    tokio::sync::Mutex::const_new(None);
 /// The templates and until when they are kept. Held while they are read, so
 /// the Consoles that open New stack at once wait for one read.
 static TEMPLATES: tokio::sync::Mutex<Option<(Instant, StackTemplates)>> =
@@ -107,6 +158,36 @@ pub(crate) async fn templates() -> Result<StackTemplates> {
     }
     let read = read_templates().await?;
     *kept = Some((Instant::now() + KEEP_FOR, read.clone()));
+    Ok(read)
+}
+
+/// The newest releases of iii-hq/iii and its newest release candidate, kept
+/// ten minutes; with `version`, whether that release exists and publishes
+/// the CLI.
+pub(crate) async fn iii_releases(version: Option<&str>) -> Result<IiiReleases> {
+    if let Some(version) = version {
+        ensure!(
+            release_version(version),
+            "A version is digits, letters, ., + and -, up to 64 characters, starting with a digit, e.g. 0.24.2."
+        );
+    }
+    let client = client()?;
+    let mut read = {
+        let mut kept = RELEASES.lock().await;
+        match kept.as_ref() {
+            Some((until, read)) if *until > Instant::now() => read.clone(),
+            _ => {
+                let read = read_releases(&client, GITHUB_API, github_token()).await?;
+                *kept = Some((Instant::now() + KEEP_FOR, read.clone()));
+                read
+            }
+        }
+    };
+    if let Some(version) = version {
+        read.checked = Some(
+            check_release(&client, GITHUB_API, github_token(), version, &read.releases).await?,
+        );
+    }
     Ok(read)
 }
 
@@ -128,7 +209,7 @@ pub(crate) async fn resolve(worker: &str) -> Result<WorkerResolution> {
         .await
         .map_err(|error| anyhow!("The iii registry did not answer: {}", error.without_url()))?;
     let status = response.status().as_u16();
-    let body = read_capped(response, "The iii registry's answer").await?;
+    let body = read_capped(response, "The iii registry's answer", MAX_BYTES).await?;
     let body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
     let resolved = resolution(worker, status, &body)?;
     remember(
@@ -162,13 +243,13 @@ fn remember(
     kept.insert(worker.to_owned(), (now + KEEP_FOR, resolved));
 }
 
-/// An answer's body, refused past `MAX_BYTES`: at once when it says its
+/// An answer's body, refused past `max` bytes: at once when it says its
 /// length, else as the chunks arrive.
-async fn read_capped(mut response: reqwest::Response, what: &str) -> Result<Vec<u8>> {
-    let too_big = || anyhow!("{what} is past 1 MB; it was not read.");
+async fn read_capped(mut response: reqwest::Response, what: &str, max: usize) -> Result<Vec<u8>> {
+    let too_big = || anyhow!("{what} is past {} MB; it was not read.", max >> 20);
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_BYTES as u64)
+        .is_some_and(|length| length > max as u64)
     {
         return Err(too_big());
     }
@@ -178,7 +259,7 @@ async fn read_capped(mut response: reqwest::Response, what: &str) -> Result<Vec<
         .await
         .map_err(|error| anyhow!("{what} could not be read: {}", error.without_url()))?
     {
-        ensure!(body.len() + chunk.len() <= MAX_BYTES, too_big());
+        ensure!(body.len() + chunk.len() <= max, too_big());
         body.extend_from_slice(&chunk);
     }
     Ok(body)
@@ -286,13 +367,27 @@ async fn read_templates() -> Result<StackTemplates> {
 }
 
 /// The commit `main` of iii-hq/templates is at.
-/// A token only raises GitHub's rate limit; one it refuses (401) is dropped
-/// and the public repository asked again without it.
 async fn main_revision(
     client: &reqwest::Client,
     url: &str,
     token: Option<String>,
 ) -> Result<String> {
+    let (status, body) = github_json(client, url, token, MAX_BYTES).await?;
+    github_ok(status, body, url)?["sha"]
+        .as_str()
+        .map(str::to_owned)
+        .with_context(|| format!("GitHub's answer for {url} has no sha."))
+}
+
+/// GitHub's JSON answer for `url`, read up to `max` bytes, and its status.
+/// A token only raises GitHub's rate limit; one it refuses (401) is dropped
+/// and the public repository asked again without it.
+async fn github_json(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<String>,
+    max: usize,
+) -> Result<(reqwest::StatusCode, Value)> {
     let ask = |token: Option<&str>| {
         let mut request = client
             .get(url)
@@ -309,22 +404,135 @@ async fn main_revision(
     };
     let mut response = ask(token.as_deref()).await?;
     if response.status() == reqwest::StatusCode::UNAUTHORIZED && token.is_some() {
-        tracing::warn!("GitHub refused GITHUB_TOKEN/GH_TOKEN; reading iii-hq/templates without it");
+        tracing::warn!("GitHub refused GITHUB_TOKEN/GH_TOKEN; asking again without it");
         response = ask(None).await?;
     }
     let status = response.status();
-    let body = read_capped(response, "GitHub's answer").await?;
-    let body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
+    let body = read_capped(response, "GitHub's answer", max).await?;
+    Ok((
+        status,
+        serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null),
+    ))
+}
+
+/// A successful answer's body, else what GitHub said.
+fn github_ok(status: reqwest::StatusCode, body: Value, url: &str) -> Result<Value> {
     if !status.is_success() {
         match body["message"].as_str() {
             Some(message) => bail!("GitHub answered {status} for {url}: {message}"),
             None => bail!("GitHub answered {status} for {url}."),
         }
     }
-    body["sha"]
-        .as_str()
-        .map(str::to_owned)
-        .with_context(|| format!("GitHub's answer for {url} has no sha."))
+    Ok(body)
+}
+
+/// The newest releases of iii-hq/iii and, from its `iii/v*` tags, its
+/// newest release candidate.
+async fn read_releases(
+    client: &reqwest::Client,
+    api: &str,
+    token: Option<String>,
+) -> Result<IiiReleases> {
+    let url = format!("{api}/repos/{III_REPOSITORY}/releases?per_page={RELEASES_PER_PAGE}");
+    let (status, releases) = github_json(client, &url, token.clone(), MAX_RELEASES_BYTES).await?;
+    let releases = github_ok(status, releases, &url)?;
+    let url = format!("{api}/repos/{III_REPOSITORY}/git/matching-refs/tags/iii/v");
+    let (status, refs) = github_json(client, &url, token, MAX_BYTES).await?;
+    let refs = github_ok(status, refs, &url)?;
+    Ok(IiiReleases {
+        latest_candidate: newest_candidate(&refs),
+        releases: releases
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(release)
+            .collect(),
+        checked: None,
+    })
+}
+
+/// Whether `iii/v<version>` exists and publishes the CLI: from the list when
+/// it holds it, else asked.
+async fn check_release(
+    client: &reqwest::Client,
+    api: &str,
+    token: Option<String>,
+    version: &str,
+    listed: &[IiiRelease],
+) -> Result<IiiVersionCheck> {
+    let found = match listed.iter().find(|listed| listed.version == version) {
+        Some(listed) => Some(listed.clone()),
+        None => {
+            let url = format!("{api}/repos/{III_REPOSITORY}/releases/tags/iii/v{version}");
+            match github_json(client, &url, token, MAX_BYTES).await? {
+                (reqwest::StatusCode::NOT_FOUND, _) => None,
+                (status, body) => release(&github_ok(status, body, &url)?),
+            }
+        }
+    };
+    Ok(IiiVersionCheck {
+        version: version.to_owned(),
+        release: found,
+    })
+}
+
+/// A release of the iii CLI: tagged `iii/v…` and published.
+fn release(release: &Value) -> Option<IiiRelease> {
+    if release["draft"].as_bool() == Some(true) {
+        return None;
+    }
+    Some(IiiRelease {
+        version: release["tag_name"]
+            .as_str()?
+            .strip_prefix("iii/v")?
+            .to_owned(),
+        prerelease: release["prerelease"].as_bool().unwrap_or(false),
+        published_at: release["published_at"].as_str().map(str::to_owned),
+        cli: release["assets"]
+            .as_array()
+            .is_some_and(|assets| assets.iter().any(|asset| asset["name"] == CLI_ASSET)),
+    })
+}
+
+/// What `iii: latest` means (`prepare_execution.py` newest_release_candidate):
+/// the newest `X.Y.Z-rc.N` among the `iii/v*` tags, by core, then N. Stable
+/// releases and other pre-releases are not candidates.
+fn newest_candidate(refs: &Value) -> Option<String> {
+    refs.as_array()?
+        .iter()
+        .filter_map(|tag| tag["ref"].as_str()?.strip_prefix("refs/tags/iii/v"))
+        .filter_map(|version| Some((candidate(version)?, version)))
+        .max()
+        .map(|(_, version)| version.to_owned())
+}
+
+/// `^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-rc\.([1-9]\d*)$`, as numbers.
+fn candidate(version: &str) -> Option<[u64; 4]> {
+    let number = |part: &str| {
+        let plain = !part.is_empty()
+            && part.bytes().all(|byte| byte.is_ascii_digit())
+            && (part == "0" || !part.starts_with('0'));
+        plain.then(|| part.parse().ok()).flatten()
+    };
+    let (core, n) = version.split_once("-rc.")?;
+    let mut core = core.split('.');
+    let rank = [
+        number(core.next()?)?,
+        number(core.next()?)?,
+        number(core.next()?)?,
+        number(n)?,
+    ];
+    (core.next().is_none() && rank[3] > 0).then_some(rank)
+}
+
+/// A version that stays one segment of a URL: a digit, then up to 63 of
+/// `A-Za-z0-9.+-`.
+fn release_version(version: &str) -> bool {
+    version.len() <= 64
+        && version.starts_with(|first: char| first.is_ascii_digit())
+        && version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'+' | b'-'))
 }
 
 fn github_token() -> Option<String> {
@@ -345,7 +553,7 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     ensure!(status.is_success(), "GitHub answered {status} for {url}.");
-    let body = read_capped(response, url).await?;
+    let body = read_capped(response, url, MAX_BYTES).await?;
     String::from_utf8(body)
         .map(Some)
         .map_err(|_| anyhow!("{url} is not UTF-8 text."))
@@ -697,12 +905,12 @@ mod tests {
     #[tokio::test]
     async fn an_answer_past_1_mib_is_refused_as_it_arrives() {
         let answer = |body: Vec<u8>| reqwest::Response::from(axum::http::Response::new(body));
-        let fits = read_capped(answer(vec![b'x'; MAX_BYTES]), "It")
+        let fits = read_capped(answer(vec![b'x'; MAX_BYTES]), "It", MAX_BYTES)
             .await
             .unwrap();
         assert_eq!(fits.len(), MAX_BYTES);
         assert_eq!(
-            read_capped(answer(vec![b'x'; MAX_BYTES + 1]), "The answer")
+            read_capped(answer(vec![b'x'; MAX_BYTES + 1]), "The answer", MAX_BYTES)
                 .await
                 .unwrap_err()
                 .to_string(),
@@ -801,6 +1009,179 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("lowercase letters"));
+        }
+    }
+
+    #[test]
+    fn iii_releases_are_the_cli_tags_without_alphas_and_the_newest_candidate() {
+        let listed: Value = serde_json::from_str(&fixture("iii-releases.json")).unwrap();
+        let releases = listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(release)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            releases
+                .iter()
+                .map(|r| r.version.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "0.24.3",
+                "0.24.3-rc.1",
+                "0.24.2",
+                "0.24.1",
+                "0.24.2-rc.2",
+                "0.24.2-rc.1",
+                "0.24.0-rc.2",
+                "0.24.0"
+            ]
+        );
+        assert_eq!(
+            releases[1],
+            IiiRelease {
+                version: "0.24.3-rc.1".into(),
+                prerelease: true,
+                published_at: Some("2026-09-25T13:59:34Z".into()),
+                cli: true,
+            }
+        );
+        assert!(!releases[0].prerelease);
+        // A release without the CLI's archive is listed as one.
+        let mut bare = listed[0].clone();
+        bare["assets"] = json!([{"name": "iii-x86_64-apple-darwin.tar.gz"}]);
+        assert!(!release(&bare).unwrap().cli);
+        bare["draft"] = json!(true);
+        assert_eq!(release(&bare), None);
+
+        let refs: Value = serde_json::from_str(&fixture("iii-tag-refs.json")).unwrap();
+        assert_eq!(newest_candidate(&refs).as_deref(), Some("0.24.3-rc.1"));
+        let tags = |versions: &[&str]| {
+            json!(versions
+                .iter()
+                .map(|version| json!({"ref": format!("refs/tags/iii/v{version}")}))
+                .collect::<Vec<_>>())
+        };
+        // By core, then N as a number; stable and other pre-releases never.
+        assert_eq!(
+            newest_candidate(&tags(&[
+                "0.23.0-rc.9",
+                "0.23.0-rc.10",
+                "0.23.0",
+                "0.24.0-dry-run.1"
+            ]))
+            .as_deref(),
+            Some("0.23.0-rc.10")
+        );
+        assert_eq!(
+            newest_candidate(&tags(&[
+                "01.2.3-rc.1",
+                "1.2.3-rc.0",
+                "1.2-rc.1",
+                "1.2.3.4-rc.1"
+            ])),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn a_typed_version_is_found_in_the_list_or_asked_for_by_its_tag() {
+        use std::sync::Arc;
+        let listed: Value = serde_json::from_str(&fixture("iii-releases.json")).unwrap();
+        let refs: Value = serde_json::from_str(&fixture("iii-tag-refs.json")).unwrap();
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let app = axum::Router::new()
+            .route(
+                "/repos/iii-hq/iii/releases",
+                axum::routing::get({
+                    let (asked, listed) = (asked.clone(), listed.clone());
+                    move |query: axum::extract::RawQuery| {
+                        asked
+                            .lock()
+                            .unwrap()
+                            .push(format!("list?{}", query.0.unwrap_or_default()));
+                        let first = json!(listed.as_array().unwrap()[..2]);
+                        async move { axum::Json(first) }
+                    }
+                }),
+            )
+            .route(
+                "/repos/iii-hq/iii/git/matching-refs/tags/iii/v",
+                axum::routing::get(move || async move { axum::Json(refs) }),
+            )
+            .route(
+                "/repos/iii-hq/iii/releases/tags/iii/:tag",
+                axum::routing::get({
+                    let asked = asked.clone();
+                    move |axum::extract::Path(tag): axum::extract::Path<String>| {
+                        asked.lock().unwrap().push(tag.clone());
+                        let found = listed
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .find(|release| release["tag_name"] == format!("iii/{tag}"))
+                            .cloned();
+                        async move {
+                            match found {
+                                Some(release) => (axum::http::StatusCode::OK, axum::Json(release)),
+                                None => (
+                                    axum::http::StatusCode::NOT_FOUND,
+                                    axum::Json(json!({"message": "Not Found", "status": "404"})),
+                                ),
+                            }
+                        }
+                    }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client().unwrap();
+
+        let read = read_releases(&client, &api, None).await.unwrap();
+        assert_eq!(read.latest_candidate.as_deref(), Some("0.24.3-rc.1"));
+        assert_eq!(read.releases.len(), 2);
+        assert_eq!(*asked.lock().unwrap(), ["list?per_page=20"]);
+
+        asked.lock().unwrap().clear();
+        let listed = check_release(&client, &api, None, "0.24.3-rc.1", &read.releases)
+            .await
+            .unwrap();
+        assert_eq!(listed.release.as_ref(), Some(&read.releases[1]));
+        let older = check_release(&client, &api, None, "0.24.1", &read.releases)
+            .await
+            .unwrap();
+        assert_eq!(
+            older.release.map(|release| (release.version, release.cli)),
+            Some(("0.24.1".into(), true))
+        );
+        let missing = check_release(&client, &api, None, "9.9.9", &read.releases)
+            .await
+            .unwrap();
+        assert_eq!((missing.version.as_str(), missing.release), ("9.9.9", None));
+        // Only what the list does not hold is asked for.
+        assert_eq!(*asked.lock().unwrap(), ["v0.24.1", "v9.9.9"]);
+    }
+
+    #[tokio::test]
+    async fn a_typed_version_that_is_not_one_url_segment_is_refused_before_asking() {
+        for version in ["0.24.2", "0.24.3-rc.1", "1.0.0+build.5"] {
+            assert!(release_version(version), "{version}");
+        }
+        for version in [
+            "",
+            "latest",
+            "v0.24.2",
+            "0.24/../x",
+            "0.24.2?x",
+            &"1".repeat(65),
+        ] {
+            assert!(!release_version(version), "{version}");
+            assert!(iii_releases(Some(version))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("A version is"));
         }
     }
 }
