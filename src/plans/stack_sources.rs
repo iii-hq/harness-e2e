@@ -24,6 +24,8 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_BYTES: usize = 1024 * 1024;
 /// Workers whose resolution is kept at once.
 const MAX_RESOLVED: usize = 256;
+/// Revisions of iii-hq/templates whose templates are kept at once.
+const MAX_REVISIONS: usize = 16;
 const GITHUB_API: &str = "https://api.github.com";
 const III_REPOSITORY: &str = "iii-hq/iii";
 /// The archive a group installs the iii CLI from (`prepare_execution.py`
@@ -38,10 +40,10 @@ const MAX_RELEASES_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) struct StackTemplates {
     /// `iii-hq/templates`.
     pub repository: String,
-    /// The branch read: `main`.
+    /// The revision asked for: `main` unless another commit, tag or branch was.
     #[serde(rename = "ref")]
     pub reference: String,
-    /// The commit `main` was at when it was read.
+    /// The commit it was at when it was read.
     pub revision: String,
     /// In the order `iii/template.yaml` lists them; a listed folder that does
     /// not exist is left out.
@@ -59,6 +61,16 @@ pub(crate) struct StackTemplate {
     /// Why it declares no workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// The oldest iii release it runs on, when its `template.yaml` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_iii_version: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+pub(crate) struct StackTemplatesRequest {
+    /// A commit, tag or branch of iii-hq/templates; `main` when absent.
+    #[serde(default)]
+    pub revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -141,24 +153,50 @@ pub(crate) struct IiiVersionCheck {
 /// The releases of iii-hq/iii and until when they are kept, held while read.
 static RELEASES: tokio::sync::Mutex<Option<(Instant, IiiReleases)>> =
     tokio::sync::Mutex::const_new(None);
-/// The templates and until when they are kept. Held while they are read, so
-/// the Consoles that open New stack at once wait for one read.
-static TEMPLATES: tokio::sync::Mutex<Option<(Instant, StackTemplates)>> =
-    tokio::sync::Mutex::const_new(None);
+/// The templates of each revision asked for and until when they are kept.
+/// Held while they are read, so the Consoles that open New stack at once
+/// wait for one read.
+static TEMPLATES: tokio::sync::Mutex<BTreeMap<String, (Instant, StackTemplates)>> =
+    tokio::sync::Mutex::const_new(BTreeMap::new());
 /// Each worker's resolution and until when it is kept.
 static RESOLVED: Mutex<BTreeMap<String, (Instant, WorkerResolution)>> = Mutex::new(BTreeMap::new());
 
-/// The projects of iii-hq/templates as `main` has them, kept ten minutes.
-pub(crate) async fn templates() -> Result<StackTemplates> {
+/// The projects of iii-hq/templates at `revision` (a commit, tag or branch;
+/// `main` when none), kept ten minutes.
+pub(crate) async fn templates(revision: Option<&str>) -> Result<StackTemplates> {
+    let revision = revision.unwrap_or(TEMPLATES_REF);
+    ensure!(
+        template_revision(revision),
+        "A revision is a commit, tag or branch of iii-hq/templates: letters, digits and ._/-, up to 100 characters."
+    );
     let mut kept = TEMPLATES.lock().await;
-    if let Some((until, read)) = kept.as_ref() {
+    if let Some((until, read)) = kept.get(revision) {
         if *until > Instant::now() {
             return Ok(read.clone());
         }
     }
-    let read = read_templates().await?;
-    *kept = Some((Instant::now() + KEEP_FOR, read.clone()));
+    let read = read_templates(revision).await?;
+    remember(
+        &mut kept,
+        revision,
+        read.clone(),
+        Instant::now(),
+        MAX_REVISIONS,
+    );
     Ok(read)
+}
+
+/// `^[A-Za-z0-9._/-]{1,100}$`, without what no git ref holds (`..`, `//`,
+/// a `/` at either end), so it stays a revision in GitHub's URLs.
+fn template_revision(revision: &str) -> bool {
+    (1..=100).contains(&revision.len())
+        && revision
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
+        && !revision.contains("..")
+        && !revision.contains("//")
+        && !revision.starts_with('/')
+        && !revision.ends_with('/')
 }
 
 /// The newest releases of iii-hq/iii and its newest release candidate, kept
@@ -217,20 +255,22 @@ pub(crate) async fn resolve(worker: &str) -> Result<WorkerResolution> {
         worker,
         resolved.clone(),
         Instant::now(),
+        MAX_RESOLVED,
     );
     Ok(resolved)
 }
 
-/// Keep a resolution ten minutes: the expired ones go first, then, at
-/// `MAX_RESOLVED`, the one that expires soonest.
-fn remember(
-    kept: &mut BTreeMap<String, (Instant, WorkerResolution)>,
+/// Keep an answer ten minutes: the expired ones go first, then, at `max`,
+/// the one that expires soonest.
+fn remember<T>(
+    kept: &mut BTreeMap<String, (Instant, T)>,
     worker: &str,
-    resolved: WorkerResolution,
+    resolved: T,
     now: Instant,
+    max: usize,
 ) {
     kept.retain(|_, (until, _)| *until > now);
-    while kept.len() >= MAX_RESOLVED && !kept.contains_key(worker) {
+    while kept.len() >= max && !kept.contains_key(worker) {
         let Some(soonest) = kept
             .iter()
             .min_by_key(|(_, (until, _))| *until)
@@ -322,12 +362,13 @@ fn resolution(worker: &str, status: u16, body: &Value) -> Result<WorkerResolutio
     })
 }
 
-async fn read_templates() -> Result<StackTemplates> {
+async fn read_templates(reference: &str) -> Result<StackTemplates> {
     let client = client()?;
-    let revision = main_revision(
+    let revision = commit_of(
         &client,
-        &format!("https://api.github.com/repos/{TEMPLATES_REPOSITORY}/commits/{TEMPLATES_REF}"),
+        &format!("{GITHUB_API}/repos/{TEMPLATES_REPOSITORY}/commits/{reference}"),
         github_token(),
+        reference,
     )
     .await?;
     let raw = |path: &str| {
@@ -360,19 +401,24 @@ async fn read_templates() -> Result<StackTemplates> {
         .collect();
     Ok(StackTemplates {
         repository: TEMPLATES_REPOSITORY.into(),
-        reference: TEMPLATES_REF.into(),
+        reference: reference.into(),
         revision,
         templates,
     })
 }
 
-/// The commit `main` of iii-hq/templates is at.
-async fn main_revision(
+/// The commit a revision of iii-hq/templates is at. GitHub answers 422 (or
+/// 404) for one it does not hold.
+async fn commit_of(
     client: &reqwest::Client,
     url: &str,
     token: Option<String>,
+    reference: &str,
 ) -> Result<String> {
     let (status, body) = github_json(client, url, token, MAX_BYTES).await?;
+    if matches!(status.as_u16(), 404 | 422) {
+        bail!("iii-hq/templates has no commit, tag or branch {reference}.");
+    }
     github_ok(status, body, url)?["sha"]
         .as_str()
         .map(str::to_owned)
@@ -633,6 +679,7 @@ fn template(id: &str, manifest: &str, compose: Option<&str>) -> Result<StackTemp
         description: text("description"),
         workers,
         note,
+        min_iii_version: scalar(&manifest["min_iii_version"]),
     })
 }
 
@@ -651,6 +698,7 @@ fn unreadable(id: &str, error: &anyhow::Error) -> StackTemplate {
         description: String::new(),
         workers: Vec::new(),
         note: Some(format!("Couldn’t be read: {why}")),
+        min_iii_version: None,
     }
 }
 
@@ -713,6 +761,17 @@ mod tests {
             )
         );
         assert_eq!(harness.note, None);
+        // main has it commented out; a template that says it is read.
+        assert_eq!(harness.min_iii_version, None);
+        let declared =
+            fixture("harness-template.yaml").replace("# min_iii_version", "min_iii_version");
+        assert_eq!(
+            template("harness", &declared, None)
+                .unwrap()
+                .min_iii_version
+                .as_deref(),
+            Some("0.22.0")
+        );
         assert_eq!(
             harness
                 .workers
@@ -950,7 +1009,7 @@ mod tests {
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
         let client = client().unwrap();
         assert_eq!(
-            main_revision(&client, &url, Some("stale".into()))
+            commit_of(&client, &url, Some("stale".into()), "main")
                 .await
                 .unwrap(),
             "4077e670"
@@ -958,7 +1017,7 @@ mod tests {
         assert_eq!(*asked.lock().unwrap(), [true, false]);
         // Without a token, once.
         asked.lock().unwrap().clear();
-        main_revision(&client, &url, None).await.unwrap();
+        commit_of(&client, &url, None, "main").await.unwrap();
         assert_eq!(*asked.lock().unwrap(), [false]);
     }
 
@@ -973,7 +1032,13 @@ mod tests {
         let mut kept = BTreeMap::new();
         for index in 0..300 {
             let now = start + Duration::from_millis(index);
-            remember(&mut kept, &format!("w{index}"), found("1"), now);
+            remember(
+                &mut kept,
+                &format!("w{index}"),
+                found("1"),
+                now,
+                MAX_RESOLVED,
+            );
         }
         assert_eq!(kept.len(), MAX_RESOLVED);
         // The ones that expire soonest went first.
@@ -984,6 +1049,7 @@ mod tests {
             "w299",
             found("2"),
             start + Duration::from_millis(400),
+            MAX_RESOLVED,
         );
         assert_eq!(kept.len(), MAX_RESOLVED);
         assert_eq!(kept["w299"].1, found("2"));
@@ -993,6 +1059,7 @@ mod tests {
             "fresh",
             found("1"),
             start + KEEP_FOR + Duration::from_millis(350),
+            MAX_RESOLVED,
         );
         assert_eq!(kept.keys().collect::<Vec<_>>(), ["fresh", "w299"]);
     }
@@ -1183,5 +1250,57 @@ mod tests {
                 .to_string()
                 .contains("A version is"));
         }
+    }
+
+    #[tokio::test]
+    async fn a_revision_is_checked_before_asking_and_one_github_lacks_says_so() {
+        for revision in [
+            "main",
+            "v1.2.0",
+            "feat/stack-sheet",
+            "4077e670",
+            "release_1.x",
+        ] {
+            assert!(template_revision(revision), "{revision}");
+        }
+        for revision in [
+            "",
+            "../iii",
+            "a..b",
+            "a//b",
+            "/main",
+            "main/",
+            "a b",
+            "main?x",
+            &"a".repeat(101),
+        ] {
+            assert!(!template_revision(revision), "{revision}");
+            assert!(templates(Some(revision))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("A revision is"));
+        }
+        let app = axum::Router::new().route(
+            "/commits/:reference",
+            axum::routing::get(|| async {
+                (
+                    axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                    axum::Json(
+                        json!({"message": "No commit found for SHA: nope", "status": "422"}),
+                    ),
+                )
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/commits/nope", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        assert_eq!(
+            commit_of(&client().unwrap(), &url, None, "nope")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "iii-hq/templates has no commit, tag or branch nope."
+        );
     }
 }

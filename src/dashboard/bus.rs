@@ -21,7 +21,9 @@ use super::read_model::{
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
-use crate::plans::stack_sources::{self, IiiReleasesRequest, WorkerResolveRequest};
+use crate::plans::stack_sources::{
+    self, IiiReleasesRequest, StackTemplatesRequest, WorkerResolveRequest,
+};
 use crate::plans::stacks::{
     self, StackCreateRequest, StackPreviewRequest, StackUpdateRequest, StackView,
 };
@@ -772,9 +774,11 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         STACK_TEMPLATES_LIST,
-        "List the iii-hq/templates projects a stack can start from, as main has them, each with the workers its worker-compose.yaml declares; kept ten minutes.",
-        RegisterFunction::new_async(move |_request: DashboardEmptyRequest| async move {
-            stack_sources::templates().await.map_err(handler_error)
+        "List the iii-hq/templates projects a stack can start from at a revision (a commit, tag or branch; main when none), each with the workers its worker-compose.yaml declares and the oldest iii it runs on; kept ten minutes.",
+        RegisterFunction::new_async(move |request: StackTemplatesRequest| async move {
+            stack_sources::templates(request.revision.as_deref())
+                .await
+                .map_err(handler_error)
         }),
     );
     register(
