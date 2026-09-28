@@ -963,9 +963,10 @@ fn contract_fields(contract: &Path) -> Value {
     })
 }
 
-/// Workers one group ran on: what its compose lock resolved and what the
-/// engine reported running, with the commit each worker the stack pinned to
-/// one was built from (its contract says). Engine built-ins are left out.
+/// Workers one group ran on: what its compose lock asked for and resolved
+/// and what the engine reported running, with the commit each worker the
+/// stack pinned to one was built from (its contract says). Engine built-ins
+/// are left out.
 fn group_stack(directory: &Path) -> Vec<StackWorker> {
     let lock = fs::read_to_string(directory.join("stack/worker-compose.lock"))
         .ok()
@@ -974,14 +975,14 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
     let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
     let mut rows = super::stack::rows(
         &lock["containers"],
-        |container| {
-            container["resolved"]["version"]
-                .as_str()
-                .or(container["requested"].as_str())
-                .map(str::to_owned)
-        },
+        |container| container["requested"].as_str().map(str::to_owned),
         super::stack::observed_versions(&workers, None),
     );
+    for row in &mut rows {
+        row.resolved = lock["containers"][row.name.as_str()]["resolved"]["version"]
+            .as_str()
+            .map(str::to_owned);
+    }
     let contract = read_json(&directory.join("stack-lock.json")).unwrap_or(Value::Null);
     for (name, pin) in contract["runtime"]["commits"]
         .as_object()
@@ -995,6 +996,7 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
                 name: name.clone(),
                 source: WorkerSource::Package,
                 requested: None,
+                resolved: None,
                 observed: None,
                 commit,
                 dirty: None,
@@ -1220,6 +1222,7 @@ mod tests {
             name: name.into(),
             source: WorkerSource::Package,
             requested: Some("1.0.0".into()),
+            resolved: None,
             observed: Some(observed.into()),
             commit: None,
             dirty: None,

@@ -274,6 +274,12 @@ pub(crate) struct StackWorker {
     pub name: String,
     pub source: WorkerSource,
     pub requested: Option<String>,
+    /// The version the compose lock resolved: the release a packaged worker
+    /// ran. Only executions that ran from a lock (GitHub, Docker) have one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved: Option<String>,
+    /// The version the engine reported: the binary's Cargo version, which
+    /// lagged the published release (iii-hq/workers before 9cf019231).
     pub observed: Option<String>,
     pub commit: Option<String>,
     pub dirty: Option<bool>,
@@ -525,7 +531,10 @@ impl PlanStore {
         Ok(stacks)
     }
     pub(crate) async fn read_execution(&self, id: &str) -> Result<PlanExecution> {
-        self.load_execution(id).await.map(ran_where_it_came_from)
+        self.load_execution(id)
+            .await
+            .map(ran_where_it_came_from)
+            .map(resolved_from_lock)
     }
     async fn load_execution(&self, id: &str) -> Result<PlanExecution> {
         safe_id(id)?;
@@ -590,7 +599,11 @@ impl PlanStore {
             #[cfg(test)]
             read_json_directory(&self.root.join("plan-store/executions"))?
         };
-        Ok(executions.into_iter().map(ran_where_it_came_from).collect())
+        Ok(executions
+            .into_iter()
+            .map(ran_where_it_came_from)
+            .map(resolved_from_lock)
+            .collect())
     }
 
     /// Every suite an execution can run: the master plan's, read-only, then
@@ -1487,6 +1500,24 @@ fn ran_where_it_came_from(mut execution: PlanExecution) -> PlanExecution {
     };
     if let Some(parameters) = execution.parameters.as_mut() {
         parameters.r#where = from;
+    }
+    execution
+}
+/// An import recorded before stack rows had `resolved` (0.17.1) kept the
+/// version its lock resolved in `requested`.
+fn resolved_from_lock(mut execution: PlanExecution) -> PlanExecution {
+    if matches!(execution.source, ExecutionSource::Local)
+        || execution
+            .stack
+            .iter()
+            .any(|worker| worker.resolved.is_some())
+    {
+        return execution;
+    }
+    for worker in &mut execution.stack {
+        if worker.source == WorkerSource::Package {
+            worker.resolved = worker.requested.clone();
+        }
     }
     execution
 }
@@ -2411,6 +2442,7 @@ pub(crate) mod tests {
                     name: "queue".into(),
                     source: WorkerSource::Path,
                     requested: None,
+                    resolved: None,
                     observed: Some("0.4.1".into()),
                     commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
                     dirty: Some(self.dirty.load(Ordering::SeqCst)),
@@ -3158,6 +3190,32 @@ pub(crate) mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn an_import_recorded_before_resolved_reads_its_lock_version() {
+        let root = tempfile::tempdir().unwrap();
+        let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
+        // As 0.17.1 stored one: the lock's version in `requested`, the
+        // engine's stale Cargo version in `observed`.
+        let mut stored = serde_json::to_value(import_stub()).unwrap();
+        stored["source"] = json!({"kind": "github", "repository": "o/r", "run_id": 7,
+            "run_attempt": 1, "url": "", "release_control_execution_id": null});
+        stored["stack"] = json!([
+            {"name": "harness", "source": "package", "requested": "1.8.36",
+             "observed": "1.8.8-rc.3", "commit": null, "dirty": null},
+            {"name": "queue", "source": "path", "requested": null,
+             "observed": "0.4.1", "commit": null, "dirty": null},
+        ]);
+        write_json(&manager.execution_path("plan-stub").unwrap(), &stored).unwrap();
+        let read = manager.read_execution("plan-stub").await.unwrap();
+        assert_eq!(
+            read.stack
+                .iter()
+                .map(|worker| worker.resolved.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("1.8.36"), None]
+        );
+    }
+
     #[test]
     fn a_suite_an_older_import_stored_by_id_reads_as_that_suite() {
         let mut stored = serde_json::to_value(suite_parameters("pr")).unwrap();
@@ -3336,7 +3394,8 @@ pub(crate) mod tests {
             vec![StackWorker {
                 name: "harness".into(),
                 source: WorkerSource::Package,
-                requested: Some("1.8.31".into()),
+                requested: Some("latest".into()),
+                resolved: Some("1.8.31".into()),
                 observed: Some("1.8.8".into()),
                 commit: None,
                 dirty: None,
@@ -4817,6 +4876,7 @@ pub(crate) mod tests {
             name: name.into(),
             source: WorkerSource::Path,
             requested: None,
+            resolved: None,
             observed: Some("0.4.1".into()),
             commit: Some("0123456789abcdef0123456789abcdef01234567".into()),
             dirty: Some(dirty),

@@ -407,8 +407,8 @@ export function suiteText(
 
 /** The version a stack worker ran: its checkout for a `path://` worker,
  *  the commit a package the stack pinned to one was built from, else the
- *  version the engine reported (or the one asked for). Versions that
- *  differed between groups are all listed. */
+ *  version its lock resolved, the one the engine reported, or the one asked
+ *  for. Versions that differed between groups are all listed. */
 export function workerVersion(
   stack: StackWorker[] | undefined,
   name: string,
@@ -420,7 +420,7 @@ export function workerVersion(
         ? `path @${worker.commit.slice(0, 12)}${worker.dirty ? ' (dirty)' : ''}`
         : worker.commit
           ? `@${worker.commit.slice(0, 7)}`
-          : (worker.observed ?? worker.requested),
+          : (worker.resolved ?? worker.observed ?? worker.requested),
     )
     .filter((version): version is string => Boolean(version))
   return versions.length > 0 ? [...new Set(versions)].join(', ') : null

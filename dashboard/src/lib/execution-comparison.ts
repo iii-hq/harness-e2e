@@ -163,7 +163,7 @@ export type StackComparison = {
     /** Workers of this group the other side does not run. */
     onlyHere: string[]
   }>
-  /** Workers on both sides, neither from a checkout, whose observed version differs. */
+  /** Workers on both sides, neither from a checkout, whose version differs. */
   versions: ComparisonChange[]
   /** Workers on one side only, other than that side's own code. */
   onlyA: string[]
@@ -722,6 +722,15 @@ function stackOf(detail: DashboardExecutionDetail): StackWorker[] {
   return Array.isArray(stack) ? stack : []
 }
 
+/** A package's release: what its compose lock resolved, else the version the
+ *  engine reported, the binary's Cargo version, which lagged the published
+ *  release; shown, that one says so. */
+function release(worker: StackWorker, shown = false): string | null {
+  if (worker.resolved) return worker.resolved
+  if (!worker.observed) return null
+  return shown ? `${worker.observed} (self-reported)` : worker.observed
+}
+
 /** What running the execution again would take: parameters when recorded,
  *  else what the report says. A suite and a profile are known only from
  *  parameters. */
@@ -758,11 +767,14 @@ function sideFacts(detail: DashboardExecutionDetail): ComparisonSide {
   // The application under test and the runner that measured it are different
   // workers; a path checkout of either is described with the others below.
   const harness = stack.find((worker) => worker.name === 'harness')
-  const built = harness?.commit ? `@${harness.commit.slice(0, 7)}` : null
-  if (harness && harness.source !== 'path' && (built ?? harness.observed))
-    parts.push(`harness ${built ?? harness.observed}`)
+  const built = harness?.commit
+    ? `@${harness.commit.slice(0, 7)}`
+    : harness && release(harness, true)
+  if (harness && harness.source !== 'path' && built)
+    parts.push(`harness ${built}`)
   const runner = stack.find((worker) => worker.name === 'harness-e2e')
-  if (runner?.observed) parts.push(`runner ${runner.observed}`)
+  const measured = runner && release(runner, true)
+  if (measured) parts.push(`runner ${measured}`)
   const paths = new Map<string, string[]>()
   for (const worker of stack.filter((entry) => entry.source === 'path')) {
     const state = worker.commit
@@ -883,22 +895,11 @@ function stackComparison(
     yourCode
       .filter((group) => group.side === side)
       .flatMap((group) => group.workers)
-  const versions = (side: 'a' | 'b', name: string) =>
-    distinct(
-      stacks[side]
-        .filter((worker) => worker.name === name)
-        .map((worker) =>
-          // Built from a commit, a worker is that commit, not its Cargo version.
-          worker.commit
-            ? `@${worker.commit.slice(0, 7)}`
-            : (worker.observed ?? 'version not observed'),
-        ),
-    )
-      .sort()
-      .join(' | ')
   // What a worker ran, whatever its source: a checkout by its commit and
-  // state, a package built from a commit by the commit, else its version.
-  const builds = (side: 'a' | 'b', name: string) =>
+  // state, a package built from a commit by the commit (not its Cargo
+  // version), else its release. Compared as is; shown, a version the lock
+  // did not give says so.
+  const builds = (side: 'a' | 'b', name: string, shown = false) =>
     distinct(
       stacks[side]
         .filter((worker) => worker.name === name)
@@ -909,11 +910,16 @@ function stackComparison(
               : 'checkout, commit not recorded'
             : worker.commit
               ? `@${worker.commit.slice(0, 7)}`
-              : (worker.observed ?? 'version not observed'),
+              : (release(worker, shown) ?? 'version not observed'),
         ),
     )
       .sort()
       .join(' | ')
+  const shown = (name: string) => ({
+    field: name,
+    a: builds('a', name, true),
+    b: builds('b', name, true),
+  })
   // What keeps a side's build from being vouched for, if anything.
   const unknown = (side: 'a' | 'b', name: string) =>
     distinct(
@@ -924,7 +930,7 @@ function stackComparison(
             ? null
             : worker.source === 'path'
               ? 'commit not recorded'
-              : worker.observed
+              : release(worker)
                 ? null
                 : 'version not observed',
         ),
@@ -940,18 +946,16 @@ function stackComparison(
   // Known and different is a change; unknown on either side, or the same
   // commit with uncommitted changes, cannot be compared; else the same.
   const judged = both.map((name) => {
-    const a = builds('a', name)
-    const b = builds('b', name)
     const unknownWhy = distinct([...unknown('a', name), ...unknown('b', name)])
     const verdict =
       unknownWhy.length > 0
         ? unknownWhy.join(', ')
-        : a !== b
+        : builds('a', name) !== builds('b', name)
           ? 'changed'
           : dirty('a', name) || dirty('b', name)
             ? 'uncommitted changes'
             : 'same'
-    return { field: name, a, b, verdict }
+    return { ...shown(name), verdict }
   })
   const fromCheckout = (name: string) =>
     [...stacks.a, ...stacks.b].some(
@@ -966,11 +970,9 @@ function stackComparison(
           name !== RUNNER && names('b').includes(name) && !fromCheckout(name),
       )
       .sort()
-      .flatMap((name) => {
-        const a = versions('a', name)
-        const b = versions('b', name)
-        return a === b ? [] : [{ field: name, a, b }]
-      }),
+      .flatMap((name) =>
+        builds('a', name) === builds('b', name) ? [] : [shown(name)],
+      ),
     onlyA: only('a').filter((name) => !ownCode('a').includes(name)),
     onlyB: only('b').filter((name) => !ownCode('b').includes(name)),
     changed: judged.flatMap(({ field, a, b, verdict }) =>
@@ -1073,7 +1075,7 @@ function runnerComparison(
     distinct(
       stackOf(detail)
         .filter((worker) => worker.name === RUNNER)
-        .map((worker) => worker.observed),
+        .map((worker) => release(worker)),
     ).join(' | ') || null
   const a = version(left)
   const b = version(right)

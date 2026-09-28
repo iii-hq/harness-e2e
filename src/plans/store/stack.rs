@@ -166,6 +166,7 @@ pub(super) fn rows(
                 WorkerSource::Package
             },
             requested: requested(container),
+            resolved: None,
             observed: observed.remove(name).flatten(),
             commit: None,
             dirty: None,
@@ -176,6 +177,7 @@ pub(super) fn rows(
         name,
         source: WorkerSource::Package,
         requested: None,
+        resolved: None,
         observed,
         commit: None,
         dirty: None,

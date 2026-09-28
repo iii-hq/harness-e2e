@@ -209,8 +209,18 @@ export function imported() {
       parameters,
       source,
       stack: stack([
-        { name: 'harness-e2e', observed: '0.9.3', requested: '0.9.3' },
-        { name: 'llm-router', observed: '1.2.0', requested: '^1.2' },
+        {
+          name: 'harness-e2e',
+          observed: '0.9.3',
+          requested: 'latest',
+          resolved: '0.9.3',
+        },
+        {
+          name: 'llm-router',
+          observed: '1.2.0',
+          requested: '^1.2',
+          resolved: '1.2.0',
+        },
       ]),
       plan_execution: {
         id: 'import-a',
@@ -220,8 +230,18 @@ export function imported() {
         parameters,
         source,
         stack: stack([
-          { name: 'harness-e2e', observed: '0.9.3', requested: '0.9.3' },
-          { name: 'llm-router', observed: '1.2.0', requested: '^1.2' },
+          {
+            name: 'harness-e2e',
+            observed: '0.9.3',
+            requested: 'latest',
+            resolved: '0.9.3',
+          },
+          {
+            name: 'llm-router',
+            observed: '1.2.0',
+            requested: '^1.2',
+            resolved: '1.2.0',
+          },
         ]),
       },
     },
