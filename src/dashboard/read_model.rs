@@ -19,6 +19,7 @@ use crate::control::ExecutionRecord;
 use crate::identity::StackIdentity;
 use crate::report::{
     CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
+    TechnicalState,
 };
 use crate::scenarios::{
     stable_seed, ExecutionPolicy, ScenarioCharacterization, ScenarioId, ScenarioSpec,
@@ -422,6 +423,12 @@ struct RunMetrics {
     completion: CompletionState,
     status: RunStatus,
     assessment: RunAssessmentContract,
+    /// Absent in a projection written before trends read it; projections
+    /// are kept as written.
+    #[serde(default)]
+    technical: Option<TechnicalState>,
+    #[serde(default)]
+    input_tokens: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1441,6 +1448,12 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         completion: run.completion,
         status: run.status,
         assessment: assessment.clone(),
+        technical: Some(run.technical),
+        input_tokens: run
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.totals.input_tokens)
+            .map(|tokens| tokens as f64),
     }
 }
 
