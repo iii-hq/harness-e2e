@@ -15,20 +15,20 @@ const key = ({ suite, provider, model, profile }) => ({
   profile,
 })
 
-/** trends-get as the worker answers it: the request's series, else the one
- *  with the latest execution; every stack the series ran on, latest first,
+/** trends-get as the worker answers it: the latest series that fits what
+ *  the request names (suite, then model, then profile), else the one with
+ *  the latest execution; every stack the series ran on, latest first,
  *  then not_recorded and any; the stack filter when the series lists it,
  *  else (none asked, or one it never ran on) any, the one applied always
  *  said in `stack`. */
 export function trendsAnswer(request = {}) {
-  const chosen =
-    fixture.series.find(
-      ({ series }) =>
-        series.suite === request.suite &&
-        series.provider === request.provider &&
-        series.model === request.model &&
-        (series.profile || null) === (request.profile || null),
-    ) ?? fixture.series[0]
+  const fits = ({ series }) =>
+    (!request.suite || series.suite === request.suite) &&
+    (!request.provider || series.provider === request.provider) &&
+    (!request.model || series.model === request.model) &&
+    (request.profile === undefined ||
+      (series.profile || null) === (request.profile || null))
+  const chosen = fixture.series.find(fits) ?? fixture.series[0]
   const points = chosen.points
   const names = [
     ...new Set(points.map((point) => point.stack.name).reverse()),

@@ -29,20 +29,22 @@ import {
   getDashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 import { buildExecutionPresentation } from '@/lib/execution-view'
+import { plural } from '@/lib/format'
 import {
   ANY_STACK,
   changesAt,
   counted,
   emptyText,
+  modelChoices,
   NOT_RECORDED_STACK,
   pointTime,
   previousCounted,
+  profileChoices,
   profileText,
-  sameSeries,
   seriesModel,
-  seriesWhere,
   stackNote,
   stackOptionText,
+  suiteChoices,
   summaryText,
   TREND_METRICS,
   type TrendMetricId,
@@ -85,11 +87,8 @@ export function requestSeries(request: TrendsRequest): TrendSeriesKey | null {
 
 /** The hash's params for a request: nothing for the default view. */
 export function requestParams(request: TrendsRequest) {
-  return trendsParams(requestSeries(request), request.stack ?? null)
+  return trendsParams(request)
 }
-
-const seriesId = (key: TrendSeriesKey) =>
-  JSON.stringify([key.suite, key.provider, key.model, key.profile ?? null])
 
 /** What each stack option holds, under its name. */
 export function stackSub(name: string) {
@@ -136,91 +135,152 @@ export function stackNotice(asked: TrendsRequest, data: TrendsResponse) {
 
 /* ------------------------------------------------------------- controls */
 
-function SeriesMenu({
-  data,
-  narrow,
+/** One of the three pickers: its value, and the choices that exist under
+ *  the ones before it, each with its executions. */
+function ChoiceMenu({
+  name,
+  value,
+  text,
+  mono = false,
+  choices,
+  note,
   onPick,
 }: {
-  data: TrendsResponse
-  narrow: boolean
-  onPick: (key: TrendSeriesKey) => void
+  name: 'Suite' | 'Model' | 'Profile'
+  value: string
+  text: string
+  mono?: boolean
+  choices: Array<{ value: string; label: string; executions: number }>
+  note?: string
+  onPick: (value: string) => void
 }) {
-  const current =
-    data.series.find((series) => sameSeries(series, data.selected)) ?? null
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           className="tr-control"
-          data-series-picker
-          data-narrow={narrow || undefined}
+          data-picker={name.toLowerCase()}
         >
-          <span className="tr-faint-ink">Suite</span>
-          <span className="tr-strong tr-ellipsis">
-            {current?.suite_label ?? '—'}
-          </span>
-          <span className="tr-ghost" aria-hidden="true">
-            ·
-          </span>
-          <span className="tr-faint-ink">Model</span>
-          <span className="tr-mono tr-small tr-ellipsis">
-            {current ? seriesModel(current) : '—'}
-          </span>
-          <span className="tr-ghost" aria-hidden="true">
-            ·
-          </span>
-          <span className="tr-faint-ink">Profile</span>
-          <span className="tr-mono tr-small">
-            {current ? profileText(current.profile) : '—'}
+          <span className="tr-faint-ink">{name}</span>
+          <span
+            className={
+              mono ? 'tr-mono tr-small tr-ellipsis' : 'tr-strong tr-ellipsis'
+            }
+          >
+            {text}
           </span>
           <ChevronDown size={16} aria-hidden="true" className="tr-faint-ink" />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        aria-label="Series"
-        className="tr-menu tr-series-menu"
+        aria-label={name}
+        className="tr-menu tr-choice-menu"
       >
-        <DropdownMenuRadioGroup
-          value={current ? seriesId(current) : ''}
-          onValueChange={(value) => {
-            const picked = data.series.find(
-              (series) => seriesId(series) === value,
-            )
-            if (picked) onPick(picked)
-          }}
-        >
-          {data.series.map((series) => (
+        <DropdownMenuRadioGroup value={value} onValueChange={onPick}>
+          {choices.map((choice) => (
             <DropdownMenuRadioItem
-              key={seriesId(series)}
-              value={seriesId(series)}
+              key={choice.value}
+              value={choice.value}
               className="tr-menu-item"
             >
-              <span className="tr-menu-text">
-                <span className="tr-strong tr-ellipsis">
-                  {series.suite_label} · {seriesModel(series)} ·{' '}
-                  {profileText(series.profile)}
-                </span>
-                <span className="tr-faint tr-ellipsis">
-                  {seriesWhere(series)}
-                </span>
+              <span
+                className={
+                  mono
+                    ? 'tr-menu-text tr-mono tr-small'
+                    : 'tr-menu-text tr-strong'
+                }
+              >
+                {choice.label}
               </span>
               <span className="tr-mono tr-faint">
-                {series.executions === 1
-                  ? '1 execution'
-                  : `${series.executions} executions`}
+                {plural(choice.executions, 'execution')}
               </span>
             </DropdownMenuRadioItem>
           ))}
         </DropdownMenuRadioGroup>
-        <p className="tr-menu-note">
-          A series is every execution of one suite on one model and profile,
-          wherever it ran. Stack changes stay inside the series and show as
-          diamonds.
-        </p>
+        {note ? <p className="tr-menu-note">{note}</p> : null}
       </DropdownMenuContent>
     </DropdownMenu>
+  )
+}
+
+const modelId = (key: Pick<TrendSeriesKey, 'provider' | 'model'>) =>
+  JSON.stringify([key.provider, key.model])
+
+/** Suite, then the models that ran it, then the profiles that ran both.
+ *  Picking one asks for it with the ones before it; the worker answers the
+ *  latest series that fits. */
+function SeriesPickers({
+  data,
+  onPick,
+}: {
+  data: TrendsResponse
+  onPick: (request: TrendsRequest) => void
+}) {
+  const current = data.selected
+  if (!current) return null
+  const suites = suiteChoices(data.series)
+  const models = modelChoices(data.series, current.suite)
+  const profiles = profileChoices(data.series, current)
+  return (
+    <>
+      <ChoiceMenu
+        name="Suite"
+        value={current.suite}
+        text={
+          suites.find((choice) => choice.suite === current.suite)?.label ??
+          current.suite
+        }
+        choices={suites.map((choice) => ({
+          value: choice.suite,
+          label: choice.label,
+          executions: choice.executions,
+        }))}
+        note="A series is every execution of one suite on one model and profile, wherever it ran. Stack changes stay inside the series and show as diamonds."
+        onPick={(suite) => onPick({ suite })}
+      />
+      <ChoiceMenu
+        name="Model"
+        mono
+        value={modelId(current)}
+        text={seriesModel(current)}
+        choices={models.map((choice) => ({
+          value: modelId(choice),
+          label: seriesModel(choice),
+          executions: choice.executions,
+        }))}
+        onPick={(value) => {
+          const picked = models.find((choice) => modelId(choice) === value)
+          if (picked)
+            onPick({
+              suite: current.suite,
+              provider: picked.provider,
+              model: picked.model,
+            })
+        }}
+      />
+      <ChoiceMenu
+        name="Profile"
+        mono
+        value={current.profile ?? ''}
+        text={profileText(current.profile)}
+        choices={profiles.map((choice) => ({
+          value: choice.profile ?? '',
+          label: profileText(choice.profile),
+          executions: choice.executions,
+        }))}
+        onPick={(profile) =>
+          onPick({
+            suite: current.suite,
+            provider: current.provider,
+            model: current.model,
+            profile: profile || null,
+          })
+        }
+      />
+    </>
   )
 }
 
@@ -471,15 +531,10 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     }
   }
 
-  // Another series starts over: its latest stack, the score in front.
-  const pickSeries = (key: TrendSeriesKey) => {
+  // Another series starts over: every stack, the score in front.
+  const pickSeries = (request: TrendsRequest) => {
     setFocus('score')
-    setQuery({
-      suite: key.suite,
-      provider: key.provider,
-      model: key.model,
-      profile: key.profile,
-    })
+    setQuery(request)
   }
   const pickStack = (stack: string) =>
     setQuery({ ...(data?.selected ?? requestSeries(query) ?? {}), stack })
@@ -532,7 +587,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
           {data.series.length > 0 ? (
             <>
               <div role="toolbar" aria-label="Series" className="tr-toolbar">
-                <SeriesMenu data={data} narrow={narrow} onPick={pickSeries} />
+                <SeriesPickers data={data} onPick={pickSeries} />
                 <StackMenu data={data} onPick={pickStack} />
                 <span className="tr-spacer" />
                 <Legend />

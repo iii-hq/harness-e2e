@@ -134,26 +134,6 @@ export function profileText(profile: string | null) {
   return profile || 'none'
 }
 
-export function sameSeries(a: TrendSeriesKey, b: TrendSeriesKey | null) {
-  return (
-    b !== null &&
-    a.suite === b.suite &&
-    a.provider === b.provider &&
-    a.model === b.model &&
-    (a.profile || null) === (b.profile || null)
-  )
-}
-
-const WHERE: Record<TrendWhere, string> = {
-  harness: 'This harness',
-  docker: 'Docker',
-  github: 'GitHub',
-}
-
-export function seriesWhere(series: Pick<TrendSeries, 'where'>) {
-  return series.where.map((where) => WHERE[where]).join(', ')
-}
-
 /** The series and stack in the hash, so a link reopens the same view. */
 export function trendsRequestFromParams(params: URLSearchParams) {
   const request: TrendsRequest = {}
@@ -165,19 +145,69 @@ export function trendsRequestFromParams(params: URLSearchParams) {
   return request
 }
 
-export function trendsParams(
-  key: TrendSeriesKey | null,
-  stack: string | null,
-): URLSearchParams {
+export function trendsParams(request: TrendsRequest): URLSearchParams {
   const params = new URLSearchParams()
-  if (key) {
-    params.set('suite', key.suite)
-    params.set('provider', key.provider)
-    params.set('model', key.model)
-    params.set('profile', key.profile ?? '')
+  for (const key of ['suite', 'provider', 'model'] as const) {
+    const value = request[key]
+    if (value) params.set(key, value)
   }
-  if (stack) params.set('stack', stack)
+  if (request.profile !== undefined)
+    params.set('profile', request.profile ?? '')
+  if (request.stack) params.set('stack', request.stack)
   return params
+}
+
+/** The suites of every series, latest first, each with all its executions. */
+export function suiteChoices(series: TrendSeries[]) {
+  const out: Array<{ suite: string; label: string; executions: number }> = []
+  for (const item of series) {
+    const found = out.find((choice) => choice.suite === item.suite)
+    if (found) found.executions += item.executions
+    else
+      out.push({
+        suite: item.suite,
+        label: item.suite_label,
+        executions: item.executions,
+      })
+  }
+  return out
+}
+
+/** The models that ran a suite, latest first. */
+export function modelChoices(series: TrendSeries[], suite: string) {
+  const out: Array<{ provider: string; model: string; executions: number }> = []
+  for (const item of series.filter((each) => each.suite === suite)) {
+    const found = out.find(
+      (choice) =>
+        choice.provider === item.provider && choice.model === item.model,
+    )
+    if (found) found.executions += item.executions
+    else
+      out.push({
+        provider: item.provider,
+        model: item.model,
+        executions: item.executions,
+      })
+  }
+  return out
+}
+
+/** The profiles (null: none) that ran a suite on a model, latest first. */
+export function profileChoices(
+  series: TrendSeries[],
+  key: Pick<TrendSeriesKey, 'suite' | 'provider' | 'model'>,
+) {
+  return series
+    .filter(
+      (item) =>
+        item.suite === key.suite &&
+        item.provider === key.provider &&
+        item.model === key.model,
+    )
+    .map((item) => ({
+      profile: item.profile || null,
+      executions: item.executions,
+    }))
 }
 
 /* -------------------------------------------------------------- a point */

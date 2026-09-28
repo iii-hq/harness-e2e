@@ -9,12 +9,15 @@ import {
   emptyText,
   laneLabel,
   latestPair,
+  modelChoices,
   notRun,
   pointTime,
   previousCounted,
+  profileChoices,
   roomyMarks,
   segments,
   stackNote,
+  suiteChoices,
   summaryText,
   type TrendMetric,
   type TrendPoint,
@@ -26,7 +29,7 @@ import {
   utcOffsetText,
   versionsText,
 } from '@/lib/trends'
-import { seriesPoints } from '@/test-fixtures/trends'
+import { seriesPoints, trendSeries } from '@/test-fixtures/trends'
 
 // The fixture's times are UTC−3 (TZ is pinned in vite.config.ts) and its
 // year 2026: dates read without the year against this now.
@@ -355,17 +358,53 @@ describe('by test', () => {
   })
 })
 
-describe('the view', () => {
-  it('round-trips the series and the stack through the hash', () => {
-    const params = trendsParams(
+describe('suite, model and profile pickers', () => {
+  const series = trendSeries.map((item) => item.series)
+
+  it('lists the suites, the models that ran one and the profiles that ran both', () => {
+    expect(suiteChoices(series)).toEqual([
+      { suite: 'regression', label: 'Regression', executions: 15 },
       {
-        suite: 'regression',
+        suite: expect.stringMatching(/^sha256:/),
+        label: '2 tests, unsaved',
+        executions: 5,
+      },
+      {
+        suite: 'software-engineering',
+        label: 'Software engineering',
+        executions: 2,
+      },
+    ])
+    expect(modelChoices(series, 'regression')).toEqual([
+      { provider: 'deepseek', model: 'deepseek-flash', executions: 14 },
+      { provider: 'anthropic', model: 'claude-opus-5-5', executions: 1 },
+    ])
+    expect(
+      profileChoices(series, {
+        suite: 'software-engineering',
         provider: 'deepseek',
         model: 'deepseek-flash',
-        profile: null,
-      },
-      'any',
-    )
+      }),
+    ).toEqual([{ profile: 'ade-worker-builder', executions: 2 }])
+    expect(
+      profileChoices(series, {
+        suite: 'regression',
+        provider: 'anthropic',
+        model: 'claude-opus-5-5',
+      }),
+    ).toEqual([{ profile: null, executions: 1 }])
+  })
+})
+
+describe('the view', () => {
+  it('round-trips the series and the stack through the hash', () => {
+    const params = trendsParams({
+      suite: 'regression',
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+      profile: null,
+      stack: 'any',
+    })
     expect(params.toString()).toBe(
       'suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any',
     )
@@ -377,6 +416,10 @@ describe('the view', () => {
       stack: 'any',
     })
     expect(trendsRequestFromParams(new URLSearchParams())).toEqual({})
+    // A suite alone, as its picker asks.
+    expect(trendsParams({ suite: 'regression' }).toString()).toBe(
+      'suite=regression',
+    )
   })
 
   it('sums the executions and counted runs up in one line', () => {

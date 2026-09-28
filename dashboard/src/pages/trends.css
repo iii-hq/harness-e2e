@@ -162,17 +162,13 @@
   outline-offset: 1px;
 }
 
-.tr-control[data-narrow] {
-  width: 100%;
-}
-
 .tr-menu {
   max-width: calc(100vw - var(--spacing) * 4);
   padding: calc(var(--spacing) * 1);
 }
 
-.tr-series-menu {
-  width: calc(var(--spacing) * 160);
+.tr-choice-menu {
+  width: calc(var(--spacing) * 90);
 }
 
 .tr-stack-menu {

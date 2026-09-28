@@ -130,11 +130,12 @@ try {
       { exact: false },
     )
     .waitFor()
-  const series = page.locator('[data-series-picker]')
-  assert.match(
-    await series.innerText(),
-    /Regression[\s\S]*deepseek\/deepseek-flash[\s\S]*none/,
-  )
+  const suite = page.locator('[data-picker="suite"]')
+  const model = page.locator('[data-picker="model"]')
+  const profile = page.locator('[data-picker="profile"]')
+  assert.match(await suite.innerText(), /Regression/)
+  assert.match(await model.innerText(), /deepseek\/deepseek-flash/)
+  assert.match(await profile.innerText(), /none/)
   assert.match(await page.locator('[data-stack-picker]').innerText(), /any/)
   await page
     .getByText('4 of these ran before the Console recorded stacks', {
@@ -264,13 +265,31 @@ try {
   await summary.getByText('11 executions ·', { exact: false }).waitFor()
   assert.equal(await hash(), here)
 
-  // Another series: two executions, the stack not recorded, two planned
-  // tests that did not run.
-  await series.click()
+  // Another suite: its latest series (two executions, the stack not
+  // recorded, two planned tests that did not run); its one profile.
+  await suite.click()
   await page
-    .getByRole('menuitemradio', { name: /^Software engineering/ })
+    .getByRole('menuitemradio', {
+      name: /^Software engineering\s*2 executions$/,
+    })
     .click()
   await summary.getByText('2 executions ·', { exact: false }).waitFor()
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'software-engineering',
+  })
+  assert.match(await profile.innerText(), /ade-worker-builder/)
+  await profile.click()
+  assert.equal(
+    await page
+      .getByRole('menu', { name: 'Profile' })
+      .getByRole('menuitemradio')
+      .count(),
+    1,
+  )
+  await page.getByRole('menuitemradio', { name: /^ade-worker-builder/ }).click()
+  await page.waitForFunction(
+    () => window.calls.at(-1)?.payload?.profile === 'ade-worker-builder',
+  )
   assert.deepEqual(requests('trends-get').at(-1), {
     suite: 'software-engineering',
     provider: 'deepseek',
@@ -288,7 +307,7 @@ try {
   // The Trends tab starts over on the default view, the hash with it.
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
   await summary.getByText('14 executions ·', { exact: false }).waitFor()
-  assert.match(await series.innerText(), /Regression/)
+  assert.match(await suite.innerText(), /Regression/)
   assert.match(await hash(), /\/trends\?suite=regression&.*stack=any$/)
 
   // A link to a stack the series never ran on: the worker applies its
@@ -310,17 +329,35 @@ try {
   assert.match(await hash(), /stack=any$/)
 
   // This harness: nothing changed between its executions, no diamond.
-  await series.click()
+  await suite.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
   await summary.getByText('5 executions ·', { exact: false }).waitFor()
   assert.match(await stack.innerText(), /any/)
   assert.equal(await page.locator('.tr-diamond').count(), 0)
 
   // Nothing counted: say why, open the execution or run it again.
-  await series.click()
-  await page
-    .getByRole('menuitemradio', { name: /^Regression · anthropic/ })
+  // Regression again (its latest series is deepseek's), then the model that
+  // ran it once.
+  await suite.click()
+  await page.getByRole('menuitemradio', { name: /^Regression/ }).click()
+  await summary.getByText('14 executions ·', { exact: false }).waitFor()
+  await model.click()
+  const models = page.getByRole('menu', { name: 'Model' })
+  await models
+    .getByRole('menuitemradio', {
+      name: /^deepseek\/deepseek-flash\s*14 executions$/,
+    })
+    .waitFor()
+  await models
+    .getByRole('menuitemradio', {
+      name: /^anthropic\/claude-opus-5-5\s*1 execution$/,
+    })
     .click()
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'regression',
+    provider: 'anthropic',
+    model: 'claude-opus-5-5',
+  })
   await page.getByRole('heading', { name: 'Nothing to draw yet' }).waitFor()
   // One action; the execution is a link in the sentence.
   const empty = page.locator('.tr-empty')
@@ -351,7 +388,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, a model of a suite and the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()
