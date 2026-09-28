@@ -46,12 +46,18 @@ const se = {
   model: 'deepseek-flash',
   profile: 'ade-worker-builder',
 }
+// The default period, the last 30 days, on Sep 28, 2026 in UTC−3.
+const last30 = {
+  since: '2026-08-30T03:00:00.000Z',
+  until: '2026-09-29T02:59:59.999Z',
+}
 const pinned = {
   suite: 'regression',
   provider: 'deepseek',
   model: 'deepseek-flash',
   profile: null,
   stack: 'any',
+  ...last30,
 }
 // trends-get answers that fail before one succeeds again.
 let failing = 0
@@ -123,10 +129,10 @@ try {
       .getAttribute('aria-current'),
     'page',
   )
-  assert.deepEqual(requests('trends-get')[0], {})
+  assert.deepEqual(requests('trends-get')[0], last30)
   await summary
     .getByText(
-      '14 executions · 11 with counted runs, 3 without · 99 counted runs',
+      '14 executions in the last 30 days · 11 with counted runs, 3 without · 99 counted runs',
       { exact: false },
     )
     .waitFor()
@@ -205,7 +211,7 @@ try {
   // The default view is pinned to what it showed, in the hash too.
   assert.match(
     await hash(),
-    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any$/,
+    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any&range=30d$/,
   )
 
   // A run lands, and another series has the newest execution: the trend
@@ -218,14 +224,14 @@ try {
       for (const handler of window.__changeHandlers ?? []) handler({})
     })
   await change()
-  await summary.getByText('15 executions ·', { exact: false }).waitFor()
+  await summary.getByText('15 executions ', { exact: false }).waitFor()
   assert.deepEqual(requests('trends-get').at(asked), pinned)
   await latest.getByRole('button', { name: 'Close' }).waitFor()
   // A reload that fails keeps the trend and says so over it.
   failing = 1
   await change()
   await page.getByText('Couldn’t reload the trend').waitFor()
-  await summary.getByText('15 executions ·', { exact: false }).waitFor()
+  await summary.getByText('15 executions ', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
   await page
     .getByText('Couldn’t reload the trend')
@@ -246,10 +252,13 @@ try {
   // One stack of the series, kept in the hash.
   await page.locator('[data-stack-picker]').click()
   await page.getByRole('menuitemradio', { name: /^default/ }).click()
-  await summary.getByText('11 executions ·', { exact: false }).waitFor()
+  await summary.getByText('11 executions ', { exact: false }).waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'default')
   assert.equal(requests('trends-get').at(-1).suite, 'regression')
-  assert.match(await hash(), /\/trends\?suite=regression&.*stack=default$/)
+  assert.match(
+    await hash(),
+    /\/trends\?suite=regression&.*stack=default&range=30d$/,
+  )
   const here = await hash()
 
   // Compare with the previous counted execution, and back to this view.
@@ -262,7 +271,7 @@ try {
   await back.waitFor()
   assert.equal(await back.getAttribute('href'), here)
   await back.click()
-  await summary.getByText('11 executions ·', { exact: false }).waitFor()
+  await summary.getByText('11 executions ', { exact: false }).waitFor()
   assert.equal(await hash(), here)
 
   // Another suite: its latest series (two executions, the stack not
@@ -273,9 +282,10 @@ try {
       name: /^Software engineering\s*2 executions$/,
     })
     .click()
-  await summary.getByText('2 executions ·', { exact: false }).waitFor()
+  await summary.getByText('2 executions ', { exact: false }).waitFor()
   assert.deepEqual(requests('trends-get').at(-1), {
     suite: 'software-engineering',
+    ...last30,
   })
   assert.match(await profile.innerText(), /ade-worker-builder/)
   await profile.click()
@@ -295,6 +305,7 @@ try {
     provider: 'deepseek',
     model: 'deepseek-flash',
     profile: 'ade-worker-builder',
+    ...last30,
   })
   const stack = page.locator('[data-stack-picker]')
   assert.equal(await stack.isDisabled(), true)
@@ -306,9 +317,12 @@ try {
 
   // The Trends tab starts over on the default view, the hash with it.
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
-  await summary.getByText('14 executions ·', { exact: false }).waitFor()
+  await summary.getByText('14 executions ', { exact: false }).waitFor()
   assert.match(await suite.innerText(), /Regression/)
-  assert.match(await hash(), /\/trends\?suite=regression&.*stack=any$/)
+  assert.match(
+    await hash(),
+    /\/trends\?suite=regression&.*stack=any&range=30d$/,
+  )
 
   // A link to a stack the series never ran on: the worker applies its
   // default, and the page says so.
@@ -326,12 +340,56 @@ try {
     .waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'lean')
   assert.match(await stack.innerText(), /any/)
-  assert.match(await hash(), /stack=any$/)
+  assert.match(await hash(), /stack=any&range=30d$/)
+
+  // The period: all time, a custom one, From after To said and not asked,
+  // then one with nothing in it and the way back to all time.
+  const period = page.locator('[data-picker="period"]')
+  await period.click()
+  await page.getByRole('menuitemradio', { name: 'All time' }).click()
+  await summary
+    .getByText('14 executions over all time ·', { exact: false })
+    .waitFor()
+  assert.equal(requests('trends-get').at(-1).since, undefined)
+  assert.match(await hash(), /stack=any&range=all$/)
+  await period.click()
+  await page.getByRole('menuitemradio', { name: 'Custom' }).click()
+  const from = page.getByLabel('From', { exact: true })
+  const to = page.getByLabel('To', { exact: true })
+  assert.equal(await from.inputValue(), '2026-08-30')
+  assert.equal(await to.inputValue(), '2026-09-28')
+  await from.fill('2026-09-26')
+  await summary
+    .getByText('5 executions from Sep 26 to Sep 28 ·', { exact: false })
+    .waitFor()
+  const { since, until } = requests('trends-get').at(-1)
+  assert.deepEqual(
+    { since, until },
+    { since: '2026-09-26T03:00:00.000Z', until: '2026-09-29T02:59:59.999Z' },
+  )
+  assert.match(await hash(), /stack=any&since=2026-09-26&until=2026-09-28$/)
+  const before = requests('trends-get').length
+  await from.fill('2026-09-29')
+  await page.getByText('From must be on or before To.').waitFor()
+  assert.equal(await from.getAttribute('aria-invalid'), 'true')
+  assert.equal(requests('trends-get').length, before)
+  await to.fill('2026-09-10')
+  await from.fill('2026-09-01')
+  await page
+    .getByRole('heading', {
+      name: 'No execution of this series from Sep 1 to Sep 10',
+    })
+    .waitFor()
+  await page.getByRole('button', { name: 'Show all time' }).click()
+  await summary
+    .getByText('14 executions over all time ·', { exact: false })
+    .waitFor()
+  assert.equal(await from.count(), 0)
 
   // This harness: nothing changed between its executions, no diamond.
   await suite.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
-  await summary.getByText('5 executions ·', { exact: false }).waitFor()
+  await summary.getByText('5 executions ', { exact: false }).waitFor()
   assert.match(await stack.innerText(), /any/)
   assert.equal(await page.locator('.tr-diamond').count(), 0)
 
@@ -340,7 +398,7 @@ try {
   // ran it once.
   await suite.click()
   await page.getByRole('menuitemradio', { name: /^Regression/ }).click()
-  await summary.getByText('14 executions ·', { exact: false }).waitFor()
+  await summary.getByText('14 executions ', { exact: false }).waitFor()
   await model.click()
   const models = page.getByRole('menu', { name: 'Model' })
   await models
@@ -358,6 +416,7 @@ try {
     provider: 'anthropic',
     model: 'claude-opus-5-5',
   })
+  // The period picked stays across series: all time asks for no bounds.
   await page.getByRole('heading', { name: 'Nothing to draw yet' }).waitFor()
   // One action; the execution is a link in the sentence.
   const empty = page.locator('.tr-empty')
@@ -388,7 +447,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, a model of a suite and the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a model of a suite and the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()

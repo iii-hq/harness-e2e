@@ -171,6 +171,32 @@
   width: calc(var(--spacing) * 90);
 }
 
+.tr-period-menu {
+  width: calc(var(--spacing) * 50);
+}
+
+/* A custom period: From and To, and why they are not one when not. */
+.tr-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-width: 0;
+}
+
+.tr-day {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  font-size: var(--ds-text-sm, 0.8125rem);
+}
+
+.tr-period-error {
+  margin: 0;
+  color: var(--ds-danger-text);
+  font-size: var(--text-xs);
+}
+
 .tr-stack-menu {
   width: calc(var(--spacing) * 85);
 }

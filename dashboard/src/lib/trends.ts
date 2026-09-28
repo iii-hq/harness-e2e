@@ -27,6 +27,11 @@ export type TrendsRequest = {
   /** A stack name, 'not_recorded' or 'any'; default (and for a stack the
    *  series never ran on): 'any'. */
   stack?: string
+  /** RFC 3339 instants, both inclusive, against each execution's
+   *  started_at; absent = unbounded. They limit `points` (and the stacks'
+   *  counts), never `series`. */
+  since?: string
+  until?: string
 }
 
 export type TrendSeriesKey = {
@@ -208,6 +213,125 @@ export function profileChoices(
       profile: item.profile || null,
       executions: item.executions,
     }))
+}
+
+/* --------------------------------------------------------------- period */
+
+export type TrendRange = '7d' | '30d' | '90d' | 'all'
+
+/** A range ending today, or two local days (YYYY-MM-DD), both included. */
+export type TrendPeriod =
+  | { range: TrendRange }
+  | { since: string; until: string }
+
+export const DEFAULT_PERIOD: TrendPeriod = { range: '30d' }
+
+const RANGE_DAYS: Record<Exclude<TrendRange, 'all'>, number> = {
+  '7d': 7,
+  '30d': 30,
+  '90d': 90,
+}
+
+export const PERIOD_CHOICES: Array<{ value: TrendRange; label: string }> = [
+  { value: '7d', label: 'Last 7 days' },
+  { value: '30d', label: 'Last 30 days' },
+  { value: '90d', label: 'Last 90 days' },
+  { value: 'all', label: 'All time' },
+]
+
+function isRange(value: string | null): value is TrendRange {
+  return value === '7d' || value === '30d' || value === '90d' || value === 'all'
+}
+
+function dayDate(day: string) {
+  const [year, month, date] = day.split('-').map(Number)
+  return new Date(year, month - 1, date)
+}
+
+/** A calendar day as a date input writes it, and one that exists. */
+export function validDay(day: string) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false
+  const date = dayDate(day)
+  return localDay(date) === day
+}
+
+/** The reader's calendar day of a date: YYYY-MM-DD. */
+export function localDay(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+/** Why two days are not a period, or null. */
+export function periodError(since: string, until: string) {
+  if (!validDay(since) || !validDay(until)) return 'Pick a From and a To day.'
+  return since <= until ? null : 'From must be on or before To.'
+}
+
+/** The period in the hash: range=…, or since=…&until=… as days. */
+export function periodFromParams(params: URLSearchParams): TrendPeriod {
+  const range = params.get('range')
+  if (isRange(range)) return { range }
+  const since = params.get('since') ?? ''
+  const until = params.get('until') ?? ''
+  return periodError(since, until) === null ? { since, until } : DEFAULT_PERIOD
+}
+
+export function withPeriod(params: URLSearchParams, period: TrendPeriod) {
+  if ('range' in period) params.set('range', period.range)
+  else {
+    params.set('since', period.since)
+    params.set('until', period.until)
+  }
+  return params
+}
+
+/** The instants to ask for: from the start of the first local day to the
+ *  end of the last, RFC 3339; nothing for all time. */
+export function periodBounds(
+  period: TrendPeriod,
+  now = new Date(),
+): Pick<TrendsRequest, 'since' | 'until'> {
+  if ('since' in period) {
+    const end = dayDate(period.until)
+    end.setHours(23, 59, 59, 999)
+    return {
+      since: dayDate(period.since).toISOString(),
+      until: end.toISOString(),
+    }
+  }
+  if (period.range === 'all') return {}
+  const start = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate() - (RANGE_DAYS[period.range] - 1),
+  )
+  const end = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  end.setHours(23, 59, 59, 999)
+  return { since: start.toISOString(), until: end.toISOString() }
+}
+
+/** The two days a custom period starts from: the last 30. */
+export function customDays(period: TrendPeriod, now = new Date()) {
+  if ('since' in period) return { since: period.since, until: period.until }
+  const start = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)
+  return { since: localDay(start), until: localDay(now) }
+}
+
+/** `in the last 30 days`, `over all time`, `from Sep 1 to Sep 10`. */
+export function periodPhrase(period: TrendPeriod, now = new Date()) {
+  if ('since' in period)
+    return `from ${formatDay(period.since, now)} to ${formatDay(period.until, now)}`
+  return period.range === 'all'
+    ? 'over all time'
+    : `in the last ${RANGE_DAYS[period.range]} days`
+}
+
+/** The period picker's value. */
+export function periodLabel(period: TrendPeriod) {
+  if ('since' in period) return 'Custom'
+  return (
+    PERIOD_CHOICES.find((choice) => choice.value === period.range)?.label ??
+    'Last 30 days'
+  )
 }
 
 /* -------------------------------------------------------------- a point */
@@ -792,6 +916,7 @@ export function utcOffsetText(date = new Date()) {
  *  Sep 22 – Sep 28 · times in UTC−3`. */
 export function summaryText(
   points: TrendPoint[],
+  period: TrendPeriod = DEFAULT_PERIOD,
   offset = utcOffsetText(),
   now = new Date(),
 ) {
@@ -801,7 +926,7 @@ export function summaryText(
   const first = points[0] ? formatDay(points[0].started_at, now) : null
   const last = points.at(-1) ? formatDay(points.at(-1)?.started_at, now) : null
   return [
-    plural(points.length, 'execution'),
+    `${plural(points.length, 'execution')} ${periodPhrase(period, now)}`,
     `${withRuns} with counted runs${without ? `, ${without} without` : ''}`,
     plural(runs, 'counted run'),
     first ? (last && last !== first ? `${first} – ${last}` : first) : null,

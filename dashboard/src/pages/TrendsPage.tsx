@@ -4,6 +4,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
+  Input,
   Skeleton,
 } from '@iii-dev/console-ui'
 import { ChartLine, ChevronDown, Download, X } from 'lucide-react'
@@ -34,9 +35,15 @@ import {
   ANY_STACK,
   changesAt,
   counted,
+  customDays,
   emptyText,
   modelChoices,
   NOT_RECORDED_STACK,
+  PERIOD_CHOICES,
+  periodBounds,
+  periodError,
+  periodLabel,
+  periodPhrase,
   pointTime,
   previousCounted,
   profileChoices,
@@ -48,12 +55,15 @@ import {
   summaryText,
   TREND_METRICS,
   type TrendMetricId,
+  type TrendPeriod,
   type TrendPoint,
+  type TrendRange,
   type TrendSeriesKey,
   type TrendsRequest,
   type TrendsResponse,
   trendMetric,
   trendsParams,
+  withPeriod,
 } from '@/lib/trends'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import { LedgerLoadFailure } from '@/pages/ExecutionsPage'
@@ -339,6 +349,95 @@ function StackMenu({
   )
 }
 
+/** The period: a range ending today, or Custom with two days. */
+function PeriodMenu({
+  period,
+  onPick,
+}: {
+  period: TrendPeriod
+  onPick: (value: string) => void
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button type="button" className="tr-control" data-picker="period">
+          <span className="tr-faint-ink">Period</span>
+          <span>{periodLabel(period)}</span>
+          <ChevronDown size={16} aria-hidden="true" className="tr-faint-ink" />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="start"
+        aria-label="Period"
+        className="tr-menu tr-period-menu"
+      >
+        <DropdownMenuRadioGroup
+          value={'range' in period ? period.range : 'custom'}
+          onValueChange={onPick}
+        >
+          {[...PERIOD_CHOICES, { value: 'custom', label: 'Custom' }].map(
+            (choice) => (
+              <DropdownMenuRadioItem
+                key={choice.value}
+                value={choice.value}
+                className="tr-menu-item"
+              >
+                {choice.label}
+              </DropdownMenuRadioItem>
+            ),
+          )}
+        </DropdownMenuRadioGroup>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/** A custom period's two days; From after To is said beside them and asks
+ *  for nothing. */
+function CustomPeriod({
+  since,
+  until,
+  onChange,
+}: {
+  since: string
+  until: string
+  onChange: (field: 'since' | 'until', value: string) => void
+}) {
+  const error = periodError(since, until)
+  return (
+    // biome-ignore lint/a11y/useSemanticElements: a labelled pair of fields
+    <div className="tr-custom" role="group" aria-label="Custom period">
+      <label className="tr-day" htmlFor="tr-since">
+        <span className="tr-faint-ink">From</span>
+        <Input
+          id="tr-since"
+          type="date"
+          value={since}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'tr-period-error' : undefined}
+          onChange={(value) => onChange('since', value)}
+        />
+      </label>
+      <label className="tr-day" htmlFor="tr-until">
+        <span className="tr-faint-ink">To</span>
+        <Input
+          id="tr-until"
+          type="date"
+          value={until}
+          aria-invalid={error ? true : undefined}
+          aria-describedby={error ? 'tr-period-error' : undefined}
+          onChange={(value) => onChange('until', value)}
+        />
+      </label>
+      {error ? (
+        <p id="tr-period-error" className="tr-period-error" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function Legend() {
   return (
     <ul className="tr-legend" aria-label="Legend">
@@ -390,9 +489,20 @@ export function TrendsSkeleton({ narrow }: { narrow: boolean }) {
 
 type Runner = { parameters: ExecutionParameters | null; label: string }
 
-export function TrendsPage({ request }: { request: TrendsRequest }) {
+export function TrendsPage({
+  request,
+  period: routePeriod,
+}: {
+  request: TrendsRequest
+  period: TrendPeriod
+}) {
   const narrow = useDashboardChrome()?.narrow ?? false
   const [query, setQuery] = useState<TrendsRequest>(request)
+  const [period, setPeriod] = useState<TrendPeriod>(routePeriod)
+  // The two days being typed for a custom period, until they make one.
+  const [draft, setDraft] = useState<{ since: string; until: string } | null>(
+    null,
+  )
   const [data, setData] = useState<TrendsResponse | null>(null)
   const [bridge, setBridge] = useState<DashboardDataBridge | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -413,8 +523,10 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   // The Trends tab or a link lands here again: start over from its request.
   useEffect(() => {
     setQuery(request)
+    setPeriod(routePeriod)
+    setDraft(null)
     setFocus('score')
-  }, [request])
+  }, [request, routePeriod])
 
   const load = useCallback(async () => {
     const pending = beginRequest()
@@ -424,7 +536,10 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
       if (!pending.isCurrent()) return
       setBridge(next)
       const asked = shown.current
-      const answer = await next.getTrends(asked)
+      const answer = await next.getTrends({
+        ...asked,
+        ...periodBounds(period),
+      })
       if (!pending.isCurrent()) return
       shown.current = answeredView(asked, answer)
       setView(shown.current)
@@ -436,12 +551,17 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     } finally {
       if (pending.isCurrent()) setLoading(false)
     }
-  }, [beginRequest])
+  }, [beginRequest, period])
 
+  // A new request starts over; a new period keeps the series and stack.
+  const loaded = useRef<TrendsRequest | null>(null)
   useEffect(() => {
-    shown.current = query
-    setView(query)
-    setPicked(null)
+    if (loaded.current !== query) {
+      loaded.current = query
+      shown.current = query
+      setView(query)
+      setPicked(null)
+    }
     void load()
   }, [load, query])
 
@@ -469,7 +589,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   }, [bridge, load])
 
   // The hash names what is on screen, once the worker said what that is.
-  const viewParams = requestParams(view).toString()
+  const viewParams = withPeriod(requestParams(view), period).toString()
   useEffect(() => {
     replaceRouteParams(new URLSearchParams(viewParams))
   }, [viewParams])
@@ -479,7 +599,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     () => points.map((_, index) => changesAt(points, index)),
     [points],
   )
-  const here = hashForTrends(requestParams(view))
+  const here = hashForTrends(new URLSearchParams(viewParams))
   const selected = points.findIndex((item) => item.execution_id === picked)
   const pick = (index: number) => {
     const id = points[index]?.execution_id ?? null
@@ -540,7 +660,26 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     setQuery({ ...(data?.selected ?? requestSeries(query) ?? {}), stack })
 
   const failedFirstLoad = Boolean(error) && data === null
-  const nothingCounted = data !== null && !points.some(counted)
+  const noneInPeriod = data !== null && points.length === 0
+  const nothingCounted = !noneInPeriod && !points.some(counted)
+  const days =
+    draft ??
+    ('since' in period ? { since: period.since, until: period.until } : null)
+  const pickPeriod = (value: string) => {
+    if (value === 'custom') {
+      const next = customDays(period)
+      setDraft(next)
+      setPeriod(next)
+    } else {
+      setDraft(null)
+      setPeriod({ range: value as TrendRange })
+    }
+  }
+  const typeDay = (field: 'since' | 'until', value: string) => {
+    const next = { ...(days ?? customDays(period)), [field]: value }
+    setDraft(next)
+    if (periodError(next.since, next.until) === null) setPeriod(next)
+  }
   const latest = points.at(-1) ?? null
   const metric = trendMetric(focus)
   const note = stackNote(points)
@@ -589,12 +728,20 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
               <div role="toolbar" aria-label="Series" className="tr-toolbar">
                 <SeriesPickers data={data} onPick={pickSeries} />
                 <StackMenu data={data} onPick={pickStack} />
+                <PeriodMenu period={period} onPick={pickPeriod} />
+                {days ? (
+                  <CustomPeriod
+                    since={days.since}
+                    until={days.until}
+                    onChange={typeDay}
+                  />
+                ) : null}
                 <span className="tr-spacer" />
                 <Legend />
               </div>
               <div className="tr-summary" aria-busy={loading || undefined}>
                 <p className="tr-faint tr-num-text" data-trend-summary>
-                  {summaryText(points)}
+                  {summaryText(points, period)}
                 </p>
                 {note ? <p className="tr-faint">{note}</p> : null}
                 {notice ? (
@@ -633,6 +780,23 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                     Run tests
                   </button>
                 ) : null
+              }
+            />
+          ) : noneInPeriod ? (
+            <EmptyState
+              icon={<ChartLine size={24} />}
+              title={`No execution of this series ${periodPhrase(period)}`}
+              description="Its executions ran outside this period."
+              actions={
+                'range' in period && period.range === 'all' ? null : (
+                  <button
+                    type="button"
+                    className={buttonClassName({ variant: 'secondary' })}
+                    onClick={() => pickPeriod('all')}
+                  >
+                    Show all time
+                  </button>
+                )
               }
             />
           ) : nothingCounted ? (

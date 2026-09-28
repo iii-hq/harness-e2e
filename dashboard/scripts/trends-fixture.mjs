@@ -15,13 +15,28 @@ const key = ({ suite, provider, model, profile }) => ({
   profile,
 })
 
+const RFC3339 =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
+
+/** A bound of the period: an RFC 3339 instant, else the worker refuses. */
+function bound(name, value) {
+  if (value === undefined) return null
+  if (typeof value !== 'string' || !RFC3339.test(value))
+    throw new Error(`${name} is not an RFC 3339 instant: ${value}`)
+  return Date.parse(value)
+}
+
 /** trends-get as the worker answers it: the latest series that fits what
  *  the request names (suite, then model, then profile), else the one with
- *  the latest execution; every stack the series ran on, latest first,
- *  then not_recorded and any; the stack filter when the series lists it,
- *  else (none asked, or one it never ran on) any, the one applied always
- *  said in `stack`. */
+ *  the latest execution. The period (since/until, inclusive) limits the
+ *  points and the stacks' counts, never the series; an execution whose
+ *  start cannot be read is left out once a bound is set. Every stack the
+ *  series ever ran on is listed, latest first, then not_recorded and any;
+ *  the stack filter applies when listed (even at 0 in the period), else
+ *  any, the one applied always said in `stack`. */
 export function trendsAnswer(request = {}) {
+  const since = bound('since', request.since)
+  const until = bound('until', request.until)
   const fits = ({ series }) =>
     (!request.suite || series.suite === request.suite) &&
     (!request.provider || series.provider === request.provider) &&
@@ -29,17 +44,28 @@ export function trendsAnswer(request = {}) {
     (request.profile === undefined ||
       (series.profile || null) === (request.profile || null))
   const chosen = fixture.series.find(fits) ?? fixture.series[0]
-  const points = chosen.points
+  const all = chosen.points
+  const points =
+    since === null && until === null
+      ? all
+      : all.filter((point) => {
+          const at = Date.parse(point.started_at)
+          return (
+            !Number.isNaN(at) &&
+            (since === null || at >= since) &&
+            (until === null || at <= until)
+          )
+        })
   const names = [
-    ...new Set(points.map((point) => point.stack.name).reverse()),
+    ...new Set(all.map((point) => point.stack.name).reverse()),
   ].filter(Boolean)
-  const stacks = names.map((name) => ({
-    name,
-    executions: points.filter((point) => point.stack.name === name).length,
-  }))
-  const unrecorded = points.filter((point) => !point.stack.name).length
-  if (unrecorded) stacks.push({ name: 'not_recorded', executions: unrecorded })
-  stacks.push({ name: 'any', executions: points.length })
+  const count = (name) =>
+    points.filter((point) => name === 'any' || stackOf(point) === name).length
+  const stacks = [
+    ...names,
+    ...(all.some((point) => !point.stack.name) ? ['not_recorded'] : []),
+    'any',
+  ].map((name) => ({ name, executions: count(name) }))
   const stack = stacks.some((item) => item.name === request.stack)
     ? request.stack
     : 'any'

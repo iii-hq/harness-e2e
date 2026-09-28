@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   changesAt,
   commitsLinkText,
+  customDays,
+  DEFAULT_PERIOD,
   dayMarks,
   deltaFormat,
   deltaOf,
@@ -11,6 +13,11 @@ import {
   latestPair,
   modelChoices,
   notRun,
+  periodBounds,
+  periodError,
+  periodFromParams,
+  periodLabel,
+  periodPhrase,
   pointTime,
   previousCounted,
   profileChoices,
@@ -28,6 +35,7 @@ import {
   trendsRequestFromParams,
   utcOffsetText,
   versionsText,
+  withPeriod,
 } from '@/lib/trends'
 import { seriesPoints, trendSeries } from '@/test-fixtures/trends'
 
@@ -396,6 +404,72 @@ describe('suite, model and profile pickers', () => {
   })
 })
 
+describe('the period', () => {
+  it('asks from the start of the first local day to the end of the last', () => {
+    expect(periodBounds({ range: '30d' }, NOW)).toEqual({
+      since: '2026-08-30T03:00:00.000Z',
+      until: '2026-09-29T02:59:59.999Z',
+    })
+    expect(periodBounds({ range: '7d' }, NOW).since).toBe(
+      '2026-09-22T03:00:00.000Z',
+    )
+    expect(periodBounds({ range: 'all' }, NOW)).toEqual({})
+    expect(
+      periodBounds({ since: '2026-09-26', until: '2026-09-28' }, NOW),
+    ).toEqual({
+      since: '2026-09-26T03:00:00.000Z',
+      until: '2026-09-29T02:59:59.999Z',
+    })
+  })
+
+  it('keeps the period in the hash, a bad one falling back to 30 days', () => {
+    const at = (query: string) => periodFromParams(new URLSearchParams(query))
+    expect(at('range=7d')).toEqual({ range: '7d' })
+    expect(at('since=2026-09-01&until=2026-09-10')).toEqual({
+      since: '2026-09-01',
+      until: '2026-09-10',
+    })
+    for (const bad of [
+      '',
+      'range=1y',
+      'since=2026-09-10&until=2026-09-01',
+      'since=2026-02-31&until=2026-03-01',
+      'since=yesterday&until=today',
+    ])
+      expect(at(bad)).toEqual(DEFAULT_PERIOD)
+    expect(
+      withPeriod(new URLSearchParams('stack=any'), {
+        since: '2026-09-01',
+        until: '2026-09-10',
+      }).toString(),
+    ).toBe('stack=any&since=2026-09-01&until=2026-09-10')
+    expect(withPeriod(new URLSearchParams(), { range: 'all' }).toString()).toBe(
+      'range=all',
+    )
+  })
+
+  it('names the period and checks a custom one', () => {
+    expect(periodPhrase({ range: '90d' }, NOW)).toBe('in the last 90 days')
+    expect(periodPhrase({ range: 'all' }, NOW)).toBe('over all time')
+    expect(
+      periodPhrase({ since: '2026-09-01', until: '2026-09-10' }, NOW),
+    ).toBe('from Sep 1 to Sep 10')
+    expect(periodLabel({ range: 'all' })).toBe('All time')
+    expect(periodLabel({ since: '2026-09-01', until: '2026-09-10' })).toBe(
+      'Custom',
+    )
+    expect(periodError('2026-09-10', '2026-09-01')).toBe(
+      'From must be on or before To.',
+    )
+    expect(periodError('2026-09-01', '')).toBe('Pick a From and a To day.')
+    expect(periodError('2026-09-01', '2026-09-01')).toBeNull()
+    expect(customDays({ range: '30d' }, NOW)).toEqual({
+      since: '2026-08-30',
+      until: '2026-09-28',
+    })
+  })
+})
+
 describe('the view', () => {
   it('round-trips the series and the stack through the hash', () => {
     const params = trendsParams({
@@ -423,8 +497,8 @@ describe('the view', () => {
   })
 
   it('sums the executions and counted runs up in one line', () => {
-    expect(summaryText(regression, 'UTC−3', NOW)).toBe(
-      '11 executions · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
+    expect(summaryText(regression, DEFAULT_PERIOD, 'UTC−3', NOW)).toBe(
+      '11 executions in the last 30 days · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
     )
     expect(stackNote(regression)).toBe(
       '4 of these ran before the Console recorded stacks; they are in because they ran the same workers as default.',

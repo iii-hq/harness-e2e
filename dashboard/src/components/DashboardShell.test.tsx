@@ -50,7 +50,13 @@ describe('section navigation in the Console header', () => {
   it('maps every route to a section', () => {
     expect(sectionForRoute({ page: 'suites' })).toBe('suites')
     expect(sectionForRoute({ page: 'stacks' })).toBe('stacks')
-    expect(sectionForRoute({ page: 'trends', request: {} })).toBe('trends')
+    expect(
+      sectionForRoute({
+        page: 'trends',
+        request: {},
+        period: { range: '30d' },
+      }),
+    ).toBe('trends')
     expect(
       sectionForRoute({
         page: 'execution',

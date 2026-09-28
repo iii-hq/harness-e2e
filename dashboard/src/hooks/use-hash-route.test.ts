@@ -139,6 +139,7 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash(hashForTrends())).toEqual({
       page: 'trends',
       request: {},
+      period: { range: '30d' },
     })
     expect(
       routeFromHash(
@@ -149,6 +150,8 @@ describe('dashboard hash routes', () => {
             model: 'deepseek-flash',
             profile: '',
             stack: 'not_recorded',
+            since: '2026-09-01',
+            until: '2026-09-10',
           }),
         ),
       ),
@@ -161,6 +164,7 @@ describe('dashboard hash routes', () => {
         profile: null,
         stack: 'not_recorded',
       },
+      period: { since: '2026-09-01', until: '2026-09-10' },
     })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()

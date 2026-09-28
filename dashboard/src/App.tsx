@@ -43,7 +43,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'stacks':
       return <StacksPage />
     case 'trends':
-      return <TrendsPage request={route.request} />
+      return <TrendsPage request={route.request} period={route.period} />
     case 'workspace':
       if (route.view === 'tests') return <TestsCatalogPage />
       return <ExecutionsPage />
