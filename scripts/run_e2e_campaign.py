@@ -1024,6 +1024,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    os.environ["III_TELEMETRY_ENABLED"] = "false"
     args = build_parser().parse_args(argv)
     try:
         campaign = load_campaign(args.manifest, scenario_catalog(args.e2e_bin))

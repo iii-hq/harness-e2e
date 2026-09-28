@@ -781,6 +781,7 @@ def command_runner_binary(args: argparse.Namespace) -> None:
 
 
 def main() -> int:
+    os.environ["III_TELEMETRY_ENABLED"] = "false"
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
     dispatch = commands.add_parser("dispatch", help="read the DISPATCH_* inputs")
