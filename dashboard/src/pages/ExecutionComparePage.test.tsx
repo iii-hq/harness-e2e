@@ -4,6 +4,7 @@ import {
   byScoreChange,
   ComparisonView,
   deltaText,
+  deltaTone,
   outsideText,
   pairByCaption,
   RowDetail,
@@ -120,7 +121,10 @@ describe('execution comparison page', () => {
     expect(html).toContain('infrastructure error → </span>40')
     expect(html).toContain('data-cell="tokens"')
     expect(html).toContain('data-layer="comparison-stack"')
-    expect(html).not.toMatch(/better|worse|improv|regress|winner/i)
+    // No verdict in words; the colour of a difference is an attribute.
+    expect(html.replace(/<[^>]*>/g, ' ')).not.toMatch(
+      /better|worse|improv|regress|winner/i,
+    )
   })
 
   it('never calls uncommitted builds the same stack', () => {
@@ -174,6 +178,25 @@ describe('execution comparison page', () => {
       (entry) => entry.id === 'technical_failures',
     )
     expect(invalid && outsideText(invalid)).toBe('1 run in A out of the totals')
+  })
+
+  it('colours a difference green or red (Compare.dc.html), the sign kept', () => {
+    const { scenarios } = compareExecutions(imported(), local())
+    const [persistent] = byScoreChange(scenarios)
+    const metric = (id: string) => {
+      const found = persistent.metrics.find((entry) => entry.id === id)
+      if (!found) throw new Error(id)
+      return found
+    }
+    // A lower score is worse; a lower figure is better for every other
+    // measure; no change is faint; nothing to compare has no colour.
+    expect(deltaTone(metric('score'))).toBe('worse')
+    expect(deltaTone({ ...metric('tokens'), delta: -10 })).toBe('better')
+    expect(deltaTone({ ...metric('tokens'), delta: 10 })).toBe('worse')
+    expect(deltaTone({ ...metric('completed'), delta: 1 })).toBe('better')
+    expect(deltaTone(metric('turns'))).toBe('same')
+    expect(deltaTone({ ...metric('score'), delta: null })).toBeUndefined()
+    expect(view()).toMatch(/data-tone="worse"[^>]*>−38 pts</)
   })
 
   it('opens a test on the criteria that moved, those lost on both sides, its metrics and runs', () => {

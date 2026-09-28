@@ -1445,3 +1445,28 @@ button.cmp-highlight:hover {
     max-height: calc(var(--spacing) * 75);
   }
 }
+
+/* A difference in colour (Compare.dc.html): green where B did better, red
+   where worse (lower is better for every measure but the score, completed
+   tasks and coverage), faint for no change. The sign or the icon stays, so
+   colour never says it alone. Red is the design system's danger text: the
+   host has no light --color-alert-strong. Both pass AA in both themes. */
+.cmp-tone[data-tone="better"] {
+  color: var(--color-ok);
+}
+
+.cmp-tone[data-tone="worse"] {
+  color: var(--ds-danger-text, var(--color-alert));
+}
+
+.cmp-tone[data-tone="same"] {
+  color: var(--color-ink-faint);
+}
+
+.cmp-tag.cmp-tone[data-tone="better"] {
+  background: var(--color-ok-muted);
+}
+
+.cmp-tag.cmp-tone[data-tone="worse"] {
+  background: var(--color-alert-muted);
+}

@@ -1342,10 +1342,15 @@ export function scenarioScore(
 export type Highlight = {
   /** The test it is about, to open; null for the comparison as a whole. */
   test: string | null
-  /** Which way B's figure moved: a direction, never a verdict. */
+  /** Which way B's figure moved. */
   direction: 'up' | 'down' | 'same'
+  /** Its colour (Compare.dc.html): a higher score, or a lower figure of any
+   *  other measure, is better. The words stay a difference. */
+  tone: DeltaTone
   text: string
 }
+
+export type DeltaTone = 'better' | 'worse' | 'same'
 
 export type ComparisonHighlights = {
   /** "B scored 4.4 points lower", or why there is no score to compare. */
@@ -1447,6 +1452,7 @@ export function comparisonHighlights(
     return {
       test: scenario.id,
       direction: delta < 0 ? 'down' : 'up',
+      tone: delta < 0 ? 'worse' : 'better',
       text: `${delta < 0 ? 'lost' : 'gained'} ${pointsPhrase(delta)} in B${why}.`,
     }
   })
@@ -1454,6 +1460,7 @@ export function comparisonHighlights(
     items.push({
       test: null,
       direction: 'same',
+      tone: 'same',
       text: `${moved.length - 3} more ${moved.length - 3 === 1 ? 'test' : 'tests'} changed score.`,
     })
 
@@ -1481,6 +1488,8 @@ export function comparisonHighlights(
     items.push({
       test: scenario.id,
       direction: delta < 0 ? 'down' : 'up',
+      // Every measure here is better lower.
+      tone: delta < 0 ? 'better' : 'worse',
       text: `${phrase(delta > 0, amount)} in B (${metricFigure(entry.format, entry.baseline ?? 0)} → ${metricFigure(entry.format, entry.candidate ?? 0)}).`,
     })
   }
@@ -1495,6 +1504,7 @@ export function comparisonHighlights(
     items.push({
       test: null,
       direction: 'same',
+      tone: 'same',
       text:
         moved.length > 0
           ? kept === 1

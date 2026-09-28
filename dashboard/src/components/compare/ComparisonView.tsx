@@ -40,6 +40,7 @@ import {
   type ComparisonSide,
   compareRuns,
   comparisonHighlights,
+  type DeltaTone,
   type ExecutionComparison,
   exclusionPhrase,
   gapPhrase,
@@ -121,6 +122,20 @@ export function deltaText(metric: ComparedMetric): string {
       ? ''
       : ` · ${sign}${Math.abs(metric.delta_percent).toFixed(Math.abs(metric.delta_percent) < 10 ? 1 : 0)}%`
   return `${sign}${metricFigure(metric.format, size)}${relative}`
+}
+
+/** Measures where more is better; lower is better for every other. */
+const HIGHER_IS_BETTER = ['score', 'completed', 'coverage']
+
+/** The colour of a difference (Compare.dc.html): green where B did better,
+ *  red where worse, faint for no change, none when there is nothing to
+ *  compare. The sign stays in the text, so colour never says it alone. */
+export function deltaTone(metric: ComparedMetric): DeltaTone | undefined {
+  if (metric.delta === null) return undefined
+  if (Math.abs(metric.delta) < 1e-9) return 'same'
+  return metric.delta > 0 === HIGHER_IS_BETTER.includes(metric.id)
+    ? 'better'
+    : 'worse'
 }
 
 /** A run's state where its score would be: `infrastructure error`. */
@@ -379,7 +394,10 @@ function TestPicker({
                           {score ? valueText(score, 'baseline') : '—'} →{' '}
                           {score ? valueText(score, 'candidate') : '—'}
                         </span>
-                        <span className="cmp-pick-delta">
+                        <span
+                          className="cmp-pick-delta cmp-tone"
+                          data-tone={score ? deltaTone(score) : undefined}
+                        >
                           {score ? deltaText(score) : ''}
                         </span>
                       </>
@@ -439,7 +457,8 @@ function Highlights({
             const body = (
               <>
                 <Icon
-                  className="cmp-highlight-icon"
+                  className="cmp-highlight-icon cmp-tone"
+                  data-tone={item.tone}
                   size={16}
                   aria-hidden="true"
                 />
@@ -511,7 +530,12 @@ function Totals({ comparison }: { comparison: ExecutionComparison }) {
                 </span>
                 <span className="cmp-kpi-b">{b}</span>
               </span>
-              <span className="cmp-kpi-delta">{deltaText(metric) || '—'}</span>
+              <span
+                className="cmp-kpi-delta cmp-tone"
+                data-tone={deltaTone(metric)}
+              >
+                {deltaText(metric) || '—'}
+              </span>
             </div>,
           ]
         })}
@@ -575,7 +599,9 @@ function MetricTable({
             </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
-            <td className="cmp-delta">{deltaText(metric) || '—'}</td>
+            <td className="cmp-delta cmp-tone" data-tone={deltaTone(metric)}>
+              {deltaText(metric) || '—'}
+            </td>
           </tr>
         ))}
       </tbody>
@@ -593,14 +619,26 @@ const CELLS: Array<[string, string]> = [
   ['turns', 'Turns'],
 ]
 
-function Pair({ a, b, delta }: { a: string; b: string; delta: string }) {
+function Pair({
+  a,
+  b,
+  delta,
+  tone,
+}: {
+  a: string
+  b: string
+  delta: string
+  tone?: DeltaTone
+}) {
   return (
     <span className="cmp-pair">
       <span className="cmp-pair-values" title={`${a} → ${b}`}>
         <span className="cmp-faint-num">{a} → </span>
         {b}
       </span>
-      <span className="cmp-pair-delta">{delta}</span>
+      <span className="cmp-pair-delta cmp-tone" data-tone={tone}>
+        {delta}
+      </span>
     </span>
   )
 }
@@ -641,6 +679,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
         a={a.runs ? `${metric.baseline ?? 0}/${a.runs}` : '—'}
         b={b.runs ? `${metric.candidate ?? 0}/${b.runs}` : '—'}
         delta={deltaText(metric)}
+        tone={deltaTone(metric)}
       />
     )
   }
@@ -649,6 +688,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
       a={valueText(metric, 'baseline')}
       b={valueText(metric, 'candidate')}
       delta={deltaText(metric)}
+      tone={deltaTone(metric)}
     />
   )
 }
@@ -773,6 +813,7 @@ function Results({
                             : stateText(scenario.sides.b.state)
                         }
                         delta={score ? deltaText(score) : ''}
+                        tone={score ? deltaTone(score) : undefined}
                       />
                     </span>
                   </td>
@@ -915,7 +956,10 @@ export function RowDetail({
                   </span>
                   {points(criterion.b)}/{criterion.possible}
                 </span>
-                <span className="cmp-tag">
+                <span
+                  className="cmp-tag cmp-tone"
+                  data-tone={criterion.delta > 0 ? 'better' : 'worse'}
+                >
                   {criterion.delta > 0 ? '+' : '−'}
                   {points(Math.abs(criterion.delta))}
                 </span>
