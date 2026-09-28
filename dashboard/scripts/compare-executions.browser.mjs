@@ -24,6 +24,12 @@ function run(
     metrics: { complete: true, totals: { cache_read_tokens: 10 } },
     cost: { subject_usd: 0.01 },
     criteria: [],
+    // Enough of an assessment for the run's own pages to open.
+    assessment: {
+      run_id: id,
+      system_status: technical === 'valid' ? 'passed' : 'infrastructure_error',
+      assessments: [],
+    },
     failures: failure ? [{ phase: 'setup', message: failure }] : [],
     deliverables: screenshot
       ? [
@@ -369,6 +375,19 @@ try {
     'Open A · board full size',
   )
 
+  // A run's transcript opened from the comparison goes back to it.
+  await page
+    .locator('[data-run-side="b"]')
+    .getByRole('link', { name: 'Transcript', exact: true })
+    .first()
+    .click()
+  await page.getByRole('link', { name: 'Back to comparison' }).click()
+  await page.locator('[data-comparison-scenarios]').waitFor()
+  assert.match(
+    await page.evaluate(() => location.hash),
+    /^#\/ext\/harness-e2e\/compare\//,
+  )
+
   // Run again: B's parameters, on the tests B scored lower on.
   await page.getByRole('button', { name: 'Run again · 1 test' }).click()
   const again = page.getByRole('dialog', { name: 'Run again' })
@@ -558,7 +577,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, a run's transcript that goes back to the comparison, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()

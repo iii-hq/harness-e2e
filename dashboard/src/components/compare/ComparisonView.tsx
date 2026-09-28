@@ -11,9 +11,11 @@ import {
   TrendingUp,
 } from 'lucide-react'
 import {
+  createContext,
   Fragment,
   type MouseEvent,
   type ReactNode,
+  useContext,
   useMemo,
   useRef,
   useState,
@@ -30,7 +32,11 @@ import {
   isInteractiveTarget,
   StatusLabel,
 } from '@/design-system'
-import { hashForExecution } from '@/hooks/use-hash-route'
+import {
+  hashForComparison,
+  hashForExecution,
+  hashFrom,
+} from '@/hooks/use-hash-route'
 import type {
   DashboardDataBridge,
   DashboardExecutionDetail,
@@ -122,6 +128,22 @@ export function deltaText(metric: ComparedMetric): string {
       ? ''
       : ` · ${sign}${Math.abs(metric.delta_percent).toFixed(Math.abs(metric.delta_percent) < 10 ? 1 : 0)}%`
   return `${sign}${metricFigure(metric.format, size)}${relative}`
+}
+
+/** This comparison's own hash, choice included, for a run's page opened from
+ *  it to come back to; without one, the plain pair. */
+const ComparisonHash = createContext<string | null>(null)
+
+/** A link to a run's page (transcript or evidence record) that comes back to
+ *  this comparison. */
+function useRunHref(sides: Sides) {
+  const here =
+    useContext(ComparisonHash) ?? hashForComparison(sides.a.id, sides.b.id)
+  return (
+    which: Which,
+    runId: string,
+    view: 'evidence' | 'transcript' = 'evidence',
+  ) => hashFrom(hashForExecution(sides[which].id, null, runId, view), here)
 }
 
 /** Measures where more is better; lower is better for every other. */
@@ -898,6 +920,7 @@ export function RowDetail({
   bridge: DashboardDataBridge | null
   onRunTest?: (scenarioId: string) => void
 }) {
+  const runHref = useRunHref(sides)
   const runs = useMemo(
     () =>
       (['a', 'b'] as const).flatMap((which) =>
@@ -1049,23 +1072,11 @@ export function RowDetail({
                     <>
                       <a
                         className="cmp-act"
-                        href={hashForExecution(
-                          sides[which].id,
-                          null,
-                          run.runId,
-                          'transcript',
-                        )}
+                        href={runHref(which, run.runId, 'transcript')}
                       >
                         Transcript
                       </a>
-                      <a
-                        className="cmp-act"
-                        href={hashForExecution(
-                          sides[which].id,
-                          null,
-                          run.runId,
-                        )}
-                      >
+                      <a className="cmp-act" href={runHref(which, run.runId)}>
                         Evidence
                       </a>
                     </>
@@ -1195,6 +1206,7 @@ function ScreenshotPairs({
   sides: Sides
   scenarioId: string
 }) {
+  const runHref = useRunHref(sides)
   const shots = useMemo(
     () => ({
       a: screenshotsOf(sides.a, scenarioId),
@@ -1216,9 +1228,7 @@ function ScreenshotPairs({
   const pairs = pairByCaption(shots.a, shots.b)
   if (pairs.length === 0) return null
   const evidence = (which: Which, screenshot: ScreenshotEntry | null) =>
-    screenshot
-      ? hashForExecution(sides[which].id, null, screenshot.runId)
-      : null
+    screenshot ? runHref(which, screenshot.runId) : null
   const current = viewer ? shots[viewer.which][viewer.index] : null
   return (
     <section className="cmp-shots" aria-label="Screenshots">
@@ -1438,6 +1448,7 @@ export function ComparisonView({
   sides,
   bridge = null,
   swap,
+  here,
   refreshError = null,
   onCount,
   onRunTest,
@@ -1445,6 +1456,9 @@ export function ComparisonView({
   comparison: ExecutionComparison
   sides: Sides
   bridge?: DashboardDataBridge | null
+  /** This comparison's hash, its choice included: where a run's transcript
+   *  or evidence record opened from it goes back to. */
+  here?: string
   /** Why the last refresh failed; what was loaded stays on screen. */
   refreshError?: string | null
   /** The link to the same comparison with A and B swapped. */
@@ -1511,7 +1525,7 @@ export function ComparisonView({
       : []),
   ]
   return (
-    <>
+    <ComparisonHash.Provider value={here ?? null}>
       {refreshError ? (
         <p className="cmp-warning" role="status" data-comparison-refresh-error>
           <AlertTriangle size={16} aria-hidden="true" />
@@ -1617,6 +1631,6 @@ export function ComparisonView({
           <Methodology comparison={comparison} />
         </DisclosureLayer>
       </section>
-    </>
+    </ComparisonHash.Provider>
   )
 }

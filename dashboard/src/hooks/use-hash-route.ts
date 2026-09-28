@@ -171,6 +171,27 @@ export function hashForComparison(
   return pairHash('compare', left, right)
 }
 
+/** A run's page opened from a comparison: its link carries the comparison's
+ *  hash (its choice of tests included) in `from`, to go back to. */
+export function hashFrom(hash: string, origin: string): string {
+  return hashWithParams(hash, new URLSearchParams({ from: origin }))
+}
+
+/** The comparison a run's page was opened from. Only a comparison of this
+ *  dashboard, A and B and nothing more in its path, is taken: never another
+ *  hash or a URL. */
+export function comparisonOrigin(rawHash: string): string | null {
+  const from = routeParams(rawHash).get('from')
+  const route = from ? routeFromHash(from) : null
+  return from &&
+    route?.page === 'compare' &&
+    route.left &&
+    route.right &&
+    from.split('?')[0] === hashForComparison(route.left, route.right)
+    ? from
+    : null
+}
+
 /** Two evaluated system versions of the test catalog. */
 export function hashForVersionComparison(
   left: string | null = null,

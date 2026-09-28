@@ -172,6 +172,7 @@ export function EvidenceRecordPage({
   run,
   detail,
   backHref,
+  backLabel = 'Back to the execution',
   transcriptHref,
   onRerun,
   onOpenFile,
@@ -180,6 +181,8 @@ export function EvidenceRecordPage({
   run: AssessmentRunView
   detail?: DashboardExecutionDetail | null
   backHref: string
+  /** "Back to comparison" when it was opened from one. */
+  backLabel?: string
   transcriptHref?: string
   onRerun?: () => void
   /** Open a file the run's report declares (evidence or a deliverable). */
@@ -269,7 +272,7 @@ export function EvidenceRecordPage({
       <PageHeader
         variant="detail"
         mono
-        back={{ label: 'Back to the execution', href: backHref }}
+        back={{ label: backLabel, href: backHref }}
         context="Evidence record"
         title={run.scenarioId}
         summary={

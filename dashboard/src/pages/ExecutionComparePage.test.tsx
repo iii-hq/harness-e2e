@@ -223,13 +223,15 @@ describe('execution comparison page', () => {
     expect(html).toContain('Lost points on both sides')
     expect(html).toContain('A 74/80 · B 74/80')
     expect(html).toContain('data-metric-id="cache_read"')
-    // A run of each side, its transcript and evidence record.
+    // A run of each side, its transcript and evidence record, which come
+    // back to this comparison.
+    const back = `?from=${encodeURIComponent('#/ext/harness-e2e/compare/import-a/local-b')}`
     expect(html).toContain('data-run-side="a"')
     expect(html).toContain(
-      'href="#/ext/harness-e2e/execution/local-b/run/local-b-0/transcript"',
+      `href="#/ext/harness-e2e/execution/local-b/run/local-b-0/transcript${back}"`,
     )
     expect(html).toContain(
-      'href="#/ext/harness-e2e/execution/import-a/run/import-a-0"',
+      `href="#/ext/harness-e2e/execution/import-a/run/import-a-0${back}"`,
     )
   })
 

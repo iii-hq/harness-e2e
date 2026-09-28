@@ -47,9 +47,11 @@ import {
   StatusBadge,
 } from '@/design-system'
 import {
+  comparisonOrigin,
   hashForComparison,
   hashForExecution,
   hashForWorkspace,
+  hashFrom,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
@@ -671,14 +673,19 @@ export function ExecutionPage({
   // A run's evidence record and transcript are pages of their own (linkable,
   // back to the execution) instead of dialogs over it.
   if (evidenceRun) {
-    const backHref = hashForExecution(detail.id, 'results')
-    const transcriptHref = hashForExecution(
-      detail.id,
-      null,
-      evidenceRun.runId,
-      'transcript',
+    // Opened from a comparison: its links keep it, and back goes to it.
+    const origin =
+      typeof window === 'undefined'
+        ? null
+        : comparisonOrigin(window.location.hash)
+    const keep = (hash: string) => (origin ? hashFrom(hash, origin) : hash)
+    const backHref = origin ?? hashForExecution(detail.id, 'results')
+    const transcriptHref = keep(
+      hashForExecution(detail.id, null, evidenceRun.runId, 'transcript'),
     )
-    const evidenceHref = hashForExecution(detail.id, null, evidenceRun.runId)
+    const evidenceHref = keep(
+      hashForExecution(detail.id, null, evidenceRun.runId),
+    )
     return (
       <div className="harness-e2e-execution-page">
         <DashboardPageActions
@@ -690,8 +697,10 @@ export function ExecutionPage({
             title={evidenceRun.scenarioId}
             runLine={`run ${evidenceRun.runId} · ${evidenceRun.subjectId} · ${formatDuration((evidenceRun.metrics.durationMs ?? 0) / 1000)}`}
             messages={evidenceRun.transcript?.messages}
-            backHref={evidenceHref}
-            backLabel="Back to the evidence record"
+            backHref={origin ?? evidenceHref}
+            backLabel={
+              origin ? 'Back to comparison' : 'Back to the evidence record'
+            }
             evidenceHref={evidenceHref}
           />
         ) : (
@@ -699,6 +708,7 @@ export function ExecutionPage({
             run={evidenceRun}
             detail={detail}
             backHref={backHref}
+            backLabel={origin ? 'Back to comparison' : undefined}
             transcriptHref={transcriptHref}
             onRerun={
               testRerunOffered(detail, Boolean(bridge), live)

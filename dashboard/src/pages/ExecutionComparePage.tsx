@@ -417,6 +417,10 @@ export function ExecutionComparePage({
           hashForComparison(right, left),
           choiceToParams(choice),
         )}
+        here={hashWithParams(
+          hashForComparison(left, right),
+          choiceToParams(choice),
+        )}
         refreshError={error}
         onCount={(ids) =>
           setChoice(
