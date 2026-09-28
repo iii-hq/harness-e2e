@@ -139,6 +139,11 @@ const registry = {
   fp: { name: 'fp', version: '0.2.20', dependencies: [] },
   browser: { name: 'browser', version: '0.3.1', dependencies: [] },
 }
+// Creating Mine waits until the flow lets it go.
+let letMineGo
+const mineCreated = new Promise((resolve) => {
+  letMineGo = resolve
+})
 let letBrowserGo
 const browserAnswer = new Promise((resolve) => {
   letBrowserGo = resolve
@@ -205,7 +210,7 @@ const trigger = (name, request = {}) => {
       request.yaml ?? from.yaml,
     )
     local.push(stack)
-    return stack
+    return request.label === 'Mine' ? mineCreated.then(() => stack) : stack
   }
   if (id === 'stack-templates-list') {
     if (failTemplates) {
@@ -671,6 +676,17 @@ try {
   // Named and created from its YAML; it opens as a copy does.
   await name.fill('Mine')
   await create.click()
+  // While it is created, Edit as YAML waits too.
+  await builder
+    .getByRole('button', { name: 'Creating…', exact: true })
+    .waitFor()
+  assert.equal(
+    await builder
+      .getByRole('button', { name: 'Edit as YAML', exact: true })
+      .getAttribute('aria-disabled'),
+    'true',
+  )
+  letMineGo()
   const mineSheet = page.getByRole('dialog', { name: 'Edit Mine' })
   await mineSheet.waitFor()
   const builtYaml = `${[

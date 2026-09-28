@@ -948,7 +948,10 @@ export function StackBuilder({
                 <button
                   type="button"
                   className="sk-btn sk-btn-small sb-outline"
-                  onClick={editYaml}
+                  aria-disabled={creating || undefined}
+                  onClick={() => {
+                    if (!creating) editYaml()
+                  }}
                 >
                   Edit as YAML
                 </button>
