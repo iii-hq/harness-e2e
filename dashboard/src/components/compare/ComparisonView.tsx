@@ -1137,7 +1137,6 @@ export function pairByCaption(
   })
 }
 
-/** One side of a pair: the image, which opens full size, and its record. */
 /** Scrolls to a part of the page and moves focus to its control, so the
  *  keyboard and a screen reader land where the page moved. */
 function reach(target: Element | null, control: string) {
@@ -1145,6 +1144,7 @@ function reach(target: Element | null, control: string) {
   target?.querySelector<HTMLElement>(control)?.focus({ preventScroll: true })
 }
 
+/** One side of a pair: the image, which opens full size, and its record. */
 export function ScreenshotFigure({
   which,
   screenshot,
