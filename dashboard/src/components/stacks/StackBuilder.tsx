@@ -211,7 +211,9 @@ export function StackBuilder({
     loadTemplates()
   }, [loadTemplates])
 
-  // Each name is asked once; a failed answer warns and blocks nothing.
+  // Each name is asked once while it is answered or being asked; one the
+  // registry did not answer about warns, blocks nothing and can be asked
+  // again with Try again.
   const asked = useRef(new Set<string>())
   const check = useCallback(
     (worker: string) => {
@@ -219,16 +221,18 @@ export function StackBuilder({
       asked.current.add(worker)
       setLookups((current) => ({ ...current, [worker]: { state: 'checking' } }))
       bridge.resolveWorker(worker).then(
-        (resolution) =>
-          setLookups((current) => ({
-            ...current,
-            [worker]: lookupOf(resolution),
-          })),
-        (cause) =>
+        (resolution) => {
+          const answer = lookupOf(resolution)
+          if (answer.state === 'failed') asked.current.delete(worker)
+          setLookups((current) => ({ ...current, [worker]: answer }))
+        },
+        (cause) => {
+          asked.current.delete(worker)
           setLookups((current) => ({
             ...current,
             [worker]: { state: 'failed', message: errorText(cause) },
-          })),
+          }))
+        },
       )
     },
     [bridge],
@@ -719,6 +723,7 @@ export function StackBuilder({
                         }}
                         onChange={(change) => patch(entry.name, change)}
                         onRemove={() => remove(entry.name)}
+                        onRetry={check}
                       />
                     ))}
                   </ul>
@@ -828,6 +833,15 @@ export function StackBuilder({
                       <div className="sb-pick-head">
                         <span className="sb-eyebrow">{group.label}</span>
                         <span className="sk-faint">{group.sub}</span>
+                        {group.retry ? (
+                          <button
+                            type="button"
+                            className="sk-btn sk-btn-small sb-push"
+                            onClick={() => group.retry && check(group.retry)}
+                          >
+                            Try again
+                          </button>
+                        ) : null}
                       </div>
                       {group.items.map((item) => (
                         <button
@@ -963,6 +977,7 @@ function DeclaredRow({
   onToggle,
   onChange,
   onRemove,
+  onRetry,
 }: {
   entry: Declared
   verdict: Verdict | null
@@ -970,6 +985,7 @@ function DeclaredRow({
   onToggle: (button: HTMLButtonElement) => void
   onChange: (change: Partial<Declared>) => void
   onRemove: () => void
+  onRetry: (worker: string) => void
 }) {
   return (
     <li data-worker={entry.name} data-tone={verdict?.tone}>
@@ -1009,6 +1025,15 @@ function DeclaredRow({
             <strong>{verdict.lead}</strong>
             {verdict.text ? ` ${verdict.text}` : ''}
           </span>
+          {verdict.retry ? (
+            <button
+              type="button"
+              className="sk-btn sk-btn-small sb-retry"
+              onClick={() => verdict.retry && onRetry(verdict.retry)}
+            >
+              Try again
+            </button>
+          ) : null}
         </p>
       ) : null}
     </li>

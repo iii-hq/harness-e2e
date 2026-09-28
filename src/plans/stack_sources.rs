@@ -120,7 +120,7 @@ pub(crate) async fn resolve(worker: &str) -> Result<WorkerResolution> {
         .map_err(|error| anyhow!("The iii registry did not answer: {}", error.without_url()))?;
     let status = response.status().as_u16();
     let body = response.json::<Value>().await.unwrap_or(Value::Null);
-    let resolved = resolution(status, &body)?;
+    let resolved = resolution(worker, status, &body)?;
     RESOLVED
         .lock()
         .unwrap()
@@ -139,20 +139,28 @@ fn worker_name(name: &str) -> bool {
 }
 
 /// The registry's answer: the root's release and every other non-engine
-/// worker of its graph, or the error it gave.
-fn resolution(status: u16, body: &Value) -> Result<WorkerResolution> {
-    if let Some(code) = body["error"]["code"].as_str() {
+/// worker of its graph, or that it has no such worker (a 404 or
+/// `worker_not_found`). Anything else it answers (a rate limit, a server
+/// error) is an error, never kept: the worker may well exist.
+fn resolution(worker: &str, status: u16, body: &Value) -> Result<WorkerResolution> {
+    let code = body["error"]["code"].as_str();
+    let message = body["error"]["message"].as_str();
+    if status == 404 || code == Some("worker_not_found") {
         return Ok(WorkerResolution::Refused {
             error: RegistryRefusal {
-                code: code.to_owned(),
-                message: body["error"]["message"].as_str().unwrap_or(code).to_owned(),
+                code: code.unwrap_or("worker_not_found").to_owned(),
+                message: message
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| format!("The iii registry has no worker {worker}.")),
             },
         });
     }
-    ensure!(
-        (200..300).contains(&status),
-        "The iii registry answered {status}."
-    );
+    if !(200..300).contains(&status) || code.is_some() {
+        match message.or(code) {
+            Some(said) => bail!("The iii registry answered {status}: {said}"),
+            None => bail!("The iii registry answered {status}."),
+        }
+    }
     let name = body["root"]["name"]
         .as_str()
         .context("The iii registry's answer names no root worker.")?;
@@ -478,6 +486,7 @@ mod tests {
     #[test]
     fn a_resolution_is_the_root_release_and_its_workers_without_the_engine() {
         let found = resolution(
+            "harness",
             200,
             &serde_json::from_str(&fixture("resolve-harness.json")).unwrap(),
         )
@@ -502,6 +511,7 @@ mod tests {
         assert!(answer.get("error").is_none());
 
         let refused = resolution(
+            "nope-not-a-worker",
             404,
             &serde_json::from_str(&fixture("resolve-worker-not-found.json")).unwrap(),
         )
@@ -513,7 +523,33 @@ mod tests {
                 "message": "Worker 'nope-not-a-worker' was not found in the registry."
             }})
         );
-        assert!(resolution(502, &Value::Null)
+        // A 404 without a body is still no such worker.
+        assert_eq!(
+            serde_json::to_value(resolution("gone", 404, &Value::Null).unwrap()).unwrap(),
+            json!({"error": {
+                "code": "worker_not_found",
+                "message": "The iii registry has no worker gone."
+            }})
+        );
+        // A rate limit or a server error is not an answer about the worker:
+        // it is an error, with what the registry said, and never kept.
+        for (status, code, message) in [
+            (429, "rate_limited", "Too many requests, retry in 30s."),
+            (503, "unavailable", "The registry is restarting."),
+        ] {
+            let error = resolution(
+                "harness",
+                status,
+                &json!({"error": {"code": code, "message": message}}),
+            )
+            .unwrap_err()
+            .to_string();
+            assert_eq!(
+                error,
+                format!("The iii registry answered {status}: {message}")
+            );
+        }
+        assert!(resolution("harness", 502, &Value::Null)
             .unwrap_err()
             .to_string()
             .contains("answered 502"));

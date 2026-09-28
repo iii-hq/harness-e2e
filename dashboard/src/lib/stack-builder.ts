@@ -34,7 +34,13 @@ export type Lookups = Partial<Record<string, Lookup>>
 
 export type Tone = 'info' | 'block' | 'warn' | 'pending'
 
-export type Verdict = { tone: Tone; lead: string; text: string }
+export type Verdict = {
+  tone: Tone
+  lead: string
+  text: string
+  /** The worker to ask the registry about again. */
+  retry?: string
+}
 
 /** One provider per model family, as the canvas lists them. */
 export const PROVIDERS = [
@@ -77,14 +83,18 @@ export function templateId(template: string | null) {
   return template ? template.split('@')[0] : null
 }
 
+/** Only `worker_not_found` says a worker does not exist; any other error
+ *  is the registry not answering, asked again on Try again. */
 export function lookupOf(resolution: WorkerResolution): Lookup {
-  return 'error' in resolution
-    ? { state: 'missing', message: resolution.error.message }
-    : {
-        state: 'found',
-        version: resolution.version,
-        dependencies: resolution.dependencies,
-      }
+  if ('error' in resolution)
+    return resolution.error.code === 'worker_not_found'
+      ? { state: 'missing', message: resolution.error.message }
+      : { state: 'failed', message: resolution.error.message }
+  return {
+    state: 'found',
+    version: resolution.version,
+    dependencies: resolution.dependencies,
+  }
 }
 
 /** The declared worker that brings `name` with it, by the registry. */
@@ -167,8 +177,9 @@ export function judge(
   if (found.state === 'failed')
     return {
       tone: 'warn',
-      lead: 'Couldn’t check the registry.',
+      lead: 'Couldn’t reach the registry.',
       text: `${found.message} Nothing is blocked for it.`,
+      retry: own,
     }
   if (found.dependencies.length)
     return {
@@ -265,7 +276,13 @@ export type PickItem = {
   add: Declared | null
 }
 
-export type PickGroup = { label: string; sub: string; items: PickItem[] }
+export type PickGroup = {
+  label: string
+  sub: string
+  items: PickItem[]
+  /** A typed name the registry did not answer about, to ask again. */
+  retry?: string
+}
 
 /** The query as a worker's name: `package://` and case dropped. */
 export function pickerQuery(query: string) {
@@ -424,11 +441,12 @@ export function pickerGroups({
           ? `found, ${found.version}`
           : found.state === 'missing'
             ? found.message
-            : `couldn’t check the registry: ${found.message}`
+            : `couldn’t reach the registry: ${found.message}`
     const off = typed.off || waiting || refused
     groups.push({
       label: 'From the iii registry',
       sub: 'checked as you type',
+      retry: found?.state === 'failed' ? q : undefined,
       items: [
         {
           ...typed,

@@ -218,6 +218,15 @@ const trigger = (name, request = {}) => {
   if (id === 'worker-resolve') {
     calls.resolve.push(request.worker)
     if (request.worker === 'browser') return browserAnswer
+    // The registry does not answer about flaky-worker the first time.
+    if (request.worker === 'flaky-worker')
+      if (
+        calls.resolve.filter((worker) => worker === 'flaky-worker').length === 1
+      )
+        throw new Error(
+          'The iii registry answered 503: The registry is restarting.',
+        )
+      else return { name: 'flaky-worker', version: '0.1.0', dependencies: [] }
     return (
       registry[request.worker] ?? {
         error: {
@@ -728,6 +737,22 @@ try {
     calls.resolve.filter((worker) => worker === 'nope-worker'),
     ['nope-worker'],
   )
+  // A registry that does not answer is not a worker that does not exist:
+  // it warns, blocks nothing, and Try again asks again.
+  await search.fill('flaky-worker')
+  const flaky = picker.locator('[data-pick="flaky-worker"]')
+  await flaky
+    .getByText(
+      'package://flaky-worker · couldn’t reach the registry: The iii registry answered 503: The registry is restarting.',
+      { exact: true },
+    )
+    .waitFor()
+  assert.equal(await flaky.getAttribute('aria-disabled'), null)
+  await picker.getByRole('button', { name: 'Try again', exact: true }).click()
+  await flaky
+    .getByText('package://flaky-worker · found, 0.1.0', { exact: true })
+    .waitFor()
+
   // Escape closes the picker, not the builder.
   await search.press('Escape')
   await picker.waitFor({ state: 'detached' })

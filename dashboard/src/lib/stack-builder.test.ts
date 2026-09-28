@@ -6,6 +6,7 @@ import {
   declaredOf,
   judge,
   type Lookups,
+  lookupOf,
   markedLines,
   orderTemplates,
   pickerGroups,
@@ -202,6 +203,19 @@ describe('stack builder', () => {
       'warn',
     ])
     expect(failed.blocked).toBe(false)
+    expect(failed.verdicts[0]).toMatchObject({
+      lead: 'Couldn’t reach the registry.',
+      retry: 'harness',
+    })
+    // Only worker_not_found says a worker does not exist.
+    expect(
+      lookupOf({
+        error: { code: 'worker_not_found', message: 'No such worker.' },
+      }),
+    ).toEqual({ state: 'missing', message: 'No such worker.' })
+    expect(
+      lookupOf({ error: { code: 'rate_limited', message: 'Slow down.' } }),
+    ).toEqual({ state: 'failed', message: 'Slow down.' })
     // A path worker is never looked up.
     expect(
       judge({ ...pkg('link'), worker: 'path://./link' }, null, null, [], {}),
@@ -348,9 +362,13 @@ describe('stack builder', () => {
       alert: true,
     })
     // A network error warns and still lets it be added.
-    expect(
-      typed({ nope: { state: 'failed', message: 'timed out' } })?.items[0],
-    ).toMatchObject({ off: false, tag: 'add' })
+    const unreached = typed({ nope: { state: 'failed', message: 'timed out' } })
+    expect(unreached?.retry).toBe('nope')
+    expect(unreached?.items[0]).toMatchObject({
+      sub: 'package://nope · couldn’t reach the registry: timed out',
+      off: false,
+      tag: 'add',
+    })
     // With a template, a name it does not declare would be ignored.
     const ignored = typed({}, harness)
     expect(ignored?.items[0]).toMatchObject({

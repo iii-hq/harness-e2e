@@ -441,6 +441,12 @@
   background: var(--color-ink-ghost);
 }
 
+.sk-btn.sb-retry {
+  flex: none;
+  height: calc(var(--spacing) * 6);
+  margin-left: auto;
+}
+
 .sb-empty {
   padding: calc(var(--spacing) * 3);
   border-radius: var(--radius-sm);
