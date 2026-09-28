@@ -32,7 +32,10 @@ pub(crate) use github_start::GithubFollow;
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
-pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
+pub(crate) use github::{
+    GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
+    VersionCompareRequest, VersionCompareResponse,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Slot {
@@ -3647,6 +3650,68 @@ pub(crate) mod tests {
             .as_deref()
             .unwrap()
             .contains("did not finish within 500ms"));
+    }
+
+    #[tokio::test]
+    async fn a_comparison_github_answered_is_kept_and_one_it_did_not_has_no_count() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let calls = root.path().join("calls");
+        let counting = manager_with_gh(
+            &data,
+            runner.clone(),
+            fake_gh(
+                root.path(),
+                &format!("echo \"$2\" >> {}; echo 7", calls.display()),
+            ),
+        );
+        let request = VersionCompareRequest {
+            name: "compare-probe".into(),
+            base: "1.0.0".into(),
+            head: "@4e5d6c7*".into(),
+        };
+        let expected = VersionCompareResponse {
+            url: "https://github.com/iii-hq/workers/compare/compare-probe/v1.0.0...4e5d6c7".into(),
+            total_commits: Some(7),
+        };
+        assert_eq!(counting.version_compare(&request).await.unwrap(), expected);
+        assert_eq!(counting.version_compare(&request).await.unwrap(), expected);
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "repos/iii-hq/workers/compare/compare-probe/v1.0.0...4e5d6c7\n"
+        );
+
+        let failing = manager_with_gh(
+            &data,
+            runner.clone(),
+            fake_gh(root.path(), "echo 'HTTP 404: Not Found' >&2; exit 1"),
+        );
+        let missing = VersionCompareRequest {
+            head: "1.0.1".into(),
+            ..request
+        };
+        let answer = failing.version_compare(&missing).await.unwrap();
+        assert_eq!(answer.total_commits, None);
+        assert!(answer
+            .url
+            .ends_with("compare-probe/v1.0.0...compare-probe/v1.0.1"));
+        let absent = manager_with_gh(
+            &data,
+            runner,
+            github::GithubCli {
+                program: root.path().join("no-gh"),
+                ..github::GithubCli::default()
+            },
+        );
+        assert_eq!(
+            absent
+                .version_compare(&missing)
+                .await
+                .unwrap()
+                .total_commits,
+            None
+        );
     }
 
     #[tokio::test]

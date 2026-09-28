@@ -4,15 +4,16 @@
 //! `gh` only lists runs and downloads artifacts. Installing reads an
 //! extracted bundle: every native run in it becomes an ordinary retained run
 //! and the execution records how the groups map onto them.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use futures_util::StreamExt;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -55,6 +56,26 @@ pub(crate) struct GithubRunImportRequest {
     pub repository: Option<String>,
     pub run_id: u64,
 }
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct VersionCompareRequest {
+    /// `iii`, `harness-e2e` or a worker of iii-hq/workers.
+    pub name: String,
+    /// A version, or a `@sha7` identity (`*` marks uncommitted changes).
+    pub base: String,
+    pub head: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub(crate) struct VersionCompareResponse {
+    pub url: String,
+    /// Null when `gh` is missing or GitHub answers an error.
+    pub total_commits: Option<u64>,
+}
+
+/// Comparisons GitHub answered, for the worker's lifetime: tags and commits
+/// do not move.
+static COMPARISONS: OnceLock<Mutex<HashMap<(String, String, String), u64>>> = OnceLock::new();
 
 /// How the worker calls the GitHub CLI; tests point it at a stand-in.
 #[derive(Debug, Clone)]
@@ -891,6 +912,55 @@ impl PlanStore {
         Ok((slots, request, stack))
     }
 
+    /// Where GitHub shows what changed between two builds of a worker, and
+    /// how many commits apart they are when `gh` can tell.
+    pub(crate) async fn version_compare(
+        &self,
+        request: &VersionCompareRequest,
+    ) -> Result<VersionCompareResponse> {
+        let (repository, base, head) = compare_refs(&request.name, &request.base, &request.head)?;
+        let url = format!("https://github.com/{repository}/compare/{base}...{head}");
+        let cache = COMPARISONS.get_or_init(Default::default);
+        let key = (repository, base, head);
+        let cached = cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&key)
+            .copied();
+        if let Some(total) = cached {
+            return Ok(VersionCompareResponse {
+                url,
+                total_commits: Some(total),
+            });
+        }
+        let (repository, base, head) = &key;
+        let answered = self
+            .gh(
+                self.github.api_timeout,
+                &[
+                    "api",
+                    &format!("repos/{repository}/compare/{base}...{head}"),
+                    "--jq",
+                    ".total_commits",
+                ],
+            )
+            .await;
+        let total_commits = match answered {
+            Ok(output) => String::from_utf8_lossy(&output).trim().parse::<u64>().ok(),
+            Err(error) => {
+                tracing::debug!(error = %format!("{error:#}"), %url, "GitHub cannot count the commits between two builds");
+                None
+            }
+        };
+        if let Some(total) = total_commits {
+            cache
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert(key, total);
+        }
+        Ok(VersionCompareResponse { url, total_commits })
+    }
+
     /// Run `gh` with its temporary files in the data directory (it stages
     /// downloads there) and a deadline; a missing binary, a failed call or a
     /// call past its deadline becomes the step the user has to take.
@@ -920,6 +990,44 @@ impl PlanStore {
         );
         Ok(output.stdout)
     }
+}
+
+/// The repository builds of `name` come from and the two refs to compare:
+/// a version's release tag, or the commit an identity names (`@sha7`, after
+/// a version or not; `*` dropped).
+fn compare_refs(name: &str, base: &str, head: &str) -> Result<(String, String, String)> {
+    ensure!(
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+        "name must be iii, harness-e2e or a worker's name"
+    );
+    let repository = match name {
+        "iii" => "iii-hq/iii",
+        "harness-e2e" => "iii-hq/harness-e2e",
+        _ => "iii-hq/workers",
+    };
+    let reference = |identity: &str| -> Result<String> {
+        if let Some((_, commit)) = identity.split_once('@') {
+            let commit = commit.trim_end_matches('*');
+            ensure!(
+                (4..=40).contains(&commit.len()) && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+                "'{identity}' does not name a commit"
+            );
+            return Ok(commit.to_owned());
+        }
+        let version = identity.strip_prefix('v').unwrap_or(identity);
+        ensure!(
+            !version.is_empty()
+                && version
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b)),
+            "'{identity}' is not a version"
+        );
+        Ok(format!("{name}/v{version}"))
+    };
+    Ok((repository.into(), reference(base)?, reference(head)?))
 }
 
 /// One execution per repository and run: importing again replaces it.
@@ -1162,6 +1270,47 @@ mod tests {
             "https://github.com/o/r",
         ] {
             assert!(validate_repository(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn builds_compare_as_release_tags_or_commits_of_their_repository() {
+        let refs = |name, base, head| compare_refs(name, base, head).unwrap();
+        assert_eq!(
+            refs("iii", "0.24.2", "0.24.3"),
+            (
+                "iii-hq/iii".into(),
+                "iii/v0.24.2".into(),
+                "iii/v0.24.3".into()
+            )
+        );
+        assert_eq!(
+            refs("harness-e2e", "0.17.0", "0.17.0@abc1234"),
+            (
+                "iii-hq/harness-e2e".into(),
+                "harness-e2e/v0.17.0".into(),
+                "abc1234".into()
+            )
+        );
+        assert_eq!(
+            refs("harness", "@3f2a9c1*", "@4e5d6c7"),
+            ("iii-hq/workers".into(), "3f2a9c1".into(), "4e5d6c7".into())
+        );
+        assert_eq!(
+            refs("llm-router", "1.4.26", "1.4.27").2,
+            "llm-router/v1.4.27"
+        );
+        for (name, base, head) in [
+            ("", "1.0.0", "1.0.1"),
+            ("../iii", "1.0.0", "1.0.1"),
+            ("harness", "1.0.0/../x", "1.0.1"),
+            ("harness", "@not-hex", "1.0.1"),
+            ("harness", "1.0.0", ""),
+        ] {
+            assert!(
+                compare_refs(name, base, head).is_err(),
+                "{name} {base} {head}"
+            );
         }
     }
 

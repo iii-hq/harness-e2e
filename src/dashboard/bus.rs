@@ -26,7 +26,7 @@ use crate::plans::stack_sources::{self, WorkerResolveRequest};
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
-    SuiteView,
+    SuiteView, VersionCompareRequest,
 };
 use crate::plans::{SuiteCreateRequest, SuiteUpdateRequest};
 
@@ -48,6 +48,7 @@ pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
 pub(super) const TRENDS_GET: &str = "e2e::dashboard::trends-get";
+pub(super) const VERSION_COMPARE: &str = "e2e::dashboard::version-compare";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const SUITES_LIST: &str = "e2e::dashboard::suites-list";
 pub(super) const SUITE_CREATE: &str = "e2e::dashboard::suite-create";
@@ -652,6 +653,24 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        VERSION_COMPARE,
+        "Link to what changed between two builds of iii, the runner or a worker (release tags or commits) on GitHub, with how many commits apart they are when gh can tell.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: VersionCompareRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .plan_store
+                        .version_compare(&request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
         SUITES_LIST,
         "List the suites an execution can run: the master plan's (read-only) and this Console's.",
         {
@@ -1231,7 +1250,7 @@ mod response_contract_tests {
     }
 
     #[test]
-    fn trends_answer_with_the_names_the_console_reads() {
+    fn trends_and_comparisons_answer_with_the_names_the_console_reads() {
         use super::super::trends::{trends, TrendRun, TrendsResponse};
         let schema = serde_json::to_value(schemars::schema_for!(TrendsResponse)).unwrap();
         for field in ["series", "selected", "stack", "stacks", "points"] {
@@ -1308,6 +1327,20 @@ mod response_contract_tests {
         assert_eq!(
             point["tests"],
             json!([{"id": "minimal_path", "state": "scored", "score": 40.0, "behavior_sha256": null}])
+        );
+
+        let compare: VersionCompareRequest = serde_json::from_value(
+            json!({"name": "harness", "base": "1.8.31", "head": "@3f2a9c1*"}),
+        )
+        .unwrap();
+        assert_eq!(compare.head, "@3f2a9c1*");
+        assert_eq!(
+            serde_json::to_value(crate::plans::store::VersionCompareResponse {
+                url: "https://github.com/iii-hq/workers/compare/harness/v1.8.31...3f2a9c1".into(),
+                total_commits: None,
+            })
+            .unwrap(),
+            json!({"url": "https://github.com/iii-hq/workers/compare/harness/v1.8.31...3f2a9c1", "total_commits": null})
         );
     }
 }
