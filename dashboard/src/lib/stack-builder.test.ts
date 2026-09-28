@@ -10,10 +10,8 @@ import {
   lookupOf,
   markedLines,
   orderTemplates,
-  patchYaml,
   pickerGroups,
   pinLabel,
-  sameDeclared,
   templateExtra,
   typedName,
   yamlOf,
@@ -464,91 +462,6 @@ describe('stack builder', () => {
       off: true,
     })
     expect(typedName('nope', [ignored as never])).toBeNull()
-  })
-
-  it('changes only the lines of the containers the form touched', () => {
-    const original = [
-      '# A stack with its own environment.',
-      'iii: latest',
-      '',
-      'containers:',
-      '  # The application under test.',
-      '  harness:',
-      '    worker: package://harness',
-      '    version: latest # the newest',
-      '    environment:',
-      '      RUST_LOG: debug',
-      '',
-      '  fp:',
-      '    worker: package://fp',
-      '    version: latest',
-      '',
-      'startup_timeout: 5m',
-      '',
-    ].join('\n')
-    const before = [pkg('harness'), pkg('fp')]
-    expect(patchYaml(original, before, before, null, null)).toBe(original)
-    expect(
-      patchYaml(
-        original,
-        before,
-        [{ ...pinned }, pkg('provider-kimi')],
-        'harness',
-        null,
-      ),
-    ).toBe(
-      [
-        '# A stack with its own environment.',
-        'iii: latest',
-        'template: harness',
-        '',
-        'containers:',
-        '  # The application under test.',
-        '  harness:',
-        '    worker: package://harness',
-        '    commit: "8c02f93a1d4e"',
-        '    environment:',
-        '      RUST_LOG: debug',
-        '',
-        '  provider-kimi:',
-        '    worker: package://provider-kimi',
-        '    version: latest',
-        '',
-        'startup_timeout: 5m',
-        '',
-      ].join('\n'),
-    )
-    // Everything removed leaves an empty mapping; one added to an empty
-    // mapping opens it.
-    expect(patchYaml(original, before, [], null, null)).toContain(
-      'containers: {}\n  # The application under test.\n\n\nstartup_timeout',
-    )
-    expect(
-      patchYaml('iii: latest\ncontainers: {}\n', [], [pkg('fp')], null, null),
-    ).toBe(
-      'iii: latest\ncontainers:\n  fp:\n    worker: package://fp\n    version: latest\n',
-    )
-    // Laid out otherwise, it is not changed line by line.
-    expect(
-      patchYaml(
-        'containers:\n    harness:\n      worker: package://harness\n',
-        [pkg('harness')],
-        [],
-        null,
-        null,
-      ),
-    ).toBeNull()
-    expect(
-      patchYaml(
-        'containers: {harness: {}}\n',
-        [pkg('harness')],
-        [],
-        null,
-        null,
-      ),
-    ).toBeNull()
-    expect(sameDeclared(before, [pkg('harness'), pkg('fp')])).toBe(true)
-    expect(sameDeclared(before, [pinned, pkg('fp')])).toBe(false)
   })
 
   it('keeps a container without a worker as it is', () => {
