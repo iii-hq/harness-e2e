@@ -12,7 +12,21 @@ import {
   hashFrom,
   routeFromHash,
   routeRenderIdentity,
+  trendsOrigin,
 } from '@/hooks/use-hash-route'
+
+describe('a comparison opened from Trends', () => {
+  it('goes back to the Trends view it came from, and to nothing else', () => {
+    const trends = hashForTrends(new URLSearchParams({ stack: 'any' }))
+    const compare = hashFrom(hashForComparison('plan-a', 'plan-b'), trends)
+    expect(trendsOrigin(compare)).toBe(trends)
+    expect(trendsOrigin(hashForComparison('plan-a', 'plan-b'))).toBeNull()
+    for (const from of ['https://example.com/', hashForExecution('plan-a')])
+      expect(
+        trendsOrigin(hashFrom(hashForComparison('plan-a', 'plan-b'), from)),
+      ).toBeNull()
+  })
+})
 
 describe('a run page opened from a comparison', () => {
   const comparison = `${hashForComparison('plan-a', 'plan-b')}?exclude=minimal_path`

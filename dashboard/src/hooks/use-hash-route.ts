@@ -198,6 +198,13 @@ export function comparisonOrigin(rawHash: string): string | null {
     : null
 }
 
+/** The Trends view a comparison was opened from (its Compare with), to go
+ *  back to. Only a Trends hash of this dashboard is taken. */
+export function trendsOrigin(rawHash: string): string | null {
+  const from = routeParams(rawHash).get('from')
+  return from && routeFromHash(from)?.page === 'trends' ? from : null
+}
+
 /** Two evaluated system versions of the test catalog. */
 export function hashForVersionComparison(
   left: string | null = null,
