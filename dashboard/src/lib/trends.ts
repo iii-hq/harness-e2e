@@ -47,7 +47,9 @@ export type TrendSeries = TrendSeriesKey & {
 
 export type TrendMeasures = {
   score_mean: number | null
+  /** Counted runs that completed their task. */
   completed: number
+  /** Planned tests × runs per test, the same unit as `completed`. */
   planned: number
   duration_ms_mean: number | null
   input_tokens_mean: number | null
@@ -633,13 +635,10 @@ export function domain(
     hi = Math.min(100, Math.ceil(hi + 2))
     if (hi - lo < 4) lo = Math.max(0, hi - 4)
   } else if (metric.id === 'completed') {
+    // `planned` counts runs (planned tests × runs per test), as `completed`
+    // does; the plan's test list does not.
     lo = 0
-    hi = Math.max(
-      hi,
-      ...points.map(
-        (point) => point.measures?.planned ?? point.planned?.length ?? 0,
-      ),
-    )
+    hi = Math.max(hi, ...points.map((point) => point.measures?.planned ?? 0))
   } else if (metric.id === 'error_rate') {
     lo = 0
     hi = Math.max(1, Math.ceil(hi * 1.25))

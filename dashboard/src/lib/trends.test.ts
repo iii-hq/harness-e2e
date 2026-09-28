@@ -269,6 +269,18 @@ describe('axes', () => {
     expect(hi).toBeCloseTo(10.6)
   })
 
+  it('scales tests completed to the planned runs, never to the list of tests', () => {
+    const twice = structuredClone(regression.slice(-2))
+    for (const point of twice)
+      if (point.measures) {
+        point.measures.completed *= 2
+        point.measures.planned *= 2
+      }
+    const done = trendMetric('completed')
+    expect(done.figure(18, twice[1])).toBe('18 of 18 planned')
+    expect(domain(done, [18, 18], [regression[6], ...twice])).toEqual([0, 18])
+  })
+
   it('marks where each day starts', () => {
     const on = (day: number, hour: number) => ({
       started_at: new Date(2026, 8, day, hour).toISOString(),
