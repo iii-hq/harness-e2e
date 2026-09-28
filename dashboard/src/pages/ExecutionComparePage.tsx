@@ -317,7 +317,7 @@ export function ExecutionComparePage({
   )
 
   const shell = (children: ReactNode) => (
-    <div className="ds-root cmp-page bg-canvas text-ink">
+    <div className="ds-root cmp-page text-ink">
       <DashboardPageActions active="executions" context="Compare" />
       <div className="page-shell">{children}</div>
     </div>

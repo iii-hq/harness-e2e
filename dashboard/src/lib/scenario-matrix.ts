@@ -109,7 +109,11 @@ export function buildScenarioMatrix(
   for (const item of items) {
     if (item.objective.status === 'passed') summary.passed += 1
     else if (item.objective.status === 'inconclusive') summary.inconclusive += 1
-    else if (item.objective.status === 'unavailable') summary.unavailable += 1
+    else if (
+      item.objective.status === 'not-run' ||
+      item.objective.status === 'unavailable'
+    )
+      summary.unavailable += 1
     else if (unreported(item)) summary.running += 1
     else if (
       item.objective.status === 'incomplete' ||
@@ -270,6 +274,25 @@ export function failureReason(run: DashboardRunProjection | null) {
   return typeof message === 'string' && message.trim() ? message.trim() : null
 }
 
+/** Planned in the execution and never started: its plan slot says
+ *  `not_run` or holds no run. A slot that ran and left nothing (it finished
+ *  with an error, or was closed while running) is unavailable instead. */
+function neverStarted(
+  detail: DashboardExecutionDetail,
+  record: DashboardExecutionDetail['reports'][number] | undefined,
+) {
+  const round = (record as { round?: unknown } | undefined)?.round
+  const slots = (detail.plan_execution?.slots ?? []).filter(
+    (slot) =>
+      slot.scenario_id === record?.scenario_id &&
+      (round === undefined || slot.round === round),
+  )
+  return (
+    slots.length > 0 &&
+    slots.every((slot) => slot.state === 'not_run' || !slot.execution_id)
+  )
+}
+
 function unavailableScenario(
   detail: DashboardExecutionDetail,
   reportIndex: number,
@@ -297,7 +320,13 @@ function unavailableScenario(
     scenarioId,
     behaviorSha256: summary?.behavior_sha256 ?? null,
     available: false,
-    objective: objectiveStatus(waiting ? String(record?.state) : 'unavailable'),
+    objective: objectiveStatus(
+      waiting
+        ? String(record?.state)
+        : neverStarted(detail, record)
+          ? 'not_run'
+          : 'unavailable',
+    ),
     durationMs: null,
     durationKind: null,
     runCount: 0,
@@ -308,6 +337,16 @@ function unavailableScenario(
     aggregate: null,
     primaryMetrics: primaryMetrics(null, [], { value: null, kind: null }),
   }
+}
+
+/** Why a test did not pass, less the test's own id the row already names
+ *  (`kanban_c7: …`, `scenario 'kanban_c7': …`). */
+export function ownReason(
+  item: Pick<ScenarioMatrixItem, 'reason' | 'scenarioId'>,
+) {
+  const prefixes = [`${item.scenarioId}: `, `scenario '${item.scenarioId}': `]
+  const prefix = prefixes.find((text) => item.reason?.startsWith(text))
+  return prefix ? (item.reason?.slice(prefix.length) ?? null) : item.reason
 }
 
 /** A test's key within its round: tests repeat across rounds. */
@@ -419,6 +458,8 @@ function objectiveStatus(rawValue: string): ScenarioMatrixItem['objective'] {
   if (raw === 'unavailable' || raw === 'not_evaluated') {
     return { status: 'unavailable', label: 'Unavailable', raw }
   }
+  // Planned in this execution and never started (LyOverlays: an open dot).
+  if (raw === 'not_run') return { status: 'not-run', label: 'Not run', raw }
   if (raw === 'running') return { status: 'running', label: 'Running', raw }
   if (raw === 'queued') return { status: 'queued', label: 'Queued', raw }
   if (raw === 'cancelling') {

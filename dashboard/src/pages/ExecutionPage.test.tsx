@@ -8,6 +8,7 @@ import {
   EvidenceBundleUnavailable,
   executionOutcome,
   executionSuite,
+  liveView,
   provenanceEntries,
   rerunParameters,
   stackVersions,
@@ -310,5 +311,52 @@ describe('running a test again', () => {
     // Nor without the Console, nor for an execution that is no plan.
     expect(testRerunOffered(docker, false, false)).toBe(false)
     expect(testRerunOffered(detail, true, false)).toBe(false)
+  })
+})
+
+describe('one live view at a time', () => {
+  const plan = (kind: string, rerun: unknown = null) =>
+    ({
+      plan_execution: { source: { kind }, rerun },
+    }) as unknown as Pick<DashboardExecutionDetail, 'plan_execution'>
+  const at = (live: boolean, importing: boolean, hasResults = false) => ({
+    live,
+    importing,
+    hasResults,
+  })
+
+  it('shows a GitHub run’s steps instead of results while it runs, cancels and imports', () => {
+    for (const state of [at(true, false), at(true, false), at(false, true)])
+      expect(liveView(plan('github'), state)).toEqual({
+        githubLive: true,
+        legacyPanel: false,
+      })
+    // Importing reads as running too: still one progress, no legacy panel.
+    expect(liveView(plan('github'), at(true, true)).legacyPanel).toBe(false)
+    expect(liveView(plan('github'), at(false, false))).toEqual({
+      githubLive: false,
+      legacyPanel: true,
+    })
+  })
+
+  it('keeps the results of a test run again or of a reimport on screen', () => {
+    expect(
+      liveView(plan('github', { scenarios: ['a'] }), at(true, false))
+        .githubLive,
+    ).toBe(false)
+    expect(liveView(plan('github'), at(false, true, true)).githubLive).toBe(
+      false,
+    )
+  })
+
+  it('never shows GitHub’s steps elsewhere, nor the legacy panel over a plan', () => {
+    expect(liveView(plan('docker'), at(true, false))).toEqual({
+      githubLive: false,
+      legacyPanel: false,
+    })
+    expect(liveView({ plan_execution: undefined }, at(true, false))).toEqual({
+      githubLive: false,
+      legacyPanel: true,
+    })
   })
 })

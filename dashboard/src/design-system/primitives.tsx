@@ -105,6 +105,8 @@ export type OperationalStatus =
   | 'failed'
   | 'inconclusive'
   | 'unavailable'
+  /** Planned and never started: an open dot in the alert tone. */
+  | 'not-run'
   | 'recommendation'
   | 'running'
   | 'cancelling'
@@ -118,6 +120,7 @@ const statusLabels: Record<OperationalStatus, string> = {
   failed: 'Failed',
   inconclusive: 'Inconclusive',
   unavailable: 'Unavailable',
+  'not-run': 'Not run',
   recommendation: 'Recommendation',
   running: 'Running',
   cancelling: 'Cancelling',

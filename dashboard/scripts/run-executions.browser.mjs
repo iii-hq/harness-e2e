@@ -455,6 +455,8 @@ let githubGone = []
 let staleGithubList = null
 const started = []
 const deleted = []
+// The first delete from the detail is refused, to see it said.
+let refuseDelete = true
 const cancelled = []
 /** A started execution, cancelled once its cancel arrived. */
 const startedExecution = (id) => {
@@ -548,6 +550,10 @@ const trigger = async (name, request = {}) => {
   }
   if (id === 'stacks-list') return { stacks }
   if (id === 'execution-delete') {
+    if (refuseDelete) {
+      refuseDelete = false
+      throw new Error('execution is locked by an import')
+    }
     deleted.push(request.execution_id)
     return {}
   }
@@ -612,12 +618,19 @@ try {
   await page.goto(`${server.url}#/ext/harness-e2e/executions`)
   await page.getByText('No executions retained yet').waitFor()
   const empty = page.locator('main, body').first()
-  for (const action of ['run tests', 'import from GitHub'])
-    await empty.getByRole('button', { name: action, exact: true }).waitFor()
+  // The header's and the empty state's, by the same names.
+  for (const action of ['Run tests', 'Import from GitHub'])
+    assert.equal(
+      await empty.getByRole('button', { name: action, exact: true }).count(),
+      2,
+    )
   assert.equal(await empty.getByText(/new plan/i).count(), 0)
 
   // Without an earlier execution Run tests picks no model for the user.
-  await empty.getByRole('button', { name: 'run tests', exact: true }).click()
+  await empty
+    .getByRole('button', { name: 'Run tests', exact: true })
+    .first()
+    .click()
   const fresh = page.getByRole('dialog', { name: 'Run tests' })
   await fresh.getByText('catalog ready').waitFor()
   await fresh
@@ -633,7 +646,8 @@ try {
   // on the worker's machine, and Retry lists the runs once it is fixed.
   githubDown = true
   await empty
-    .getByRole('button', { name: 'import from GitHub', exact: true })
+    .getByRole('button', { name: 'Import from GitHub', exact: true })
+    .first()
     .click()
   const importDialog = page.getByRole('dialog', { name: 'Import from GitHub' })
   const githubError = importDialog.getByRole('alert')
@@ -773,8 +787,9 @@ try {
     },
   }
   const openImport = () =>
-    empty
-      .getByRole('button', { name: 'import from GitHub', exact: true })
+    page
+      .locator('#harness-e2e-main')
+      .getByRole('button', { name: 'Import from GitHub', exact: true })
       .click()
   await openImport()
   await importDialog
@@ -912,17 +927,39 @@ try {
       where: 'harness',
     },
   })
-  // No plan, no role: just an execution.
-  await page.getByText('Execution · running', { exact: true }).waitFor()
-  // Cancel asks first, says what stops, then stops it: no next scenario.
+  // No plan, no role: just an execution. Its progress is one bar under the
+  // title; no second panel repeats it.
   await page
-    .locator('[data-where-line]')
-    .getByText('Running · on this harness', { exact: false })
+    .locator('[data-harness-progress]')
+    .getByText(/ of 2 tests reported · \d running · results are provisional$/)
     .waitFor()
-  await page.getByRole('button', { name: 'Cancel', exact: true }).click()
-  const confirmCancel = page.getByRole('dialog', {
+  assert.equal(await page.getByText('Execution · running').count(), 0)
+  assert.equal(await page.locator('[data-live-progress]').count(), 0)
+  // Cancel asks first, says what stops, then stops it: no next scenario.
+  // The status line says tests · where · when, live as finished.
+  await page
+    .locator('[data-status-line]')
+    .getByText(/^2 tests · on this harness · started /)
+    .waitFor()
+  // While it runs the header cancels it; Run again waits for the end.
+  assert.equal(
+    await page.getByRole('button', { name: 'Run again', exact: true }).count(),
+    0,
+  )
+  await page
+    .getByRole('button', { name: 'Cancel execution', exact: true })
+    .click()
+  const confirmCancel = page.getByRole('alertdialog', {
     name: 'Cancel this execution?',
   })
+  // The safe choice has the focus.
+  await confirmCancel
+    .getByRole('button', { name: 'Keep running', exact: true })
+    .waitFor()
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.textContent),
+    'Keep running',
+  )
   await confirmCancel
     .getByText('The test running now stops. What already reported stays.')
     .waitFor()
@@ -930,8 +967,12 @@ try {
     .getByRole('button', { name: 'Cancel execution', exact: true })
     .click()
   await confirmCancel.waitFor({ state: 'hidden' })
+  // Focus lands on More actions, which stays whatever the header becomes.
+  await page.waitForFunction(
+    () => document.activeElement?.getAttribute('aria-label') === 'More actions',
+  )
   assert.deepEqual(cancelled, [nightly, `plan-${'1'.padStart(32, 'f')}`])
-  await page.getByText('Execution · running').waitFor({ state: 'detached' })
+  await page.locator('[data-harness-progress]').waitFor({ state: 'detached' })
 
   // Run again: the header names what it ran on; the form opens on the tests
   // that will run, under the execution's name, and sends its parameters
@@ -1053,29 +1094,22 @@ try {
     yaml: stacks[0].yaml,
   })
 
-  // A Docker execution that runs: its groups and where each is.
+  // A Docker execution that runs: its numbered steps, the current one the
+  // groups; each test's row says where it is.
   await page.goto(
     `${server.url}#/ext/harness-e2e/execution/${dockerRunning.id}`,
   )
-  const groups = page.locator('[data-docker-groups]')
-  await groups.locator('[data-docker-group]').first().waitFor()
-  await page
+  const progress = page.locator('[data-live-progress="docker"]')
+  await progress
     .locator('[data-step-state="current"]')
     .getByText('Groups', { exact: true })
     .waitFor()
-  await groups
-    .locator('[data-docker-group="case-persistent-state"] [data-group-state]')
-    .getByText('running', { exact: true })
-    .waitFor()
-  await page
+  await progress
     .locator('[data-step-state="current"]')
     .getByText('1 of 3 finished · 1 running · 1 waiting', { exact: true })
     .waitFor()
+  assert.equal(await page.locator('.wr-card').count(), 0)
   // The group that ended reports its test at once; the others fill in.
-  await page
-    .locator('[data-where-line]')
-    .getByText('1 of 3 tests reported · results are provisional')
-    .waitFor()
   const result = (scenario) =>
     page
       .getByRole('table', { name: 'Scenario results' })
@@ -1134,12 +1168,23 @@ try {
   assert.equal(started[3].parameters.where, 'docker')
 
   // A finished execution can be deleted, from the ⋯ menu, after a confirm.
+  // A refusal closes the dialog and is said once, not as a refresh error.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${imported.id}`)
-  await page.getByRole('button', { name: 'More actions', exact: true }).click()
-  await page.getByRole('menuitem', { name: 'Delete…' }).click()
-  await page
-    .getByRole('button', { name: 'delete execution', exact: true })
-    .click()
+  const deleteFromMenu = async () => {
+    await page
+      .getByRole('button', { name: 'More actions', exact: true })
+      .click()
+    await page.getByRole('menuitem', { name: 'Delete…' }).click()
+    await page
+      .getByRole('button', { name: 'Delete execution', exact: true })
+      .click()
+  }
+  await deleteFromMenu()
+  const refusal = page.locator('[data-delete-error]')
+  await refusal.getByText('execution is locked by an import').waitFor()
+  assert.equal(await page.getByRole('alertdialog').count(), 0)
+  assert.equal(await page.getByText('Refresh failed').count(), 0)
+  await deleteFromMenu()
   await page.waitForFunction(() => location.hash.endsWith('/executions'))
   assert.deepEqual(deleted, [imported.id])
   assert.deepEqual(errors, [])

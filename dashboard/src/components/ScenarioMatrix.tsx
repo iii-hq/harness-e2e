@@ -25,10 +25,12 @@ import type {
 import { shortDefinition } from '@/lib/definition-digest'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import { titleCase } from '@/lib/execution-view'
+import { sentenceCase } from '@/lib/format'
 import {
   buildScenarioMatrix,
   detailForScenario,
   formatScenarioDuration,
+  ownReason,
   type PreviousAttempt,
   previousAttempts,
   roundKey,
@@ -344,23 +346,35 @@ export function itemScore(item: ScenarioMatrixItem): number | null {
   )
 }
 
+/** The reason's first clause, as the data wrote it: its case is left alone
+ *  (it may start with an id or an acronym). */
 function firstClause(text: string) {
   const clause = text.split(/\.\s|\n|:\s/)[0].trim()
   return clause.length > 64 ? `${clause.slice(0, 63)}…` : clause
 }
 
-/** One line under the test id: why it lost points or did not run. */
+/** One line under the test id, in the result's terms: why it lost points,
+ *  did not finish the task or did not run. */
 export function rowNote(item: ScenarioMatrixItem): string {
-  if (item.runCount === 0)
-    return item.reason ? firstClause(item.reason) : 'No run retained'
+  const reason = ownReason(item)
+  if (item.runCount === 0) {
+    if (!reason) return 'No run retained'
+    const clause = firstClause(reason)
+    return item.objective.status === 'not-run' && !/^Didn’t start/.test(clause)
+      ? `Didn’t start · ${clause}`
+      : clause
+  }
   const lost = runCriteria(item.primaryRun).filter(
     (c) => c.awarded < c.possible,
   )
-  const prefix = lost.some((c) => c.gate)
-    ? 'Failed a hard gate'
-    : item.objective.status !== 'passed' && item.reason
-      ? firstClause(item.reason)
-      : null
+  const prefix =
+    item.objective.status === 'incomplete'
+      ? 'Task incomplete'
+      : item.objective.status === 'failed' && lost.some((c) => c.gate)
+        ? 'Failed a hard gate'
+        : item.objective.status !== 'passed' && reason
+          ? firstClause(reason)
+          : null
   const suffix = lost.length
     ? `${lost.length} ${lost.length === 1 ? 'criterion' : 'criteria'} lost`
     : null
@@ -801,7 +815,7 @@ function PreviousAttempts({ previous }: { previous: PreviousAttempt[] }) {
                   item.primaryRun.run_id,
                 )}
               >
-                evidence record
+                Evidence record
               </a>
             ) : null}
           </li>
@@ -989,7 +1003,7 @@ function workflowStepStatus(statusValue: string): {
     return { status: 'cancelled', label: 'Cancelled' }
   }
   if (status === 'pending' || status === 'skipped') {
-    return { status: 'incomplete', label: titleCase(status) }
+    return { status: 'incomplete', label: sentenceCase(status) }
   }
-  return { status: 'unavailable', label: titleCase(status) }
+  return { status: 'unavailable', label: sentenceCase(status) }
 }

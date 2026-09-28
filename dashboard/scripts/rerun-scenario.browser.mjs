@@ -285,7 +285,7 @@ try {
     .getByRole('button', { name: 'Run Registry Verification again' })
     .click()
   const group = page.getByRole('dialog', {
-    name: 'Run registry_verification again',
+    name: 'Run registry_verification again?',
     exact: true,
   })
   await group
@@ -293,20 +293,18 @@ try {
       'registry_implementation then registry_verification run only together, in this order; the whole group runs again.',
     )
     .waitFor()
-  await group.getByRole('button', { name: 'cancel', exact: true }).click()
+  await group.getByRole('button', { name: 'Cancel', exact: true }).click()
   await group.waitFor({ state: 'hidden' })
 
   // A busy runner is named; the next try runs timer_wake again and the page
   // follows the execution while it runs.
   await timerAgain.click()
   const dialog = page.getByRole('dialog', {
-    name: 'Run timer_wake again',
+    name: 'Run timer_wake again?',
     exact: true,
   })
-  await dialog
-    .getByText('The last attempt counts, even when', { exact: false })
-    .waitFor()
-  const confirm = dialog.getByRole('button', { name: 'run again', exact: true })
+  await dialog.getByText('the last attempt counts', { exact: false }).waitFor()
+  const confirm = dialog.getByRole('button', { name: 'Run again', exact: true })
   await confirm.click()
   await dialog
     .getByText(
@@ -316,13 +314,13 @@ try {
   assert.ok(
     (
       await dialog
-        .getByRole('link', { name: 'open Nightly', exact: true })
+        .getByRole('link', { name: 'Open Nightly', exact: true })
         .getAttribute('href')
     ).includes(nightly),
   )
   assert.equal(reruns.length, 0)
   await confirm.click()
-  await page.getByText('Execution · running', { exact: true }).waitFor()
+  await dialog.waitFor({ state: 'hidden' })
   assert.deepEqual(reruns, [
     { execution_id: localId, scenario_id: 'timer_wake' },
   ])
@@ -361,7 +359,7 @@ try {
   assert.ok(
     (
       await previous
-        .getByRole('link', { name: 'evidence record' })
+        .getByRole('link', { name: 'Evidence record' })
         .getAttribute('href')
     ).includes('execution/native-timer-1/run/timer-1'),
   )
@@ -377,7 +375,7 @@ try {
     .getByRole('button', { name: 'Run Timer Wake again', exact: true })
     .click()
   const github = page.getByRole('dialog', {
-    name: 'Run timer_wake again on GitHub',
+    name: 'Run timer_wake again?',
     exact: true,
   })
   await github
@@ -389,7 +387,9 @@ try {
       .getAttribute('href'),
     importedSource.url,
   )
-  await github.getByRole('button', { name: 'run again', exact: true }).click()
+  await github
+    .getByRole('button', { name: 'Re-run the job', exact: true })
+    .click()
   await github.waitFor({ state: 'hidden' })
   assert.equal(reruns.length, 2)
   assert.equal(reruns[1].execution_id, importedId)

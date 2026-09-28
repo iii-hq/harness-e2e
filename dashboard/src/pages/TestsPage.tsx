@@ -712,7 +712,7 @@ function CompareRow({
                 href={hashForWorkspace()}
                 onClick={() => requestQuickExecution([row.test_id])}
               >
-                run on {result?.from ? 'b' : 'a'}
+                Run on {result?.from ? 'B' : 'A'}
                 <ArrowRight size={13} aria-hidden="true" />
               </a>
             ) : null}
@@ -728,7 +728,7 @@ function CompareRow({
                 disabled={loading}
                 onClick={() => onToggle(row)}
               >
-                {loading ? 'loading…' : expanded ? 'hide' : 'inspect'}
+                {loading ? 'Loading…' : expanded ? 'Hide' : 'Inspect'}
                 <ChevronDown
                   className={`transition-transform duration-[var(--ds-duration-fast)] ${expanded ? 'rotate-180' : ''}`}
                   size={13}
@@ -769,7 +769,7 @@ function CompareRow({
                       onDefinition(row, row.selected_version)
                     }
                   >
-                    retry
+                    Retry
                   </button>
                 </span>
               </Callout>
@@ -1441,7 +1441,7 @@ export function TestsPage({
               })}
               type="button"
               aria-label="Swap system versions a and b"
-              title="swap a and b"
+              title="Swap A and B"
               disabled={!fromVersionId || !toVersionId}
               onClick={swapVersions}
             >
@@ -1496,7 +1496,7 @@ export function TestsPage({
                       if (previous) setFromVersionId(previous)
                     }}
                   >
-                    undo
+                    Undo
                   </button>
                 ) : null}
               </span>
@@ -1521,7 +1521,7 @@ export function TestsPage({
                 onClick={() => setReloadKey((value) => value + 1)}
               >
                 <RefreshCw size={13} aria-hidden="true" />
-                retry
+                Retry
               </button>
             </span>
           </Callout>
@@ -1534,7 +1534,7 @@ export function TestsPage({
           <Callout
             className="mt-6"
             tone="warning"
-            title="these two sides have no test in common"
+            title="These two sides have no test in common"
           >
             <span className="grid gap-2">
               <span>
@@ -1582,7 +1582,7 @@ export function TestsPage({
                   type="button"
                   onClick={() => setFilter('one_side')}
                 >
-                  show what each side ran
+                  Show what each side ran
                 </button>
               </span>
             </span>
@@ -1639,7 +1639,7 @@ export function TestsPage({
                 onClick={() => setFilter('evidence')}
                 title="tests with evidence on at least one side"
               >
-                with evidence
+                With evidence
               </FilterChip>
               {/* Audit CP-21: three chips that can only ever read zero sat as
                   equal peers to the two that work. They appear once there is
@@ -1651,7 +1651,7 @@ export function TestsPage({
                   onClick={() => setFilter('comparable')}
                   title="same scenario definition, cases and contracts on both sides"
                 >
-                  comparable
+                  Comparable
                 </FilterChip>
               ) : null}
               {counts.regressed > 0 || filter === 'regressed' ? (
@@ -1661,7 +1661,7 @@ export function TestsPage({
                   onClick={() => setFilter('regressed')}
                   title="objective result or score dropped in b"
                 >
-                  regressed in b
+                  Regressed in B
                 </FilterChip>
               ) : null}
               {counts.improved > 0 || filter === 'improved' ? (
@@ -1671,7 +1671,7 @@ export function TestsPage({
                   onClick={() => setFilter('improved')}
                   title="score up in b, no gate lost"
                 >
-                  improved in b
+                  Improved in B
                 </FilterChip>
               ) : null}
               <FilterChip
@@ -1680,14 +1680,14 @@ export function TestsPage({
                 onClick={() => setFilter('one_side')}
                 title="run the other side to compare"
               >
-                one side
+                One side
               </FilterChip>
               <FilterChip
                 active={filter === 'all'}
                 count={rows.length}
                 onClick={() => setFilter('all')}
               >
-                all
+                All
               </FilterChip>
             </FilterChipGroup>
             <div className="relative ms-auto w-full max-w-[18rem]">
@@ -1764,7 +1764,7 @@ export function TestsPage({
                     setQuery('')
                   }}
                 >
-                  clear filters
+                  Clear filters
                 </button>
               ) : (
                 <a
@@ -1775,7 +1775,7 @@ export function TestsPage({
                   href={hashForWorkspace()}
                   onClick={() => requestQuickExecution()}
                 >
-                  run tests
+                  Run tests
                 </a>
               )
             }

@@ -1,5 +1,5 @@
 import { type OperationalStatus, StatusBadge } from '@/design-system'
-import { titleCase } from '@/lib/execution-view'
+import { sentenceCase } from '@/lib/format'
 
 /** The result contract publishes one outcome: the system status. It used to
  *  be rendered beside an advisory AI verdict and an "effective" combination
@@ -39,8 +39,8 @@ export function SystemOutcomeBadge({
   const label =
     outcome.label ??
     (outcome.value === 'hard_gate_failed'
-      ? 'failed (legacy result)'
-      : titleCase(outcome.value).toLowerCase())
+      ? 'Failed (legacy result)'
+      : sentenceCase(outcome.value))
   return (
     <div
       className={`grid items-baseline gap-x-4 gap-y-0.5 ${className ?? ''}`}

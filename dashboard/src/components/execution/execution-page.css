@@ -740,9 +740,12 @@
   white-space: nowrap;
 }
 
+/* The note under a test id is prose: sans 11/16, not the id's mono. */
 .ep-row-note {
   color: var(--color-ink-faint, var(--text-soft));
-  font-size: 0.75rem;
+  font-family: var(--font-sans);
+  font-size: 0.6875rem;
+  line-height: 1rem;
 }
 
 .ep-score {
@@ -1610,13 +1613,6 @@ ol.ep-events {
   text-align: right;
 }
 
-.ep-results-table .ds-status-badge,
-.ep-totals .ds-button,
-.ep-attention .ds-button,
-.ep-segments button {
-  text-transform: none;
-}
-
 tr.ep-detail-row,
 tr.ep-detail-row:hover {
   background: transparent;
@@ -1634,16 +1630,9 @@ tr.ep-detail-row:hover {
   opacity: 0.55;
 }
 
-/* Canvas header: status in sentence case with its dot, sentence-case actions */
+/* Canvas header: the status word in ink beside its dot */
 .execution-header .ds-status-badge {
   color: var(--color-ink, var(--text));
-  font-family: var(--font-sans);
-  font-weight: 500;
-  text-transform: none;
-}
-
-.execution-header .ds-button {
-  text-transform: none;
 }
 
 /* Facts band: 24 px chips, sans label, mono value */
@@ -1826,19 +1815,6 @@ tr.ep-detail-row:hover {
   color: var(--color-ink-faint, var(--text-soft));
 }
 
-/* The dot keeps the status colour; the word is ink (canvas header). */
-.execution-header .ds-status-badge .ds-status-dot {
-  background: var(--ds-status-color);
-}
-
-/* Canvas controls are sans; mono stays for ids and figures. */
-.execution-header .ds-button,
-.ep-attention .ds-button,
-.ep-totals .ds-button,
-.ep-segments button {
-  font-family: var(--font-sans);
-}
-
 /* Stack panel (canvas: Execution detail · Stack) */
 .ep-act.ep-fact-stack[data-selected="true"] {
   background: var(--color-surface-selected, var(--surface-selected));
@@ -2019,4 +1995,52 @@ tr.ep-detail-row:hover {
 
 .ep-stack-more {
   font-family: var(--font-sans);
+}
+
+/* Run a test again (canvas: Execution detail · rerun): the host's dialog as
+   the list's confirmations, 560 wide, its facts on a surface. */
+.ep-confirm-wide {
+  max-width: 35rem;
+}
+
+.ep-confirm-facts {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: calc(var(--spacing) * 1.5) calc(var(--spacing) * 3);
+  margin: 0;
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 3);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.25);
+}
+
+.ep-confirm-facts dt {
+  color: var(--color-ink-faint);
+}
+
+.ep-confirm-facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.ep-confirm-mono {
+  font-family: var(--font-mono);
+}
+
+.ex-dialog-title .ep-confirm-mono {
+  font-size: var(--text-sm);
+}
+
+.ep-confirm-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing);
+  color: inherit;
+}
+
+.ex-dialog-actions .ep-confirm-link {
+  margin-inline-end: auto;
+  font-size: var(--text-xs);
 }

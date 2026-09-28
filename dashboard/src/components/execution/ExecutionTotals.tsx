@@ -2,6 +2,7 @@ import { ChevronRight, Info } from 'lucide-react'
 import { useId, useMemo, useState } from 'react'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
+import { formatTokens as compactTokens, formatCost } from '@/lib/format'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import { type ScenarioMatrixItem, unreported } from '@/lib/scenario-matrix'
 import './execution-page.css'
@@ -13,14 +14,9 @@ export function metricNumber(metric: MetricValue | undefined) {
   return metric.value ?? metric.observed
 }
 
-/** Token counts as the canvas writes them: 6K, 35.2K, 118K, 4.28M. */
+/** Token counts as the canvas writes them: 6K, 35.2K, 118K, 4.28M, 82.1M. */
 export function formatTokens(value: number | null) {
-  if (value === null) return '—'
-  const n = Math.round(value)
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
-  if (n >= 100_000) return `${Math.round(n / 1000)}K`
-  if (n >= 1000) return `${(n / 1000).toFixed(1).replace(/\.0$/, '')}K`
-  return String(n)
+  return compactTokens(value)
 }
 
 export function formatFull(value: number | null) {
@@ -38,10 +34,9 @@ export function formatSpan(ms: number | null) {
   return `${s}s`
 }
 
+/** `$0.0048` under a dollar, `$2.57` above. */
 export function formatUsd(value: number | null) {
-  if (value === null) return '—'
-  if (value > 0 && value < 0.0001) return '<$0.0001'
-  return `$${value.toFixed(value >= 10 ? 2 : 4)}`
+  return formatCost(value)
 }
 
 function plural(count: number, one: string, many: string) {

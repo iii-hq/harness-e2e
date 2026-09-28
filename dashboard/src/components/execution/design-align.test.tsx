@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { matchesFilter, rowNote } from '@/components/ScenarioMatrix'
 import type { MetricValue, PrimaryMetrics } from '@/lib/primary-metrics'
 import type { ScenarioMatrixItem } from '@/lib/scenario-matrix'
-import { ExecutionTotals } from './ExecutionTotals'
+import { ExecutionTotals, formatTokens, formatUsd } from './ExecutionTotals'
 import { NeedsAttention } from './NeedsAttention'
 
 const metric = (value: number | null): MetricValue => ({
@@ -53,6 +53,67 @@ describe('results by test (canvas)', () => {
     expect(rowNote(full)).toBe('')
   })
 
+  it('says what the result says: an incomplete task, never a gate it did not fail on', () => {
+    const incomplete = item({
+      ...lost,
+      objective: {
+        status: 'incomplete',
+        label: 'Incomplete',
+        raw: 'incomplete',
+      },
+    })
+    expect(rowNote(incomplete)).toBe('Task incomplete · 2 criteria lost')
+    // The error names the test the row already names: not again.
+    const inconclusive = item({
+      scenarioId: 'alertmanager_route_match',
+      objective: {
+        status: 'inconclusive',
+        label: 'Inconclusive',
+        raw: 'inconclusive',
+      },
+      reason:
+        "scenario 'alertmanager_route_match': cleanup failed after the run: exit 1",
+    })
+    expect(rowNote(inconclusive)).toBe('cleanup failed after the run')
+    const neverStarted = item({
+      scenarioId: 'kanban_c7_live',
+      runCount: 0,
+      objective: { status: 'not-run', label: 'Not run', raw: 'not_run' },
+      reason:
+        "kanban_c7_live: compose::add failed: container 'state': could not download",
+    })
+    expect(rowNote(neverStarted)).toBe('Didn’t start · compose::add failed')
+  })
+
+  it('leaves the case of a reason as the data wrote it', () => {
+    const acronym = item({
+      scenarioId: 'kanban_c7_live',
+      runCount: 0,
+      objective: { status: 'not-run', label: 'Not run', raw: 'not_run' },
+      reason: 'HTTP 502 from the release download: retry later',
+    })
+    expect(rowNote(acronym)).toBe(
+      'Didn’t start · HTTP 502 from the release download',
+    )
+    const byId = item({
+      scenarioId: 'kanban_c4',
+      objective: { status: 'failed', label: 'Failed', raw: 'failed' },
+      reason: 'kanban_c4: ticket_details missing after reload',
+    })
+    expect(rowNote(byId)).toBe('ticket_details missing after reload')
+    const unavailable = item({
+      scenarioId: 'kanban_c9',
+      runCount: 0,
+      objective: {
+        status: 'unavailable',
+        label: 'Unavailable',
+        raw: 'unavailable',
+      },
+      reason: 'The native run ended without results.',
+    })
+    expect(rowNote(unavailable)).toBe('The native run ended without results.')
+  })
+
   it('filters by lost points, not run and full marks', () => {
     expect(matchesFilter(lost, 'lost')).toBe(true)
     expect(matchesFilter(full, 'passed')).toBe(true)
@@ -63,6 +124,13 @@ describe('results by test (canvas)', () => {
 })
 
 describe('execution totals (canvas)', () => {
+  it('writes cost and tokens as the canvas does', () => {
+    expect(formatUsd(2.566)).toBe('$2.57')
+    expect(formatUsd(0.0048)).toBe('$0.0048')
+    expect(formatTokens(82_060_000)).toBe('82.1M')
+    expect(formatTokens(4_280_000)).toBe('4.28M')
+  })
+
   it('shows six figures and the partial note', () => {
     const metrics = {
       tests: [

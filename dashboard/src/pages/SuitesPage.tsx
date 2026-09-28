@@ -1176,7 +1176,7 @@ export function SuitesPage() {
               type="button"
               onClick={() => void load()}
             >
-              try again
+              Try again
             </button>
           </span>
         </Callout>
@@ -1194,7 +1194,7 @@ export function SuitesPage() {
                 type="button"
                 onClick={() => void load()}
               >
-                try again
+                Try again
               </button>
             }
           />

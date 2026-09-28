@@ -35,10 +35,8 @@
 }
 
 .rd-dialog .ds-dialog-title {
-  font-family: var(--font-sans);
   font-size: 0.9375rem;
   line-height: 1.375rem;
-  text-transform: none;
 }
 
 .rd-dialog .ds-dialog-description {

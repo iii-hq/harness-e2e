@@ -475,7 +475,7 @@ export function AssessmentDetailContent({
       {scoredNothing ? (
         <Callout
           tone="warning"
-          title="only execution and infrastructure were checked"
+          title="Only execution and infrastructure were checked"
         >
           This run retained no assessments, so nothing about the deliverable or
           its structure was scored. The outcome below reports that the run
@@ -865,7 +865,7 @@ function RunAssessment({
             <Callout
               className="mb-3.5"
               tone="warning"
-              title="nothing was scored on merit"
+              title="Nothing was scored on merit"
             >
               This run ended in {titleCase(run.systemStatus).toLowerCase()}{' '}
               after {formatRunDuration(run.metrics.durationMs)}, before any

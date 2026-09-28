@@ -42,8 +42,12 @@ function render(value: PlanExecution, scenarioId: string) {
 describe('run this scenario again', () => {
   it('says the last attempt counts, which rounds run and that a group runs whole', () => {
     const grouped = render(execution, 'registry_verification')
-    expect(grouped).toContain('Run registry_verification again')
-    expect(grouped).toContain('The last attempt counts')
+    expect(grouped).toContain(
+      'Run <span class="ep-confirm-mono">registry_verification</span> again?',
+    )
+    expect(grouped).toContain('the last attempt counts')
+    expect(grouped).toContain('<dt>Where</dt><dd>This harness</dd>')
+    expect(grouped).toContain('>Run again<')
     expect(grouped).toContain('All 2 of its rounds run again.')
     expect(grouped).toContain(
       'registry_implementation then registry_verification run only together, in this order; the whole group runs again.',
@@ -64,14 +68,14 @@ describe('run this scenario again', () => {
       },
     } as PlanExecution
     const html = render(imported, 'minimal_path')
-    expect(html).toContain('Run minimal_path again on GitHub')
     expect(html).toContain('Re-runs its group’s job on GitHub')
+    expect(html).toContain('<dd>2 of the run</dd>')
     expect(html).toContain('imports the run again when it ends')
     expect(html).toContain(
       'href="https://github.com/iii-hq/harness-e2e/actions/runs/42"',
     )
     expect(html).toContain('Release Control execution 12d5f973')
-    expect(html).toContain('>run again<')
+    expect(html).toContain('>Re-run the job<')
   })
 
   it('says a Docker test runs again as the next attempt', () => {
@@ -80,7 +84,8 @@ describe('run this scenario again', () => {
       source: { kind: 'docker', attempt: 1, phase: 'done', groups: [] },
     } as unknown as PlanExecution
     const html = render(docker, 'minimal_path')
-    expect(html).toContain('Run minimal_path again in Docker')
+    expect(html).toContain('>Run again in Docker<')
     expect(html).toContain('as attempt 2')
+    expect(html).toContain('<dd>2 of this execution</dd>')
   })
 })

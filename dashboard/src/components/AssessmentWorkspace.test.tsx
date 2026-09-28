@@ -358,7 +358,7 @@ describe('assessment workspace component', () => {
     expect(detailHtml).toContain('No assessments were retained for this run.')
     // Audit ED-25: passing on infrastructure alone is not the same as passing.
     expect(detailHtml).toContain(
-      'only execution and infrastructure were checked',
+      'Only execution and infrastructure were checked',
     )
     expect(detailHtml).toContain('nothing about the deliverable')
     expect(detailHtml).not.toContain('border-t-[3px]')

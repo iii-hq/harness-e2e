@@ -129,12 +129,6 @@
   outline-offset: 1px;
 }
 
-/* Header: sentence-case actions, as on the execution page. */
-.cmp-header .ds-button {
-  font-family: var(--font-sans);
-  text-transform: none;
-}
-
 /* The two sides, the swap between them */
 .cmp-sides {
   display: grid;
@@ -1447,11 +1441,4 @@ button.cmp-highlight:hover {
   .cmp-shot-frame img {
     max-height: calc(var(--spacing) * 75);
   }
-}
-
-/* Empty and error states in the redesign's type: sentence case, sans. */
-.cmp-empty .ds-empty-title,
-.cmp-empty .ds-button {
-  font-family: var(--font-sans);
-  text-transform: none;
 }

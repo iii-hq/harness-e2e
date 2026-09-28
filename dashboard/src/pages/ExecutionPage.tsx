@@ -1,4 +1,4 @@
-import { GitCompare, RotateCcw } from 'lucide-react'
+import { GitCompare, RotateCcw, Square } from 'lucide-react'
 import {
   type ReactNode,
   useCallback,
@@ -10,7 +10,6 @@ import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { DisclosureLayer } from '@/components/DisclosureLayer'
 import { ExecutionFacts } from '@/components/ExecutionConfiguration'
 import { ExecutionNameControl } from '@/components/ExecutionNameControl'
-import { ExecutionProgress } from '@/components/ExecutionProgress'
 import { EvidenceRecordPage } from '@/components/execution/EvidenceRecord'
 import { ExecutionTotals } from '@/components/execution/ExecutionTotals'
 import {
@@ -22,13 +21,11 @@ import { ScreenshotGallery } from '@/components/execution/screenshots'
 import { TranscriptPage } from '@/components/execution/TranscriptPage'
 import {
   CancelExecutionDialog,
+  HarnessProgress,
+  LiveProgress,
   WhereItRan,
 } from '@/components/execution/WhereItRan'
-import {
-  liveNotes,
-  reportedLine,
-  whereLine,
-} from '@/components/execution/where-it-ran-model'
+import { liveNotes } from '@/components/execution/where-it-ran-model'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LiveProgressPanel } from '@/components/LiveProgressPanel'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
@@ -42,7 +39,6 @@ import type { SystemOutcome } from '@/components/SystemOutcome'
 import {
   buttonClassName,
   Callout,
-  Dialog,
   EmptyState,
   MetricCard,
   type OperationalStatus,
@@ -83,6 +79,7 @@ import { buildPrimaryMetrics } from '@/lib/primary-metrics'
 import { buildScenarioMatrix } from '@/lib/scenario-matrix'
 import { screenshotsOf } from '@/lib/screenshots'
 import { watchExecution } from '@/lib/watch-execution'
+import { buildLedgerRows, DeleteDialog } from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
 
 type DetailSection = 'metrics' | 'results' | 'technical'
@@ -352,7 +349,7 @@ function ProvenanceSection({
             })
           }}
         >
-          {copied ? 'copied' : 'copy json'}
+          {copied ? 'Copied' : 'Copy JSON'}
         </button>
       </div>
       <pre className="m-0 min-w-0 max-h-[480px] overflow-auto rounded-[6px] bg-canvas p-4 font-mono text-xs leading-5 text-ink-soft">
@@ -365,14 +362,10 @@ function ProvenanceSection({
 function LiveState({
   presentation,
   status,
-  onCancel,
-  cancelling,
   hasProgress,
 }: {
   presentation: ExecutionPresentation
   status: { status: OperationalStatus; label: string }
-  onCancel?: () => void
-  cancelling: boolean
   hasProgress: boolean
 }) {
   const running =
@@ -395,29 +388,12 @@ function LiveState({
   return (
     <Panel className="mt-5" data-live-state={presentation.attention}>
       <div className="flex flex-wrap items-center gap-3">
-        <StatusBadge
-          status={status.status}
-          label={status.label.toLowerCase()}
-        />
+        <StatusBadge status={status.status} label={status.label} />
         <span className="font-mono text-xs text-ink-soft">
           {[scope, elapsed ? `${elapsed} elapsed` : null]
             .filter(Boolean)
             .join(' · ') || 'no progress reported yet'}
         </span>
-        {running && onCancel ? (
-          <button
-            className={buttonClassName({
-              variant: 'secondary',
-              size: 'compact',
-              className: 'ms-auto',
-            })}
-            type="button"
-            onClick={onCancel}
-            disabled={cancelling}
-          >
-            {cancelling ? 'cancelling…' : 'cancel execution'}
-          </button>
-        ) : null}
       </div>
       <p className="mt-3 mb-0 max-w-[70ch] text-xs leading-5 text-ink-soft">
         {running
@@ -487,6 +463,31 @@ export function EvidenceBundleUnavailable({
   )
 }
 
+/** What a live execution's page shows, one progress at a time. On GitHub
+ *  the steps and group jobs stand in for the results until the import,
+ *  never over results already there (a test run again, a reimport). The
+ *  legacy live panel is for executions without a plan. */
+export function liveView(
+  detail: Pick<DashboardExecutionDetail, 'plan_execution'>,
+  {
+    live,
+    importing,
+    hasResults,
+  }: {
+    live: boolean
+    importing: boolean
+    hasResults: boolean
+  },
+) {
+  const plan = detail.plan_execution
+  const moving = live || importing
+  return {
+    githubLive:
+      plan?.source.kind === 'github' && moving && !plan.rerun && !hasResults,
+    legacyPanel: !(plan && moving),
+  }
+}
+
 /** Where the execution ran, as the status line says it. */
 function statusWhere(detail: DashboardExecutionDetail) {
   const kind = detail.plan_execution?.source.kind
@@ -518,6 +519,8 @@ export function ExecutionPage({
   const [openScenario, setOpenScenario] = useState<string | null>(null)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // A delete the worker refused: said once, apart from refresh errors.
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   // The parameters the Run again form opened with; null while it is closed.
   const [rerun, setRerun] = useState<ExecutionParameters | null>(null)
   // Open apart from the parameters, so Run again keeps its title while the
@@ -603,7 +606,7 @@ export function ExecutionPage({
 
   if (error && !detail)
     return (
-      <div className="ds-root min-h-dvh bg-canvas text-ink">
+      <div className="ds-root min-h-dvh text-ink">
         <DashboardPageActions active="executions" />
         <div className="page-shell">
           <EmptyState
@@ -624,7 +627,7 @@ export function ExecutionPage({
                     void load()
                   }}
                 >
-                  retry
+                  Retry
                 </button>
                 <a
                   className={buttonClassName({
@@ -633,7 +636,7 @@ export function ExecutionPage({
                   })}
                   href={hashForWorkspace('executions')}
                 >
-                  back to executions
+                  Back to Executions
                 </a>
               </>
             }
@@ -645,7 +648,7 @@ export function ExecutionPage({
   // Audit ED-22: the skeleton keeps the chrome, so nothing jumps on arrival.
   if (!detail || !presentation)
     return (
-      <div className="ds-root min-h-dvh bg-canvas text-ink">
+      <div className="ds-root min-h-dvh text-ink">
         <DashboardPageActions active="executions" />
         <div className="page-shell" aria-busy="true" role="status">
           <span className="ds-visually-hidden">Loading execution report</span>
@@ -763,9 +766,20 @@ export function ExecutionPage({
   const scenarioSummary = scenarioMatrix?.summary ?? null
   // In Docker a group's tests fill in as it ends: the table shows from the start.
   const docker = detail.plan_execution?.source.kind === 'docker'
+  // On GitHub the results arrive with the import: until then the page shows
+  // the run's steps and group jobs, not totals of nothing.
+  const { githubLive, legacyPanel } = liveView(detail, {
+    live,
+    importing,
+    hasResults: Boolean(
+      scenarioMatrix?.items.some((item) => item.runCount > 0),
+    ),
+  })
   const status = importing
     ? { status: 'running' as const, label: 'Importing' }
-    : executionStatus(presentation)
+    : detail.plan_execution?.state === 'cancelling'
+      ? { status: 'cancelling' as const, label: 'Cancelling' }
+      : executionStatus(presentation)
   const noRun = !presentation.available || (scenarioSummary?.total ?? 0) === 0
   const rerunScenarios = new Set(
     detail.plan_execution?.slots
@@ -773,6 +787,26 @@ export function ExecutionPage({
       .map((slot) => slot.scenario_id),
   ).size
   const { title } = executionTitle(presentation)
+  // Tests · where · when, live or not (canvas: Execution detail): a live
+  // execution counts what it plans, GitHub's from when it was dispatched.
+  const tests = Math.max(
+    scenarioSummary?.total ?? 0,
+    live ? new Set(detail.plan_execution?.parameters?.scenarios).size : 0,
+  )
+  const statusLine = [
+    `${tests} ${tests === 1 ? 'test' : 'tests'}`,
+    statusWhere(detail),
+    rerunning && detail.plan_execution?.rerun
+      ? `${detail.plan_execution.rerun.scenarios.join(', ')} running again since ${formatDate(detail.plan_execution.rerun.started_at)}`
+      : presentation.startedAt
+        ? `${live ? (detail.plan_execution?.source.kind === 'github' ? 'dispatched ' : 'started ') : ''}${formatDate(presentation.startedAt)}`
+        : null,
+    rerunScenarios > 0
+      ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
   const loadStacks = bridge ? () => bridge.listStacks() : undefined
   // Facts the band shows beside what the plan execution recorded.
   const identity: Array<[string, ReactNode]> = [
@@ -795,6 +829,11 @@ export function ExecutionPage({
     ['Id', `${detail.id.slice(0, 9)}…${detail.id.slice(-6)}`],
   ]
   const ready = Boolean(bridge)
+  const canCancel =
+    live &&
+    !importing &&
+    presentation.attention !== 'cancelling' &&
+    detail.plan_execution?.state !== 'cancelling'
   const cancelRun = async () => {
     if (!bridge) return
     setCancelling(true)
@@ -819,19 +858,21 @@ export function ExecutionPage({
   const deleteExecution = async () => {
     if (!bridge || !detail) return
     setDeleting(true)
-    setError(null)
+    setDeleteError(null)
     try {
       await bridge.deleteExecution(detail.id)
       window.location.hash = hashForWorkspace('executions')
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      // As the list: the dialog closes and the page says why, once.
+      setDeleteOpen(false)
+      setDeleteError(cause instanceof Error ? cause.message : String(cause))
     } finally {
       setDeleting(false)
     }
   }
 
   return (
-    <div className="ds-root execution-page bg-canvas text-ink">
+    <div className="ds-root execution-page text-ink">
       <DashboardPageActions active="executions" context={title} />
       <div className="page-shell">
         {/* Audit ED-13 / ED-23: the title is the execution, the trail is flat. */}
@@ -842,31 +883,14 @@ export function ExecutionPage({
           summary={
             <>
               <StatusBadge status={status.status} label={status.label} />{' '}
-              <span>
-                {detail.live_progress
-                  ? `${detail.live_progress.runs_committed} of ${detail.live_progress.planned_slots} runs recorded · ${live ? 'results are provisional' : 'partial evidence preserved'}`
-                  : live
-                    ? 'Execution in progress · results are provisional'
-                    : [
-                        `${scenarioSummary?.total ?? 0} ${scenarioSummary?.total === 1 ? 'test' : 'tests'}`,
-                        statusWhere(detail),
-                        presentation.startedAt
-                          ? formatDate(presentation.startedAt)
-                          : null,
-                        rerunScenarios > 0
-                          ? `${rerunScenarios} ${rerunScenarios === 1 ? 'scenario' : 'scenarios'} run again, the last attempt counts`
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-              </span>
+              <span data-status-line>{statusLine}</span>
             </>
           }
           headingId="execution-title"
-          breadcrumb={[
-            { label: 'executions', href: hashForWorkspace('executions') },
-            { label: title },
-          ]}
+          back={{
+            label: 'Back to Executions',
+            href: hashForWorkspace('executions'),
+          }}
           titleAction={
             ready && detail.plan_execution ? (
               <ExecutionNameControl
@@ -896,8 +920,31 @@ export function ExecutionPage({
               {detail.evidence_error ? (
                 <InvestigationAction executionId={executionId} />
               ) : null}
+              {/* While it runs the header cancels it (canvas: Execution
+                  detail · running); once cancelling, nothing to do but wait. */}
+              {ready && canCancel ? (
+                <button
+                  className={buttonClassName({ variant: 'secondary' })}
+                  type="button"
+                  disabled={cancelling}
+                  aria-busy={cancelling || undefined}
+                  onClick={() =>
+                    detail.plan_execution
+                      ? setCancelOpen(true)
+                      : void cancelRun()
+                  }
+                  data-cancel-execution
+                >
+                  <Square size={15} aria-hidden="true" />
+                  {cancelling
+                    ? 'Cancelling…'
+                    : detail.plan_execution?.source.kind === 'github'
+                      ? 'Cancel run'
+                      : 'Cancel execution'}
+                </button>
+              ) : null}
               {/* The page's one primary action (canvas: Execution detail). */}
-              {ready ? (
+              {ready && !live ? (
                 <button
                   className={buttonClassName({ variant: 'primary' })}
                   type="button"
@@ -953,6 +1000,9 @@ export function ExecutionPage({
             </>
           }
         />
+        {detail.plan_execution?.source.kind === 'local' && live ? (
+          <HarnessProgress execution={detail.plan_execution} />
+        ) : null}
         {!noRun || detail.plan_execution ? (
           <ExecutionFacts
             execution={detail.plan_execution ?? null}
@@ -961,6 +1011,28 @@ export function ExecutionPage({
           />
         ) : null}
 
+        {deleteError ? (
+          <Callout
+            className="mt-4"
+            tone="danger"
+            title={`Couldn’t delete “${title}”`}
+            data-delete-error
+          >
+            <span className="ex-callout-line">
+              {deleteError}
+              <button
+                className={buttonClassName({
+                  variant: 'quiet',
+                  size: 'compact',
+                })}
+                type="button"
+                onClick={() => setDeleteError(null)}
+              >
+                Dismiss
+              </button>
+            </span>
+          </Callout>
+        ) : null}
         {detail.evidence_error ? (
           <EvidenceBundleUnavailable detail={detail} />
         ) : null}
@@ -981,50 +1053,17 @@ export function ExecutionPage({
             failed. {detail.persistence_errors.join(' · ')}
           </p>
         ) : null}
-        {!detail.evidence_error &&
-        (noRun || live) &&
-        !(detail.plan_execution && live && !importing) ? (
+        {!detail.evidence_error && (noRun || live) && legacyPanel ? (
           <LiveState
             presentation={presentation}
             status={status}
-            cancelling={cancelling}
             hasProgress={Boolean(detail.live_progress || detail.plan_execution)}
-            onCancel={ready && !importing ? () => void cancelRun() : undefined}
           />
         ) : null}
+        {/* One representation of progress: numbered steps in Docker and on
+            GitHub; this harness's bar sits under the title. */}
         {detail.plan_execution && (live || importing) ? (
-          <div className="wr-live" role="status" data-where-line>
-            <span className="wr-live-line">
-              {whereLine(detail.plan_execution)}
-            </span>
-            {reportedLine(detail.plan_execution) ? (
-              <span className="wr-faint">
-                {reportedLine(detail.plan_execution)}
-              </span>
-            ) : null}
-            {ready && live && detail.plan_execution.state !== 'cancelling' ? (
-              <button
-                type="button"
-                className={buttonClassName({
-                  variant: 'secondary',
-                  size: 'compact',
-                  className: 'ms-auto',
-                })}
-                onClick={() => setCancelOpen(true)}
-              >
-                Cancel
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-        {detail.plan_execution && (live || importing) ? (
-          <WhereItRan execution={detail.plan_execution} />
-        ) : null}
-        {detail.plan_execution &&
-        detail.plan_execution.source.kind === 'local' &&
-        live &&
-        !importing ? (
-          <ExecutionProgress execution={detail.plan_execution} />
+          <LiveProgress execution={detail.plan_execution} />
         ) : null}
         {detail.plan_execution ? (
           <CancelExecutionDialog
@@ -1032,13 +1071,17 @@ export function ExecutionPage({
             execution={detail.plan_execution}
             open={cancelOpen}
             onClose={() => setCancelOpen(false)}
-            onCancelled={() => void load()}
+            onCancelled={() => {
+              // Asked: the header's Cancel waits for the reload that says so.
+              setCancelling(true)
+              void load().finally(() => setCancelling(false))
+            }}
           />
         ) : null}
         {detail.live_progress ? (
           <LiveProgressPanel progress={detail.live_progress} running={live} />
         ) : null}
-        {(!live || docker) && scenarioMatrix ? (
+        {(!live || (detail.plan_execution && !githubLive)) && scenarioMatrix ? (
           <NeedsAttention
             items={attentionItems(scenarioMatrix.items, [
               ...(detail.plan_execution?.error
@@ -1066,7 +1109,8 @@ export function ExecutionPage({
         {primaryMetrics &&
         scenarioMatrix &&
         !detail.evidence_error &&
-        !noRun ? (
+        !noRun &&
+        !githubLive ? (
           <section
             id="metrics"
             className="scroll-mt-24"
@@ -1080,7 +1124,7 @@ export function ExecutionPage({
             />
           </section>
         ) : null}
-        {!noRun && (!live || rerunning || docker) ? (
+        {!noRun && !githubLive && (!live || detail.plan_execution) ? (
           <div className="execution-layers grid min-w-0">
             <section
               id="results"
@@ -1092,9 +1136,11 @@ export function ExecutionPage({
                 detail={detail}
                 openKey={openScenario}
                 running={live}
-                {...(docker && live && detail.plan_execution
+                {...(live && !rerunning && detail.plan_execution
                   ? {
-                      liveNote: 'A group’s tests fill in as it finishes.',
+                      liveNote: docker
+                        ? 'A group’s tests fill in as it finishes.'
+                        : 'Rows fill in as tests report.',
                       notes: liveNotes(detail.plan_execution),
                     }
                   : {})}
@@ -1136,32 +1182,22 @@ export function ExecutionPage({
           <WhereItRan execution={detail.plan_execution} />
         ) : null}
       </div>
-      <Dialog
-        open={deleteOpen}
-        onClose={() => !deleting && setDeleteOpen(false)}
-        size="sm"
-        title="Delete execution?"
-        description="This permanently removes the execution and its retained evidence from the Console."
-        footer={
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              disabled={deleting}
-              onClick={() => setDeleteOpen(false)}
-            >
-              cancel
-            </button>
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'primary' })}
-              disabled={deleting}
-              aria-busy={deleting}
-              onClick={() => void deleteExecution()}
-            >
-              {deleting ? 'deleting…' : 'delete execution'}
-            </button>
-          </div>
+      {/* The list's delete confirmation, on this execution. */}
+      <DeleteDialog
+        request={
+          deleteOpen && summary
+            ? { rows: buildLedgerRows([summary]), kept: [] }
+            : null
+        }
+        deleting={deleting}
+        onCancel={() => setDeleteOpen(false)}
+        onConfirm={() => void deleteExecution()}
+        onClosed={() =>
+          document
+            .querySelector<HTMLElement>(
+              '.execution-header [aria-label="More actions"]',
+            )
+            ?.focus()
         }
       />
       {detail.plan_execution ? (

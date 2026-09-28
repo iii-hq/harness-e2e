@@ -1,16 +1,21 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import type { PlanExecution } from '@/lib/plan-execution'
-import { CancelExecutionDialog, WhereItRan } from './WhereItRan'
+import {
+  CancelExecutionDialog,
+  HarnessProgress,
+  LiveProgress,
+  WhereItRan,
+} from './WhereItRan'
 import {
   cancelCopy,
   dockerSteps,
+  githubSteps,
   jobLabel,
   jobTests,
   liveNotes,
-  reportedLine,
+  shortImage,
   testRows,
-  whereLine,
 } from './where-it-ran-model'
 
 const base = {
@@ -149,10 +154,6 @@ describe('where it ran · model', () => {
       'running',
       'waiting',
     ])
-    expect(whereLine(harness)).toMatch(/^Running · on this harness · for 3m/)
-    expect(reportedLine(harness)).toBe(
-      '1 of 3 tests reported · results are provisional',
-    )
   })
 
   it('reads a Docker execution’s steps and groups; a finished group’s tests report at once', () => {
@@ -177,9 +178,6 @@ describe('where it ran · model', () => {
     })
     // How many groups run at once is the worker's; the line does not guess.
     expect(rows[2].detail).toBe('Waiting for a slot')
-    expect(reportedLine(docker)).toBe(
-      '1 of 4 tests reported · results are provisional',
-    )
     // A group that ended without a run: its tests did not run, and say why.
     const failed = {
       ...docker,
@@ -207,9 +205,6 @@ describe('where it ran · model', () => {
         detail: 'compose::add failed',
       },
     ])
-    expect(reportedLine(failed)).toBe(
-      '1 of 1 test reported · results are provisional',
-    )
     const cancelled = { ...docker, state: 'cancelled' } as PlanExecution
     const stopped = {
       ...cancelled,
@@ -245,10 +240,113 @@ describe('where it ran · model', () => {
       github.source.kind === 'github' ? (github.source.follow?.jobs ?? []) : []
     expect(jobTests(jobs[0], github)).toEqual(['minimal_path'])
     expect(jobs.map(jobLabel)).toEqual(['Done', 'Running', 'Queued'])
-    expect(whereLine(github)).toMatch(/^Running · on GitHub · dispatched /)
-    expect(reportedLine(github)).toBe(
-      '1 of 2 group jobs finished · results at import',
+  })
+
+  it('reads a GitHub run’s four steps from its jobs', () => {
+    const steps = githubSteps(github)
+    expect(steps.map((step) => [step.label, step.state])).toEqual([
+      ['Prepare job', 'done'],
+      ['Group jobs', 'current'],
+      ['Aggregate job', 'next'],
+      ['Import', 'next'],
+    ])
+    expect(steps[1].detail).toBe('1 of 2 finished · 1 running')
+    const cancelling = { ...github, state: 'cancelling' } as PlanExecution
+    expect(githubSteps(cancelling).map((step) => step.state)).toEqual([
+      'done',
+      'stopped',
+      'current',
+      'next',
+    ])
+    expect(githubSteps(cancelling)[1].detail).toBe(
+      '1 of 2 finished before the cancel · 1 stopped',
     )
+    const importing = { ...github, state: 'importing' } as PlanExecution
+    expect(githubSteps(importing)[3]).toMatchObject({
+      state: 'current',
+      detail: 'Importing what finished',
+    })
+  })
+
+  it('stops a step whose job ended other than success; a re-run starts past the prepare', () => {
+    const jobs = (list: unknown[]) =>
+      ({
+        ...github,
+        source: {
+          ...(github.source as object),
+          follow: { followed: true, jobs: list },
+        },
+      }) as unknown as PlanExecution
+    const failed = githubSteps(
+      jobs([
+        {
+          id: 9,
+          name: 'Materialize the suite and assemble the stack',
+          status: 'completed',
+          conclusion: 'failure',
+          url: '',
+        },
+      ]),
+    )
+    expect(failed[0]).toMatchObject({ state: 'stopped', detail: 'Failed' })
+    // A group job whose test is named prepare… is not the prepare job.
+    const groupOnly = githubSteps(
+      jobs([
+        {
+          id: 10,
+          name: 'r01 · case-prepare-release',
+          status: 'in_progress',
+          url: '',
+        },
+      ]),
+    )
+    expect(groupOnly.map((step) => step.state)).toEqual([
+      'done',
+      'current',
+      'next',
+      'next',
+    ])
+    expect(failed[1].state).toBe('next')
+    // A job re-run: followed, its jobs not listed yet.
+    const rerun = {
+      ...jobs([]),
+      rerun: { scenarios: ['timer_wake'] },
+    } as unknown as PlanExecution
+    expect(githubSteps(rerun).map((step) => step.state)).toEqual([
+      'done',
+      'current',
+      'next',
+      'next',
+    ])
+    expect(githubSteps(rerun)[1].detail).toBe(
+      'Waiting for GitHub to start the jobs',
+    )
+  })
+
+  it('knows only the import of a run it does not follow', () => {
+    const imported = {
+      ...github,
+      state: 'importing',
+      source: { ...(github.source as object), follow: undefined },
+    } as unknown as PlanExecution
+    expect(
+      githubSteps(imported).map((step) => [step.label, step.state]),
+    ).toEqual([['Import', 'current']])
+    const html = renderToStaticMarkup(<LiveProgress execution={imported} />)
+    expect(html).toContain('Import')
+    expect(html).not.toContain('Group jobs')
+    expect(html).not.toContain('Waiting for GitHub')
+  })
+
+  it('names an executor image by its tag, cut to 12', () => {
+    expect(shortImage('ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85')).toBe(
+      'tools-d9a8b54a2c85',
+    )
+    expect(
+      shortImage(
+        'ghcr.io/iii-hq/harness-e2e:tools-d9a8b54a2c85f00dfeedface0123',
+      ),
+    ).toBe('tools-d9a8b54a2c85')
   })
 
   it('says what a cancel stops and keeps, per place', () => {
@@ -323,31 +421,43 @@ describe('where it ran · rounds', () => {
 })
 
 describe('where it ran · card', () => {
-  it('shows the GitHub run, workflow ref and group jobs', () => {
+  it('shows the workflow ref and group jobs, not the run the band names', () => {
     const html = renderToStaticMarkup(<WhereItRan execution={github} />)
-    expect(html).toContain('GitHub #77')
+    expect(html).not.toContain('GitHub #77')
+    expect(html).not.toContain('Release Control')
     expect(html).toContain('exact-stack-e2e.yml @ main 88aee14')
-    expect(html).toContain('Automatic when the run ends')
     expect(html).toContain('E2E / case-timer-wake')
     expect(html).toContain('data-job-state="running"')
     expect(html).toContain('6m 47s')
   })
 
-  it('shows the Docker steps, groups, image and the missing credentials', () => {
+  it('shows the Docker steps and groups; image and credentials are said once, elsewhere', () => {
     const html = renderToStaticMarkup(<WhereItRan execution={docker} />)
-    expect(html).toContain('No provider credentials')
+    // Needs attention says the missing credentials; the band, the image.
+    expect(html).not.toContain('No provider credentials')
+    expect(html).not.toContain('tools-d9a8b54a2c85')
     expect(html).toContain('Suite materialized, stack assembled and locked')
     expect(html).toContain('data-docker-group="case-timer-wake"')
-    expect(html).toContain('tools-d9a8b54a2c85')
+    expect(html).toContain('data-group-state="true">Running<')
     // Its tests are in the results table, filled in as each group ends.
     expect(html).not.toContain('aria-label="Tests"')
     expect(html).not.toContain('results at import')
   })
 
-  it('lists the harness tests while it runs', () => {
-    const html = renderToStaticMarkup(<WhereItRan execution={harness} />)
-    expect(html).toContain('This harness, on the stack this Console runs on')
-    expect(html).toContain('data-state="running"')
+  it('shows one live progress: steps in Docker and on GitHub, a bar here', () => {
+    const docked = renderToStaticMarkup(<LiveProgress execution={docker} />)
+    expect(docked).toContain('Progress')
+    expect(docked).toContain('data-step-state="current"')
+    expect(docked).not.toContain('Group jobs')
+    const hub = renderToStaticMarkup(<LiveProgress execution={github} />)
+    expect(hub).toContain('Aggregate job')
+    expect(hub).toContain('E2E / case-timer-wake')
+    // Group jobs lists the group jobs only, as its count does.
+    expect(hub).not.toContain('title="aggregate"')
+    expect(renderToStaticMarkup(<LiveProgress execution={harness} />)).toBe('')
+    expect(
+      renderToStaticMarkup(<HarnessProgress execution={harness} />),
+    ).toContain('1 of 3 tests reported · 1 running · results are provisional')
   })
 
   it('confirms a GitHub cancel naming gh run cancel', () => {
@@ -362,6 +472,8 @@ describe('where it ran · card', () => {
     )
     expect(html).toContain('Cancel the run on GitHub?')
     expect(html).toContain('Calls gh run cancel.')
-    expect(html).toContain('Keep it running')
+    expect(html).toContain('Keep running')
+    expect(html).toContain('role="alertdialog"')
+    expect(html).toContain('>Cancel run<')
   })
 })

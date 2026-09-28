@@ -1,67 +1,196 @@
-import { ExternalLink } from 'lucide-react'
-import { useState } from 'react'
-import { Callout, Dialog } from '@/design-system'
+import {
+  Button,
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogTitle,
+} from '@iii-dev/console-ui'
+import { Check, ExternalLink, Square } from 'lucide-react'
+import { useEffect, useState } from 'react'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
-import { type PlanExecution, running } from '@/lib/plan-execution'
+import { sentenceCase } from '@/lib/format'
+import type { PlanExecution } from '@/lib/plan-execution'
 import './where-it-ran.css'
 import {
   cancelCopy,
   dockerSteps,
+  githubSteps,
+  isGroupJob,
   jobDuration,
   jobLabel,
   jobTests,
   placeOf,
-  type TestRow,
+  plural,
   testRows,
 } from './where-it-ran-model'
-
-const STATE_LABEL: Record<TestRow['state'], string> = {
-  reported: 'Reported',
-  'not-run': 'Not run',
-  running: 'Running',
-  waiting: 'Waiting',
-  stopped: 'Stopped',
-}
 
 function Dot({ tone }: { tone: 'ok' | 'live' | 'idle' | 'alert' }) {
   return <span className="wr-dot" data-tone={tone} aria-hidden="true" />
 }
 
-function TestList({ rows }: { rows: TestRow[] }) {
-  if (rows.length === 0) return null
+/** A GitHub run's group jobs, as GitHub reports them. */
+function GroupJobList({ execution }: { execution: PlanExecution }) {
+  const source = execution.source
+  if (source.kind !== 'github') return null
   return (
-    <ul className="wr-tests" aria-label="Tests">
-      {rows.map((row) => (
-        <li key={row.id} className="wr-test" data-state={row.state}>
-          <Dot
-            tone={
-              row.state === 'running'
-                ? 'live'
-                : row.state === 'reported'
-                  ? 'ok'
-                  : row.state === 'not-run'
-                    ? 'alert'
-                    : 'idle'
-            }
-          />
-          <span className="wr-mono wr-ellipsis" title={row.id}>
-            {row.id}
-          </span>
-          <span className="wr-state">{STATE_LABEL[row.state]}</span>
-          <span className="wr-faint wr-ellipsis" title={row.detail}>
-            {row.detail}
-          </span>
-        </li>
-      ))}
+    <ul className="wr-jobs" aria-label="Group jobs">
+      {(source.follow?.jobs ?? []).filter(isGroupJob).map((job) => {
+        const label = jobLabel(job)
+        const tests = jobTests(job, execution)
+        return (
+          <li
+            key={job.id}
+            className="wr-job"
+            data-job-state={label.toLowerCase()}
+          >
+            <Dot
+              tone={
+                label === 'Running'
+                  ? 'live'
+                  : label === 'Done'
+                    ? 'ok'
+                    : label === 'Failed'
+                      ? 'alert'
+                      : 'idle'
+              }
+            />
+            <span className="wr-job-name">
+              <span className="wr-mono wr-ellipsis" title={job.name}>
+                {job.name}
+              </span>
+              {tests.length ? (
+                <span className="wr-faint wr-ellipsis">{tests.join(', ')}</span>
+              ) : null}
+            </span>
+            <span className="wr-state">{label}</span>
+            <span className="wr-mono wr-faint">{jobDuration(job)}</span>
+            {job.url ? (
+              <a
+                className="wr-icon-link"
+                href={job.url}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={`Open ${job.name} on GitHub`}
+              >
+                <ExternalLink size={14} aria-hidden="true" />
+              </a>
+            ) : null}
+          </li>
+        )
+      })}
     </ul>
   )
 }
 
-/** Where the execution runs and what happens there: this harness, Docker
+/** A live execution's progress, one representation (canvas: Execution
+ *  detail · running): numbered steps in Docker and on GitHub, with GitHub's
+ *  group jobs under them. A harness execution's is the bar under its title. */
+export function LiveProgress({ execution }: { execution: PlanExecution }) {
+  const source = execution.source
+  const steps =
+    source.kind === 'docker'
+      ? dockerSteps(execution)
+      : source.kind === 'github'
+        ? githubSteps(execution)
+        : []
+  if (steps.length === 0) return null
+  const jobs =
+    source.kind === 'github'
+      ? (source.follow?.jobs ?? []).filter(isGroupJob)
+      : []
+  return (
+    <>
+      <section
+        className="wr-progress"
+        aria-labelledby="live-progress-title"
+        data-live-progress={source.kind}
+      >
+        <h2 id="live-progress-title" className="wr-title">
+          Progress
+        </h2>
+        <ol className="wr-step-cards">
+          {steps.map((step, index) => (
+            <li
+              key={step.phase}
+              className="wr-step-card"
+              data-step-state={step.state}
+              aria-current={step.state === 'current' ? 'step' : undefined}
+            >
+              <span className="wr-step-head">
+                <span className="wr-step-mark" aria-hidden="true">
+                  {step.state === 'done' ? <Check size={12} /> : null}
+                </span>
+                <span className="wr-mono wr-faint">{index + 1}</span>
+                <span className="wr-strong">{step.label}</span>
+                <span className="wr-mono wr-faint wr-step-time">
+                  {step.time}
+                </span>
+              </span>
+              <span className="wr-step-detail">{step.detail}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
+      {source.kind === 'github' &&
+      (source.follow?.followed || source.follow?.jobs?.length) ? (
+        <section className="wr-progress" aria-labelledby="group-jobs-title">
+          <div className="wr-head">
+            <h2 id="group-jobs-title" className="wr-title">
+              Group jobs
+            </h2>
+            {jobs.length ? (
+              <span className="wr-mono wr-faint">
+                {jobs.filter((job) => job.status === 'completed').length}/
+                {jobs.length}
+              </span>
+            ) : null}
+          </div>
+          {jobs.length ? (
+            <GroupJobList execution={execution} />
+          ) : (
+            <p className="wr-faint" role="status">
+              Waiting for GitHub to start the jobs…
+            </p>
+          )}
+          <p className="wr-faint wr-note">
+            GitHub holds the results until the run ends. Then this Console
+            imports the run by itself, and the totals and each test’s results
+            show here as on any execution.
+          </p>
+        </section>
+      ) : null}
+    </>
+  )
+}
+
+/** A harness execution's progress under its title: the share of tests that
+ *  reported, and how many run now. */
+export function HarnessProgress({ execution }: { execution: PlanExecution }) {
+  const rows = testRows(execution)
+  if (rows.length === 0) return null
+  const reported = rows.filter(
+    (row) => row.state === 'reported' || row.state === 'not-run',
+  ).length
+  const now = rows.filter((row) => row.state === 'running').length
+  return (
+    <div className="wr-bar-line" data-harness-progress>
+      <span className="wr-bar" aria-hidden="true">
+        <span style={{ width: `${(100 * reported) / rows.length}%` }} />
+      </span>
+      <span role="status">
+        {reported} of {plural(rows.length, 'test', 'tests')} reported · {now}{' '}
+        running · results are provisional
+      </span>
+    </div>
+  )
+}
+
+/** Where a finished execution ran, past what the facts band already says
+ *  (the run, Release Control, image and stack): GitHub's workflow ref and
+ *  group jobs, Docker's steps and groups. Where it runs: this harness, Docker
  *  (steps and groups) or GitHub (run, ref and group jobs). */
 export function WhereItRan({ execution }: { execution: PlanExecution }) {
   const source = execution.source
-  const live = running(execution.state) || execution.state === 'importing'
   const place = placeOf(execution)
   return (
     <section
@@ -85,21 +214,6 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
       {source.kind === 'github' ? (
         <>
           <dl className="wr-facts">
-            <dt>Run</dt>
-            <dd>
-              <a
-                className="wr-link"
-                href={source.url}
-                target="_blank"
-                rel="noreferrer"
-              >
-                GitHub #{source.run_id}
-                {source.run_attempt > 1
-                  ? ` · attempt ${source.run_attempt}`
-                  : ''}
-                <ExternalLink size={12} aria-hidden="true" />
-              </a>
-            </dd>
             <dt>Workflow</dt>
             <dd className="wr-mono">
               exact-stack-e2e.yml
@@ -110,98 +224,12 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
                 ? ` ${source.follow.head_sha.slice(0, 7)}`
                 : ''}
             </dd>
-            {source.release_control_execution_id ? (
-              <>
-                <dt>Reports</dt>
-                <dd className="wr-mono">
-                  Release Control{' '}
-                  {source.release_control_execution_id.slice(0, 8)}
-                </dd>
-              </>
-            ) : null}
-            <dt>Import</dt>
-            <dd>
-              {execution.state === 'importing'
-                ? 'Importing what finished…'
-                : execution.state === 'cancelling'
-                  ? 'GitHub is finishing the cancel; what finished is imported when the run ends.'
-                  : live
-                    ? 'Automatic when the run ends'
-                    : 'Imported'}
-            </dd>
           </dl>
-          {source.follow?.jobs && source.follow.jobs.length > 0 ? (
-            <ul className="wr-jobs" aria-label="Group jobs">
-              {source.follow.jobs.map((job) => {
-                const label = jobLabel(job)
-                const tests = jobTests(job, execution)
-                return (
-                  <li
-                    key={job.id}
-                    className="wr-job"
-                    data-job-state={label.toLowerCase()}
-                  >
-                    <Dot
-                      tone={
-                        label === 'Running'
-                          ? 'live'
-                          : label === 'Done'
-                            ? 'ok'
-                            : label === 'Failed'
-                              ? 'alert'
-                              : 'idle'
-                      }
-                    />
-                    <span className="wr-job-name">
-                      <span className="wr-mono wr-ellipsis" title={job.name}>
-                        {job.name}
-                      </span>
-                      {tests.length ? (
-                        <span className="wr-faint wr-ellipsis">
-                          {tests.join(', ')}
-                        </span>
-                      ) : null}
-                    </span>
-                    <span className="wr-state">{label}</span>
-                    <span className="wr-mono wr-faint">{jobDuration(job)}</span>
-                    {job.url ? (
-                      <a
-                        className="wr-icon-link"
-                        href={job.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        aria-label={`Open ${job.name} on GitHub`}
-                      >
-                        <ExternalLink size={14} aria-hidden="true" />
-                      </a>
-                    ) : null}
-                  </li>
-                )
-              })}
-            </ul>
-          ) : live ? (
-            <p className="wr-faint" role="status">
-              Waiting for GitHub to start the jobs…
-            </p>
+          {source.follow?.jobs?.some(isGroupJob) ? (
+            <GroupJobList execution={execution} />
           ) : null}
         </>
       ) : null}
-
-      {source.kind === 'docker'
-        ? (execution.warnings ?? [])
-            .filter((warning) =>
-              /provider_env_file|without credentials/.test(warning),
-            )
-            .map((warning) => (
-              <Callout
-                key={warning}
-                tone="warning"
-                title="No provider credentials"
-              >
-                {warning} Recorded when the execution started.
-              </Callout>
-            ))
-        : null}
 
       {source.kind === 'docker' ? (
         <>
@@ -228,25 +256,6 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
               </li>
             ))}
           </ol>
-          <dl className="wr-facts">
-            {source.image ? (
-              <>
-                <dt>Image</dt>
-                <dd className="wr-mono">{source.image}</dd>
-              </>
-            ) : null}
-            {execution.parameters?.stack ? (
-              <>
-                <dt>Stack</dt>
-                <dd className="wr-mono">
-                  {execution.parameters.stack.name}
-                  {execution.parameters.stack.sha256
-                    ? ` · ${execution.parameters.stack.sha256.replace('sha256:', '').slice(0, 12)}, locked`
-                    : ''}
-                </dd>
-              </>
-            ) : null}
-          </dl>
           <ul className="wr-jobs" aria-label="Groups" data-docker-groups>
             {source.groups.map((group) => (
               <li
@@ -275,7 +284,7 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
                   ) : null}
                 </span>
                 <span className="wr-state" data-group-state>
-                  {group.state}
+                  {sentenceCase(group.state)}
                 </span>
                 <span className="wr-mono wr-faint">
                   attempt {group.attempt}
@@ -285,24 +294,12 @@ export function WhereItRan({ execution }: { execution: PlanExecution }) {
           </ul>
         </>
       ) : null}
-
-      {source.kind === 'local' ? (
-        <dl className="wr-facts">
-          <dt>Runner</dt>
-          <dd>This harness, on the stack this Console runs on</dd>
-        </dl>
-      ) : null}
-
-      {/* A Docker execution's tests are in the results table, filled in as
-          each group ends. */}
-      {live && source.kind === 'local' ? (
-        <TestList rows={testRows(execution)} />
-      ) : null}
     </section>
   )
 }
 
-/** Cancel where it runs, saying what stops and what is kept. */
+/** Cancel where it runs, saying what stops and what is kept: the host's
+ *  confirmation, as the list's delete, with the safe choice focused. */
 export function CancelExecutionDialog({
   bridge,
   execution,
@@ -318,6 +315,10 @@ export function CancelExecutionDialog({
 }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Each opening starts clean: an earlier refusal is not this one's.
+  useEffect(() => {
+    if (open) setError(null)
+  }, [open])
   const copy = cancelCopy(execution)
   const confirm = async () => {
     if (!bridge) return
@@ -336,38 +337,69 @@ export function CancelExecutionDialog({
   return (
     <Dialog
       open={open}
-      onClose={() => (busy ? undefined : onClose())}
-      size="sm"
-      title={copy.title}
-      description={copy.body}
-      bodyPadding
-      footer={
-        <div className="wr-dialog-actions">
-          <button
+      onOpenChange={(next) => {
+        if (!next && !busy) onClose()
+      }}
+    >
+      <DialogContent
+        role="alertdialog"
+        className="ex-dialog"
+        aria-describedby="ep-cancel-body"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          document.getElementById('ep-cancel-keep')?.focus()
+        }}
+        // The Cancel button may be gone once it cancels: focus goes to the
+        // header's More actions, which stays.
+        onCloseAutoFocus={(event) => {
+          event.preventDefault()
+          document
+            .querySelector<HTMLElement>(
+              '.execution-header [aria-label="More actions"]',
+            )
+            ?.focus()
+        }}
+      >
+        <div className="ex-dialog-head">
+          <span className="ex-dialog-icon" aria-hidden="true">
+            <Square size={16} />
+          </span>
+          <div>
+            <DialogTitle className="ex-dialog-title">{copy.title}</DialogTitle>
+            <DialogDescription id="ep-cancel-body" className="ex-dialog-body">
+              {copy.body}
+            </DialogDescription>
+          </div>
+        </div>
+        {error ? (
+          <p role="alert" className="ex-error">
+            {error}
+          </p>
+        ) : null}
+        <div className="ex-dialog-actions">
+          <Button
+            id="ep-cancel-keep"
             type="button"
-            className="ds-button ds-button-quiet ds-button-default"
+            variant="pill"
+            size="sm"
+            disabled={busy}
             onClick={onClose}
-            disabled={busy}
           >
-            Keep it running
-          </button>
-          <button
+            Keep running
+          </Button>
+          <Button
             type="button"
-            className="ds-button ds-button-primary ds-button-default"
-            onClick={() => void confirm()}
-            disabled={busy}
+            variant="pill"
+            size="sm"
+            className="ex-danger"
+            disabled={busy || !bridge}
             aria-busy={busy || undefined}
+            onClick={() => void confirm()}
           >
             {busy ? 'Cancelling…' : copy.action}
-          </button>
+          </Button>
         </div>
-      }
-    >
-      {error ? (
-        <p role="alert" className="wr-error">
-          {error}
-        </p>
-      ) : null}
+      </DialogContent>
     </Dialog>
   )
 }

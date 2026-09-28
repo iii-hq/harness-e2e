@@ -6,6 +6,12 @@
 /** What a cell shows when the value was not reported. */
 export const NOT_REPORTED = '—'
 
+/** A machine word as a label: "never_run" → "Never run". */
+export function sentenceCase(value: string) {
+  const words = value.replaceAll('_', ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
 function known(value: number | null | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value)
 }

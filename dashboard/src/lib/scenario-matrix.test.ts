@@ -347,6 +347,53 @@ describe('scenario matrix presentation model', () => {
     })
   })
 
+  it('says Not run only for a planned test that never started', () => {
+    const detail = executionDetail()
+    const slot = (
+      execution_id: string,
+      state: string,
+      error: string | null,
+    ) => ({
+      round: 1,
+      group_id: 'missing_report',
+      scenario_id: 'missing_report',
+      execution_id,
+      state,
+      observed: 0,
+      completed: 0,
+      passed: 0,
+      technical_valid: 0,
+      result_path: null,
+      error,
+    })
+    const planned = (entry: ReturnType<typeof slot>) =>
+      ({
+        ...detail,
+        plan_execution: { slots: [entry] },
+      }) as unknown as DashboardExecutionDetail
+    const objective = (value: DashboardExecutionDetail) =>
+      buildScenarioMatrix(value).items.find(
+        (item) => item.scenarioId === 'missing_report',
+      )?.objective
+    // It ran and left nothing: unavailable, not "not run".
+    expect(
+      objective(
+        planned(
+          slot('native-1', 'finished', 'The native run ended without results.'),
+        ),
+      ),
+    ).toMatchObject({ status: 'unavailable', label: 'Unavailable' })
+    expect(objective(planned(slot('', 'not_run', null)))).toMatchObject({
+      status: 'not-run',
+      label: 'Not run',
+    })
+    expect(
+      objective(planned(slot('', 'finished', 'compose failed'))),
+    ).toMatchObject({ status: 'not-run' })
+    // Without a plan nothing says it never started.
+    expect(objective(detail)).toMatchObject({ status: 'unavailable' })
+  })
+
   it('reads another results contract and flags it instead of hiding figures', () => {
     const current = buildScenarioMatrix(executionDetail())
     expect(current.contracts[0]).toMatchObject({

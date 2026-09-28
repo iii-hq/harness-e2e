@@ -88,7 +88,7 @@ describe('execution facts', () => {
         execution={{ ...execution, source: { kind: 'local' }, stack: [] }}
       />,
     )
-    expect(html).toContain('>local<')
+    expect(html).toContain('>This harness<')
     expect(html).not.toContain('data-stack-toggle')
   })
 

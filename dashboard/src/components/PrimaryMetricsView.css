@@ -265,10 +265,6 @@
 .primary-metrics .pm-table .pm-difference {
   margin-top: 2px;
 }
-.primary-metrics .ds-button {
-  font-family: var(--font-sans);
-  text-transform: none;
-}
 .primary-metrics .pm-excluded {
   margin-top: 20px;
   font-size: 12px;
@@ -380,28 +376,21 @@
 /* Entity title: 20/600, -0.01em (Layout · titles). */
 .harness-e2e-shell .pm-page-header h1,
 .harness-e2e-shell .pm-page-header h2 {
-  font-family: var(--font-sans);
   font-size: 20px;
   font-weight: 600;
   line-height: 28px;
   letter-spacing: -0.01em;
-  text-transform: none;
 }
 
 .harness-e2e-shell .pm-page-header .ds-page-summary,
-.harness-e2e-shell .pm-page-header .ds-page-context,
-.harness-e2e-shell .pm-page-header .ds-breadcrumb ol {
+.harness-e2e-shell .pm-page-header .ds-page-context {
   font-family: var(--font-sans);
   font-size: 12px;
   text-transform: none;
 }
 
-.harness-e2e-shell .pm-page-header .ds-page-actions,
-.harness-e2e-shell .pm-page-header .ds-page-actions .ds-button,
 .harness-e2e-shell .pm-page-header .ds-page-actions .ds-status-badge {
-  font-family: var(--font-sans);
   font-size: 13px;
-  text-transform: none;
 }
 
 .primary-metrics .pm-view-tabs {
