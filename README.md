@@ -99,6 +99,12 @@ cargo run --locked --bin harness-e2e -- catalog
 | `test-plan materialize` | Expand one suite into campaigns, groups, and cases. |
 | `--manifest` | Print the Registry worker manifest as JSON. |
 
+The E2E runner and launch scripts force `III_TELEMETRY_ENABLED=false` for
+themselves and their child processes, preventing iii product usage events
+from being sent to PostHog. For tests against an existing stack, set this
+opt-out when starting its engine and Compose too. An engine already running
+without the opt-out must be restarted with it before E2E tests.
+
 Run one scenario against an existing stack:
 
 ```bash
