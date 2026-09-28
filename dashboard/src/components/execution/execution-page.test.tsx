@@ -98,6 +98,11 @@ describe('transcript page', () => {
     expect(html).toContain('Copy all')
     expect(html).toContain('Download JSON')
     expect(html).toContain('Consecutive tool calls are grouped')
+    // The group names what it holds and starts closed; the count of a cause
+    // is its own pill, not the section's faint count.
+    expect(html).toContain('<span class="ep-strong">1 tool call</span>')
+    expect(html).toMatch(/<details class="ep-tools">/)
+    expect(html).toContain('<span class="ep-cause-count">1×</span>')
   })
 })
 

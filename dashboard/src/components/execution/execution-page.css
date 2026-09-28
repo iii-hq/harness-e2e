@@ -291,7 +291,8 @@
 .ep-cause {
   display: grid;
   width: 100%;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
   gap: 0.125rem 0.5rem;
   padding: 0.375rem 0.5rem;
   border: 0;
@@ -303,16 +304,19 @@
   cursor: pointer;
 }
 
+/* The cause under its function, the count alone in its column. */
 .ep-cause > .ep-faint {
-  grid-column: 1 / -1;
+  grid-column: 2;
 }
 
-.ep-count {
-  padding: 0 0.375rem;
+.ep-cause-count {
+  justify-self: start;
+  padding: 0 var(--ds-space-1);
   border-radius: var(--ds-radius-pill, 9999px);
   background: var(--color-alert-muted, var(--surface-soft));
   font-family: var(--font-mono);
-  font-size: 0.6875rem;
+  font-size: var(--ds-text-label);
+  font-variant-numeric: tabular-nums;
 }
 
 .ep-events {
@@ -384,17 +388,24 @@
   padding: 0 0.5rem;
 }
 
-.ep-tool[data-error] > summary .ep-mono {
-  color: var(--color-alert, var(--danger));
-}
-
 .ep-tool-state {
   font-size: 0.6875rem;
   font-weight: 500;
 }
 
+/* An error reads in ink; the dot carries the colour (state vocabulary). */
 .ep-tool-state[data-tone="alert"] {
-  color: var(--color-alert, var(--danger));
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ds-space-1);
+}
+
+.ep-tool-state[data-tone="alert"]::before {
+  width: 0.375rem;
+  height: 0.375rem;
+  border-radius: var(--ds-radius-pill, 9999px);
+  background: var(--color-alert, var(--danger));
+  content: "";
 }
 
 .ep-pre {
@@ -1052,8 +1063,10 @@
   color: var(--color-ok, var(--success));
 }
 
+/* The design system's danger text (AA on the panel in both themes), where
+   the canvas uses --alert-strong: the host has no light one. */
 .er-miss {
-  color: var(--color-alert, var(--danger));
+  color: var(--ds-danger-text, var(--color-alert, var(--danger)));
 }
 
 .er-deliverable {
