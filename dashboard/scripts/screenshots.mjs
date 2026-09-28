@@ -21,6 +21,7 @@ const BASES = {
 const ROUTES = [
   { name: 'tests', route: 'tests' },
   { name: 'executions', route: 'executions' },
+  { name: 'trends', route: 'trends' },
   { name: 'suites', route: 'suites' },
   { name: 'stacks', route: 'stacks' },
   { name: 'compare', route: 'compare' },

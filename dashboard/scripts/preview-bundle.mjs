@@ -68,6 +68,8 @@ const READS = [
   'stack-templates-list',
   'worker-resolve',
   'credentials-list',
+  'trends-get',
+  'version-compare',
 ].map((name) => `e2e::dashboard::${name}`)
 // The Console loads page.js; this one sets the route and guards the calls,
 // then hands over to the bundle.
