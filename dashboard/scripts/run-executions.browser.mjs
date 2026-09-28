@@ -787,7 +787,8 @@ try {
     },
   }
   const openImport = () =>
-    page.locator('#harness-e2e-main')
+    page
+      .locator('#harness-e2e-main')
       .getByRole('button', { name: 'Import from GitHub', exact: true })
       .click()
   await openImport()
