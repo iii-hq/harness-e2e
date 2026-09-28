@@ -22,7 +22,9 @@ use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
 use crate::plans::stack_sources::{self, WorkerResolveRequest};
-use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
+use crate::plans::stacks::{
+    self, StackCreateRequest, StackPreviewRequest, StackUpdateRequest, StackView,
+};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
     SuiteView,
@@ -55,6 +57,7 @@ pub(super) const STACKS_LIST: &str = "e2e::dashboard::stacks-list";
 pub(super) const STACK_CREATE: &str = "e2e::dashboard::stack-create";
 pub(super) const STACK_UPDATE: &str = "e2e::dashboard::stack-update";
 pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
+pub(super) const STACK_PREVIEW: &str = "e2e::dashboard::stack-preview";
 pub(super) const STACK_TEMPLATES_LIST: &str = "e2e::dashboard::stack-templates-list";
 pub(super) const WORKER_RESOLVE: &str = "e2e::dashboard::worker-resolve";
 pub(super) const CREDENTIALS_LIST: &str = "e2e::dashboard::credentials-list";
@@ -757,6 +760,14 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             }
         })
     });
+    register(
+        iii,
+        STACK_PREVIEW,
+        "Read a stack's YAML as stack-create and stack-update would, without saving it: what it declares (the template's revision apart) and its warnings, or why it would be refused.",
+        RegisterFunction::new_async(move |request: StackPreviewRequest| async move {
+            Ok::<_, Error>(stacks::preview(&request.yaml))
+        }),
+    );
     register(
         iii,
         STACK_TEMPLATES_LIST,

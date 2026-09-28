@@ -77,6 +77,61 @@ pub(crate) struct StackContainer {
     pub commit: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct StackPreviewRequest {
+    /// A stack's YAML as a draft holds it; nothing is saved.
+    pub yaml: String,
+}
+
+/// What a draft declares, as a saved stack would be read, or why it would be
+/// refused.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub(crate) enum StackPreview {
+    Read {
+        /// The iii CLI release it installs.
+        iii: Option<String>,
+        /// The iii-hq/templates project it starts from.
+        template: Option<TemplateReference>,
+        containers: Vec<StackContainer>,
+        /// What the executor or Compose may not do as written; never blocking.
+        warnings: Vec<String>,
+    },
+    Refused {
+        /// Why `stack-create` and `stack-update` would refuse it.
+        refused: String,
+    },
+}
+
+/// `template: <id>@<revision>`, split.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub(crate) struct TemplateReference {
+    pub id: String,
+    /// A commit, tag or branch of iii-hq/templates; none follows `main`.
+    pub revision: Option<String>,
+}
+
+/// A draft read as `summarize` reads a stack, without saving it.
+pub(crate) fn preview(yaml: &str) -> StackPreview {
+    match summarize(yaml) {
+        Ok(summary) => StackPreview::Read {
+            iii: summary.iii,
+            template: summary.template.map(|template| {
+                let (id, revision) = template.split_once('@').unwrap_or((&template, ""));
+                TemplateReference {
+                    id: id.to_owned(),
+                    revision: (!revision.is_empty()).then(|| revision.to_owned()),
+                }
+            }),
+            containers: summary.containers,
+            warnings: summary.warnings,
+        },
+        Err(error) => StackPreview::Refused {
+            refused: error.to_string(),
+        },
+    }
+}
+
 /// A stack as the Console lists it.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct StackView {
@@ -710,5 +765,44 @@ mod tests {
         });
         let error = stack.validate().unwrap_err().to_string();
         assert!(error.contains("Name the stack"), "{error}");
+    }
+
+    #[test]
+    fn a_preview_is_what_a_saved_stack_reads_with_the_template_revision_apart() {
+        let pinned = preview(
+            "iii: 0.24.3-rc.1\ntemplate: harness@v1.2\n# kept\ncontainers:\n  fp:\n    worker: package://fp\n    version: \"\"\n  harness:\n    worker: package://harness\n    commit: 8c02f93\nx-extra: 1\n",
+        );
+        assert_eq!(
+            serde_json::to_value(&pinned).unwrap(),
+            serde_json::json!({
+                "iii": "0.24.3-rc.1",
+                "template": {"id": "harness", "revision": "v1.2"},
+                "containers": [
+                    {"name": "fp", "worker": "package://fp", "version": "", "commit": null},
+                    {"name": "harness", "worker": "package://harness", "version": null, "commit": "8c02f93"},
+                ],
+                "warnings": ["`x-extra` is not a key of a stack (iii, template) or of a Compose project."],
+            })
+        );
+        for (template, revision) in [("harness", None), ("harness@", None)] {
+            let StackPreview::Read {
+                template: Some(read),
+                ..
+            } = preview(&format!("template: {template}\ncontainers: {{}}\n"))
+            else {
+                panic!("{template} is read");
+            };
+            assert_eq!((read.id.as_str(), read.revision), ("harness", revision));
+        }
+        assert_eq!(
+            preview("iii: latest\n"),
+            StackPreview::Refused {
+                refused: "A stack needs a `containers` mapping.".into()
+            }
+        );
+        let StackPreview::Refused { refused } = preview("containers: [") else {
+            panic!("not YAML is refused");
+        };
+        assert!(refused.starts_with("The stack is not YAML"), "{refused}");
     }
 }
