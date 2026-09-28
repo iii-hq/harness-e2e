@@ -4,12 +4,14 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@iii-dev/console-ui'
-import { Ellipsis } from 'lucide-react'
+import { Ellipsis, type LucideIcon } from 'lucide-react'
 
 /** One of a section's actions (Run tests, Import from GitHub, …). */
 export type HeaderAction = {
   id: string
   label: string
+  /** Drawn before the label in the header (Import from GitHub's download). */
+  icon?: LucideIcon
   /** The section's one primary action. */
   primary?: boolean
   disabled?: boolean
@@ -27,6 +29,13 @@ function run(action: HeaderAction) {
 }
 
 function ActionButton({ action }: { action: HeaderAction }) {
+  const Icon = action.icon
+  const content = (
+    <>
+      {Icon ? <Icon size={16} aria-hidden="true" /> : null}
+      {action.label}
+    </>
+  )
   const className = action.primary
     ? 'harness-e2e-header-action harness-e2e-header-action-primary'
     : 'harness-e2e-header-action harness-e2e-header-action-secondary'
@@ -37,7 +46,7 @@ function ActionButton({ action }: { action: HeaderAction }) {
       title={action.title}
       onClick={action.onSelect}
     >
-      {action.label}
+      {content}
     </a>
   ) : (
     <button
@@ -47,7 +56,7 @@ function ActionButton({ action }: { action: HeaderAction }) {
       title={action.title}
       onClick={action.onSelect}
     >
-      {action.label}
+      {content}
     </button>
   )
 }

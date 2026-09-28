@@ -315,6 +315,11 @@
   height: calc(var(--spacing) * 13);
 }
 
+/* The row a menu is open for stays marked while it is (LyMenus). */
+.ex-table.iii-ui-table .ex-row:has(.ds-row-menu-trigger[data-state="open"]) {
+  background: var(--color-surface-hover);
+}
+
 .ex-cell-stack {
   overflow: hidden;
 }

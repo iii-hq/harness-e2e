@@ -1,3 +1,4 @@
+import { Download } from 'lucide-react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
@@ -36,7 +37,12 @@ function renderShell({ narrow = false, phone = false } = {}) {
 }
 
 const ACTIONS: HeaderAction[] = [
-  { id: 'import', label: 'Import from GitHub', onSelect: () => {} },
+  {
+    id: 'import',
+    label: 'Import from GitHub',
+    icon: Download,
+    onSelect: () => {},
+  },
   { id: 'run', label: 'Run tests', primary: true, onSelect: () => {} },
 ]
 
@@ -113,6 +119,10 @@ describe('section actions in the header', () => {
       html.indexOf('Run tests'),
     )
     expect(html).toContain('harness-e2e-header-action-primary')
+    // An action's icon goes before its label, hidden from reading.
+    expect(html).toMatch(
+      /<svg[^>]*lucide-download[^>]*aria-hidden="true"[^>]*>.*?<\/svg>Import from GitHub/,
+    )
   })
 
   it('folds secondary actions into ⋯ with full labels below 720 px', () => {

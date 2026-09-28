@@ -353,14 +353,14 @@ describe('the row menu', () => {
   it('runs again what ran here, and imports again what came from GitHub', () => {
     expect(menu('plan-cf6ab5f9')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Run again',
       'Copy execution id',
       '—Delete…',
     ])
     expect(menu('plan-1d320744')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Open on GitHub',
       'Import again(Replaces its evidence with the run’s)',
       'Copy execution id',
@@ -378,7 +378,7 @@ describe('the row menu', () => {
   it('cancels what runs, and says why it cannot be deleted yet', () => {
     expect(menu('plan-2b7e41c0')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Copy execution id',
       '—Cancel execution',
       'Delete…[Finish or cancel it first]',
@@ -386,7 +386,7 @@ describe('the row menu', () => {
     expect(menu('plan-9c41d07b')).toContain('—Cancel execution')
     expect(menu('plan-e5b0a2c4')).toEqual([
       'Open',
-      'Rename',
+      'Rename…',
       'Open on GitHub',
       'Copy execution id',
       '—Delete…[Wait for the import to finish]',

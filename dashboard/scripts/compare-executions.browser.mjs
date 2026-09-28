@@ -485,7 +485,7 @@ try {
   await page
     .getByRole('button', { name: 'Actions for smoke', exact: true })
     .click()
-  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  await page.getByRole('menuitem', { name: 'Rename…' }).click()
   const rename = page
     .getByRole('dialog')
     .filter({ hasText: 'Rename execution' })
@@ -569,7 +569,7 @@ try {
   await page
     .getByRole('button', { name: 'Actions for smoke rerun', exact: true })
     .click()
-  await page.getByRole('menuitem', { name: 'Rename' }).click()
+  await page.getByRole('menuitem', { name: 'Rename…' }).click()
   await rename.getByRole('button', { name: 'Save', exact: true }).click()
   await rename.waitFor({ state: 'detached' })
   await page.waitForTimeout(300)

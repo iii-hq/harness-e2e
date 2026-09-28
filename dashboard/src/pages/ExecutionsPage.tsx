@@ -7,6 +7,7 @@ import {
   DialogTitle,
   EmptyState as HostEmptyState,
   Input as HostInput,
+  Select as HostSelect,
   SegmentedControl,
   StatusPanel,
   Table,
@@ -25,6 +26,7 @@ import {
   ArrowRight,
   Check,
   Copy,
+  Download,
   ExternalLink,
   GitCompare,
   Inbox,
@@ -59,7 +61,6 @@ import {
   isInteractiveTarget,
   RowMenu,
   type RowMenuItem,
-  Select,
   StatusLabel,
 } from '@/design-system'
 import {
@@ -498,7 +499,7 @@ export function rowMenuItems(
   ]
   if (renamable(row))
     items.push({
-      label: 'Rename',
+      label: 'Rename…',
       icon: icon(Pencil),
       onSelect: () => actions.rename(row),
     })
@@ -1474,6 +1475,7 @@ export function ExecutionsPage() {
             {
               id: 'import',
               label: importLabel,
+              icon: Download,
               onSelect: () => setImportOpen(true),
             },
             {
@@ -1557,20 +1559,13 @@ export function ExecutionsPage() {
               ),
             }))}
           />
-          <Select
+          <HostSelect
             aria-label="Sort executions"
             className="ex-sort"
             value={filters.sort}
-            onChange={(event) =>
-              setFilter('sort', event.target.value as LedgerSort)
-            }
-          >
-            {SORTS.map((sort) => (
-              <option key={sort.value} value={sort.value}>
-                {sort.label}
-              </option>
-            ))}
-          </Select>
+            onChange={(value) => setFilter('sort', value)}
+            options={SORTS}
+          />
         </section>
       )}
 
