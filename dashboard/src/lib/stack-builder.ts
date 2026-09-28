@@ -190,11 +190,20 @@ export function judge(
   return null
 }
 
-/** A scalar as YAML reads it back as text: a version like 1.10 is quoted. */
-function scalar(value: string) {
-  return value !== '' && !Number.isNaN(Number(value))
-    ? JSON.stringify(value)
-    : value
+/** Words YAML (1.1, as the executor reads it, or 1.2) takes for null or a
+ *  boolean. */
+const YAML_WORDS = /^(null|~|true|false|yes|no|on|off|y|n)$/i
+
+/** A value written so YAML reads it back as the same text: plain only when
+ *  it starts with a letter, holds `A-Za-z0-9._+/:@-` alone and is no word
+ *  YAML reads as something else; anything else (a number, a date, `@1.2`,
+ *  `a: b`, `1.2.3 #rc`) is quoted. */
+export function yamlScalar(value: string) {
+  const plain =
+    /^[A-Za-z][A-Za-z0-9._+/:@-]*$/.test(value) &&
+    !value.endsWith(':') &&
+    !YAML_WORDS.test(value)
+  return plain ? value : JSON.stringify(value)
 }
 
 /** The stack's YAML, as the form writes it. */
@@ -203,19 +212,23 @@ export function yamlOf(
   template: string | null,
   declared: Declared[],
 ) {
-  const out = [`iii: ${scalar(iii)}`]
-  if (template) out.push(`template: ${template}`)
+  const out = [`iii: ${yamlScalar(iii)}`]
+  if (template) out.push(`template: ${yamlScalar(template)}`)
   out.push('', declared.length ? 'containers:' : 'containers: {}')
-  for (const entry of declared) {
-    out.push(`  ${entry.name}:`, `    worker: ${entry.worker}`)
-    out.push(
-      entry.commit !== null
-        ? `    commit: ${JSON.stringify(entry.commit)}`
-        : `    version: ${scalar(entry.version || 'latest')}`,
-    )
-  }
+  for (const entry of declared)
+    out.push(`  ${yamlScalar(entry.name)}:`, ...containerLines(entry))
   out.push('', 'startup_timeout: 5m', 'stop_timeout: 30s')
   return out
+}
+
+/** A container's fields as the form writes them: its worker and its pin. */
+function containerLines(entry: Declared) {
+  return [
+    `    worker: ${yamlScalar(entry.worker)}`,
+    entry.commit !== null
+      ? `    commit: ${JSON.stringify(entry.commit)}`
+      : `    version: ${yamlScalar(entry.version || 'latest')}`,
+  ]
 }
 
 /** The YAML's lines, each container's block marked when it stops Create. */

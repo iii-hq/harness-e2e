@@ -14,6 +14,7 @@ import {
   templateExtra,
   typedName,
   yamlOf,
+  yamlScalar,
 } from '@/lib/stack-builder'
 
 const HARNESS = [
@@ -104,7 +105,37 @@ describe('stack builder', () => {
       '    version: "1.10"',
       '  queue:',
       '    worker: package://queue',
-      '    version: 0.21.9',
+      '    version: "0.21.9"',
+    ])
+    // What YAML would read as something else, or not at all, is quoted.
+    for (const [value, written] of [
+      ['latest', 'latest'],
+      ['package://harness', 'package://harness'],
+      ['harness@4077e670', 'harness@4077e670'],
+      ['null', '"null"'],
+      ['~', '"~"'],
+      ['Yes', '"Yes"'],
+      ['1.2.3 #rc', '"1.2.3 #rc"'],
+      ['@1.2', '"@1.2"'],
+      ['a: b', '"a: b"'],
+      ['2026-09-28', '"2026-09-28"'],
+      ['12', '"12"'],
+      ['end:', '"end:"'],
+    ])
+      expect(yamlScalar(value)).toBe(written)
+    expect(
+      yamlOf('null', '~', [{ ...pkg('x'), version: '1.2.3 #rc' }]),
+    ).toEqual([
+      'iii: "null"',
+      'template: "~"',
+      '',
+      'containers:',
+      '  x:',
+      '    worker: package://x',
+      '    version: "1.2.3 #rc"',
+      '',
+      'startup_timeout: 5m',
+      'stop_timeout: 30s',
     ])
     expect(pinLabel(pinned)).toBe('commit 8c02f93')
     expect(pinLabel({ ...pkg('x'), commit: '' })).toBe('commit …')
