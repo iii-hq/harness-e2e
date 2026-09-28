@@ -26,6 +26,8 @@ describe('live dashboard transport', () => {
         stack_delete: 'stack-delete',
         stack_templates_list: 'stack-templates-list',
         worker_resolve: 'worker-resolve',
+        stack_preview: 'stack-preview',
+        iii_releases_list: 'iii-releases-list',
         credentials_list: 'credentials-list',
         credential_set: 'credential-set',
         credential_delete: 'credential-delete',
@@ -68,6 +70,20 @@ describe('live dashboard transport', () => {
     })
     await live.listStackTemplates()
     expect(trigger).toHaveBeenCalledWith('stack-templates-list', {})
+    await live.listStackTemplates('v1.2')
+    expect(trigger).toHaveBeenCalledWith('stack-templates-list', {
+      revision: 'v1.2',
+    })
+    await live.previewStack('containers: {}\n')
+    expect(trigger).toHaveBeenCalledWith('stack-preview', {
+      yaml: 'containers: {}\n',
+    })
+    await live.listIiiReleases()
+    expect(trigger).toHaveBeenCalledWith('iii-releases-list', {})
+    await live.listIiiReleases('0.24.2')
+    expect(trigger).toHaveBeenCalledWith('iii-releases-list', {
+      version: '0.24.2',
+    })
     await live.resolveWorker('harness')
     expect(trigger).toHaveBeenCalledWith('worker-resolve', {
       worker: 'harness',

@@ -84,14 +84,45 @@ export type StackTemplate = {
   workers: TemplateWorker[]
   /** Why it declares no workers. */
   note?: string
+  /** The oldest iii release it runs on, when its template.yaml says. */
+  min_iii_version?: string
 }
 
-/** iii-hq/templates as `main` had it when the worker read it. */
+/** iii-hq/templates at a revision (`ref`, `main` by default) and the commit
+ *  it was at when the worker read it. */
 export type StackTemplates = {
   repository: string
   ref: string
   revision: string
   templates: StackTemplate[]
+}
+
+/** What a draft's YAML declares, read as a saved stack would be (the
+ *  template's `@revision` apart), or why saving it would be refused. */
+export type StackPreview =
+  | {
+      iii: string | null
+      template: { id: string; revision: string | null } | null
+      containers: StackContainer[]
+      warnings: string[]
+    }
+  | { refused: string }
+
+/** A release of the iii CLI (tag `iii/v<version>`). */
+export type IiiRelease = {
+  version: string
+  prerelease: boolean
+  published_at: string | null
+  /** Whether it publishes the CLI archive a group installs. */
+  cli: boolean
+}
+
+/** The newest iii releases and what `iii: latest` installs; with a version
+ *  asked about, whether that release exists. */
+export type IiiReleases = {
+  latest_candidate: string | null
+  releases: IiiRelease[]
+  checked?: { version: string; release: IiiRelease | null }
 }
 
 /** What the iii registry resolves a worker to: its newest release and the
@@ -700,7 +731,9 @@ export type RuntimeConfig = {
     stack_update: string
     stack_delete: string
     stack_templates_list: string
+    stack_preview: string
     worker_resolve: string
+    iii_releases_list: string
     credentials_list: string
     credential_set: string
     credential_delete: string
@@ -761,8 +794,13 @@ export type DashboardDataBridge = {
   createStack(from: string, label?: string): Promise<Stack>
   /** A stack of this Console of this YAML; refused as `updateStack` is. */
   createStackFromYaml(label: string, yaml: string): Promise<Stack>
-  /** The iii-hq/templates projects; the worker keeps them ten minutes. */
-  listStackTemplates(): Promise<StackTemplates>
+  /** The iii-hq/templates projects at a revision (`main` when none); the
+   *  worker keeps them ten minutes. */
+  listStackTemplates(revision?: string): Promise<StackTemplates>
+  /** A draft's YAML read as a saved stack would be, without saving it. */
+  previewStack(yaml: string): Promise<StackPreview>
+  /** The newest iii releases; with `version`, whether it exists. */
+  listIiiReleases(version?: string): Promise<IiiReleases>
   /** What the iii registry resolves `<worker>@latest` to. */
   resolveWorker(worker: string): Promise<WorkerResolution>
   /** Refused only when the YAML does not parse or declares no containers. */
@@ -891,7 +929,14 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call(runtime.functions.stack_create, { from, label }),
     createStackFromYaml: (label, yaml) =>
       call(runtime.functions.stack_create, { label, yaml }),
-    listStackTemplates: () => call(runtime.functions.stack_templates_list, {}),
+    listStackTemplates: (revision) =>
+      call(
+        runtime.functions.stack_templates_list,
+        revision ? { revision } : {},
+      ),
+    previewStack: (yaml) => call(runtime.functions.stack_preview, { yaml }),
+    listIiiReleases: (version) =>
+      call(runtime.functions.iii_releases_list, version ? { version } : {}),
     resolveWorker: (worker) =>
       call(runtime.functions.worker_resolve, { worker }),
     updateStack: (stackId, changes) =>
