@@ -29,6 +29,7 @@ import {
 import { useDashboardChrome } from '@/components/DashboardShell'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { ProviderCredentials } from '@/components/ProviderCredentials'
+import { StackBuilder } from '@/components/stacks/StackBuilder'
 import {
   buttonClassName,
   Callout,
@@ -48,7 +49,6 @@ import {
   iiiHint,
   pinOf,
   savedStatus,
-  stackDeclares,
   stackDiff,
   stackFile,
   stackSub,
@@ -94,6 +94,7 @@ export function StackSheet({
   copyError,
   created = false,
   gone = false,
+  unsaved = false,
   onCopy,
   onSaved,
   onClose,
@@ -109,6 +110,8 @@ export function StackSheet({
   created?: boolean
   /** No longer listed: deleted elsewhere while it was open. */
   gone?: boolean
+  /** Written by New stack's Edit as YAML: saving creates it. */
+  unsaved?: boolean
   onCopy: () => void
   onSaved: (stack: Stack) => void
   onClose: () => void
@@ -122,7 +125,8 @@ export function StackSheet({
   const [asking, setAsking] = useState(false)
   const code = useRef<HTMLElement>(null)
   const dirty =
-    editing && (draft.label.trim() !== stack.label || draft.yaml !== stack.yaml)
+    editing &&
+    (unsaved || draft.label.trim() !== stack.label || draft.yaml !== stack.yaml)
   const lines = yamlLines(stack.yaml)
   const editorLines = draft.yaml.split('\n').length
   const warnings = stack.warnings
@@ -140,10 +144,12 @@ export function StackSheet({
     setSaving(true)
     setError(null)
     try {
-      const next = await bridge.updateStack(stack.id, {
-        label: draft.label.trim(),
-        yaml: draft.yaml,
-      })
+      const next = unsaved
+        ? await bridge.createStackFromYaml(draft.label.trim(), draft.yaml)
+        : await bridge.updateStack(stack.id, {
+            label: draft.label.trim(),
+            yaml: draft.yaml,
+          })
       setDraft({ label: next.label, yaml: next.yaml })
       setStatus(savedStatus(next))
       onSaved(next)
@@ -163,18 +169,20 @@ export function StackSheet({
       ? ['alert', copyError]
       : !editing
         ? ['faint', 'Read-only. Copies you make appear under This Console.']
-        : dirty
-          ? [
-              'warn',
-              'Unsaved changes. The summary and warnings refresh when you save.',
-            ]
-          : [
-              'faint',
-              status ||
-                (stack.updated_at
-                  ? `Saved ${formatDateTime(stack.updated_at)}.`
-                  : ''),
-            ]
+        : unsaved
+          ? ['warn', 'Not saved yet. Save stack creates it in this Console.']
+          : dirty
+            ? [
+                'warn',
+                'Unsaved changes. The summary and warnings refresh when you save.',
+              ]
+            : [
+                'faint',
+                status ||
+                  (stack.updated_at
+                    ? `Saved ${formatDateTime(stack.updated_at)}.`
+                    : ''),
+              ]
 
   return (
     <>
@@ -198,7 +206,7 @@ export function StackSheet({
             {editing ? (
               <>
                 <DialogTitle className="ds-visually-hidden">
-                  Edit {stack.label}
+                  {unsaved ? 'New stack' : `Edit ${stack.label}`}
                 </DialogTitle>
                 <label className="sk-field-label" htmlFor="sk-name">
                   Stack name
@@ -228,9 +236,11 @@ export function StackSheet({
               </div>
             )}
             <DialogDescription className="sk-sheet-desc">
-              {editing
-                ? 'Kept in this Console. Only YAML that does not parse, or has no containers, is refused. Everything else is a warning.'
-                : `${stackFile(stack)}, built into this runner. Copy it to change a version, a worker or the template.`}
+              {unsaved
+                ? 'Written by New stack, not saved yet: Save stack creates it in this Console. Only YAML that does not parse, or has no containers, is refused. Everything else is a warning.'
+                : editing
+                  ? 'Kept in this Console. Only YAML that does not parse, or has no containers, is refused. Everything else is a warning.'
+                  : `${stackFile(stack)}, built into this runner. Copy it to change a version, a worker or the template.`}
             </DialogDescription>
           </header>
 
@@ -443,12 +453,13 @@ export function StackSheet({
                   aria-disabled={saving || undefined}
                   onClick={() => {
                     if (saving) return
+                    if (unsaved) return close()
                     if (!dirty) return onClose()
                     setDraft({ label: stack.label, yaml: stack.yaml })
                     setError(null)
                   }}
                 >
-                  {dirty ? 'Discard changes' : 'Close'}
+                  {unsaved ? 'Cancel' : dirty ? 'Discard changes' : 'Close'}
                 </button>
                 <button
                   type="button"
@@ -490,8 +501,16 @@ export function StackSheet({
         onOpenChange={(open) => {
           if (!open) setAsking(false)
         }}
-        title={`Discard changes to ${stack.label}?`}
-        description="What you changed in it is not saved. Discarding keeps the stack as it was last saved."
+        title={
+          unsaved
+            ? 'Discard this new stack?'
+            : `Discard changes to ${stack.label}?`
+        }
+        description={
+          unsaved
+            ? 'It is not saved yet: discarding drops it and what the form wrote.'
+            : 'What you changed in it is not saved. Discarding keeps the stack as it was last saved.'
+        }
         cancelLabel="Keep editing"
         confirmLabel="Discard changes"
         tone="danger"
@@ -512,7 +531,8 @@ export function stacksHeaderActions(
       id: 'new',
       label: 'New stack',
       disabled: !onNew,
-      title: 'A stack of this Console, as a copy of another',
+      title:
+        'A stack of this Console, from a template, a copy or the workers you pick',
       onSelect: onNew,
     },
     ...(onRun
@@ -705,165 +725,6 @@ export function StackList({ stacks, onNew, ...row }: StackListProps) {
   ))
 }
 
-/** New stack: a stack of this Console starts as a copy of another, named
- *  after it unless a name is given; its YAML opens next to edit. */
-export function NewStackDialog({
-  stacks,
-  narrow,
-  busy,
-  error,
-  onCreate,
-  onClose,
-}: {
-  stacks: Stack[]
-  narrow: boolean
-  busy: boolean
-  /** Why the last try did not go through. */
-  error: string | null
-  onCreate: (from: string, label: string) => void
-  onClose: () => void
-}) {
-  const [from, setFrom] = useState(
-    () =>
-      (stacks.find((stack) => stack.id === BASE_STACK) ?? stacks[0])?.id ?? '',
-  )
-  const [name, setName] = useState('')
-  const source = stacks.find((stack) => stack.id === from)
-  const groups = [
-    {
-      key: 'repository',
-      label: 'Repository',
-      stacks: stacks.filter((stack) => stack.source !== 'local'),
-    },
-    {
-      key: 'local',
-      label: 'This Console',
-      stacks: stacks.filter((stack) => stack.source === 'local'),
-    },
-  ]
-  return (
-    <Dialog
-      open
-      onOpenChange={(open) => {
-        if (!open && !busy) onClose()
-      }}
-    >
-      <DialogContent className="sk-new" data-narrow={narrow || undefined}>
-        <header className="sk-sheet-head">
-          <DialogTitle className="sk-new-title">New stack</DialogTitle>
-          <DialogDescription className="sk-sheet-desc">
-            A stack of this Console starts as a copy. Its YAML opens next, to
-            change what you need.
-          </DialogDescription>
-        </header>
-        <form
-          id="sk-new-form"
-          className="sk-new-body"
-          noValidate
-          onSubmit={(event) => {
-            event.preventDefault()
-            if (source && !busy) onCreate(source.id, name.trim())
-          }}
-        >
-          <fieldset className="sk-from">
-            <legend className="sk-field-label">Copy of</legend>
-            {groups.map((group) => (
-              // biome-ignore lint/a11y/useSemanticElements: a labelled part of one radio group, inside its fieldset
-              <div
-                key={group.key}
-                role="group"
-                aria-labelledby={`sk-from-${group.key}`}
-                className="sk-from-group"
-              >
-                <span className="ds-label" id={`sk-from-${group.key}`}>
-                  {group.label}
-                </span>
-                {group.stacks.map((stack) => (
-                  <label
-                    key={stack.id}
-                    className="sk-option"
-                    data-selected={stack.id === from || undefined}
-                  >
-                    <input
-                      type="radio"
-                      className="sk-radio"
-                      name="sk-from"
-                      value={stack.id}
-                      checked={stack.id === from}
-                      aria-disabled={busy || undefined}
-                      onChange={() => {
-                        if (!busy) setFrom(stack.id)
-                      }}
-                    />
-                    <span className="sk-option-text">
-                      <span className="sk-option-label">{stack.label}</span>
-                      <span className="sk-faint">{stackDeclares(stack)}</span>
-                    </span>
-                  </label>
-                ))}
-                {group.stacks.length === 0 ? (
-                  <span className="sk-from-empty">None yet.</span>
-                ) : null}
-              </div>
-            ))}
-          </fieldset>
-          <div className="sk-field">
-            <label className="sk-field-label" htmlFor="sk-new-name">
-              Name <span className="sk-optional">optional</span>
-            </label>
-            <input
-              id="sk-new-name"
-              className="sk-input"
-              value={name}
-              maxLength={160}
-              autoComplete="off"
-              placeholder={source ? `${source.label} copy` : ''}
-              aria-describedby="sk-new-name-hint"
-              readOnly={busy}
-              aria-disabled={busy || undefined}
-              onChange={(event) => setName(event.target.value)}
-            />
-            <span id="sk-new-name-hint" className="sk-hint">
-              Empty names it after what it copies. Rename it any time.
-            </span>
-          </div>
-        </form>
-        <footer className="sk-new-foot">
-          <span
-            className="sk-status"
-            aria-live="polite"
-            role={error ? 'alert' : undefined}
-            data-tone={error ? 'alert' : 'faint'}
-          >
-            {error ??
-              (source ? `Copies ${source.label} into this Console.` : '')}
-          </span>
-          <button
-            type="button"
-            className="sk-btn"
-            aria-disabled={busy || undefined}
-            onClick={() => {
-              if (!busy) onClose()
-            }}
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            form="sk-new-form"
-            className="sk-btn sk-btn-primary"
-            disabled={!source}
-            aria-disabled={busy || undefined}
-            aria-busy={busy || undefined}
-          >
-            {busy ? 'Creating…' : 'Create and edit'}
-          </button>
-        </footer>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
 /** Stacks: the repository's, read-only, and this Console's. Any stack is
  *  copied into one of this Console to edit it. Below them, the provider
  *  credentials a Docker execution's stack receives. */
@@ -881,10 +742,10 @@ export function StacksPage() {
     mode: 'view' | 'edit'
     stack: Stack
     created?: boolean
+    unsaved?: boolean
   } | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
   const [creating, setCreating] = useState(false)
-  const [createError, setCreateError] = useState<string | null>(null)
   const [running, setRunning] = useState(false)
   const beginRequest = useLatestRequest()
 
@@ -905,10 +766,7 @@ export function StacksPage() {
     void load()
   }, [load])
 
-  const openNew = useCallback(() => {
-    setCreateError(null)
-    setCreating(true)
-  }, [])
+  const openNew = useCallback(() => setCreating(true), [])
   const headerActions = useMemo(
     () =>
       stacksHeaderActions(
@@ -929,22 +787,6 @@ export function StacksPage() {
       void load()
     } catch (cause) {
       setActionError(errorText(cause))
-    } finally {
-      setBusy(false)
-    }
-  }
-  const create = async (from: string, label: string) => {
-    if (!bridge) return
-    setBusy(true)
-    setCreateError(null)
-    try {
-      const created = await bridge.createStack(from, label)
-      setStacks((current) => upsertStack(current, created))
-      setCreating(false)
-      setSheet({ id: created.id, mode: 'edit', stack: created, created: true })
-      void load()
-    } catch (cause) {
-      setCreateError(errorText(cause))
     } finally {
       setBusy(false)
     }
@@ -1073,25 +915,49 @@ export function StacksPage() {
           busy={busy}
           copyError={actionError}
           created={sheet?.created}
-          gone={Boolean(stacks) && !listed}
+          gone={!sheet?.unsaved && Boolean(stacks) && !listed}
+          unsaved={sheet?.unsaved}
           onCopy={() => void copy(open)}
           onSaved={(saved) => {
             setStacks((current) => upsertStack(current, saved))
             setSheet((current) =>
-              current?.id === saved.id ? { ...current, stack: saved } : current,
+              current?.unsaved
+                ? { id: saved.id, mode: 'edit', stack: saved, created: true }
+                : current?.id === saved.id
+                  ? { ...current, stack: saved }
+                  : current,
             )
             void load()
           }}
           onClose={() => setSheet(null)}
         />
       ) : null}
-      {creating && stacks ? (
-        <NewStackDialog
+      {creating && stacks && bridge ? (
+        <StackBuilder
           stacks={stacks}
           narrow={narrow}
-          busy={busy}
-          error={createError}
-          onCreate={(from, label) => void create(from, label)}
+          bridge={bridge}
+          onCreated={(made) => {
+            setStacks((current) => upsertStack(current, made))
+            setCreating(false)
+            setSheet({ id: made.id, mode: 'edit', stack: made, created: true })
+            void load()
+          }}
+          onEditYaml={(draft) => {
+            setCreating(false)
+            setSheet({
+              id: '',
+              mode: 'edit',
+              unsaved: true,
+              stack: {
+                ...draft,
+                id: '',
+                source: 'local',
+                warnings: [],
+                updated_at: null,
+              },
+            })
+          }}
           onClose={() => setCreating(false)}
         />
       ) : null}

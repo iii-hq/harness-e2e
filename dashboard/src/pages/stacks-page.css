@@ -836,25 +836,6 @@
   padding: 0 0 calc(var(--spacing) * 2);
 }
 
-.sk-from-group {
-  display: flex;
-  flex-direction: column;
-  gap: calc(var(--spacing) * 0.5);
-}
-
-.sk-from-group > .ds-label {
-  padding: 0 calc(var(--spacing) * 2.5) var(--spacing);
-  color: var(--color-ink-faint);
-  font-size: var(--ds-text-label, 0.6875rem);
-  letter-spacing: var(--ds-tracking-label, 0.06em);
-}
-
-.sk-from-empty {
-  padding: var(--spacing) calc(var(--spacing) * 2.5);
-  color: var(--color-ink-faint);
-  font-size: var(--text-xs);
-}
-
 .sk-option {
   display: grid;
   grid-template-columns: calc(var(--spacing) * 4.5) minmax(0, 1fr);
@@ -914,11 +895,6 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing);
-}
-
-.sk-optional {
-  color: var(--color-ink-faint);
-  font-weight: 400;
 }
 
 .sk-hint {
