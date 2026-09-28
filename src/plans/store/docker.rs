@@ -2300,12 +2300,22 @@ mod tests {
                 if path.is_dir() {
                     folders.push(path);
                 } else if path != data.join(credentials::FILE) {
+                    // Whole values: "9f1c" alone turns up in random hex ids.
                     let bytes = fs::read(&path).unwrap();
-                    assert!(
-                        !bytes.windows(4).any(|window| window == b"9f1c"),
-                        "{} holds a credential",
-                        path.display()
-                    );
+                    for secret in [
+                        "sk-file-9f1c",
+                        "sk-zai-9f1c",
+                        "sk-console-9f1c",
+                        "sk-openai-9f1c",
+                    ] {
+                        assert!(
+                            !bytes
+                                .windows(secret.len())
+                                .any(|window| window == secret.as_bytes()),
+                            "{} holds a credential",
+                            path.display()
+                        );
+                    }
                 }
             }
         }
