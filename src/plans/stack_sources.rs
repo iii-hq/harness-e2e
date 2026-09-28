@@ -19,6 +19,10 @@ const REGISTRY_RESOLVE: &str = "https://api.workers.iii.dev/resolve";
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 const KEEP_FOR: Duration = Duration::from_secs(10 * 60);
 const TIMEOUT: Duration = Duration::from_secs(10);
+/// Past this an answer is refused before it is read further.
+const MAX_BYTES: usize = 1024 * 1024;
+/// Workers whose resolution is kept at once.
+const MAX_RESOLVED: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct StackTemplates {
@@ -87,6 +91,7 @@ pub(crate) struct RegistryRefusal {
 }
 
 static TEMPLATES: Mutex<Option<(Instant, StackTemplates)>> = Mutex::new(None);
+/// Each worker's resolution and until when it is kept.
 static RESOLVED: Mutex<BTreeMap<String, (Instant, WorkerResolution)>> = Mutex::new(BTreeMap::new());
 
 /// The projects of iii-hq/templates as `main` has them, kept ten minutes.
@@ -107,8 +112,8 @@ pub(crate) async fn resolve(worker: &str) -> Result<WorkerResolution> {
         worker_name(worker),
         "A worker's name is lowercase letters, digits and -, up to 64 characters, starting with a letter or a digit."
     );
-    if let Some((at, kept)) = RESOLVED.lock().unwrap().get(worker) {
-        if at.elapsed() < KEEP_FOR {
+    if let Some((until, kept)) = RESOLVED.lock().unwrap().get(worker) {
+        if *until > Instant::now() {
             return Ok(kept.clone());
         }
     }
@@ -119,13 +124,60 @@ pub(crate) async fn resolve(worker: &str) -> Result<WorkerResolution> {
         .await
         .map_err(|error| anyhow!("The iii registry did not answer: {}", error.without_url()))?;
     let status = response.status().as_u16();
-    let body = response.json::<Value>().await.unwrap_or(Value::Null);
+    let body = read_capped(response, "The iii registry's answer").await?;
+    let body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
     let resolved = resolution(worker, status, &body)?;
-    RESOLVED
-        .lock()
-        .unwrap()
-        .insert(worker.to_owned(), (Instant::now(), resolved.clone()));
+    remember(
+        &mut RESOLVED.lock().unwrap(),
+        worker,
+        resolved.clone(),
+        Instant::now(),
+    );
     Ok(resolved)
+}
+
+/// Keep a resolution ten minutes: the expired ones go first, then, at
+/// `MAX_RESOLVED`, the one that expires soonest.
+fn remember(
+    kept: &mut BTreeMap<String, (Instant, WorkerResolution)>,
+    worker: &str,
+    resolved: WorkerResolution,
+    now: Instant,
+) {
+    kept.retain(|_, (until, _)| *until > now);
+    while kept.len() >= MAX_RESOLVED && !kept.contains_key(worker) {
+        let Some(soonest) = kept
+            .iter()
+            .min_by_key(|(_, (until, _))| *until)
+            .map(|(name, _)| name.clone())
+        else {
+            break;
+        };
+        kept.remove(&soonest);
+    }
+    kept.insert(worker.to_owned(), (now + KEEP_FOR, resolved));
+}
+
+/// An answer's body, refused past `MAX_BYTES`: at once when it says its
+/// length, else as the chunks arrive.
+async fn read_capped(mut response: reqwest::Response, what: &str) -> Result<Vec<u8>> {
+    let too_big = || anyhow!("{what} is past 1 MB; it was not read.");
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_BYTES as u64)
+    {
+        return Err(too_big());
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|error| anyhow!("{what} could not be read: {}", error.without_url()))?
+    {
+        ensure!(body.len() + chunk.len() <= MAX_BYTES, too_big());
+        body.extend_from_slice(&chunk);
+    }
+    Ok(body)
 }
 
 /// `^[a-z0-9][a-z0-9-]{0,63}$`.
@@ -242,7 +294,8 @@ async fn main_revision(client: &reqwest::Client) -> Result<String> {
         .await
         .map_err(|error| anyhow!("GitHub did not answer: {}", error.without_url()))?;
     let status = response.status();
-    let body = response.json::<Value>().await.unwrap_or(Value::Null);
+    let body = read_capped(response, "GitHub's answer").await?;
+    let body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
     if !status.is_success() {
         match body["message"].as_str() {
             Some(message) => bail!("GitHub answered {status} for {url}: {message}"),
@@ -267,12 +320,10 @@ async fn fetch(client: &reqwest::Client, url: &str) -> Result<Option<String>> {
         return Ok(None);
     }
     ensure!(status.is_success(), "GitHub answered {status} for {url}.");
-    Ok(Some(
-        response
-            .text()
-            .await
-            .with_context(|| format!("read {url}"))?,
-    ))
+    let body = read_capped(response, url).await?;
+    String::from_utf8(body)
+        .map(Some)
+        .map_err(|_| anyhow!("{url} is not UTF-8 text."))
 }
 
 fn client() -> Result<reqwest::Client> {
@@ -600,6 +651,57 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("answered 502"));
+    }
+
+    #[tokio::test]
+    async fn an_answer_past_1_mib_is_refused_as_it_arrives() {
+        let answer = |body: Vec<u8>| reqwest::Response::from(axum::http::Response::new(body));
+        let fits = read_capped(answer(vec![b'x'; MAX_BYTES]), "It")
+            .await
+            .unwrap();
+        assert_eq!(fits.len(), MAX_BYTES);
+        assert_eq!(
+            read_capped(answer(vec![b'x'; MAX_BYTES + 1]), "The answer")
+                .await
+                .unwrap_err()
+                .to_string(),
+            "The answer is past 1 MB; it was not read."
+        );
+    }
+
+    #[test]
+    fn resolutions_are_kept_ten_minutes_and_at_most_256() {
+        let found = |version: &str| WorkerResolution::Found {
+            name: "w".into(),
+            version: version.into(),
+            dependencies: Vec::new(),
+        };
+        let start = Instant::now();
+        let mut kept = BTreeMap::new();
+        for index in 0..300 {
+            let now = start + Duration::from_millis(index);
+            remember(&mut kept, &format!("w{index}"), found("1"), now);
+        }
+        assert_eq!(kept.len(), MAX_RESOLVED);
+        // The ones that expire soonest went first.
+        assert!(!kept.contains_key("w0") && kept.contains_key("w299"));
+        // Asking again for one kept replaces it without evicting another.
+        remember(
+            &mut kept,
+            "w299",
+            found("2"),
+            start + Duration::from_millis(400),
+        );
+        assert_eq!(kept.len(), MAX_RESOLVED);
+        assert_eq!(kept["w299"].1, found("2"));
+        // Past ten minutes, everything else has expired.
+        remember(
+            &mut kept,
+            "fresh",
+            found("1"),
+            start + KEEP_FOR + Duration::from_millis(350),
+        );
+        assert_eq!(kept.keys().collect::<Vec<_>>(), ["fresh", "w299"]);
     }
 
     #[tokio::test]
