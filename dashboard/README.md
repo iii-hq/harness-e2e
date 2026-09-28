@@ -138,7 +138,9 @@ technically valid runs only; completed runs are counted out of the planned ones
 (tests × runs per test), and a planned test with no run is `not_run`. The stack
 filter defaults to `any`, also when it names a stack the series never ran on;
 an execution that recorded no stack joins the stack whose first execution ran
-workers of the same names. A worker is named by its commit
+workers of the same names. `since` and `until` (RFC 3339, inclusive, on the
+start) limit the points and the stacks' counts; the series listed and the
+stack each execution joins are still read over all time. A worker is named by its commit
 (`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
 harness, a concrete version its compose file pins), never the version the
 engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links

@@ -3,8 +3,9 @@
 //! Everything here is computed from what the read model already holds.
 use std::collections::{BTreeMap, BTreeSet};
 
+use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{de::Error as _, Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 use crate::plans::store::{ExecutionParameters, ExecutionSource, StackWorker, Where};
@@ -31,6 +32,29 @@ pub(super) struct TrendsRequest {
     /// never ran on: `any`.
     #[serde(default)]
     pub stack: Option<String>,
+    /// Only executions started at or after this RFC 3339 instant; the series
+    /// and the stacks' workers are still read over all time.
+    #[serde(default, deserialize_with = "bound")]
+    #[schemars(with = "Option<String>")]
+    pub since: Option<DateTime<Utc>>,
+    /// Only executions started at or before this RFC 3339 instant.
+    #[serde(default, deserialize_with = "bound")]
+    #[schemars(with = "Option<String>")]
+    pub until: Option<DateTime<Utc>>,
+}
+
+/// An RFC 3339 instant; null or empty is no bound.
+fn bound<'de, D: Deserializer<'de>>(value: D) -> Result<Option<DateTime<Utc>>, D::Error> {
+    Option::<String>::deserialize(value)?
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            DateTime::parse_from_rfc3339(&value)
+                .map(|at| at.with_timezone(&Utc))
+                .map_err(|error| {
+                    D::Error::custom(format!("'{value}' is not an RFC 3339 instant: {error}"))
+                })
+        })
+        .transpose()
 }
 
 /// A field sent as null is present: `Some(None)`.
@@ -244,14 +268,25 @@ pub(super) fn trends(
 
     let stacks = stacks_of(executions);
     let name = |stack: &TrendStack| stack.name.clone().unwrap_or_else(|| NOT_RECORDED.into());
+    // Stacks are the series', over all time; they count the executions of
+    // the period.
+    let within = |execution: &&Execution| {
+        let at = instant(execution.started_at).0;
+        request
+            .since
+            .is_none_or(|since| at.is_some_and(|at| at >= since))
+            && request
+                .until
+                .is_none_or(|until| at.is_some_and(|at| at <= until))
+    };
     let mut counts = Vec::<StackCount>::new();
-    for stack in stacks.iter().rev() {
-        let name = name(stack);
-        match counts.iter_mut().find(|count| count.name == name) {
-            Some(count) => count.executions += 1,
+    for (execution, stack) in executions.iter().zip(&stacks).rev() {
+        let (name, count) = (name(stack), usize::from(within(&execution)));
+        match counts.iter_mut().find(|known| known.name == name) {
+            Some(known) => known.executions += count,
             None => counts.push(StackCount {
                 name,
-                executions: 1,
+                executions: count,
             }),
         }
     }
@@ -259,7 +294,7 @@ pub(super) fn trends(
     counts.sort_by_key(|count| count.name == NOT_RECORDED);
     counts.push(StackCount {
         name: ANY.into(),
-        executions: executions.len(),
+        executions: executions.iter().filter(within).count(),
     });
     // A stack the series never ran on filters nothing.
     let applied = request
@@ -270,7 +305,9 @@ pub(super) fn trends(
     let points = executions
         .iter()
         .zip(stacks)
-        .filter(|(_, stack)| applied == ANY || name(stack) == applied)
+        .filter(|(execution, stack)| {
+            within(execution) && (applied == ANY || name(stack) == applied)
+        })
         .map(|(execution, stack)| {
             let natives = children
                 .get(execution.id)
@@ -607,11 +644,11 @@ fn sum(values: impl Iterator<Item = Option<f64>>) -> Option<f64> {
 }
 
 /// RFC 3339 instants compare as instants, whatever their offset.
-fn instant(value: &str) -> (Option<chrono::DateTime<chrono::Utc>>, &str) {
+fn instant(value: &str) -> (Option<DateTime<Utc>>, &str) {
     (
-        chrono::DateTime::parse_from_rfc3339(value)
+        DateTime::parse_from_rfc3339(value)
             .ok()
-            .map(|at| at.with_timezone(&chrono::Utc)),
+            .map(|at| at.with_timezone(&Utc)),
         value,
     )
 }
@@ -852,6 +889,54 @@ mod tests {
         let gone = trends(&request("gone"), &summaries, &runs);
         assert_eq!(gone.stack, ANY);
         assert_eq!(gone.points.len(), 5);
+    }
+
+    #[test]
+    fn a_period_limits_the_points_and_the_stack_counts_not_the_series_or_the_matching() {
+        let mut other = listed("other", "2026-09-25T10:00:00Z", None, &[]);
+        other["parameters"]["model"] = json!("pro");
+        let summaries = [
+            listed("e1", "2026-09-20T10:00:00Z", Some("default"), &["a", "b"]),
+            listed("e2", "2026-09-22T10:00:00Z", None, &["a", "b"]),
+            listed("e3", "2026-09-24T10:00:00Z", Some("18w"), &["x"]),
+            other,
+        ];
+        let request = serde_json::from_value::<TrendsRequest>(json!({
+            "model": "flash", "since": "2026-09-21T00:00:00-03:00", "until": "2026-09-22T10:00:00Z",
+        }))
+        .unwrap();
+        let response = trends(&request, &summaries, &BTreeMap::new());
+        // Every series, over all time.
+        assert_eq!(
+            response
+                .series
+                .iter()
+                .map(|series| series.executions)
+                .collect::<Vec<_>>(),
+            [1, 3]
+        );
+        // Both bounds hold; e2 matched the stack of e1, before the period.
+        let [point] = response.points.as_slice() else {
+            panic!("one point: {:?}", response.points);
+        };
+        assert_eq!(point.execution_id, "e2");
+        assert_eq!(point.stack.name.as_deref(), Some("default"));
+        assert!(point.stack.matched_by_workers);
+        let count = |name: &str, executions| StackCount {
+            name: name.into(),
+            executions,
+        };
+        assert_eq!(
+            response.stacks,
+            [count("18w", 0), count("default", 1), count(ANY, 1)]
+        );
+        for bad in [
+            json!({"since": "yesterday"}),
+            json!({"until": "2026-09-22"}),
+        ] {
+            let error = serde_json::from_value::<TrendsRequest>(bad).unwrap_err();
+            assert!(error.to_string().contains("RFC 3339"), "{error}");
+        }
     }
 
     #[test]
