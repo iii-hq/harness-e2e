@@ -329,18 +329,15 @@ export function StackBuilder({
     edit(() => {
       setSource(next)
       setMenu(null)
-      if (next === 'none') {
-        setTemplate(null)
-        setPicking(false)
-      }
-      if (next === 'template') setPicking(true)
+      if (next === 'none') setTemplate(null)
+      setPicking(next === 'template')
     })
   const pickTemplate = (id: string) =>
     edit(() => {
       setTemplate(id)
       setPicking(false)
       setShowAll(false)
-      nameAfter(id)
+      if (source !== 'copy') nameAfter(id)
     })
   const pickCopy = (stack: Stack) =>
     edit(() => {
@@ -438,7 +435,9 @@ export function StackBuilder({
       ),
     })
 
-  const showTemplates = source === 'template' && (picking || !template)
+  // A copy's template is changed in place: it stays a copy of that stack.
+  const showTemplates =
+    (source === 'template' && !template) || (source !== 'none' && picking)
   const showChosen = Boolean(template) && !showTemplates
   const templatesSub =
     templates.state === 'ready'
@@ -646,12 +645,7 @@ export function StackBuilder({
                     type="button"
                     className="sk-btn sk-btn-small"
                     aria-label={`Change the template ${templateId(template)}`}
-                    onClick={() =>
-                      edit(() => {
-                        setSource('template')
-                        setPicking(true)
-                      })
-                    }
+                    onClick={() => edit(() => setPicking(true))}
                   >
                     Change
                   </button>
