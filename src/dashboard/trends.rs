@@ -28,7 +28,7 @@ pub(super) struct TrendsRequest {
     #[serde(default, deserialize_with = "present")]
     pub profile: Option<Option<String>>,
     /// A stack name, `not_recorded` or `any`; absent, or one the series
-    /// never ran on: the stack of the series' latest execution.
+    /// never ran on: `any`.
     #[serde(default)]
     pub stack: Option<String>,
 }
@@ -261,12 +261,12 @@ pub(super) fn trends(
         name: ANY.into(),
         executions: executions.len(),
     });
-    // A stack the series never ran on filters nothing: the default applies.
+    // A stack the series never ran on filters nothing.
     let applied = request
         .stack
         .clone()
         .filter(|stack| counts.iter().any(|count| &count.name == stack))
-        .unwrap_or_else(|| name(stacks.last().unwrap()));
+        .unwrap_or_else(|| ANY.into());
     let points = executions
         .iter()
         .zip(stacks)
@@ -324,7 +324,6 @@ fn execution(summary: &Value) -> Option<Execution<'_>> {
     })
 }
 
-/// Whether a series is the one asked for: every field sent matches.
 /// The suite's label; an unsaved one has none and reads by its size.
 fn suite_label(execution: &Execution) -> String {
     let suite = execution.parameters.suite.as_ref();
@@ -343,6 +342,7 @@ fn suite_label(execution: &Execution) -> String {
     }
 }
 
+/// Whether a series is the one asked for: every field sent matches.
 fn requested(request: &TrendsRequest, key: &TrendSeriesKey) -> bool {
     let matches = |asked: &Option<String>, value: &str| asked.as_deref().is_none_or(|a| a == value);
     matches(&request.suite, &key.suite)
@@ -800,15 +800,16 @@ mod tests {
             listed("e5", "2026-09-24T10:00:00Z", Some("18w"), &["x"]),
         ];
         let runs = BTreeMap::new();
+        // No stack asked: every execution of the series.
         let latest = trends(&TrendsRequest::default(), &summaries, &runs);
-        assert_eq!(latest.stack, "18w");
+        assert_eq!(latest.stack, ANY);
         assert_eq!(
             latest
                 .points
                 .iter()
                 .map(|p| p.execution_id.as_str())
                 .collect::<Vec<_>>(),
-            ["e5"]
+            ["e1", "e2", "e3", "e4", "e5"]
         );
         let count = |name: &str, executions| StackCount {
             name: name.into(),
@@ -846,11 +847,11 @@ mod tests {
                 matched_by_workers: false
             }
         );
-        assert_eq!(trends(&request(ANY), &summaries, &runs).points.len(), 5);
-        // A stack the series never ran on: the default applies, and says so.
+        assert_eq!(trends(&request("18w"), &summaries, &runs).points.len(), 1);
+        // A stack the series never ran on filters nothing, and says so.
         let gone = trends(&request("gone"), &summaries, &runs);
-        assert_eq!(gone.stack, "18w");
-        assert_eq!(gone.points[0].execution_id, "e5");
+        assert_eq!(gone.stack, ANY);
+        assert_eq!(gone.points.len(), 5);
     }
 
     #[test]

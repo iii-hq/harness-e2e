@@ -136,9 +136,9 @@ digest of an unsaved suite, × provider × model × agent profile) over time, fr
 what the read model already holds. Each execution is a point measured over its
 technically valid runs only; completed runs are counted out of the planned ones
 (tests × runs per test), and a planned test with no run is `not_run`. The stack
-filter defaults to the latest execution's, also when it names a stack the
-series never ran on; one that recorded no stack joins the stack whose first
-execution ran workers of the same names. A worker is named by its commit
+filter defaults to `any`, also when it names a stack the series never ran on;
+an execution that recorded no stack joins the stack whose first execution ran
+workers of the same names. A worker is named by its commit
 (`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
 harness, a concrete version its compose file pins), never the version the
 engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links
