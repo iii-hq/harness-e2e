@@ -318,7 +318,7 @@ try {
     'Turns',
     'Function calls',
   ])
-  await tiles.getByText('sum of attempts', { exact: true }).waitFor()
+  await tiles.getByText('sum of runs', { exact: true }).waitFor()
   await minimal
     .getByRole('group', { name: 'Run actions' })
     .getByRole('link', { name: 'Evidence record for Minimal Path' })

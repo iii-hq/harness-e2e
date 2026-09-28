@@ -403,7 +403,7 @@ export function runMetricTiles(
     {
       label: 'Duration',
       value: formatSpan(f.durationMs),
-      sub: summed ? 'sum of runs' : 'sum of attempts',
+      sub: 'sum of runs',
     },
     {
       label: 'Cost',

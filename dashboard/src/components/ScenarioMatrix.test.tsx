@@ -676,7 +676,7 @@ describe('runMetricTiles', () => {
       functionErrors: 1,
     })
     expect(tiles.map(({ label, value, sub }) => [label, value, sub])).toEqual([
-      ['Duration', '3m 40s', 'sum of attempts'],
+      ['Duration', '3m 40s', 'sum of runs'],
       ['Cost', '$0.0048', 'recorded spend'],
       ['Tokens', '18.7K', 'in 6K · out 12.7K'],
       ['Cache', '161K', 'read · written —'],
@@ -752,7 +752,7 @@ describe('runMetricTiles', () => {
       functionErrors: null,
     })
     expect(tiles.map(({ value, sub }) => [value, sub])).toEqual([
-      ['—', 'sum of attempts'],
+      ['—', 'sum of runs'],
       ['—', 'not reported'],
       ['—', 'in — · out —'],
       ['—', 'read · written —'],
