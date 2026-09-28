@@ -534,20 +534,19 @@ describe('comparing two executions', () => {
       {
         test: 'persistent_state',
         direction: 'down',
-        tone: 'worse',
+        metric: 'score',
         text: 'lost 38 points in B: state_after_restart went from 50/50 to 12/50.',
       },
       {
         test: 'minimal_path',
         direction: 'up',
-        tone: 'better',
+        metric: 'score',
         text: 'gained 12 points in B: cites_source went from 8/20 to 20/20.',
       },
       {
         test: 'minimal_path',
         direction: 'down',
-        // Fewer tokens: lower is better for every measure but the score.
-        tone: 'better',
+        metric: 'tokens',
         text: 'used 17% fewer tokens in B (1.2K → 1K).',
       },
     ])
@@ -593,7 +592,7 @@ describe('comparing two executions', () => {
       {
         test: null,
         direction: 'same',
-        tone: 'same',
+        metric: null,
         text: 'All 3 counted tests kept their scores.',
       },
     ])

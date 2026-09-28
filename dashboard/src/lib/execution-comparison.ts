@@ -243,6 +243,30 @@ const METRICS: Array<[MetricId, string, MetricFormat]> = [
   ['function_errors', 'Function call errors', 'count'],
 ]
 
+/** Which way each measure is better, the one place that says it: more
+ *  score, completed tasks and coverage; fewer invalid runs, tokens, cost,
+ *  time, turns, calls and errors (Compare.dc.html paints fewer function calls
+ *  as better); cache figures neither. Only the colour follows it. */
+const BETTER_WHEN: Record<MetricId, 'higher' | 'lower' | 'neither'> = {
+  score: 'higher',
+  completed: 'higher',
+  coverage: 'higher',
+  technical_failures: 'lower',
+  tokens: 'lower',
+  cache_read: 'neither',
+  cache_write: 'neither',
+  tokens_per_completion: 'lower',
+  cost: 'lower',
+  duration: 'lower',
+  turns: 'lower',
+  function_calls: 'lower',
+  function_errors: 'lower',
+}
+
+export function betterWhen(id: string): 'higher' | 'lower' | 'neither' {
+  return BETTER_WHEN[id as MetricId] ?? 'neither'
+}
+
 const SIDES = ['a', 'b'] as const
 const COMPLETION = ['completed', 'task_incomplete', 'undetermined']
 const TECHNICAL = ['valid', 'technical_invalid']
@@ -1342,15 +1366,12 @@ export function scenarioScore(
 export type Highlight = {
   /** The test it is about, to open; null for the comparison as a whole. */
   test: string | null
-  /** Which way B's figure moved. */
+  /** Which way B's figure moved: a direction, never a verdict. */
   direction: 'up' | 'down' | 'same'
-  /** Its colour (Compare.dc.html): a higher score, or a lower figure of any
-   *  other measure, is better. The words stay a difference. */
-  tone: DeltaTone
+  /** The measure that moved, for its colour; null for no move. */
+  metric: MetricId | null
   text: string
 }
-
-export type DeltaTone = 'better' | 'worse' | 'same'
 
 export type ComparisonHighlights = {
   /** "B scored 4.4 points lower", or why there is no score to compare. */
@@ -1452,7 +1473,7 @@ export function comparisonHighlights(
     return {
       test: scenario.id,
       direction: delta < 0 ? 'down' : 'up',
-      tone: delta < 0 ? 'worse' : 'better',
+      metric: 'score',
       text: `${delta < 0 ? 'lost' : 'gained'} ${pointsPhrase(delta)} in B${why}.`,
     }
   })
@@ -1460,7 +1481,7 @@ export function comparisonHighlights(
     items.push({
       test: null,
       direction: 'same',
-      tone: 'same',
+      metric: null,
       text: `${moved.length - 3} more ${moved.length - 3 === 1 ? 'test' : 'tests'} changed score.`,
     })
 
@@ -1488,8 +1509,7 @@ export function comparisonHighlights(
     items.push({
       test: scenario.id,
       direction: delta < 0 ? 'down' : 'up',
-      // Every measure here is better lower.
-      tone: delta < 0 ? 'better' : 'worse',
+      metric: entry.id as MetricId,
       text: `${phrase(delta > 0, amount)} in B (${metricFigure(entry.format, entry.baseline ?? 0)} → ${metricFigure(entry.format, entry.candidate ?? 0)}).`,
     })
   }
@@ -1504,7 +1524,7 @@ export function comparisonHighlights(
     items.push({
       test: null,
       direction: 'same',
-      tone: 'same',
+      metric: null,
       text:
         moved.length > 0
           ? kept === 1

@@ -4,7 +4,7 @@ import {
   byScoreChange,
   ComparisonView,
   deltaText,
-  deltaTone,
+  metricTone,
   outsideText,
   pairByCaption,
   RowDetail,
@@ -188,15 +188,32 @@ describe('execution comparison page', () => {
       if (!found) throw new Error(id)
       return found
     }
-    // A lower score is worse; a lower figure is better for every other
-    // measure; no change is faint; nothing to compare has no colour.
-    expect(deltaTone(metric('score'))).toBe('worse')
-    expect(deltaTone({ ...metric('tokens'), delta: -10 })).toBe('better')
-    expect(deltaTone({ ...metric('tokens'), delta: 10 })).toBe('worse')
-    expect(deltaTone({ ...metric('completed'), delta: 1 })).toBe('better')
-    expect(deltaTone(metric('turns'))).toBe('same')
-    expect(deltaTone({ ...metric('score'), delta: null })).toBeUndefined()
-    expect(view()).toMatch(/data-tone="worse"[^>]*>−38 pts</)
+    // Each measure's own direction (the design system's deltaTone): more
+    // score is better, fewer tokens and function calls are, cache figures
+    // are neither; no change is neutral; nothing to compare has no colour.
+    expect(metricTone(metric('score'))).toBe('negative')
+    expect(metricTone({ ...metric('tokens'), delta: -10 })).toBe('positive')
+    expect(metricTone({ ...metric('tokens'), delta: 10 })).toBe('negative')
+    expect(metricTone({ ...metric('completed'), delta: 1 })).toBe('positive')
+    expect(metricTone({ ...metric('function_calls'), delta: -2 })).toBe(
+      'positive',
+    )
+    expect(metricTone({ ...metric('cache_read'), delta: 500 })).toBe('neutral')
+    expect(metricTone(metric('turns'))).toBe('neutral')
+    expect(metricTone({ ...metric('score'), delta: null })).toBe('unavailable')
+    // A score or percent difference that rounds to 0 reads, and colours, as
+    // no change.
+    const tiny = { ...metric('score'), delta: 0.04 }
+    expect(deltaText(tiny)).toBe('no change')
+    expect(metricTone(tiny)).toBe('neutral')
+    expect(
+      metricTone({
+        ...metric('score'),
+        format: 'percent_points',
+        delta: -0.02,
+      }),
+    ).toBe('neutral')
+    expect(view()).toMatch(/data-tone="negative"[^>]*>−38 pts</)
   })
 
   it('opens a test on the criteria that moved, those lost on both sides, its metrics and runs', () => {

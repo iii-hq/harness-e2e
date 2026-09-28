@@ -1451,22 +1451,22 @@ button.cmp-highlight:hover {
    tasks and coverage), faint for no change. The sign or the icon stays, so
    colour never says it alone. Red is the design system's danger text: the
    host has no light --color-alert-strong. Both pass AA in both themes. */
-.cmp-tone[data-tone="better"] {
+.cmp-tone[data-tone="positive"] {
   color: var(--color-ok);
 }
 
-.cmp-tone[data-tone="worse"] {
+.cmp-tone[data-tone="negative"] {
   color: var(--ds-danger-text, var(--color-alert));
 }
 
-.cmp-tone[data-tone="same"] {
+.cmp-tone[data-tone="neutral"] {
   color: var(--color-ink-faint);
 }
 
-.cmp-tag.cmp-tone[data-tone="better"] {
+.cmp-tag.cmp-tone[data-tone="positive"] {
   background: var(--color-ok-muted);
 }
 
-.cmp-tag.cmp-tone[data-tone="worse"] {
+.cmp-tag.cmp-tone[data-tone="negative"] {
   background: var(--color-alert-muted);
 }

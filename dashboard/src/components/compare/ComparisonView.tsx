@@ -27,6 +27,9 @@ import {
   useScreenshotImages,
 } from '@/components/execution/screenshots'
 import {
+  type DeltaTone,
+  deltaDirection,
+  deltaTone,
   FactChip,
   FactList,
   isInteractiveTarget,
@@ -42,11 +45,11 @@ import type {
   DashboardExecutionDetail,
 } from '@/lib/dashboard-data-source'
 import {
+  betterWhen,
   type ComparedMetric,
   type ComparisonSide,
   compareRuns,
   comparisonHighlights,
-  type DeltaTone,
   type ExecutionComparison,
   exclusionPhrase,
   gapPhrase,
@@ -108,15 +111,16 @@ export function outsideText(metric: ComparedMetric): string | null {
  *  difference: no side is called better. A side short of runs is partial,
  *  and no difference is taken from it. */
 export function deltaText(metric: ComparedMetric): string {
-  if (metric.delta === null)
+  const delta = shownDelta(metric)
+  if (delta === null)
     return metric.partial.baseline || metric.partial.candidate
       ? `${sidesText(metric.partial)} partial`
       : metric.baseline === null && metric.candidate === null
         ? ''
         : 'not comparable'
-  if (Math.abs(metric.delta) < 1e-9) return 'no change'
-  const sign = metric.delta > 0 ? '+' : '−'
-  const size = Math.abs(metric.delta)
+  if (delta === 0) return 'no change'
+  const sign = delta > 0 ? '+' : '−'
+  const size = Math.abs(delta)
   if (metric.format === 'score') return `${sign}${Number(size.toFixed(1))} pts`
   if (metric.format === 'percent_points')
     return `${sign}${Number(size.toFixed(1))} pp`
@@ -146,18 +150,22 @@ function useRunHref(sides: Sides) {
   ) => hashFrom(hashForExecution(sides[which].id, null, runId, view), here)
 }
 
-/** Measures where more is better; lower is better for every other. */
-const HIGHER_IS_BETTER = ['score', 'completed', 'coverage']
+/** The difference as it is written: points and percentage points to one
+ *  decimal, so what reads 0 did not move; a float's dust is 0 too. */
+function shownDelta(metric: ComparedMetric): number | null {
+  if (metric.delta === null) return null
+  const shown =
+    metric.format === 'score' || metric.format === 'percent_points'
+      ? Number(metric.delta.toFixed(1))
+      : metric.delta
+  return Math.abs(shown) < 1e-9 ? 0 : shown
+}
 
-/** The colour of a difference (Compare.dc.html): green where B did better,
- *  red where worse, faint for no change, none when there is nothing to
- *  compare. The sign stays in the text, so colour never says it alone. */
-export function deltaTone(metric: ComparedMetric): DeltaTone | undefined {
-  if (metric.delta === null) return undefined
-  if (Math.abs(metric.delta) < 1e-9) return 'same'
-  return metric.delta > 0 === HIGHER_IS_BETTER.includes(metric.id)
-    ? 'better'
-    : 'worse'
+/** The colour of a difference (Compare.dc.html): the design system's tone
+ *  for the measure's own direction, rounded like its text. The sign stays
+ *  in the text, so colour never says it alone. */
+export function metricTone(metric: ComparedMetric): DeltaTone {
+  return deltaTone(deltaDirection(shownDelta(metric)), betterWhen(metric.id))
 }
 
 /** A run's state where its score would be: `infrastructure error`. */
@@ -418,7 +426,7 @@ function TestPicker({
                         </span>
                         <span
                           className="cmp-pick-delta cmp-tone"
-                          data-tone={score ? deltaTone(score) : undefined}
+                          data-tone={score ? metricTone(score) : undefined}
                         >
                           {score ? deltaText(score) : ''}
                         </span>
@@ -480,7 +488,10 @@ function Highlights({
               <>
                 <Icon
                   className="cmp-highlight-icon cmp-tone"
-                  data-tone={item.tone}
+                  data-tone={deltaTone(
+                    item.direction === 'same' ? 'flat' : item.direction,
+                    item.metric ? betterWhen(item.metric) : 'neither',
+                  )}
                   size={16}
                   aria-hidden="true"
                 />
@@ -554,7 +565,7 @@ function Totals({ comparison }: { comparison: ExecutionComparison }) {
               </span>
               <span
                 className="cmp-kpi-delta cmp-tone"
-                data-tone={deltaTone(metric)}
+                data-tone={metricTone(metric)}
               >
                 {deltaText(metric) || '—'}
               </span>
@@ -621,7 +632,7 @@ function MetricTable({
             </th>
             <td className="cmp-faint-num">{valueText(metric, 'baseline')}</td>
             <td>{valueText(metric, 'candidate')}</td>
-            <td className="cmp-delta cmp-tone" data-tone={deltaTone(metric)}>
+            <td className="cmp-delta cmp-tone" data-tone={metricTone(metric)}>
               {deltaText(metric) || '—'}
             </td>
           </tr>
@@ -701,7 +712,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
         a={a.runs ? `${metric.baseline ?? 0}/${a.runs}` : '—'}
         b={b.runs ? `${metric.candidate ?? 0}/${b.runs}` : '—'}
         delta={deltaText(metric)}
-        tone={deltaTone(metric)}
+        tone={metricTone(metric)}
       />
     )
   }
@@ -710,7 +721,7 @@ function cellPair(scenario: ScenarioComparison, id: string) {
       a={valueText(metric, 'baseline')}
       b={valueText(metric, 'candidate')}
       delta={deltaText(metric)}
-      tone={deltaTone(metric)}
+      tone={metricTone(metric)}
     />
   )
 }
@@ -835,7 +846,7 @@ function Results({
                             : stateText(scenario.sides.b.state)
                         }
                         delta={score ? deltaText(score) : ''}
-                        tone={score ? deltaTone(score) : undefined}
+                        tone={score ? metricTone(score) : undefined}
                       />
                     </span>
                   </td>
@@ -981,7 +992,10 @@ export function RowDetail({
                 </span>
                 <span
                   className="cmp-tag cmp-tone"
-                  data-tone={criterion.delta > 0 ? 'better' : 'worse'}
+                  data-tone={deltaTone(
+                    deltaDirection(criterion.delta),
+                    'higher',
+                  )}
                 >
                   {criterion.delta > 0 ? '+' : '−'}
                   {points(Math.abs(criterion.delta))}
