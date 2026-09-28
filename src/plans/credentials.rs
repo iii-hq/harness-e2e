@@ -1,9 +1,10 @@
 //! Provider credentials this Console keeps: the environment variables a
 //! Docker execution's phases receive. They live in `credentials.env` of the
 //! data directory, mode 600: never in the database, an execution's folder or
-//! its evidence. Nothing here answers with a value or logs one. The worker's
-//! `provider_env_file`, when configured, adds its entries under them: where
-//! both name a variable, this store's value wins.
+//! its evidence. Nothing here answers with a value or logs one. As llm-router
+//! resolves a provider's key (config, then environment), what is not set here
+//! comes from the worker's `provider_env_file`, when configured, and then from
+//! the worker's own environment, for the names the catalog lists.
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
@@ -84,18 +85,12 @@ pub(crate) struct CredentialView {
     pub name: String,
     pub set: bool,
     /// `console` (set here), `provider_env_file` (only the worker's file
-    /// sets it), or absent when it is not set.
+    /// sets it), `environment` (only the worker's environment holds it), or
+    /// absent when it is not set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     /// The providers that read it, as the catalog says.
     pub providers: Vec<String>,
-}
-
-/// What an import from this machine's environment found.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
-pub(crate) struct Imported {
-    pub found: Vec<String>,
-    pub not_found: Vec<String>,
 }
 
 /// An environment variable's name that no phase sets itself.
@@ -156,19 +151,48 @@ fn render(values: &BTreeMap<String, String>) -> String {
         .collect()
 }
 
+/// The names a provider or another worker reads, as the catalog lists them.
+fn catalog_names() -> BTreeSet<String> {
+    let catalog = catalog();
+    catalog
+        .providers
+        .into_values()
+        .chain(catalog.others)
+        .collect()
+}
+
 /// The credentials of a data directory, with the worker's
-/// `provider_env_file` under them.
+/// `provider_env_file` and then its environment under them.
 pub(crate) struct Credentials {
     path: PathBuf,
     extra: Option<PathBuf>,
+    /// The worker's environment; none in tests, whatever runs them.
+    lookup: fn(&str) -> Option<String>,
 }
 
 impl Credentials {
     pub(crate) fn new(data_dir: &Path, provider_env_file: Option<PathBuf>) -> Self {
+        let lookup: fn(&str) -> Option<String> = if cfg!(test) {
+            |_| None
+        } else {
+            |name| std::env::var(name).ok()
+        };
         Self {
             path: data_dir.join(FILE),
             extra: provider_env_file,
+            lookup,
         }
+    }
+
+    /// What the worker's environment holds of the catalog's names.
+    fn inherited(&self) -> BTreeMap<String, String> {
+        catalog_names()
+            .into_iter()
+            .filter_map(|name| {
+                let value = clean_value(&(self.lookup)(&name)?)?.to_owned();
+                Some((name, value))
+            })
+            .collect()
     }
 
     fn read(path: &Path) -> Result<(BTreeMap<String, String>, Vec<String>)> {
@@ -232,6 +256,7 @@ impl Credentials {
     /// Every credential the catalog knows or either source sets, by name.
     pub(crate) fn list(&self) -> Result<Vec<CredentialView>> {
         let (stored, from_file, catalog) = (self.stored()?, self.worker_file()?, catalog());
+        let inherited = self.inherited();
         let names = catalog
             .providers
             .values()
@@ -247,6 +272,8 @@ impl Credentials {
                     Some("console")
                 } else if from_file.contains_key(&name) {
                     Some("provider_env_file")
+                } else if inherited.contains_key(&name) {
+                    Some("environment")
                 } else {
                     None
                 };
@@ -293,42 +320,11 @@ impl Credentials {
         self.write(&stored)
     }
 
-    /// Set each credential the catalog knows that `lookup` (this worker's
-    /// environment) holds, and say which it did not.
-    pub(crate) fn import(&self, lookup: impl Fn(&str) -> Option<String>) -> Result<Imported> {
-        let catalog = catalog();
-        let names = catalog
-            .providers
-            .values()
-            .chain(&catalog.others)
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        let _guard = WRITES
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut stored = self.stored()?;
-        let mut imported = Imported {
-            found: Vec::new(),
-            not_found: Vec::new(),
-        };
-        for name in names {
-            match lookup(&name).as_deref().and_then(clean_value) {
-                Some(value) => {
-                    stored.insert(name.clone(), value.to_owned());
-                    imported.found.push(name);
-                }
-                None => imported.not_found.push(name),
-            }
-        }
-        if !imported.found.is_empty() {
-            self.write(&stored)?;
-        }
-        Ok(imported)
-    }
-
-    /// What a phase receives: the worker's file, then this store over it.
+    /// What a phase receives: the worker's environment, its file over it,
+    /// then this store over both.
     pub(crate) fn merged(&self) -> Result<BTreeMap<String, String>> {
-        let mut values = self.worker_file()?;
+        let mut values = self.inherited();
+        values.extend(self.worker_file()?);
         values.extend(self.stored()?);
         Ok(values)
     }
@@ -536,25 +532,48 @@ mod tests {
     }
 
     #[test]
-    fn an_import_takes_the_catalogs_names_from_this_machine_and_says_which() {
+    fn the_workers_environment_is_under_its_file_and_the_store_for_the_catalogs_names() {
         let root = tempfile::tempdir().unwrap();
-        let credentials = Credentials::new(root.path(), None);
-        let environment = BTreeMap::from([
-            ("DEEPSEEK_API_KEY", "sk-deepseek"),
-            ("ZAI_API_KEY", "  "),
-            ("GITHUB_TOKEN", "never-imported"),
-            ("CHOCOLATEY_API_KEY", "never-imported"),
-        ]);
-        let imported = credentials
-            .import(|name| environment.get(name).map(|value| (*value).to_owned()))
-            .unwrap();
-        assert_eq!(imported.found, vec!["DEEPSEEK_API_KEY"]);
-        assert!(imported.not_found.contains(&"ZAI_API_KEY".to_owned()));
-        assert!(imported.not_found.contains(&"OPENAI_API_KEY".to_owned()));
+        let file = root.path().join("providers.env");
+        fs::write(&file, "ZAI_API_KEY=zai-from-file\n").unwrap();
+        let credentials = Credentials {
+            lookup: |name| match name {
+                "OPENAI_API_KEY" | "ZAI_API_KEY" | "DEEPSEEK_API_KEY" | "NOT_IN_CATALOG" => {
+                    Some(format!("{name}-from-env"))
+                }
+                "XAI_API_KEY" => Some("  ".into()),
+                _ => None,
+            },
+            ..Credentials::new(&root.path().join("data"), Some(file))
+        };
+        credentials.set("DEEPSEEK_API_KEY", "from-console").unwrap();
+        let listed = credentials.list().unwrap();
+        let source = |name: &str| {
+            listed
+                .iter()
+                .find(|c| c.name == name)
+                .map(|c| c.source.clone())
+        };
+        assert_eq!(source("DEEPSEEK_API_KEY"), Some(Some("console".into())));
         assert_eq!(
-            fs::read_to_string(root.path().join(FILE)).unwrap(),
-            "DEEPSEEK_API_KEY=sk-deepseek\n"
+            source("ZAI_API_KEY"),
+            Some(Some("provider_env_file".into()))
         );
+        assert_eq!(source("OPENAI_API_KEY"), Some(Some("environment".into())));
+        assert_eq!(source("XAI_API_KEY"), Some(None));
+        assert_eq!(source("NOT_IN_CATALOG"), None);
+        assert_eq!(
+            credentials.merged().unwrap(),
+            BTreeMap::from([
+                ("DEEPSEEK_API_KEY".into(), "from-console".into()),
+                ("OPENAI_API_KEY".into(), "OPENAI_API_KEY-from-env".into()),
+                ("ZAI_API_KEY".into(), "zai-from-file".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn a_provider_reads_the_key_the_catalog_names() {
         assert_eq!(
             provider_key("deepseek").as_deref(),
             Some("DEEPSEEK_API_KEY")

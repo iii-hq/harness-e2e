@@ -27,7 +27,6 @@ describe('live dashboard transport', () => {
         credentials_list: 'credentials-list',
         credential_set: 'credential-set',
         credential_delete: 'credential-delete',
-        credentials_import: 'credentials-import',
         execution_cancel: 'execution-cancel',
       },
     } as RuntimeConfig)
@@ -80,8 +79,6 @@ describe('live dashboard transport', () => {
     expect(trigger).toHaveBeenCalledWith('credential-delete', {
       name: 'OPENAI_API_KEY',
     })
-    await live.importCredentials()
-    expect(trigger).toHaveBeenCalledWith('credentials-import', {})
     await live.cancelExecution('plan-1')
     expect(trigger).toHaveBeenCalledWith('execution-cancel', {
       execution_id: 'plan-1',

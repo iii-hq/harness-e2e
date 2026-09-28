@@ -413,7 +413,7 @@ async fn cancelled(cancel: &mut watch::Receiver<bool>) {
 
 impl PlanStore {
     /// This Console's provider credentials, the worker's `provider_env_file`
-    /// under them.
+    /// and then its environment under them.
     pub(crate) fn credentials(&self) -> Credentials {
         Credentials::new(&self.root, self.docker.settings.provider_env_file.clone())
     }
@@ -461,7 +461,7 @@ impl PlanStore {
         if let Some(file) = &self.docker.settings.provider_env_file {
             if !file.is_file() {
                 warnings.push(format!(
-                    "provider_env_file {} does not exist; only this Console's credentials reach the providers.",
+                    "provider_env_file {} does not exist; only this Console's credentials and the worker's environment reach the providers.",
                     file.display()
                 ));
             }
@@ -2300,12 +2300,22 @@ mod tests {
                 if path.is_dir() {
                     folders.push(path);
                 } else if path != data.join(credentials::FILE) {
+                    // Whole values: "9f1c" alone turns up in random hex ids.
                     let bytes = fs::read(&path).unwrap();
-                    assert!(
-                        !bytes.windows(4).any(|window| window == b"9f1c"),
-                        "{} holds a credential",
-                        path.display()
-                    );
+                    for secret in [
+                        "sk-file-9f1c",
+                        "sk-zai-9f1c",
+                        "sk-console-9f1c",
+                        "sk-openai-9f1c",
+                    ] {
+                        assert!(
+                            !bytes
+                                .windows(secret.len())
+                                .any(|window| window == secret.as_bytes()),
+                            "{} holds a credential",
+                            path.display()
+                        );
+                    }
                 }
             }
         }

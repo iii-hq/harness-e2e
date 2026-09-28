@@ -5,11 +5,10 @@ import {
   DialogDescription,
   DialogTitle,
 } from '@iii-dev/console-ui'
-import { Download, Plus, Trash2 } from 'lucide-react'
+import { Plus, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   Credential,
-  CredentialsImport,
   DashboardDataBridge,
 } from '@/lib/dashboard-data-source'
 
@@ -21,19 +20,12 @@ function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-/** What an import from the worker's environment did, in one sentence. */
-export function importSummary({ found, not_found }: CredentialsImport) {
-  if (found.length === 0)
-    return `None of the known keys is in the worker's environment (${not_found.join(', ')}).`
-  return `Set from the worker's environment: ${found.join(', ')}.${
-    not_found.length ? ` Not found there: ${not_found.join(', ')}.` : ''
-  }`
-}
-
 export function credentialStatus(credential: Credential) {
   if (credential.source === 'console') return 'Set here'
   if (credential.source === 'provider_env_file')
     return 'Set by the worker’s provider_env_file'
+  if (credential.source === 'environment')
+    return 'Set by the worker’s environment'
   return 'Not set'
 }
 
@@ -202,7 +194,7 @@ function CredentialDialog({
 }
 
 /** The provider credentials Docker executions receive: each by name, set or
- *  not; set, replaced or deleted here, or imported from the worker's own
+ *  not; set, replaced or deleted here, or inherited from the worker's own
  *  environment. No value ever comes back. */
 export function ProviderCredentials({
   bridge,
@@ -242,13 +234,6 @@ export function ProviderCredentials({
       setBusy(false)
     }
   }
-  const importFromMachine = () =>
-    act(async () => {
-      if (!bridge) return
-      const result = await bridge.importCredentials()
-      setCredentials(result.credentials)
-      setNotice(importSummary(result))
-    })
   // A delete in flight: a second confirmation of it is ignored.
   const removing = useRef(false)
   const remove = async (credential: Credential) => {
@@ -282,18 +267,6 @@ export function ProviderCredentials({
           Kept on this machine, readable only by the worker; only names are
           shown.
         </span>
-        <button
-          className="sk-btn sk-btn-small"
-          type="button"
-          disabled={!bridge}
-          aria-disabled={busy || undefined}
-          onClick={() => {
-            if (!busy) void importFromMachine()
-          }}
-        >
-          <Download size={14} aria-hidden="true" />
-          Import from this machine
-        </button>
         <button
           className="sk-btn sk-btn-small sk-btn-fill"
           type="button"

@@ -20,7 +20,7 @@ use super::read_model::{
 };
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
-use crate::plans::credentials::{CredentialView, Imported};
+use crate::plans::credentials::CredentialView;
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
@@ -57,7 +57,6 @@ pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
 pub(super) const CREDENTIALS_LIST: &str = "e2e::dashboard::credentials-list";
 pub(super) const CREDENTIAL_SET: &str = "e2e::dashboard::credential-set";
 pub(super) const CREDENTIAL_DELETE: &str = "e2e::dashboard::credential-delete";
-pub(super) const CREDENTIALS_IMPORT: &str = "e2e::dashboard::credentials-import";
 pub(super) const RUN_CANCEL: &str = "e2e::dashboard::run-cancel";
 pub(super) const CHANGED_TRIGGER: &str = "e2e::dashboard::changed";
 
@@ -205,13 +204,6 @@ struct CredentialDeleteRequest {
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 struct CredentialsListResponse {
     /// By name, whether each is set and where from; never a value.
-    credentials: Vec<CredentialView>,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-struct CredentialsImportResponse {
-    #[serde(flatten)]
-    imported: Imported,
     credentials: Vec<CredentialView>,
 }
 
@@ -808,30 +800,6 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
                         .delete(&request.name)
                         .and_then(|()| credentials_list(&controller))
                         .map_err(handler_error)
-                }
-            })
-        },
-    );
-    register(
-        iii,
-        CREDENTIALS_IMPORT,
-        "Set the known provider keys this worker's own environment holds; answers with which were found, which were not, and the list.",
-        {
-            let controller = controller.clone();
-            RegisterFunction::new_async(move |_request: DashboardEmptyRequest| {
-                let controller = controller.clone();
-                async move {
-                    let imported = controller
-                        .plan_store
-                        .credentials()
-                        .import(|name| std::env::var(name).ok())
-                        .map_err(handler_error)?;
-                    Ok(CredentialsImportResponse {
-                        imported,
-                        credentials: credentials_list(&controller)
-                            .map_err(handler_error)?
-                            .credentials,
-                    })
                 }
             })
         },

@@ -92,20 +92,14 @@ export type ExecutionWhere = 'harness' | 'docker' | 'github'
 
 /** A provider credential Docker executions receive, by name: the worker
  *  never answers with a value. `source` is where it is set from: this
- *  Console, or only the worker's `provider_env_file`. */
+ *  Console, the worker's `provider_env_file`, or only the worker's own
+ *  environment. */
 export type Credential = {
   name: string
   set: boolean
-  source?: 'console' | 'provider_env_file'
+  source?: 'console' | 'provider_env_file' | 'environment'
   /** The providers that read it. */
   providers: string[]
-}
-
-/** What an import from the worker's own environment found. */
-export type CredentialsImport = {
-  found: string[]
-  not_found: string[]
-  credentials: Credential[]
 }
 
 /** The stack an execution ran on in Docker or on GitHub: once imported, the
@@ -671,7 +665,6 @@ export type RuntimeConfig = {
     credentials_list: string
     credential_set: string
     credential_delete: string
-    credentials_import: string
     changed_trigger: string
   }
 }
@@ -740,8 +733,6 @@ export type DashboardDataBridge = {
     value: string,
   ): Promise<{ credentials: Credential[] }>
   deleteCredential(name: string): Promise<{ credentials: Credential[] }>
-  /** Sets the known provider keys the worker's own environment holds. */
-  importCredentials(): Promise<CredentialsImport>
   getCatalog(url?: string): Promise<JsonObject>
   /** Whether `gh` on the worker's machine can dispatch to GitHub. */
   getGithubStatus(): Promise<GithubStatus>
@@ -866,7 +857,6 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
       call(runtime.functions.credential_set, { name, secret: value }),
     deleteCredential: (name) =>
       call(runtime.functions.credential_delete, { name }),
-    importCredentials: () => call(runtime.functions.credentials_import, {}),
     getCatalog: (url) =>
       call(runtime.functions.catalog_get, url ? { url } : {}),
     startExecution: (request) =>
