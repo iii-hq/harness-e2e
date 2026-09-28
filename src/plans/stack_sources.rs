@@ -194,18 +194,25 @@ async fn read_templates() -> Result<StackTemplates> {
     let index = fetch(&client, &raw("template.yaml"))
         .await?
         .context("iii-hq/templates has no iii/template.yaml.")?;
+    // Only the index and the revision take the list down; a template that
+    // can't be read is listed with why.
     let reads = template_ids(&index)?.into_iter().map(|id| {
         let (client, raw) = (&client, &raw);
         async move {
-            let Some(manifest) = fetch(client, &raw(&format!("{id}/template.yaml"))).await? else {
-                return Ok(None);
+            let read = async {
+                let Some(manifest) = fetch(client, &raw(&format!("{id}/template.yaml"))).await?
+                else {
+                    return Ok(None);
+                };
+                let compose = fetch(client, &raw(&format!("{id}/worker-compose.yaml"))).await?;
+                template(&id, &manifest, compose.as_deref()).map(Some)
             };
-            let compose = fetch(client, &raw(&format!("{id}/worker-compose.yaml"))).await?;
-            template(&id, &manifest, compose.as_deref()).map(Some)
+            read.await
+                .unwrap_or_else(|error: anyhow::Error| Some(unreadable(&id, &error)))
         }
     });
-    let templates = futures_util::future::try_join_all(reads)
-        .await?
+    let templates = futures_util::future::join_all(reads)
+        .await
         .into_iter()
         .flatten()
         .collect();
@@ -332,6 +339,24 @@ fn template(id: &str, manifest: &str, compose: Option<&str>) -> Result<StackTemp
         workers,
         note,
     })
+}
+
+/// A template whose files could not be read or parsed: listed without
+/// workers, with the first line of why.
+fn unreadable(id: &str, error: &anyhow::Error) -> StackTemplate {
+    let why = error.to_string();
+    let why = why.lines().next().unwrap_or_default();
+    let why = match why.char_indices().nth(160) {
+        Some((cut, _)) => format!("{}…", &why[..cut]),
+        None => why.to_owned(),
+    };
+    StackTemplate {
+        id: id.into(),
+        name: id.into(),
+        description: String::new(),
+        workers: Vec::new(),
+        note: Some(format!("Couldn’t be read: {why}")),
+    }
 }
 
 /// A version as text, whether written quoted or not.
@@ -481,6 +506,28 @@ mod tests {
         .unwrap();
         assert_eq!(listed["ref"], "main");
         assert!(listed["templates"][0].get("note").is_none());
+    }
+
+    #[test]
+    fn a_template_that_cannot_be_read_is_listed_with_why() {
+        let error = template("broken", "name: [", None).unwrap_err();
+        let listed = unreadable("broken", &error);
+        assert_eq!(
+            (listed.id.as_str(), listed.name.as_str()),
+            ("broken", "broken")
+        );
+        assert!(listed.workers.is_empty());
+        let note = listed.note.unwrap();
+        assert!(
+            note.starts_with("Couldn’t be read: iii/broken/template.yaml is not YAML"),
+            "{note}"
+        );
+        assert!(!note.contains('\n'));
+        let long = unreadable("long", &anyhow!("{}\nmore", "x".repeat(400)));
+        assert_eq!(
+            long.note.unwrap(),
+            format!("Couldn’t be read: {}…", "x".repeat(160))
+        );
     }
 
     #[test]
