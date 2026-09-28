@@ -21,6 +21,7 @@ use super::read_model::{
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
+use crate::plans::stack_sources::{self, WorkerResolveRequest};
 use crate::plans::stacks::{StackCreateRequest, StackUpdateRequest, StackView};
 use crate::plans::store::{
     ExecutionParameters, GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
@@ -54,6 +55,8 @@ pub(super) const STACKS_LIST: &str = "e2e::dashboard::stacks-list";
 pub(super) const STACK_CREATE: &str = "e2e::dashboard::stack-create";
 pub(super) const STACK_UPDATE: &str = "e2e::dashboard::stack-update";
 pub(super) const STACK_DELETE: &str = "e2e::dashboard::stack-delete";
+pub(super) const STACK_TEMPLATES_LIST: &str = "e2e::dashboard::stack-templates-list";
+pub(super) const WORKER_RESOLVE: &str = "e2e::dashboard::worker-resolve";
 pub(super) const CREDENTIALS_LIST: &str = "e2e::dashboard::credentials-list";
 pub(super) const CREDENTIAL_SET: &str = "e2e::dashboard::credential-set";
 pub(super) const CREDENTIAL_DELETE: &str = "e2e::dashboard::credential-delete";
@@ -754,6 +757,24 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
             }
         })
     });
+    register(
+        iii,
+        STACK_TEMPLATES_LIST,
+        "List the iii-hq/templates projects a stack can start from, as main has them, each with the workers its worker-compose.yaml declares; kept ten minutes.",
+        RegisterFunction::new_async(move |_request: DashboardEmptyRequest| async move {
+            stack_sources::templates().await.map_err(handler_error)
+        }),
+    );
+    register(
+        iii,
+        WORKER_RESOLVE,
+        "What the iii registry resolves a worker to: its newest release and the workers it brings, or the registry's error; kept ten minutes.",
+        RegisterFunction::new_async(move |request: WorkerResolveRequest| async move {
+            stack_sources::resolve(&request.worker)
+                .await
+                .map_err(handler_error)
+        }),
+    );
     register(
         iii,
         CREDENTIALS_LIST,
