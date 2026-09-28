@@ -685,15 +685,14 @@ describe('what the list does through the bridge', () => {
   it('copies an id, or says why the page cannot', async () => {
     const written: string[] = []
     await expect(
-      copyExecutionId('plan-1', {
-        writeText: async (text) => {
-          written.push(text)
-        },
+      copyExecutionId('plan-1', async (text) => {
+        written.push(text)
+        return true
       }),
     ).resolves.toBe('Copied plan-1.')
     expect(written).toEqual(['plan-1'])
-    await expect(copyExecutionId('plan-1', undefined)).rejects.toThrow(
-      'This page cannot reach the clipboard (it needs https or localhost). The id is plan-1.',
+    await expect(copyExecutionId('plan-1', async () => false)).rejects.toThrow(
+      'The browser would not copy it. The id is plan-1.',
     )
   })
 

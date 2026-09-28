@@ -83,6 +83,7 @@ import { screenshotsOf } from '@/lib/screenshots'
 import { watchExecution } from '@/lib/watch-execution'
 import { buildLedgerRows, DeleteDialog } from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
+import { copyText } from '@/lib/clipboard'
 
 type DetailSection = 'metrics' | 'results' | 'technical'
 
@@ -345,7 +346,8 @@ function ProvenanceSection({
             size: 'compact',
           })}
           onClick={() => {
-            void navigator.clipboard?.writeText(raw).then(() => {
+            void copyText(raw).then((ok) => {
+              if (!ok) return
               setCopied(true)
               window.setTimeout(() => setCopied(false), 1500)
             })
@@ -986,15 +988,15 @@ export function ExecutionPage({
                     : undefined
                 }
                 onCopyLink={() => {
-                  void navigator.clipboard
-                    ?.writeText(window.location.href)
-                    .then(() => {
-                      setCopied(true)
-                      window.setTimeout(() => setCopied(false), 1500)
-                    })
+                  void copyText(window.location.href).then((ok) => {
+                    if (!ok) return
+                    setCopied(true)
+                    window.setTimeout(() => setCopied(false), 1500)
+                  })
                 }}
                 onCopyId={() => {
-                  void navigator.clipboard?.writeText(detail.id).then(() => {
+                  void copyText(detail.id).then((ok) => {
+                    if (!ok) return
                     setCopied(true)
                     window.setTimeout(() => setCopied(false), 1500)
                   })

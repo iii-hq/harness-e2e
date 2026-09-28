@@ -37,6 +37,7 @@ import {
   hashForWorkspace,
   replaceDashboardHash,
 } from '@/hooks/use-hash-route'
+import { copyText } from '@/lib/clipboard'
 import {
   type DashboardDataBridge,
   getDashboardDataBridge,
@@ -1314,7 +1315,8 @@ export function TestsPage({
       : 'two system versions, same model'
 
   const shareLink = () => {
-    void navigator.clipboard?.writeText(window.location.href).then(() => {
+    void copyText(window.location.href).then((ok) => {
+      if (!ok) return
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     })

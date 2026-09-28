@@ -25,15 +25,7 @@ import type {
 /** Asks the worker for the runs of every definition at once. */
 export const ALL_DEFINITIONS = 'all'
 
-/** Copies text to the clipboard; false when the browser refused. */
-export async function copyText(text: string) {
-  try {
-    await navigator.clipboard.writeText(text)
-    return true
-  } catch {
-    return false
-  }
-}
+export { copyText } from '@/lib/clipboard'
 
 /** What a copy action says after it ran. */
 export function copiedText(what: string, ok: boolean) {

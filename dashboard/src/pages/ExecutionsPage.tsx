@@ -104,6 +104,7 @@ import { RESULT_STATES, type ResultState } from '@/lib/result-status'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
 import './executions-page.css'
+import { copyText } from '@/lib/clipboard'
 
 const PAGE_SIZE = 50
 
@@ -1209,17 +1210,10 @@ export async function importLedgerExecutionAgain(
   await bridge.importGithubRun(row.github.runId)
 }
 
-/** Copies an execution id, or says why it cannot: browsers give the
- *  clipboard only to https pages and localhost. */
-export async function copyExecutionId(
-  id: string,
-  clipboard: Pick<Clipboard, 'writeText'> | undefined,
-) {
-  if (!clipboard)
-    throw new Error(
-      `This page cannot reach the clipboard (it needs https or localhost). The id is ${id}.`,
-    )
-  await clipboard.writeText(id)
+/** Copies an execution id, or says so when the browser would not. */
+export async function copyExecutionId(id: string, copy = copyText) {
+  if (!(await copy(id)))
+    throw new Error(`The browser would not copy it. The id is ${id}.`)
   return `Copied ${id}.`
 }
 
@@ -1430,7 +1424,7 @@ export function ExecutionsPage() {
       }),
     copyId: (row) => {
       setActionError(null)
-      copyExecutionId(row.id, globalThis.navigator?.clipboard)
+      copyExecutionId(row.id)
         .then(setFlash)
         .catch((cause) =>
           setActionError({

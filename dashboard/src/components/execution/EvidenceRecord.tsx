@@ -22,6 +22,7 @@ import { shortDefinition } from '@/lib/definition-digest'
 import { sentenceCase } from '@/lib/format'
 import { formatFull, formatSpan, formatUsd } from './ExecutionTotals'
 import './execution-page.css'
+import { copyText } from '@/lib/clipboard'
 
 function objects(value: unknown): JsonObject[] {
   return Array.isArray(value)
@@ -302,7 +303,8 @@ export function EvidenceRecordPage({
     )
   }
   const copy = (path: string) => {
-    void navigator.clipboard?.writeText(path).then(() => {
+    void copyText(path).then((ok) => {
+      if (!ok) return
       setCopied(path)
       window.setTimeout(() => setCopied(null), 1500)
     })

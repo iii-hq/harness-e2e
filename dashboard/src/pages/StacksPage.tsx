@@ -64,6 +64,7 @@ import {
 import '@/design-system/styles.css'
 import './executions-page.css'
 import './stacks-page.css'
+import { copyText } from '@/lib/clipboard'
 
 function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
@@ -153,10 +154,7 @@ export function StackSheet({
     }
   }
   const copyYaml = () => {
-    void navigator.clipboard
-      ?.writeText(editing ? draft.yaml : stack.yaml)
-      .then(() => setCopied(true))
-      .catch(() => setCopied(false))
+    void copyText(editing ? draft.yaml : stack.yaml).then(setCopied)
   }
 
   const [tone, said] = saving

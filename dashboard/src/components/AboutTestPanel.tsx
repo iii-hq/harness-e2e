@@ -6,6 +6,7 @@ import {
   Panel,
   StatusBadge,
 } from '@/design-system'
+import { copyText } from '@/lib/clipboard'
 import type { TestCriterion, TestSpec } from '@/lib/test-catalog'
 
 /** Whether the panel starts open. One preference for the whole dashboard: a
@@ -160,7 +161,8 @@ function PromptBlock({ prompt, testId }: { prompt: string; testId: string }) {
   const promptId = `about-${testId}-prompt`
 
   const copy = useCallback(() => {
-    void navigator.clipboard?.writeText(prompt).then(() => {
+    void copyText(prompt).then((ok) => {
+      if (!ok) return
       setCopied(true)
       window.setTimeout(() => setCopied(false), 1500)
     })

@@ -9,6 +9,7 @@ import {
   transcriptSummary,
 } from '@/lib/transcript-view'
 import './execution-page.css'
+import { copyText } from '@/lib/clipboard'
 
 export type TranscriptBlock =
   | { kind: 'message'; event: TranscriptEvent }
@@ -270,13 +271,9 @@ export function TranscriptPage({
       )
       .join('\n\n')
   const copy = async (key: string, value: string) => {
-    try {
-      await navigator.clipboard.writeText(value)
-      setCopied(key)
-      window.setTimeout(() => setCopied(null), 1500)
-    } catch {
-      setCopied(null)
-    }
+    if (!(await copyText(value))) return setCopied(null)
+    setCopied(key)
+    window.setTimeout(() => setCopied(null), 1500)
   }
   const download = () => {
     const blob = new Blob([JSON.stringify(messages ?? [], null, 2)], {
