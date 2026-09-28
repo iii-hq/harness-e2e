@@ -57,13 +57,51 @@ export const PROVIDERS = [
   'provider-github-copilot',
 ]
 
-/** What the executor adds to every group, whatever the stack declares. */
-export const ADDED_WHEN_IT_RUNS = [
-  { name: 'harness-e2e', why: 'the runner, in every group' },
-  { name: 'the model’s provider', why: 'for the model a run picks' },
-  { name: 'canvas', why: 'for visual tests' },
-  { name: 'iii-directory', why: 'when a run uses an agent profile' },
-]
+/** What the executor adds to a group, whatever the stack declares
+ *  (exact_stack_campaign.py project_scaffold). Without a template it never
+ *  adds iii-directory: a run with an agent profile needs the stack to
+ *  declare it or bring it with a declared worker, or it refuses to start. */
+export function addedWhenItRuns(
+  template: string | null,
+  declared: Declared[],
+  lookups: Lookups,
+) {
+  const host = hostOf('iii-directory', declared, lookups)
+  const directory = template
+    ? 'when a run uses an agent profile'
+    : declared.some((entry) => packageName(entry.worker) === 'iii-directory')
+      ? 'declared here, for runs with an agent profile'
+      : host
+        ? `comes with ${host}, for runs with an agent profile`
+        : 'not added: runs with an agent profile need it declared here or brought by a declared worker'
+  return [
+    { name: 'harness-e2e', why: 'the runner, in every group' },
+    { name: 'the model’s provider', why: 'for the model a run picks' },
+    { name: 'canvas', why: 'for visual tests' },
+    { name: 'iii-directory', why: directory },
+  ]
+}
+
+/** Packages the executor adds itself where a run needs them; with a
+ *  template, declaring one pins the version it adds. */
+function addedByExecutor(name: string) {
+  return (
+    name === 'harness-e2e' ||
+    name === 'canvas' ||
+    name === 'iii-directory' ||
+    name.startsWith('provider-')
+  )
+}
+
+/** The packages a template declares; what a stack pins is compared by
+ *  package, as the executor's template_packages does, never by container
+ *  name. */
+function templatePackages(tpl: StackTemplate | null) {
+  return (tpl?.workers ?? []).flatMap((worker) => {
+    const name = packageName(worker.worker)
+    return name ? [name] : []
+  })
+}
 
 /** A name the registry could hold: `^[a-z0-9][a-z0-9-]{0,63}$`. */
 export const WORKER_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -123,9 +161,10 @@ export function judge(
   declared: Declared[],
   lookups: Lookups,
 ): Verdict | null {
+  const own = packageName(entry.worker)
   if (template) {
     if (!tpl) return null
-    if (tpl.workers.some((worker) => worker.name === entry.name)) {
+    if (own && templatePackages(tpl).includes(own)) {
       const text =
         entry.commit === ''
           ? 'Type the commit to pin it.'
@@ -136,18 +175,30 @@ export function judge(
               : entry.version !== 'latest'
                 ? `The template keeps it, at ${entry.version}.`
                 : 'The template keeps it, at the newest release.'
-      return { tone: 'info', lead: `Pins the template’s ${entry.name}.`, text }
+      return { tone: 'info', lead: `Pins the template’s ${own}.`, text }
     }
-    if (entry.name === 'harness-e2e')
+    if (own === 'harness-e2e')
       return {
         tone: 'info',
         lead: 'Pins the runner.',
         text: 'The executor adds harness-e2e to every group; this sets its version.',
       }
-    if (isProvider(entry.name))
+    if (own === 'canvas')
       return {
         tone: 'info',
-        lead: `Pins it for runs that pick a ${entry.name.replace('provider-', '')} model.`,
+        lead: 'Pins canvas for visual tests.',
+        text: 'The template doesn’t bring it; the executor adds canvas to the groups that build a visual worker, at this version.',
+      }
+    if (own === 'iii-directory')
+      return {
+        tone: 'info',
+        lead: 'Pins iii-directory for runs with an agent profile.',
+        text: 'The template doesn’t bring it; the executor adds it when a run uses an agent profile, at this version.',
+      }
+    if (own && isProvider(own))
+      return {
+        tone: 'info',
+        lead: `Pins it for runs that pick a ${own.replace('provider-', '')} model.`,
         text: 'The template doesn’t bring it; the executor adds the chosen model’s provider, at this version.',
       }
     return {
@@ -156,7 +207,6 @@ export function judge(
       text: `With a template, each group runs the ${tpl.id} project and this stack only pins versions of what it declares. ${entry.name} isn’t in it, so it would never start. Remove it, or start without a template.`,
     }
   }
-  const own = packageName(entry.worker)
   const host = hostOf(own ?? entry.name, declared, lookups)
   if (host)
     return {
@@ -338,15 +388,21 @@ export function pickerGroups({
 }): PickGroup[] {
   const q = pickerQuery(query)
   const match = (name: string) => !q || name.includes(q)
-  const tplWorkers = tpl?.workers ?? []
-  const tplNames = tplWorkers.map((worker) => worker.name)
-  const has = new Set(declared.map((entry) => entry.name))
+  // The template's own workers, by package: a path:// one is the project's
+  // code, not something a stack pins.
+  const tplWorkers = (tpl?.workers ?? []).filter((worker) =>
+    packageName(worker.worker),
+  )
+  const tplNames = templatePackages(tpl)
+  const has = new Set(
+    declared.map((entry) => packageName(entry.worker) ?? entry.name),
+  )
   const item = (name: string, worker = `${PACKAGE}${name}`): PickItem => {
-    const isAdded = has.has(name)
-    const inTpl = tplNames.includes(name)
-    const ignored =
-      Boolean(template) && !inTpl && name !== 'harness-e2e' && !isProvider(name)
-    const host = template ? null : hostOf(name, declared, lookups)
+    const own = packageName(worker) ?? name
+    const isAdded = has.has(own)
+    const inTpl = tplNames.includes(own)
+    const ignored = Boolean(template) && !inTpl && !addedByExecutor(own)
+    const host = template ? null : hostOf(own, declared, lookups)
     const off = isAdded || ignored || Boolean(host)
     const tag = isAdded
       ? 'added'
@@ -356,11 +412,17 @@ export function pickerGroups({
           ? `arrives with ${host}`
           : inTpl
             ? 'pins it'
-            : name === 'harness-e2e'
+            : own === 'harness-e2e'
               ? 'the runner, always added'
-              : isProvider(name) && template
-                ? 'added with its model'
-                : ''
+              : !template
+                ? ''
+                : isProvider(own)
+                  ? 'added with its model'
+                  : own === 'canvas'
+                    ? 'added for visual tests'
+                    : own === 'iii-directory'
+                      ? 'added with an agent profile'
+                      : ''
     return {
       name,
       sub: worker,

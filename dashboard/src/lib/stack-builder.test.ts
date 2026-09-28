@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Stack, StackTemplate } from '@/lib/dashboard-data-source'
 import {
+  addedWhenItRuns,
   builderStatus,
   type Declared,
   declaredOf,
@@ -163,6 +164,24 @@ describe('stack builder', () => {
     expect(verdicts[1]?.lead).toBe('Would be ignored.')
     expect(verdicts[2]?.lead).toBe('Pins it for runs that pick a zai model.')
     expect(verdicts[3]?.lead).toBe('Pins the runner.')
+    // canvas and iii-directory, which the executor adds where a run needs
+    // them, are pinned like the runner and the providers; a worker is
+    // compared by package, not by the container's name.
+    const exempt = status(
+      [
+        pkg('canvas'),
+        pkg('iii-directory'),
+        { ...pkg('router'), worker: 'package://llm-router' },
+        { ...pkg('fp'), name: 'queue' },
+      ],
+      template('bare', ['console', 'state', 'llm-router']),
+    )
+    expect(exempt.verdicts.map((verdict) => verdict?.lead)).toEqual([
+      'Pins canvas for visual tests.',
+      'Pins iii-directory for runs with an agent profile.',
+      'Pins the template’s llm-router.',
+      'Would be ignored.',
+    ])
     expect([text, blocked, alert]).toEqual([
       'Can’t create it yet: fp would be ignored by the harness template.',
       true,
@@ -210,6 +229,26 @@ describe('stack builder', () => {
     expect(status([pkg('fp')], null, lookups).text).toBe(
       'Runs the 1 worker declared, plus what they depend on.',
     )
+    // Without a template iii-directory is never added: it has to be
+    // declared or come with a declared worker for agent profiles.
+    const directory = (declared: Declared[], template: string | null = null) =>
+      addedWhenItRuns(template, declared, lookups).at(-1)?.why
+    expect(directory([pkg('fp')])).toBe(
+      'not added: runs with an agent profile need it declared here or brought by a declared worker',
+    )
+    expect(
+      addedWhenItRuns(null, [pkg('harness')], {
+        harness: {
+          state: 'found',
+          version: '1',
+          dependencies: ['iii-directory'],
+        },
+      }).at(-1)?.why,
+    ).toBe('comes with harness, for runs with an agent profile')
+    expect(directory([pkg('iii-directory')])).toBe(
+      'declared here, for runs with an agent profile',
+    )
+    expect(directory([], 'harness')).toBe('when a run uses an agent profile')
     const fine = status([pkg('harness'), pkg('fp')], null, lookups)
     expect([fine.text, fine.blocked]).toEqual([
       'Runs the 2 workers declared, plus what they depend on.',
@@ -332,6 +371,22 @@ describe('stack builder', () => {
       'harness-e2e': ['the runner, always added', false],
       fp: ['not in the template, ignored', true],
       'provider-zai': ['added with its model', false],
+    })
+    expect(
+      pickerGroups({
+        query: 'canvas',
+        template: 'harness',
+        tpl: harness,
+        declared: [],
+        lookups: {},
+        stacks: [],
+        templates: [template('other', ['canvas'])],
+        showAll: false,
+      })[0].items[0],
+    ).toMatchObject({
+      name: 'canvas',
+      tag: 'added for visual tests',
+      off: false,
     })
     expect(groups[2].items.map((item) => item.name)).not.toContain(
       'provider-anthropic',

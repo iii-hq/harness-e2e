@@ -15,7 +15,7 @@ import type {
 } from '@/lib/dashboard-data-source'
 import { plural } from '@/lib/format'
 import {
-  ADDED_WHEN_IT_RUNS,
+  addedWhenItRuns,
   builderStatus,
   type Declared,
   declaredOf,
@@ -410,7 +410,13 @@ export function StackBuilder({
   const tplLabel = template
     ? `From the ${templateId(template)} template${tpl ? ` · ${tpl.workers.length}` : ''}`
     : ''
-  const pins = new Map(declared.map((entry) => [entry.name, pinLabel(entry)]))
+  // What this stack pins of each template worker, by package.
+  const pins = new Map(
+    declared.map((entry) => [
+      packageName(entry.worker) ?? entry.name,
+      pinLabel(entry),
+    ]),
+  )
 
   return (
     <Dialog
@@ -666,7 +672,9 @@ export function StackBuilder({
                     // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
                     <ul role="list" className="sb-chips">
                       {tpl.workers.map((worker) => {
-                        const pin = pins.get(worker.name)
+                        const pin = pins.get(
+                          packageName(worker.worker) ?? worker.name,
+                        )
                         return (
                           <li
                             key={worker.name}
@@ -759,7 +767,7 @@ export function StackBuilder({
               >
                 <span className="sb-eyebrow">Added when it runs</span>
                 <dl className="sb-added">
-                  {ADDED_WHEN_IT_RUNS.map((entry) => (
+                  {addedWhenItRuns(template, declared, lookups).map((entry) => (
                     <div key={entry.name}>
                       <dt>{entry.name}</dt>
                       <dd>{entry.why}</dd>
