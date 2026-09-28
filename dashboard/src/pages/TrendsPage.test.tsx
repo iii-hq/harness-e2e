@@ -8,7 +8,9 @@ import {
   answeredView,
   requestParams,
   requestSeries,
+  stackChoosable,
   stackLabel,
+  stackNotice,
   stackSub,
   TrendsSkeleton,
 } from '@/pages/TrendsPage'
@@ -63,6 +65,32 @@ describe('trends page state', () => {
     expect(answeredView({ stack: 'x' }, { ...answer, selected: null })).toEqual(
       { stack: 'x' },
     )
+  })
+
+  it('says when the stack asked for is not the one shown, with a way out', () => {
+    const answer = {
+      series: [],
+      selected: null,
+      stack: 'default',
+      stacks: [
+        { name: 'default', executions: 11 },
+        { name: 'any', executions: 11 },
+      ],
+      points: [],
+    }
+    expect(stackNotice({ stack: 'default' }, answer)).toBeNull()
+    expect(stackNotice({}, answer)).toBeNull()
+    expect(stackNotice({ stack: 'lean' }, answer)).toEqual({
+      text: 'No execution of this series ran on lean, so this shows default, the stack of its latest execution.',
+      anyStack: false,
+    })
+    expect(stackChoosable(answer)).toBe(false)
+    const unknown = { ...answer, stack: 'lean' }
+    expect(stackNotice({ stack: 'lean' }, unknown)).toEqual({
+      text: 'No execution of this series ran on lean.',
+      anyStack: true,
+    })
+    expect(stackChoosable(unknown)).toBe(true)
   })
 
   it('names the stack a series only ran on this harness', () => {

@@ -109,6 +109,31 @@ export function stackLabel(stack: string, points: TrendPoint[]) {
     : stackOptionText(stack)
 }
 
+/** Whether the stack can be chosen: more than one stack besides "any", or
+ *  a stack the series does not list, to get out of. */
+export function stackChoosable(data: TrendsResponse) {
+  return (
+    data.stacks.length > 2 ||
+    !data.stacks.some((stack) => stack.name === data.stack)
+  )
+}
+
+/** The stack asked for is not what is shown: say so, and how to get out
+ *  when the stack shown is not one of the series'. */
+export function stackNotice(asked: TrendsRequest, data: TrendsResponse) {
+  if (!data.stacks.some((stack) => stack.name === data.stack))
+    return {
+      text: `No execution of this series ran on ${stackOptionText(data.stack)}.`,
+      anyStack: true,
+    }
+  if (asked.stack && asked.stack !== data.stack)
+    return {
+      text: `No execution of this series ran on ${stackOptionText(asked.stack)}, so this shows ${stackOptionText(data.stack)}, the stack of its latest execution.`,
+      anyStack: false,
+    }
+  return null
+}
+
 /* ------------------------------------------------------------- controls */
 
 function SeriesMenu({
@@ -207,7 +232,7 @@ function StackMenu({
   onPick: (stack: string) => void
 }) {
   // One stack and "any" hold the same executions: nothing to choose.
-  const fixed = data.stacks.length <= 2
+  const fixed = !stackChoosable(data)
   const label = stackLabel(data.stack, data.points)
   const trigger = (
     <button
@@ -320,8 +345,10 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   const [importOpen, setImportOpen] = useState(false)
   const [rerunError, setRerunError] = useState<string | null>(null)
   const beginRequest = useLatestRequest()
-  // What a reload asks: the request, then the view its answer showed.
+  // What a reload asks and the hash names: the request, then the view its
+  // answer showed.
   const shown = useRef<TrendsRequest>(request)
+  const [view, setView] = useState<TrendsRequest>(request)
 
   // The Trends tab or a link lands here again: start over from its request.
   useEffect(() => {
@@ -340,6 +367,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
       const answer = await next.getTrends(asked)
       if (!pending.isCurrent()) return
       shown.current = answeredView(asked, answer)
+      setView(shown.current)
       setData(answer)
       setError(null)
     } catch (cause) {
@@ -352,6 +380,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
 
   useEffect(() => {
     shown.current = query
+    setView(query)
     setPicked(null)
     void load()
   }, [load, query])
@@ -380,7 +409,6 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   }, [bridge, load])
 
   // The hash names what is on screen, once the worker said what that is.
-  const view = data ? answeredView(query, data) : query
   const viewParams = requestParams(view).toString()
   useEffect(() => {
     replaceRouteParams(new URLSearchParams(viewParams))
@@ -461,6 +489,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   const latest = points.at(-1) ?? null
   const metric = trendMetric(focus)
   const note = stackNote(points)
+  const notice = data ? stackNotice(query, data) : null
   const empty = emptyText(points)
   const point = selected >= 0 ? points[selected] : undefined
 
@@ -513,6 +542,23 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                   {summaryText(points)}
                 </p>
                 {note ? <p className="tr-faint">{note}</p> : null}
+                {notice ? (
+                  <p className="tr-faint tr-notice" data-stack-notice>
+                    {notice.text}
+                    {notice.anyStack ? (
+                      <button
+                        type="button"
+                        className={buttonClassName({
+                          variant: 'quiet',
+                          size: 'compact',
+                        })}
+                        onClick={() => pickStack(ANY_STACK)}
+                      >
+                        Show every stack
+                      </button>
+                    ) : null}
+                  </p>
+                ) : null}
               </div>
             </>
           ) : null}

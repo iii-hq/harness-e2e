@@ -257,6 +257,13 @@
   margin: 0;
 }
 
+.tr-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
 .tr-num-text {
   font-variant-numeric: tabular-nums;
 }

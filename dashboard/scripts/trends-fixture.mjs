@@ -15,9 +15,10 @@ const key = ({ suite, provider, model, profile }) => ({
   profile,
 })
 
-/** trends-get as the contract says: the request's series, else the one
- *  with the latest execution; the stack filter, else the latest
- *  execution's stack. */
+/** trends-get as the worker answers it: the request's series, else the one
+ *  with the latest execution; the stack filter when the series has it, else
+ *  (none asked, or one it never ran on) the latest execution's stack, the
+ *  one applied always said in `stack`. */
 export function trendsAnswer(request = {}) {
   const chosen =
     fixture.series.find(

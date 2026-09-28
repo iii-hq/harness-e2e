@@ -283,6 +283,24 @@ try {
   assert.match(await series.innerText(), /Regression/)
   assert.match(await hash(), /\/trends\?suite=regression&.*stack=default$/)
 
+  // A link to a stack the series never ran on: the worker applies its
+  // default, and the page says so.
+  await page.goto(
+    `${server.url}#/ext/harness-e2e/trends?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=lean`,
+  )
+  await page
+    .locator('[data-stack-notice]')
+    .getByText(
+      'No execution of this series ran on lean, so this shows default',
+      {
+        exact: false,
+      },
+    )
+    .waitFor()
+  assert.equal(requests('trends-get').at(-1).stack, 'lean')
+  assert.match(await stack.innerText(), /default/)
+  assert.match(await hash(), /stack=default$/)
+
   // This harness: the runner moved between two checkouts.
   await series.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
@@ -334,7 +352,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, commits between two checkouts, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, commits between two checkouts, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()
