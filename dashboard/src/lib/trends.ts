@@ -938,7 +938,9 @@ export function summaryText(
 }
 
 /** Executions in a stack only because their workers matched it. */
-export function stackNote(points: TrendPoint[]) {
+export function stackNote(points: TrendPoint[], stack: string) {
+  // Only a named stack needs it: `any` shows every execution anyway.
+  if (stack === ANY_STACK) return null
   const matched = points.filter((point) => point.stack.matched_by_workers)
   if (matched.length === 0) return null
   const name = matched[0].stack.name

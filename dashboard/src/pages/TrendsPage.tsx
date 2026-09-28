@@ -682,7 +682,7 @@ export function TrendsPage({
   }
   const latest = points.at(-1) ?? null
   const metric = trendMetric(focus)
-  const note = stackNote(points)
+  const note = data ? stackNote(points, data.stack) : null
   const notice = data ? stackNotice(query, data) : null
   const empty = emptyText(points)
   const point = selected >= 0 ? points[selected] : undefined

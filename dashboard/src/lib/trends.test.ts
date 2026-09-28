@@ -500,10 +500,12 @@ describe('the view', () => {
     expect(summaryText(regression, DEFAULT_PERIOD, 'UTC−3', NOW)).toBe(
       '11 executions in the last 30 days · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
     )
-    expect(stackNote(regression)).toBe(
+    expect(stackNote(regression, 'default')).toBe(
       '4 of these ran before the Console recorded stacks; they are in because they ran the same workers as default.',
     )
-    expect(stackNote(seriesPoints('local'))).toBeNull()
+    // Every stack shown: nothing to explain.
+    expect(stackNote(regression, 'any')).toBeNull()
+    expect(stackNote(seriesPoints('local'), 'default')).toBeNull()
   })
 
   it('reads the fixture in the pinned timezone', () => {

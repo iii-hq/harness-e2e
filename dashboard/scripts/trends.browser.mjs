@@ -143,11 +143,13 @@ try {
   assert.match(await model.innerText(), /deepseek\/deepseek-flash/)
   assert.match(await profile.innerText(), /none/)
   assert.match(await page.locator('[data-stack-picker]').innerText(), /any/)
-  await page
-    .getByText('4 of these ran before the Console recorded stacks', {
-      exact: false,
-    })
-    .waitFor()
+  // Every stack shown: no note about executions matched by their workers.
+  assert.equal(
+    await page
+      .getByText('ran before the Console recorded stacks', { exact: false })
+      .count(),
+    0,
+  )
 
   // The Sep 26 diamond: no counted run, iii moved; the commits between are
   // asked only now.
