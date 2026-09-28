@@ -254,10 +254,44 @@
   font-variant-numeric: tabular-nums;
 }
 
-.tr-skeleton {
-  height: calc(var(--spacing) * 80);
+.tr-loading {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
+}
+
+.tr-skel {
+  display: block;
+  max-width: 100%;
   border-radius: var(--radius-sm);
   background: var(--color-surface);
+}
+
+.tr-skel-series {
+  width: calc(var(--spacing) * 110);
+  height: calc(var(--spacing) * 9);
+}
+
+.tr-skel-stack {
+  width: calc(var(--spacing) * 32);
+  height: calc(var(--spacing) * 9);
+}
+
+.tr-skel-line {
+  width: calc(var(--spacing) * 120);
+  height: calc(var(--spacing) * 4);
+}
+
+.tr-skel-big {
+  height: calc(var(--spacing) * 96);
+}
+
+.tr-skel-mini {
+  height: calc(var(--spacing) * 48);
+}
+
+.tr-skel-row {
+  height: calc(var(--spacing) * 12);
 }
 
 /* The large chart and the panel of the picked execution */

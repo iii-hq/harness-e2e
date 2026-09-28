@@ -4,6 +4,7 @@ import {
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
+  Skeleton,
 } from '@iii-dev/console-ui'
 import { ChartLine, ChevronDown, Download, X } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -266,6 +267,30 @@ function Legend() {
   )
 }
 
+/** The page's shape while the trend loads: the controls, the summary, the
+ *  large chart, the six small ones and a few rows. */
+export function TrendsSkeleton({ narrow }: { narrow: boolean }) {
+  return (
+    <div className="tr-loading" role="status" aria-busy="true">
+      <span className="ds-visually-hidden">Loading the trend</span>
+      <div className="tr-toolbar">
+        <Skeleton className="tr-skel tr-skel-series" />
+        <Skeleton className="tr-skel tr-skel-stack" />
+      </div>
+      <Skeleton className="tr-skel tr-skel-line" />
+      <Skeleton className="tr-skel tr-skel-big" />
+      <div className="tr-minis" data-narrow={narrow || undefined}>
+        {TREND_METRICS.slice(1).map((metric) => (
+          <Skeleton key={metric.id} className="tr-skel tr-skel-mini" />
+        ))}
+      </div>
+      {['first', 'second', 'third', 'fourth'].map((row) => (
+        <Skeleton key={row} className="tr-skel tr-skel-row" />
+      ))}
+    </div>
+  )
+}
+
 /* ----------------------------------------------------------------- page */
 
 type Runner = { parameters: ExecutionParameters | null; label: string }
@@ -451,9 +476,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
           onRetry={() => void load()}
         />
       ) : data === null ? (
-        <div className="tr-skeleton" role="status" aria-busy="true">
-          <span className="ds-visually-hidden">Loading the trend</span>
-        </div>
+        <TrendsSkeleton narrow={narrow} />
       ) : (
         <>
           {data.series.length > 0 ? (

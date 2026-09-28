@@ -9,6 +9,7 @@ import {
   requestSeries,
   stackLabel,
   stackSub,
+  TrendsSkeleton,
 } from '@/pages/TrendsPage'
 import { seriesPoints } from '@/test-fixtures/trends'
 
@@ -49,6 +50,14 @@ describe('trends page state', () => {
 })
 
 describe('trends page parts', () => {
+  it('loads in the shape of the page', () => {
+    const html = renderToStaticMarkup(<TrendsSkeleton narrow={false} />)
+    expect(html).toContain('role="status" aria-busy="true"')
+    expect(html.match(/tr-skel-big/g)).toHaveLength(1)
+    expect(html.match(/tr-skel-mini/g)).toHaveLength(6)
+    expect(html.match(/tr-skel-row/g)).toHaveLength(4)
+  })
+
   it('draws a labelled diamond for each change and a button per execution', () => {
     const html = renderToStaticMarkup(
       <LargeChart
