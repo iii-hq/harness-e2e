@@ -793,6 +793,24 @@
   margin: 0;
 }
 
+.ep-notrun > p,
+.ep-notrun-text {
+  flex: 1 1 320px;
+  min-width: 0;
+  color: var(--color-ink-faint, var(--text-soft));
+}
+
+.ep-notrun-text {
+  display: grid;
+  gap: 4px;
+}
+
+.ep-notrun-reason {
+  color: var(--color-ink, var(--text));
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .ep-row-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
@@ -845,22 +863,6 @@
 .ep-row-reason {
   margin: 0.625rem 0 0;
   overflow-wrap: anywhere;
-}
-
-.ep-run-facts {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
-  gap: 0.5rem 1rem;
-  margin: 0;
-}
-
-.ep-run-facts dt {
-  color: var(--color-ink-faint, var(--text-soft));
-  font-size: 0.75rem;
-}
-
-.ep-run-facts dd {
-  margin: 0;
 }
 
 .ep-run-actions {
@@ -1426,6 +1428,11 @@ ol.ep-events {
   font-size: 0.75rem;
 }
 
+.ep-met svg {
+  flex: none;
+  color: var(--color-ok, var(--success));
+}
+
 .ep-lost {
   display: flex;
   flex-direction: column;
@@ -1464,7 +1471,7 @@ ol.ep-events {
   padding: 0 6px;
   border-radius: var(--ds-radius-sm, 6px);
   background: var(--color-alert-muted, var(--surface-soft));
-  color: var(--color-alert-strong, var(--color-alert, var(--danger)));
+  color: var(--ds-danger-text);
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   font-weight: 500;
@@ -1481,43 +1488,26 @@ ol.ep-events {
   line-height: 16px;
 }
 
-.ep-run-tiles {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  margin: 0;
-}
-
-.ep-run-tile {
+.ep-run-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
   min-width: 0;
-  padding: 8px 10px;
-  border-radius: var(--ds-radius-md, 6px);
-  background: var(--color-panel-raised, var(--color-panel, var(--surface)));
-}
-
-.ep-run-tile dt {
-  color: var(--color-ink-faint, var(--text-soft));
-  font-size: 0.6875rem;
-  line-height: 16px;
-}
-
-.ep-run-tile dd {
-  margin: 0;
-  font-family: var(--font-mono);
-  font-size: 0.8125rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.ep-run-actions {
-  gap: 6px;
-  margin-top: 0;
 }
 
 .ep-run-meta {
-  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   color: var(--color-ink-faint, var(--text-soft));
   font-family: var(--font-mono);
   font-size: 0.6875rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ep-run-actions {
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .ep-act {
@@ -1551,6 +1541,35 @@ ol.ep-events {
 .ep-act:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* The run's actions: 36 px, bordered on the panel, 16 px icons (canvas
+   .act-2). The host takes no box-shadow here: the ring is an outline. */
+.ep-act.ep-row-act {
+  height: 36px;
+  gap: 8px;
+  padding: 0 14px;
+  background: var(--color-panel, var(--surface));
+  color: var(--color-ink, var(--text));
+  outline: 1px solid var(--color-edge, var(--line));
+  outline-offset: -1px;
+  font-size: 0.8125rem;
+  font-weight: 600;
+}
+
+.ep-act.ep-row-act:hover {
+  background: var(--color-surface-hover, var(--surface-soft));
+}
+
+.ep-act.ep-row-act:focus-visible {
+  outline: 2px solid var(--color-focus, var(--focus));
+  outline-offset: 1px;
+}
+
+.ep-row-act svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
 }
 
 .ep-row-shots {
@@ -1595,7 +1614,6 @@ ol.ep-events {
     padding: 2px 0 10px;
   }
 
-  .ep-run-tiles,
   .ep-row-shots .ep-shot-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
@@ -1703,6 +1721,32 @@ tr.ep-detail-row:hover {
   font-size: 0.6875rem;
   line-height: 16px;
   font-variant-numeric: tabular-nums;
+}
+
+/* An open row's run: the same cards, three across down to a phone. */
+.ep-kpis.ep-run-kpis {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ep-run-kpis .ep-kpi-value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ep-run-kpis .ep-kpi-sub {
+  min-height: 16px;
+}
+
+/* A phone: two across, so a figure keeps its width. More specific than the
+   three-across rule above, whatever the order. */
+@container harness (max-width: 560px) {
+  .ep-row-run .ep-kpis.ep-run-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .ep-totals-bar {
@@ -2043,4 +2087,15 @@ tr.ep-detail-row:hover {
 .ex-dialog-actions .ep-confirm-link {
   margin-inline-end: auto;
   font-size: var(--text-xs);
+}
+
+/* The row's result word: 12 px Inter in ink (the cell is muted), tinted
+   by its tone where StatusLabel paints one: alert strong, ghost faint. */
+.ep-result-row .ep-cell[data-label="Result"] {
+  color: var(--color-ink, var(--text));
+}
+
+.ep-result-row .ds-status-label {
+  font-family: var(--font-sans);
+  font-size: 0.75rem;
 }

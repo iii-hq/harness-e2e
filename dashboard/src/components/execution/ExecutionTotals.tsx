@@ -39,8 +39,30 @@ export function formatUsd(value: number | null) {
   return formatCost(value)
 }
 
-function plural(count: number, one: string, many: string) {
+export function plural(count: number, one: string, many: string) {
   return `${count} ${count === 1 ? one : many}`
+}
+
+/** One figure card: a label, the figure in mono and a caption under it; the
+ *  whole number, when the figure is short, on the caption's hover. */
+export type Kpi = { label: string; value: string; sub: string; full?: string }
+
+export function KpiTile({
+  kpi,
+  as: Tag = 'div',
+}: {
+  kpi: Kpi
+  as?: 'div' | 'li'
+}) {
+  return (
+    <Tag className="ep-kpi">
+      <span className="ep-kpi-label">{kpi.label}</span>
+      <span className="ep-kpi-value">{kpi.value}</span>
+      <span className="ep-kpi-sub" title={kpi.full}>
+        {kpi.sub}
+      </span>
+    </Tag>
+  )
 }
 
 /** The execution's totals: six figures, the partial note, and "All metrics"
@@ -84,12 +106,7 @@ export function ExecutionTotals({
   // reported so.
   const reported = items.filter((item) => !unreported(item)).length
   const partial = scores.length < total
-  const kpis: Array<{
-    label: string
-    value: string
-    sub: string
-    full?: string
-  }> = [
+  const kpis: Kpi[] = [
     {
       label: running ? 'Score so far' : 'Score',
       value: score === null ? '—' : String(Math.round(score * 10) / 10),
@@ -155,13 +172,7 @@ export function ExecutionTotals({
     <section className="ep-totals" aria-label="Totals" data-execution-totals>
       <div className="ep-kpis">
         {kpis.map((kpi) => (
-          <div className="ep-kpi" key={kpi.label}>
-            <span className="ep-kpi-label">{kpi.label}</span>
-            <span className="ep-kpi-value">{kpi.value}</span>
-            <span className="ep-kpi-sub" title={kpi.full}>
-              {kpi.sub}
-            </span>
-          </div>
+          <KpiTile key={kpi.label} kpi={kpi} />
         ))}
       </div>
       <div className="ep-totals-bar">

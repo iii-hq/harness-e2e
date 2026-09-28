@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   contractScent,
   matchesFilter,
+  rowResultState,
+  runMetricTiles,
   ScenarioMatrix,
 } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -221,7 +223,9 @@ describe('ScenarioMatrix', () => {
     expect(html).toMatch(/data-primary-metric="Total tokens"[^>]*>300</)
     expect(html).toMatch(/data-primary-metric="Reported cost"[^>]*>\$0\.2000</)
     expect(html).toMatch(/data-primary-metric="Runtime"[^>]*>2s</)
-    expect(html).toMatch(/<dt>Function calls<\/dt><dd[^>]*>20</)
+    expect(html).toMatch(
+      /ep-kpi-label">Function calls<\/span><span class="ep-kpi-value">20</,
+    )
     expect(html).toContain('ep-results-table')
     expect(html).not.toContain(' lg:')
     const partial = executionMetricsFixture([
@@ -232,6 +236,9 @@ describe('ScenarioMatrix', () => {
     )
     expect(partialHtml).toMatch(/data-primary-metric="Total tokens"[^>]*>100</)
     expect(partialHtml).toContain('Partial · 1/2 runs reported')
+    expect(partialHtml).toMatch(
+      /ep-kpi-label">Tokens<\/span><span class="ep-kpi-value">100<\/span><span class="ep-kpi-sub"[^>]*>Partial · 1\/2 runs reported</,
+    )
   })
 
   it('retains evidence and transcript access for every run across subjects', () => {
@@ -304,6 +311,65 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Mean · 1/2 planned runs scored')
   })
 
+  it('says a test that ran three times: the cards sum the runs, the criteria are the last one’s', () => {
+    const three = executionMetricsFixture([
+      {
+        runs: [
+          metricRun('first', 100),
+          metricRun('second', 100),
+          metricRun('third', 100),
+        ],
+      },
+    ])
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={three} onTranscript={() => {}} />,
+    )
+    // The last run is named and its short id stays in sight; the retained
+    // runs below carry the same numbers.
+    expect(html).toContain('3 runs · last run 3 · attempt 1')
+    expect(html).toMatch(
+      /aria-label="Retained runs">(?:(?!<\/ul>).)*run 1(?:(?!<\/ul>).)*run 2(?:(?!<\/ul>).)*run 3/,
+    )
+    expect(html).toContain('>Criteria of run 3<')
+    expect(html).toMatch(
+      /ep-kpi-label">Duration<\/span><span class="ep-kpi-value">3s<\/span><span class="ep-kpi-sub"[^>]*>sum of runs</,
+    )
+    expect(html).toMatch(
+      /ep-kpi-label">Cost<\/span><span class="ep-kpi-value">\$0\.3000<\/span><span class="ep-kpi-sub"[^>]*>sum of runs</,
+    )
+  })
+
+  it('says a test didn’t start only when it did not; otherwise why it left no run', () => {
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={detail} onTranscript={() => {}} />,
+    )
+    // missing_report ran and left no report: its reason, in the row.
+    expect(html).not.toContain('didn’t start, so it')
+    expect(html).toMatch(
+      /No run was retained for this test, so it has no score or evidence\.<\/p><p class="ep-notrun-reason">The expected report for this scenario was not retained\.</,
+    )
+    const notStarted = {
+      ...detail,
+      plan_execution: {
+        slots: [
+          { scenario_id: 'missing_report', state: 'not_run', execution_id: '' },
+        ],
+      },
+      reports: detail.reports.map((report) =>
+        report.scenario_id === 'missing_report'
+          ? { ...report, error: 'compose::add failed' }
+          : report,
+      ),
+    } as unknown as DashboardExecutionDetail
+    const started = renderToStaticMarkup(
+      <ScenarioMatrix detail={notStarted} onTranscript={() => {}} />,
+    )
+    expect(started).toContain(
+      'The test didn’t start, so it has no score or evidence. Needs attention above has the error.',
+    )
+    expect(started).not.toContain('class="ep-notrun-reason"')
+  })
+
   it('keeps a small positive cost distinct from zero', () => {
     const assessment = detail.reports[0].report?.scenarios[0].runs[0].assessment
     const evidence = executionMetricsFixture([
@@ -349,11 +415,15 @@ describe('ScenarioMatrix', () => {
     expect(html).not.toContain('quality')
     expect(html).not.toContain('Physical attempt outcomes')
     expect(html).not.toContain('Technical Invalid')
-    expect(html).toContain('data-status="passed"')
-    expect(html).toContain('data-status="incomplete"')
+    expect(html).toContain('data-state="passed" data-tone="ok"')
+    expect(html).toContain('data-state="incomplete" data-tone="warn"')
     expect(html).not.toContain('hard gate')
-    expect(html).toContain('data-status="inconclusive"')
-    expect(html).toContain('data-status="unavailable"')
+    // No run retained reads as not run, as the filter counts it, each in
+    // its own word.
+    for (const word of ['Inconclusive', 'Unavailable'])
+      expect(html).toMatch(
+        new RegExp(`data-state="not_run"[^>]*>(?:(?!</td>).)*<span>${word}<`),
+      )
     expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
@@ -373,7 +443,9 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('$0.0123')
     expect(html).toContain('data-primary-metric="Runtime"')
     expect(html).toContain('data-primary-metric="Total tokens"')
-    expect(html).toContain('<dt>Function calls</dt>')
+    expect(html).toContain('aria-label="Run metrics · security_review"')
+    expect(html).toContain('aria-label="Run actions · security_review"')
+    expect(html).toContain('run 1 · attempt 1')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
     expect(html).not.toContain('data-step-metric="Findings"')
@@ -453,7 +525,11 @@ describe('ScenarioMatrix', () => {
     expect(html).toMatch(/href="[^"]*execution\/old-native\/run\/run-old"/)
     expect(html).toContain('fixture repository unavailable')
     // Every row can run again; one that did not pass says so in words.
-    expect(html).toContain('aria-label="Run Security Review again"')
+    // Names start with what the control shows (label in name), and the
+    // run's groups say whose they are.
+    expect(html).toContain('aria-label="Run again: security_review"')
+    expect(html).toContain('aria-label="Run metrics · security_review"')
+    expect(html).toContain('aria-label="Run actions · security_review"')
     expect(html).toMatch(
       /data-rerun-scenario="persistent_state"[^>]*>.*?Run again<\/button>/,
     )
@@ -570,6 +646,18 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-row-state="queued"')
     expect(html).toContain('data-row-state="cancelled"')
     expect(html).toContain('Stopped before it finished')
+    // The result word as the canvas paints it (RESULT): tinted, so alert
+    // states read in strong alert and queued or cancelled faint; the dot
+    // carries the tone.
+    for (const [state, tone] of [
+      ['running', 'accent'],
+      ['queued', 'ghost'],
+      ['not_run', 'alert'],
+      ['cancelled', 'ghost'],
+    ])
+      expect(html).toContain(
+        `data-state="${state}" data-tone="${tone}" data-tinted="true"`,
+      )
     const notRun = model.items
       .filter((item) => matchesFilter(item, 'notrun'))
       .map((item) => item.scenarioId)
@@ -598,7 +686,7 @@ describe('ScenarioMatrix', () => {
     expect(panelId).toBeTruthy()
     expect(html).toContain(`id="${panelId}" hidden=""`)
     expect(html).toContain('title="persistent_state · definition b2b2b2b2"')
-    expect(html).toContain('data-status="incomplete"')
+    expect(html).toContain('data-state="incomplete"')
     expect(html).not.toContain('completion evaluator')
   })
 })
@@ -611,4 +699,126 @@ it('shows every retained outcome in aggregate provenance', () => {
       { ...contracts[0], objectiveOutcome: 'failed' },
     ]),
   ).toContain('passed / failed')
+})
+
+describe('runMetricTiles', () => {
+  it('builds the six run cards with the canvas captions', () => {
+    const tiles = runMetricTiles({
+      durationMs: 220_000,
+      costUsd: 0.0048,
+      inputTokens: 5981,
+      outputTokens: 12681,
+      tokens: 18662,
+      cacheRead: 161024,
+      cacheWrite: null,
+      turns: 12,
+      functionCalls: 14,
+      functionErrors: 1,
+    })
+    expect(tiles.map(({ label, value, sub }) => [label, value, sub])).toEqual([
+      ['Duration', '3m 40s', 'sum of runs'],
+      ['Cost', '$0.0048', 'recorded spend'],
+      ['Tokens', '18.7K', 'in 6K · out 12.7K'],
+      ['Cache', '161K', 'read · written —'],
+      ['Turns', '12', ''],
+      ['Function calls', '14', '1 error'],
+    ])
+    expect(tiles[2].full).toBe('18,662 input + output')
+  })
+
+  it('says a figure of several runs is their sum', () => {
+    const tiles = runMetricTiles(
+      {
+        durationMs: 3_000,
+        costUsd: 0.3,
+        inputTokens: 200,
+        outputTokens: 100,
+        tokens: 300,
+        cacheRead: null,
+        cacheWrite: null,
+        turns: 6,
+        functionCalls: 30,
+        functionErrors: 0,
+      },
+      { runs: 3 },
+    )
+    expect(tiles.map(({ label, sub }) => [label, sub])).toEqual([
+      ['Duration', 'sum of runs'],
+      ['Cost', 'sum of runs'],
+      ['Tokens', 'in 200 · out 100'],
+      ['Cache', 'read · written —'],
+      ['Turns', 'sum of runs'],
+      ['Function calls', '0 errors'],
+    ])
+  })
+
+  it('says a figure only part of the runs reported, and what is not available', () => {
+    const tiles = runMetricTiles(
+      {
+        durationMs: 1_000,
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        tokens: 100,
+        cacheRead: null,
+        cacheWrite: null,
+        turns: null,
+        functionCalls: null,
+        functionErrors: null,
+      },
+      {
+        partial: { tokens: 'Partial · 1/2 runs reported' },
+        available: false,
+      },
+    )
+    expect(tiles[2]).toMatchObject({
+      sub: 'Partial · 1/2 runs reported',
+      full: 'in — · out — · 100 input + output',
+    })
+    expect(tiles[1].sub).toBe('not available')
+  })
+
+  it('says what was not reported', () => {
+    const tiles = runMetricTiles({
+      durationMs: null,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      tokens: null,
+      cacheRead: null,
+      cacheWrite: null,
+      turns: null,
+      functionCalls: null,
+      functionErrors: null,
+    })
+    expect(tiles.map(({ value, sub }) => [value, sub])).toEqual([
+      ['—', 'sum of runs'],
+      ['—', 'not reported'],
+      ['—', 'in — · out —'],
+      ['—', 'read · written —'],
+      ['—', ''],
+      ['—', ''],
+    ])
+  })
+})
+
+describe('rowResultState', () => {
+  const item = (status: string, runCount: number) =>
+    ({ objective: { status, label: status, raw: status }, runCount }) as never
+
+  it('reads as not run exactly where the Not run filter counts it', () => {
+    expect(rowResultState(item('unavailable', 0))).toBe('not_run')
+    expect(rowResultState(item('incomplete', 0))).toBe('not_run')
+    expect(rowResultState(item('inconclusive', 0))).toBe('not_run')
+    expect(rowResultState(item('queued', 0))).toBe('queued')
+    expect(rowResultState(item('running', 0))).toBe('running')
+    expect(rowResultState(item('cancelled', 0))).toBe('cancelled')
+  })
+
+  it('keeps a test that ran in its own tone, an unavailable one neutral', () => {
+    expect(rowResultState(item('unavailable', 2))).toBe('inconclusive')
+    expect(rowResultState(item('incomplete', 1))).toBe('incomplete')
+    expect(rowResultState(item('failed', 1))).toBe('failed')
+    expect(rowResultState(item('passed', 1))).toBe('passed')
+  })
 })

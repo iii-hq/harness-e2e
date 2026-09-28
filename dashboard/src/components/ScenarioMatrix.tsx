@@ -1,9 +1,19 @@
-import { Check, ChevronRight, ScrollText } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  FileCheck,
+  RotateCcw,
+  ScrollText,
+} from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
+  formatFull,
   formatSpan,
   formatTokens,
   formatUsd,
+  type Kpi,
+  KpiTile,
+  plural,
 } from '@/components/execution/ExecutionTotals'
 import { ScreenshotGallery } from '@/components/execution/screenshots'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
@@ -12,6 +22,7 @@ import {
   type OperationalStatus,
   Panel,
   StatusBadge,
+  StatusLabel,
 } from '@/design-system'
 import { hashForExecution } from '@/hooks/use-hash-route'
 import {
@@ -26,6 +37,7 @@ import { shortDefinition } from '@/lib/definition-digest'
 import { buildExecutionMetrics } from '@/lib/execution-metrics'
 import { titleCase } from '@/lib/execution-view'
 import { sentenceCase } from '@/lib/format'
+import type { ResultState } from '@/lib/result-status'
 import {
   buildScenarioMatrix,
   detailForScenario,
@@ -42,10 +54,15 @@ import { screenshotsOf } from '@/lib/screenshots'
 
 export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
 
+/** No run retained and not waiting to report: what Not run counts. */
+function leftNoRun(item: Pick<ScenarioMatrixItem, 'objective' | 'runCount'>) {
+  return item.runCount === 0 && !unreported(item)
+}
+
 export function matchesFilter(item: ScenarioMatrixItem, filter: ResultFilter) {
   const score = itemScore(item)
   if (filter === 'lost') return score !== null && score < 100
-  if (filter === 'notrun') return item.runCount === 0 && !unreported(item)
+  if (filter === 'notrun') return leftNoRun(item)
   if (filter === 'passed')
     return item.objective.status === 'passed' && score === 100
   return true
@@ -335,6 +352,109 @@ export function runCriteria(run: unknown): RunCriterion[] {
   })
 }
 
+/** A test's figures, summed over its attempts. */
+export type RunFigures = {
+  durationMs: number | null
+  costUsd: number | null
+  inputTokens: number | null
+  outputTokens: number | null
+  tokens: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
+  turns: number | null
+  functionCalls: number | null
+  functionErrors: number | null
+}
+
+type TileKey =
+  | 'durationMs'
+  | 'costUsd'
+  | 'tokens'
+  | 'cacheRead'
+  | 'turns'
+  | 'functionCalls'
+const TILE_KEYS: TileKey[] = [
+  'durationMs',
+  'costUsd',
+  'tokens',
+  'cacheRead',
+  'turns',
+  'functionCalls',
+]
+
+/** The open row's six run cards, as the canvas captions them; over
+ *  several retained runs each figure is their sum and says so. A figure
+ *  only part of the runs reported says that instead, its caption kept on
+ *  hover; with no report at all, what is missing is not available. */
+export function runMetricTiles(
+  f: RunFigures,
+  {
+    runs = 1,
+    partial = {},
+    available = true,
+  }: {
+    runs?: number
+    partial?: Partial<Record<TileKey, string | undefined>>
+    available?: boolean
+  } = {},
+): Kpi[] {
+  const summed = runs > 1
+  const tiles: Kpi[] = [
+    {
+      label: 'Duration',
+      value: formatSpan(f.durationMs),
+      sub: 'sum of runs',
+    },
+    {
+      label: 'Cost',
+      value: formatUsd(f.costUsd),
+      sub:
+        f.costUsd === null
+          ? available
+            ? 'not reported'
+            : 'not available'
+          : summed
+            ? 'sum of runs'
+            : 'recorded spend',
+    },
+    {
+      label: 'Tokens',
+      value: formatTokens(f.tokens),
+      sub: `in ${formatTokens(f.inputTokens)} · out ${formatTokens(f.outputTokens)}`,
+      full:
+        f.tokens === null
+          ? undefined
+          : `${formatFull(f.tokens)} input + output`,
+    },
+    {
+      label: 'Cache',
+      value: formatTokens(f.cacheRead),
+      sub: `read · written ${formatTokens(f.cacheWrite)}`,
+      full:
+        f.cacheRead === null ? undefined : `${formatFull(f.cacheRead)} read`,
+    },
+    {
+      label: 'Turns',
+      value: formatFull(f.turns),
+      sub: summed ? 'sum of runs' : '',
+    },
+    {
+      label: 'Function calls',
+      value: formatFull(f.functionCalls),
+      sub:
+        f.functionErrors === null
+          ? ''
+          : plural(f.functionErrors, 'error', 'errors'),
+    },
+  ]
+  return tiles.map((tile, index) => {
+    const note = partial[TILE_KEYS[index]]
+    if (!note) return tile
+    const full = [tile.sub, tile.full].filter(Boolean).join(' · ')
+    return { ...tile, sub: note, full: full || undefined }
+  })
+}
+
 /** Mean of the retained runs' scores, null when none was scored. */
 export function itemScore(item: ScenarioMatrixItem): number | null {
   const scores = item.runs
@@ -379,6 +499,31 @@ export function rowNote(item: ScenarioMatrixItem): string {
     ? `${lost.length} ${lost.length === 1 ? 'criterion' : 'criteria'} lost`
     : null
   return [prefix, suffix].filter(Boolean).join(' · ')
+}
+
+/** A row's result in the canvas's vocabulary (RESULT): the tone paints the
+ *  dot and, tinted, the word. Cancelling is still live; an unavailable
+ *  report of a test that ran is only undetermined. */
+const ROW_RESULT: Record<OperationalStatus, ResultState> = {
+  passed: 'passed',
+  failed: 'failed',
+  inconclusive: 'inconclusive',
+  unavailable: 'inconclusive',
+  'not-run': 'not_run',
+  recommendation: 'inconclusive',
+  running: 'running',
+  cancelling: 'running',
+  cancelled: 'cancelled',
+  incomplete: 'incomplete',
+  queued: 'queued',
+}
+
+/** Not run exactly where the Not run filter counts it; otherwise the
+ *  result's own tone. */
+export function rowResultState(
+  item: Pick<ScenarioMatrixItem, 'objective' | 'runCount'>,
+): ResultState {
+  return leftNoRun(item) ? 'not_run' : ROW_RESULT[item.objective.status]
 }
 
 function ScenarioResult({
@@ -460,26 +605,49 @@ function ScenarioResult({
     value === null
       ? '—'
       : new Intl.NumberFormat('en-US').format(Math.round(value))
-  const runFacts: Array<[string, string]> = [
-    ['Input tokens', formatTokens(pick(metrics.inputTokens))],
-    ['Output tokens', formatTokens(pick(metrics.outputTokens))],
-    ['Cache read', formatTokens(pick(metrics.cacheReadTokens))],
-    ...(pick(metrics.cacheWriteTokens) !== null
-      ? [
-          ['Cache written', formatTokens(pick(metrics.cacheWriteTokens))] as [
-            string,
-            string,
-          ],
-        ]
-      : []),
-    ['Turns', count(turns)],
-    ['Function calls', count(pick(metrics.functionCalls))],
-    ['Function errors', count(pick(metrics.functionErrors))],
-  ]
+  const runTiles = runMetricTiles(
+    {
+      durationMs: duration,
+      costUsd: cost,
+      inputTokens: pick(metrics.inputTokens),
+      outputTokens: pick(metrics.outputTokens),
+      tokens,
+      cacheRead: pick(metrics.cacheReadTokens),
+      cacheWrite: pick(metrics.cacheWriteTokens),
+      turns,
+      functionCalls: pick(metrics.functionCalls),
+      functionErrors: pick(metrics.functionErrors),
+    },
+    {
+      runs: item.runs.length,
+      partial: {
+        durationMs: partialNote(metrics.durationMs),
+        costUsd: partialNote(metrics.cost),
+        tokens: partialNote(metrics.subjectTokens),
+        cacheRead: partialNote(metrics.cacheReadTokens),
+        functionCalls: partialNote(metrics.functionCalls),
+      },
+      available: metrics.includedScenarios > 0,
+    },
+  )
   const attempt = Number(item.primaryRun?.attempt_number ?? 1)
-  const runMeta = runId
-    ? `run ${runId.slice(0, 8)} · attempt ${attempt} · ${formatSpan(duration)} · ${formatUsd(cost)}`
-    : ''
+  // The cards sum every retained run; the criteria and the actions are the
+  // last one's, and both say so.
+  const runNumber = item.runs.length
+  const several = runNumber > 1
+  // As the canvas: the run by its number; the whole id on hover and in the
+  // numbered retained runs below.
+  const runMeta = !runId
+    ? ''
+    : several
+      ? `${runNumber} runs · last run ${runNumber} · attempt ${attempt}`
+      : `run 1 · attempt ${attempt}`
+  const criteriaTitle = [
+    several ? `Criteria of run ${runNumber}` : 'Criteria',
+    lost.length ? 'that lost points' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const screenshots = expanded ? screenshotsOf(detail, item.scenarioId) : []
   const title = `${item.scenarioId}${definition ? ` · definition ${definition}` : ''}`
   return (
@@ -523,8 +691,9 @@ function ScenarioResult({
           </button>
         </th>
         <td className="ep-cell" data-label="Result">
-          <StatusBadge
-            status={item.objective.status}
+          <StatusLabel
+            tinted
+            state={rowResultState(item)}
             label={item.objective.label}
           />
         </td>
@@ -578,17 +747,31 @@ function ScenarioResult({
           <div className="ep-detail">
             {item.runCount === 0 ? (
               <div className="ep-notrun">
-                <p>
-                  {item.reason
-                    ? `The test didn’t start, so it has no score or evidence. ${item.reason}`
-                    : 'No run was retained for this test, so it has no score or evidence.'}
-                </p>
+                {/* "Didn't start" only for a test that did not; any other
+                    test that left no run says why here. */}
+                {item.objective.status === 'not-run' ? (
+                  <p>
+                    {item.reason
+                      ? 'The test didn’t start, so it has no score or evidence. Needs attention above has the error.'
+                      : 'The test didn’t start, so it has no score or evidence.'}
+                  </p>
+                ) : (
+                  <div className="ep-notrun-text">
+                    <p>
+                      No run was retained for this test, so it has no score or
+                      evidence.
+                    </p>
+                    {item.reason ? (
+                      <p className="ep-notrun-reason">{item.reason}</p>
+                    ) : null}
+                  </div>
+                )}
                 {onRerun ? (
                   <button
                     type="button"
                     className="ep-act ep-act-ctl"
                     data-rerun-scenario={item.scenarioId}
-                    aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                    aria-label={`Run this test again: ${item.scenarioId}`}
                     onClick={() => onRerun(item.scenarioId)}
                   >
                     Run this test again
@@ -598,12 +781,10 @@ function ScenarioResult({
             ) : (
               <div className="ep-row-grid">
                 <div className="ep-row-criteria">
-                  <h3 className="ep-h3">
-                    {lost.length ? 'Criteria that lost points' : 'Criteria'}
-                  </h3>
+                  <h3 className="ep-h3">{criteriaTitle}</h3>
                   {criteria.length > 0 && lost.length === 0 ? (
                     <p className="ep-met">
-                      <Check size={14} aria-hidden="true" />
+                      <Check size={16} aria-hidden="true" />
                       Every criterion met.
                     </p>
                   ) : null}
@@ -635,21 +816,32 @@ function ScenarioResult({
                   ) : null}
                 </div>
                 <div className="ep-row-run">
-                  <h3 className="ep-h3">Run</h3>
-                  <dl className="ep-run-tiles">
-                    {runFacts.map(([label, value]) => (
-                      <div key={label} className="ep-run-tile">
-                        <dt>{label}</dt>
-                        <dd>{value}</dd>
-                      </div>
+                  <div className="ep-run-head">
+                    <h3 className="ep-h3">Run</h3>
+                    <span className="ep-run-meta" title={runId}>
+                      {runMeta}
+                    </span>
+                  </div>
+                  <ul
+                    // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+                    role="list"
+                    className="ep-kpis ep-run-kpis"
+                    aria-label={`Run metrics · ${item.scenarioId}`}
+                  >
+                    {runTiles.map((kpi) => (
+                      <KpiTile key={kpi.label} kpi={kpi} as="li" />
                     ))}
-                  </dl>
-                  <div className="ep-run-actions">
-                    <span className="ep-run-meta">{runMeta}</span>
+                  </ul>
+                  {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of commands, not a form fieldset */}
+                  <div
+                    role="group"
+                    className="ep-run-actions"
+                    aria-label={`Run actions · ${item.scenarioId}`}
+                  >
                     {primaryAssessment?.transcript ? (
                       <button
                         type="button"
-                        className="ep-act ep-act-ctl"
+                        className="ep-act ep-row-act"
                         aria-label={`View transcript for ${titleCase(item.scenarioId)}`}
                         onClick={() =>
                           onTranscript(
@@ -658,22 +850,23 @@ function ScenarioResult({
                           )
                         }
                       >
-                        <ScrollText size={14} aria-hidden="true" />
+                        <ScrollText aria-hidden="true" />
                         Transcript
                       </button>
                     ) : null}
                     {runId ? (
                       <a
-                        className="ep-act"
+                        className="ep-act ep-row-act"
                         href={hashForExecution(executionId, null, runId)}
                         aria-label={`Evidence record for ${titleCase(item.scenarioId)}`}
                       >
+                        <FileCheck aria-hidden="true" />
                         Evidence record
                       </a>
                     ) : null}
                     <ScenarioChatAction
                       label="Ask in chat"
-                      buttonClass="ep-act"
+                      buttonClass="ep-act ep-row-act"
                       detail={detail}
                       scenarioId={item.scenarioId}
                       subjectId={item.subjectId}
@@ -681,11 +874,12 @@ function ScenarioResult({
                     {onRerun ? (
                       <button
                         type="button"
-                        className={`ep-act ${item.objective.status === 'passed' ? '' : 'ep-act-ctl'}`}
-                        aria-label={`Run ${titleCase(item.scenarioId)} again`}
+                        className="ep-act ep-row-act"
+                        aria-label={`Run again: ${item.scenarioId}`}
                         data-rerun-scenario={item.scenarioId}
                         onClick={() => onRerun(item.scenarioId)}
                       >
+                        <RotateCcw aria-hidden="true" />
                         Run again
                       </button>
                     ) : null}
@@ -710,13 +904,15 @@ function ScenarioResult({
             ) : null}
             {item.runs.length > 1 ? (
               <ul className="ep-runs" aria-label="Retained runs">
-                {item.runs.map((run) => {
+                {item.runs.map((run, index) => {
                   const assessment = assessmentRuns.find(
                     (entry) => entry.runId === run.run_id,
                   )
                   return (
                     <li key={run.attempt_id}>
-                      <span className="ep-mono">{run.run_id}</span>
+                      <span className="ep-mono" title={run.run_id}>
+                        run {index + 1} · {run.run_id.slice(0, 8)}
+                      </span>
                       <a
                         className={buttonClassName({
                           variant: 'secondary',
