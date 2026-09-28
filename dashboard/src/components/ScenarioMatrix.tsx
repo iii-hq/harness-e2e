@@ -366,18 +366,25 @@ export type RunFigures = {
   functionErrors: number | null
 }
 
-/** The open row's six run cards, as the canvas captions them. */
-export function runMetricTiles(f: RunFigures): Kpi[] {
+/** The open row's six run cards, as the canvas captions them; over
+ *  several retained runs each figure is their sum and says so. */
+export function runMetricTiles(f: RunFigures, runs = 1): Kpi[] {
+  const summed = runs > 1
   return [
     {
       label: 'Duration',
       value: formatSpan(f.durationMs),
-      sub: 'sum of attempts',
+      sub: summed ? 'sum of runs' : 'sum of attempts',
     },
     {
       label: 'Cost',
       value: formatUsd(f.costUsd),
-      sub: f.costUsd === null ? 'not reported' : 'recorded spend',
+      sub:
+        f.costUsd === null
+          ? 'not reported'
+          : summed
+            ? 'sum of runs'
+            : 'recorded spend',
     },
     {
       label: 'Tokens',
@@ -395,7 +402,11 @@ export function runMetricTiles(f: RunFigures): Kpi[] {
       full:
         f.cacheRead === null ? undefined : `${formatFull(f.cacheRead)} read`,
     },
-    { label: 'Turns', value: formatFull(f.turns), sub: '' },
+    {
+      label: 'Turns',
+      value: formatFull(f.turns),
+      sub: summed ? 'sum of runs' : '',
+    },
     {
       label: 'Function calls',
       value: formatFull(f.functionCalls),
@@ -557,21 +568,37 @@ function ScenarioResult({
     value === null
       ? '—'
       : new Intl.NumberFormat('en-US').format(Math.round(value))
-  const runTiles = runMetricTiles({
-    durationMs: duration,
-    costUsd: cost,
-    inputTokens: pick(metrics.inputTokens),
-    outputTokens: pick(metrics.outputTokens),
-    tokens,
-    cacheRead: pick(metrics.cacheReadTokens),
-    cacheWrite: pick(metrics.cacheWriteTokens),
-    turns,
-    functionCalls: pick(metrics.functionCalls),
-    functionErrors: pick(metrics.functionErrors),
-  })
+  const runTiles = runMetricTiles(
+    {
+      durationMs: duration,
+      costUsd: cost,
+      inputTokens: pick(metrics.inputTokens),
+      outputTokens: pick(metrics.outputTokens),
+      tokens,
+      cacheRead: pick(metrics.cacheReadTokens),
+      cacheWrite: pick(metrics.cacheWriteTokens),
+      turns,
+      functionCalls: pick(metrics.functionCalls),
+      functionErrors: pick(metrics.functionErrors),
+    },
+    item.runs.length,
+  )
   const attempt = Number(item.primaryRun?.attempt_number ?? 1)
-  // The last retained run is the one shown: its number among them.
-  const runMeta = runId ? `run ${item.runs.length} · attempt ${attempt}` : ''
+  // The cards sum every retained run; the criteria and the actions are the
+  // last one's, and both say so.
+  const runNumber = item.runs.length
+  const several = runNumber > 1
+  const runMeta = !runId
+    ? ''
+    : several
+      ? `${runNumber} runs · last attempt ${attempt}`
+      : `run 1 · attempt ${attempt}`
+  const criteriaTitle = [
+    several ? `Criteria of run ${runNumber}` : 'Criteria',
+    lost.length ? 'that lost points' : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
   const screenshots = expanded ? screenshotsOf(detail, item.scenarioId) : []
   const title = `${item.scenarioId}${definition ? ` · definition ${definition}` : ''}`
   return (
@@ -691,9 +718,7 @@ function ScenarioResult({
             ) : (
               <div className="ep-row-grid">
                 <div className="ep-row-criteria">
-                  <h3 className="ep-h3">
-                    {lost.length ? 'Criteria that lost points' : 'Criteria'}
-                  </h3>
+                  <h3 className="ep-h3">{criteriaTitle}</h3>
                   {criteria.length > 0 && lost.length === 0 ? (
                     <p className="ep-met">
                       <Check size={16} aria-hidden="true" />

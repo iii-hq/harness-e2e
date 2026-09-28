@@ -308,6 +308,29 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('Mean · 1/2 planned runs scored')
   })
 
+  it('says a test that ran three times: the cards sum the runs, the criteria are the last one’s', () => {
+    const three = executionMetricsFixture([
+      {
+        runs: [
+          metricRun('first', 100),
+          metricRun('second', 100),
+          metricRun('third', 100),
+        ],
+      },
+    ])
+    const html = renderToStaticMarkup(
+      <ScenarioMatrix detail={three} onTranscript={() => {}} />,
+    )
+    expect(html).toContain('3 runs · last attempt 1')
+    expect(html).toContain('>Criteria of run 3<')
+    expect(html).toMatch(
+      /ep-kpi-label">Duration<\/span><span class="ep-kpi-value">3s<\/span><span class="ep-kpi-sub"[^>]*>sum of runs</,
+    )
+    expect(html).toMatch(
+      /ep-kpi-label">Cost<\/span><span class="ep-kpi-value">\$0\.3000<\/span><span class="ep-kpi-sub"[^>]*>sum of runs</,
+    )
+  })
+
   it('keeps a small positive cost distinct from zero', () => {
     const assessment = detail.reports[0].report?.scenarios[0].runs[0].assessment
     const evidence = executionMetricsFixture([
@@ -658,6 +681,32 @@ describe('runMetricTiles', () => {
       ['Function calls', '14', '1 error'],
     ])
     expect(tiles[2].full).toBe('18,662 input + output')
+  })
+
+  it('says a figure of several runs is their sum', () => {
+    const tiles = runMetricTiles(
+      {
+        durationMs: 3_000,
+        costUsd: 0.3,
+        inputTokens: 200,
+        outputTokens: 100,
+        tokens: 300,
+        cacheRead: null,
+        cacheWrite: null,
+        turns: 6,
+        functionCalls: 30,
+        functionErrors: 0,
+      },
+      3,
+    )
+    expect(tiles.map(({ label, sub }) => [label, sub])).toEqual([
+      ['Duration', 'sum of runs'],
+      ['Cost', 'sum of runs'],
+      ['Tokens', 'in 200 · out 100'],
+      ['Cache', 'read · written —'],
+      ['Turns', 'sum of runs'],
+      ['Function calls', '0 errors'],
+    ])
   })
 
   it('says what was not reported', () => {
