@@ -110,8 +110,9 @@ export type TrendsResponse = {
   series: TrendSeries[]
   selected: TrendSeriesKey | null
   stack: string
-  /** Every stack the selected series ran on, latest first, then
-   *  'not_recorded' (if any) and 'any'. */
+  /** Every stack the selected series ever ran on, latest first, then
+   *  'not_recorded' (if any) and 'any'; counts are the period's, so 0 can
+   *  be one. */
   stacks: Array<{ name: string; executions: number }>
   /** Oldest first. */
   points: TrendPoint[]
