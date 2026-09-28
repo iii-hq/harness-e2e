@@ -1308,7 +1308,7 @@ mod response_contract_tests {
         let point = &response["points"][0];
         assert_eq!(
             keys(point),
-            "counted,engine,execution_id,label,measures,planned,reason,runner,runs,source,stack,started_at,tests,workers"
+            "counted,engine,execution_id,label,measures,planned,reason,runs,source,stack,started_at,tests,workers"
         );
         assert_eq!(
             point["source"],

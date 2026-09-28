@@ -129,7 +129,6 @@ pub(super) struct TrendPoint {
     pub source: TrendSource,
     pub stack: TrendStack,
     pub engine: Option<String>,
-    pub runner: Option<String>,
     /// Identity per worker, runner and engine left out; null: not recorded.
     pub workers: Option<BTreeMap<String, String>>,
     pub planned: Option<Vec<String>>,
@@ -476,19 +475,6 @@ fn workers(rows: &[StackWorker], local: bool) -> Option<BTreeMap<String, String>
     })
 }
 
-/// The runner's release (its own version when none is recorded: the runner
-/// reports it as released), with the commit it was built from when it ran
-/// from a checkout.
-fn runner(rows: &[StackWorker], local: bool) -> Option<String> {
-    let row = rows.iter().find(|row| row.name == RUNNER)?;
-    let version = version(row, local).or_else(|| row.observed.clone());
-    let commit = row.commit.is_some().then(|| identity(row, local)).flatten();
-    match (version, commit) {
-        (Some(version), Some(commit)) => Some(format!("{version}{commit}")),
-        (version, commit) => version.or(commit),
-    }
-}
-
 /// The engine its native runs reported, else the `iii:` its stack pinned,
 /// else the compose row.
 fn engine(execution: &Execution, natives: &[&Value]) -> Option<String> {
@@ -609,7 +595,6 @@ fn point(
         source,
         stack,
         engine: engine(execution, natives),
-        runner: runner(&execution.workers, local),
         workers: workers(&execution.workers, local),
         planned: (!planned.is_empty()).then(|| planned.clone()),
         runs: runs.len(),
@@ -800,23 +785,16 @@ mod tests {
         };
         assert_eq!(identity(&built, false).as_deref(), Some("@3f2a9c1*"));
 
-        let runner = StackWorker {
-            commit: Some("abc1234ef".into()),
-            ..worker(RUNNER, Some("0.17.0"), Some("0.17.0"))
-        };
+        // The runner and the engine are not workers of the stack.
         let rows = [
             harness,
             latest,
-            runner,
+            worker(RUNNER, Some("0.17.0"), Some("0.17.0")),
             worker(ENGINE, None, Some("0.24.3")),
         ];
         assert_eq!(
             workers(&rows, false),
             Some(BTreeMap::from([("harness".into(), "1.8.36".into())]))
-        );
-        assert_eq!(
-            super::runner(&rows, false).as_deref(),
-            Some("0.17.0@abc1234")
         );
         assert_eq!(workers(&[], false), None);
     }
