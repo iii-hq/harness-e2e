@@ -332,7 +332,9 @@ export function ExecutionsTable({
                           <span
                             className="tr-version"
                             data-new={
-                              (before && before.runner !== point.runner) ||
+                              (before?.runner &&
+                                point.runner &&
+                                before.runner !== point.runner) ||
                               undefined
                             }
                           >

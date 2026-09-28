@@ -212,6 +212,14 @@ describe('trends page parts', () => {
     expect(ids.at(-1)).toBe('github-35742568444-1')
     expect(html).toContain('no counted run · GitHub #36220337119 · RC e63de635')
     expect(html).toMatch(/data-new="true">0\.24\.3-rc\.1</)
+    // A runner that was not recorded is not new.
+    const unrecorded = structuredClone(regression.slice(-2))
+    unrecorded[0].runner = null
+    expect(
+      renderToStaticMarkup(
+        <ExecutionsTable points={unrecorded} selected={-1} narrow={false} />,
+      ),
+    ).not.toContain('data-new="true">0.17.0<')
     const narrow = renderToStaticMarkup(
       <ExecutionsTable points={regression} selected={-1} narrow />,
     )
