@@ -308,7 +308,9 @@ try {
   const lost = minimal.locator('[data-lost-criterion="concise_report"]')
   await lost.getByText('−10', { exact: true }).waitFor()
   await lost.getByText('observed 1197 character(s); budget 1000').waitFor()
-  await minimal.getByText('run 1 · attempt 1', { exact: true }).waitFor()
+  await minimal
+    .getByText('run 1 · minimal- · attempt 1', { exact: true })
+    .waitFor()
   const tiles = minimal.getByRole('list', { name: 'Run metrics' })
   assert.deepEqual(await tiles.locator('.ep-kpi-label').allTextContents(), [
     'Duration',

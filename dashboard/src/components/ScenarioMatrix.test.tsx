@@ -324,7 +324,12 @@ describe('ScenarioMatrix', () => {
     const html = renderToStaticMarkup(
       <ScenarioMatrix detail={three} onTranscript={() => {}} />,
     )
-    expect(html).toContain('3 runs · last attempt 1')
+    // The last run is named and its short id stays in sight; the retained
+    // runs below carry the same numbers.
+    expect(html).toContain('3 runs · last run 3 · third · attempt 1')
+    expect(html).toMatch(
+      /aria-label="Retained runs">(?:(?!<\/ul>).)*run 1(?:(?!<\/ul>).)*run 2(?:(?!<\/ul>).)*run 3/,
+    )
     expect(html).toContain('>Criteria of run 3<')
     expect(html).toMatch(
       /ep-kpi-label">Duration<\/span><span class="ep-kpi-value">3s<\/span><span class="ep-kpi-sub"[^>]*>sum of runs</,
@@ -409,7 +414,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-primary-metric="Total tokens"')
     expect(html).toContain('aria-label="Run metrics"')
     expect(html).toContain('aria-label="Run actions"')
-    expect(html).toContain('run 1 · attempt 1')
+    expect(html).toContain('run 1 · run-secu · attempt 1')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
     expect(html).not.toContain('data-step-metric="Findings"')

@@ -635,11 +635,13 @@ function ScenarioResult({
   // last one's, and both say so.
   const runNumber = item.runs.length
   const several = runNumber > 1
+  // The run is named by its number and its short id, as the retained runs
+  // below; the whole id on hover.
   const runMeta = !runId
     ? ''
     : several
-      ? `${runNumber} runs · last attempt ${attempt}`
-      : `run 1 · attempt ${attempt}`
+      ? `${runNumber} runs · last run ${runNumber} · ${runId.slice(0, 8)} · attempt ${attempt}`
+      : `run 1 · ${runId.slice(0, 8)} · attempt ${attempt}`
   const criteriaTitle = [
     several ? `Criteria of run ${runNumber}` : 'Criteria',
     lost.length ? 'that lost points' : '',
@@ -888,13 +890,15 @@ function ScenarioResult({
             ) : null}
             {item.runs.length > 1 ? (
               <ul className="ep-runs" aria-label="Retained runs">
-                {item.runs.map((run) => {
+                {item.runs.map((run, index) => {
                   const assessment = assessmentRuns.find(
                     (entry) => entry.runId === run.run_id,
                   )
                   return (
                     <li key={run.attempt_id}>
-                      <span className="ep-mono">{run.run_id}</span>
+                      <span className="ep-mono" title={run.run_id}>
+                        run {index + 1} · {run.run_id.slice(0, 8)}
+                      </span>
                       <a
                         className={buttonClassName({
                           variant: 'secondary',
