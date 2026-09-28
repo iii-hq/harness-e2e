@@ -523,10 +523,12 @@ impl PlanStore {
     /// Install an extracted exact-stack bundle: each group's native run is
     /// moved into the data directory and retained like a finished local run.
     /// A group without a readable native run becomes a slot with its error;
-    /// a bundle with no readable group fails and leaves the execution as it
-    /// was. Runs of the previous import that the new one does not carry are
-    /// deleted only once the new execution is written. An execution that
-    /// `stopped` before it ran everything ends interrupted, with the reason.
+    /// a bundle with no readable group fails and leaves the execution's runs
+    /// as they were, recording what its contract says it ran where the
+    /// execution recorded nothing yet (a first import). Runs of the previous
+    /// import that the new one does not carry are deleted only once the new
+    /// execution is written. An execution that `stopped` before it ran
+    /// everything ends interrupted, with the reason.
     pub(super) async fn install_bundle(
         &self,
         execution: &mut PlanExecution,
@@ -630,12 +632,6 @@ impl PlanStore {
                 }
             }
         }
-        ensure!(
-            !requests.is_empty(),
-            "No group of this run left a native run this runner can read: {}",
-            errors.join("; ")
-        );
-
         let first = requests.first();
         let text = |value: &Value| value.as_str().map(str::to_owned);
         let asked = execution.parameters.as_ref();
@@ -682,6 +678,28 @@ impl PlanStore {
             r#where,
             stack,
         };
+        if requests.is_empty() {
+            let error = format!(
+                "No group of this run left a native run this runner can read: {}",
+                errors.join("; ")
+            );
+            let recorded = async {
+                let _guard = self.lock.lock().await;
+                let mut latest = self.read_execution(&execution.id).await?;
+                latest.parameters.get_or_insert(parameters);
+                if latest.stack.is_empty() {
+                    latest.stack =
+                        lock_rows(&contract.join("worker-compose.lock"), BTreeMap::new());
+                }
+                latest.label = latest.label.or_else(|| text(&fields["suite_label"]));
+                self.write_execution(&latest).await
+            }
+            .await;
+            if let Err(error) = recorded {
+                tracing::warn!(execution_id = %execution.id, error = %format!("{error:#}"), "cannot record what the contract of a failed import says");
+            }
+            bail!(error);
+        }
         let mut next = execution.clone();
         next.parameters = Some(parameters);
         if let ExecutionSource::Github { stack, .. } = &mut next.source {
@@ -968,21 +986,11 @@ fn contract_fields(contract: &Path) -> Value {
 /// stack pinned to one was built from (its contract says). Engine built-ins
 /// are left out.
 fn group_stack(directory: &Path) -> Vec<StackWorker> {
-    let lock = fs::read_to_string(directory.join("stack/worker-compose.lock"))
-        .ok()
-        .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
-        .unwrap_or(Value::Null);
     let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
-    let mut rows = super::stack::rows(
-        &lock["containers"],
-        |container| container["requested"].as_str().map(str::to_owned),
+    let mut rows = lock_rows(
+        &directory.join("stack/worker-compose.lock"),
         super::stack::observed_versions(&workers, None),
     );
-    for row in &mut rows {
-        row.resolved = lock["containers"][row.name.as_str()]["resolved"]["version"]
-            .as_str()
-            .map(str::to_owned);
-    }
     let contract = read_json(&directory.join("stack-lock.json")).unwrap_or(Value::Null);
     for (name, pin) in contract["runtime"]["commits"]
         .as_object()
@@ -1003,6 +1011,26 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
                 groups: Vec::new(),
             }),
         }
+    }
+    rows
+}
+
+/// One row per container of a compose lock: what it asked for and what it
+/// resolved, with the version the engine reported for each.
+fn lock_rows(lock: &Path, observed: BTreeMap<String, Option<String>>) -> Vec<StackWorker> {
+    let lock = fs::read_to_string(lock)
+        .ok()
+        .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
+        .unwrap_or(Value::Null);
+    let mut rows = super::stack::rows(
+        &lock["containers"],
+        |container| container["requested"].as_str().map(str::to_owned),
+        observed,
+    );
+    for row in &mut rows {
+        row.resolved = lock["containers"][row.name.as_str()]["resolved"]["version"]
+            .as_str()
+            .map(str::to_owned);
     }
     rows
 }
