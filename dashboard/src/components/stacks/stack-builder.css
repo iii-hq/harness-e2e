@@ -14,7 +14,7 @@
   height: 100dvh;
 }
 
-.sb-head {
+.sk-sheet-head.sb-head {
   gap: calc(var(--spacing) * 1.5);
   border-bottom: var(--ds-row-divider, 1px solid var(--color-edge));
 }
@@ -159,7 +159,7 @@
 }
 
 /* Templates and stacks to copy: one radio each. */
-.sb-list {
+.sk-from.sb-list {
   gap: var(--spacing);
 }
 
@@ -170,7 +170,7 @@
   padding: 0 0 calc(var(--spacing) * 1.5);
 }
 
-.sb-template {
+.sk-option.sb-template {
   grid-template-columns: calc(var(--spacing) * 4.5) minmax(0, 1fr) auto;
 }
 
@@ -195,7 +195,7 @@
   white-space: nowrap;
 }
 
-.sb-alert {
+.sk-alert.sb-alert {
   align-items: center;
   font-size: var(--text-xs);
   line-height: calc(var(--spacing) * 4.5);
@@ -240,14 +240,6 @@
   border-radius: var(--radius-sm);
   background: var(--color-surface);
   font-family: var(--font-mono);
-}
-
-.sb[data-narrow] .sb-iii {
-  grid-template-columns: auto minmax(0, 1fr);
-}
-
-.sb[data-narrow] .sb-iii > .sk-hint {
-  grid-column: 1 / -1;
 }
 
 /* Workers: the template's, what this stack declares, what is added. */
@@ -393,7 +385,7 @@
   line-height: calc(var(--spacing) * 4);
 }
 
-.sb-menu-input {
+.sk-input.sb-menu-input {
   height: calc(var(--spacing) * 8);
   margin-top: var(--spacing);
   font-size: var(--text-xs);
@@ -464,7 +456,7 @@
   outline-offset: -1px;
 }
 
-.sb-add {
+.sk-btn.sb-add {
   align-self: flex-start;
   padding: 0 calc(var(--spacing) * 2.5);
 }
@@ -692,7 +684,7 @@
   color: var(--ds-danger-text);
 }
 
-.sb-status {
+.sk-status.sb-status {
   display: flex;
   align-items: flex-start;
   gap: calc(var(--spacing) * 2);
