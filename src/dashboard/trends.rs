@@ -213,24 +213,26 @@ pub(super) fn trends(
             }
             TrendSeries {
                 key: latest.key.clone(),
-                suite_label: latest
-                    .parameters
-                    .suite
-                    .as_ref()
-                    .map(|suite| suite.label.clone())
-                    .filter(|label| !label.is_empty())
-                    .unwrap_or_else(|| latest.key.suite.clone()),
+                suite_label: suite_label(latest),
                 executions: executions.len(),
                 latest_at: latest.started_at.to_owned(),
                 r#where,
             }
         })
         .collect::<Vec<_>>();
-    let Some(executions) = ordered
-        .iter()
-        .find(|executions| requested(request, &executions[0].key))
-        .or(ordered.first())
-    else {
+    let asked = request.suite.is_some()
+        || request.provider.is_some()
+        || request.model.is_some()
+        || request.profile.is_some();
+    let chosen = if asked {
+        ordered
+            .iter()
+            .find(|executions| requested(request, &executions[0].key))
+    } else {
+        // Nothing asked: the latest series that has a trend, two executions or more.
+        ordered.iter().find(|executions| executions.len() > 1)
+    };
+    let Some(executions) = chosen.or(ordered.first()) else {
         return TrendsResponse {
             series,
             selected: None,
@@ -323,6 +325,24 @@ fn execution(summary: &Value) -> Option<Execution<'_>> {
 }
 
 /// Whether a series is the one asked for: every field sent matches.
+/// The suite's label; an unsaved one has none and reads by its size.
+fn suite_label(execution: &Execution) -> String {
+    let suite = execution.parameters.suite.as_ref();
+    if let Some(label) = suite
+        .map(|suite| &suite.label)
+        .filter(|label| !label.is_empty())
+    {
+        return label.clone();
+    }
+    if suite.is_some_and(|suite| suite.id.is_some()) {
+        return execution.key.suite.clone();
+    }
+    match execution.parameters.scenarios.len() {
+        1 => "1 test, unsaved".into(),
+        count => format!("{count} tests, unsaved"),
+    }
+}
+
 fn requested(request: &TrendsRequest, key: &TrendSeriesKey) -> bool {
     let matches = |asked: &Option<String>, value: &str| asked.as_deref().is_none_or(|a| a == value);
     matches(&request.suite, &key.suite)
@@ -842,6 +862,8 @@ mod tests {
         profiled["parameters"]["agent"] = json!("tech-lead");
         let mut unsaved = listed("d", &at(4), None, &[]);
         unsaved["parameters"]["suite"] = json!({"label": "", "sha256": "sha256:unsaved"});
+        unsaved["parameters"]["scenarios"] =
+            json!(["form_flow_build", "state_machine_canvas_build"]);
         let mut no_suite = listed("e", &at(5), None, &[]);
         no_suite["parameters"]
             .as_object_mut()
@@ -880,9 +902,11 @@ mod tests {
                 (key("regression", None), 2),
             ]
         );
+        assert_eq!(response.series[0].suite_label, "2 tests, unsaved");
         assert_eq!(response.series[2].suite_label, "Regression");
         assert_eq!(response.series[2].latest_at, at(2));
-        assert_eq!(response.selected, Some(key("sha256:unsaved", None)));
+        // Nothing asked: the latest series with a trend, not the latest one-off.
+        assert_eq!(response.selected, Some(key("regression", None)));
 
         let asked = |request: Value| {
             let request = serde_json::from_value::<TrendsRequest>(request).unwrap();
