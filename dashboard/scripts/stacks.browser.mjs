@@ -1096,13 +1096,28 @@ try {
     ),
     true,
   )
+  // A template picked: closing asks first.
+  const discard = page.getByRole('alertdialog', {
+    name: 'Discard this new stack?',
+  })
   await narrowBuilder
     .getByRole('button', { name: 'Cancel', exact: true })
+    .click()
+  await discard
+    .getByRole('button', { name: 'Keep editing', exact: true })
+    .click()
+  await discard.waitFor({ state: 'detached' })
+  await narrowBuilder.waitFor()
+  await narrowBuilder
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .click()
+  await discard
+    .getByRole('button', { name: 'Discard changes', exact: true })
     .click()
   await narrowBuilder.waitFor({ state: 'detached' })
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack built from the harness template (templates tried again, fp refused in the picker and blocked from a copy, removed, harness pinned to a commit, created), a copy the form did not touch created as written and a touched one warned and handed to the editor with only its lines changed, without a template (browser blocked as harness brings it, a name the registry does not know, Edit as YAML saved as a new stack); delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the builder in one column.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack built from the harness template (templates tried again, fp refused in the picker and blocked from a copy, removed, harness pinned to a commit, created), a copy the form did not touch created as written and a touched one warned and handed to the editor with only its lines changed, without a template (browser blocked as harness brings it, a name the registry does not know, Edit as YAML saved as a new stack); delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the builder in one column and closing it with a template picked asking first.',
   )
 } catch (error) {
   console.error(

@@ -1,4 +1,5 @@
 import {
+  ConfirmDialog,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -200,6 +201,7 @@ export function StackBuilder({
   const [creating, setCreating] = useState(false)
   const [createError, setCreateError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [asking, setAsking] = useState(false)
   const menuButton = useRef<HTMLButtonElement | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
 
@@ -377,6 +379,17 @@ export function StackBuilder({
     setQuery('')
     addButton.current?.focus()
   }
+  // Closing drops what was picked or typed: asked first, as the editor does.
+  const requestClose = () => {
+    if (creating) return
+    const worked =
+      (named.current && name.trim() !== '') ||
+      template !== null ||
+      declared.length > 0 ||
+      copy !== null
+    if (worked) setAsking(true)
+    else onClose()
+  }
   const create = async () => {
     if (status.blocked || creating) return
     setCreating(true)
@@ -454,7 +467,7 @@ export function StackBuilder({
     <Dialog
       open
       onOpenChange={(open) => {
-        if (!open && !creating) onClose()
+        if (!open) requestClose()
       }}
     >
       <DialogContent
@@ -1004,9 +1017,7 @@ export function StackBuilder({
             type="button"
             className="sk-btn"
             aria-disabled={creating || undefined}
-            onClick={() => {
-              if (!creating) onClose()
-            }}
+            onClick={requestClose}
           >
             Cancel
           </button>
@@ -1022,6 +1033,18 @@ export function StackBuilder({
           </button>
         </footer>
       </DialogContent>
+      <ConfirmDialog
+        open={asking}
+        onOpenChange={(open) => {
+          if (!open) setAsking(false)
+        }}
+        title="Discard this new stack?"
+        description="What you picked and typed here is not saved. Discarding closes New stack without creating it."
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        tone="danger"
+        onConfirm={onClose}
+      />
     </Dialog>
   )
 }
