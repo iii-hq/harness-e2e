@@ -15,5 +15,8 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    // The fixtures are real executions in UTC−3: read them there wherever
+    // the tests run.
+    env: { TZ: 'America/Sao_Paulo' },
   },
 })

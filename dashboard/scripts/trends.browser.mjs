@@ -81,9 +81,12 @@ const browser = await chromium.launch({
   args: ['--disable-dev-shm-usage'],
 })
 try {
+  // The fixture's executions ran in UTC−3 in 2026: read them there and then.
   const page = await browser.newPage({
     viewport: { width: 1440, height: 1000 },
+    timezoneId: 'America/Sao_Paulo',
   })
+  await page.clock.setFixedTime(new Date('2026-09-28T15:00:00-03:00'))
   await server.install(page, trigger)
   page.setDefaultTimeout(10_000)
   const errors = []

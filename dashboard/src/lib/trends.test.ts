@@ -10,6 +10,7 @@ import {
   laneLabel,
   latestPair,
   notRun,
+  pointTime,
   previousCounted,
   roomyMarks,
   segments,
@@ -27,6 +28,9 @@ import {
 } from '@/lib/trends'
 import { seriesPoints } from '@/test-fixtures/trends'
 
+// The fixture's times are UTC−3 (TZ is pinned in vite.config.ts) and its
+// year 2026: dates read without the year against this now.
+const NOW = new Date(2026, 8, 28, 12)
 const regression = seriesPoints('regression', 'default')
 const at = (points: TrendPoint[], id: string) =>
   points.findIndex((point) => point.execution_id === id)
@@ -285,7 +289,9 @@ describe('axes', () => {
     const on = (day: number, hour: number) => ({
       started_at: new Date(2026, 8, day, hour).toISOString(),
     })
-    expect(dayMarks([on(22, 9), on(22, 15), on(23, 2), on(26, 2)])).toEqual([
+    expect(
+      dayMarks([on(22, 9), on(22, 15), on(23, 2), on(26, 2)], NOW),
+    ).toEqual([
       { index: 0, text: 'Sep 22' },
       { index: 2, text: 'Sep 23' },
       { index: 3, text: 'Sep 26' },
@@ -380,13 +386,21 @@ describe('the view', () => {
   })
 
   it('sums the executions and counted runs up in one line', () => {
-    expect(summaryText(regression, 'UTC−3')).toBe(
+    expect(summaryText(regression, 'UTC−3', NOW)).toBe(
       '11 executions · 9 with counted runs, 2 without · 81 counted runs · Sep 22 – Sep 28 · times in UTC−3',
     )
     expect(stackNote(regression)).toBe(
       '4 of these ran before the Console recorded stacks; they are in because they ran the same workers as default.',
     )
     expect(stackNote(seriesPoints('local'))).toBeNull()
+  })
+
+  it('reads the fixture in the pinned timezone', () => {
+    expect(pointTime(regression[0], NOW)).toBe('Sep 22, 11:45 AM')
+    expect(pointTime(regression[0], new Date(2027, 0, 1))).toBe(
+      'Sep 22, 2026, 11:45 AM',
+    )
+    expect(utcOffsetText(new Date(2026, 8, 28))).toBe('UTC−3')
   })
 
   it('names the offset of the reader’s clock', () => {

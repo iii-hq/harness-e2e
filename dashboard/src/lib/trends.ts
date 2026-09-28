@@ -181,8 +181,12 @@ export function trendsParams(
 
 /* -------------------------------------------------------------- a point */
 
-export function pointTime(point: Pick<TrendPoint, 'started_at'>) {
-  return formatDateTime(point.started_at)
+/** `Sep 28, 2:17 AM`; the year only when it is not `now`'s. */
+export function pointTime(
+  point: Pick<TrendPoint, 'started_at'>,
+  now = new Date(),
+) {
+  return formatDateTime(point.started_at, now)
 }
 
 export function counted(point: Pick<TrendPoint, 'counted'>) {
@@ -652,11 +656,14 @@ export function domain(
 }
 
 /** Where a day starts: the first point of each local day, labelled. */
-export function dayMarks(points: Pick<TrendPoint, 'started_at'>[]) {
+export function dayMarks(
+  points: Pick<TrendPoint, 'started_at'>[],
+  now = new Date(),
+) {
   const marks: Array<{ index: number; text: string }> = []
   let last = ''
   points.forEach((point, index) => {
-    const text = formatDay(point.started_at)
+    const text = formatDay(point.started_at, now)
     if (text !== last) marks.push({ index, text })
     last = text
   })
@@ -769,12 +776,16 @@ export function utcOffsetText(date = new Date()) {
 
 /** `11 executions · 9 with counted runs, 2 without · 81 counted runs ·
  *  Sep 22 – Sep 28 · times in UTC−3`. */
-export function summaryText(points: TrendPoint[], offset = utcOffsetText()) {
+export function summaryText(
+  points: TrendPoint[],
+  offset = utcOffsetText(),
+  now = new Date(),
+) {
   const withRuns = points.filter(counted).length
   const without = points.length - withRuns
   const runs = points.reduce((total, point) => total + point.counted, 0)
-  const first = points[0] ? formatDay(points[0].started_at) : null
-  const last = points.at(-1) ? formatDay(points.at(-1)?.started_at) : null
+  const first = points[0] ? formatDay(points[0].started_at, now) : null
+  const last = points.at(-1) ? formatDay(points.at(-1)?.started_at, now) : null
   return [
     plural(points.length, 'execution'),
     `${withRuns} with counted runs${without ? `, ${without} without` : ''}`,
