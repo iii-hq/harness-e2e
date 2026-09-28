@@ -461,6 +461,19 @@
   vertical-align: top;
 }
 
+/* The checkbox's label is its touch target: 44 px on a phone, and a tap
+   on it never opens the row. */
+.ex-table[data-phone] .ex-col-select {
+  width: calc(var(--spacing) * 13);
+}
+
+.ex-table[data-phone] .ex-col-select .iii-ui-checkbox {
+  display: inline-grid;
+  min-width: calc(var(--spacing) * 11);
+  min-height: calc(var(--spacing) * 11);
+  place-items: center;
+}
+
 .ex-result-line {
   display: flex;
   min-width: 0;
