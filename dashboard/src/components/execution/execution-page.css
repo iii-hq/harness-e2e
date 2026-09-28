@@ -1705,7 +1705,7 @@ tr.ep-detail-row:hover {
   font-variant-numeric: tabular-nums;
 }
 
-/* An open row's run: the same cards, three across at every width. */
+/* An open row's run: the same cards, three across down to a phone. */
 .ep-kpis.ep-run-kpis {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -1721,6 +1721,14 @@ tr.ep-detail-row:hover {
 
 .ep-run-kpis .ep-kpi-sub {
   min-height: 16px;
+}
+
+/* A phone: two across, so a figure keeps its width. More specific than the
+   three-across rule above, whatever the order. */
+@container harness (max-width: 560px) {
+  .ep-row-run .ep-kpis.ep-run-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 .ep-totals-bar {
