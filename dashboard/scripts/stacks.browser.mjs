@@ -6,7 +6,8 @@
 // before closing unsaved changes; New stack, the stack builder: iii-hq/templates
 // failing then read again, the harness template with a worker it would ignore
 // refused, a pin to a commit, a copy carrying a worker the template ignores
-// (blocked, removed) and Create; without a template a worker another brings
+// (blocked, removed) and Create; a copy created as written when untouched,
+// and with only its changed lines when touched; without a template a worker another brings
 // (blocked, by the registry), a name the registry does not know, and Edit as
 // YAML saved as a new stack; Delete behind the host's confirmation (run once
 // when confirmed twice), a sheet kept when its stack is deleted elsewhere;
@@ -499,6 +500,26 @@ try {
   await again.getByRole('button', { name: 'Close', exact: true }).click()
   await again.waitFor({ state: 'detached' })
 
+  // A stack of this Console with its own environment and comments, made
+  // elsewhere: the next reload lists it.
+  const envYaml = [
+    '# A stack with its own environment.',
+    'iii: latest',
+    '',
+    'containers:',
+    '  harness:',
+    '    worker: package://harness',
+    '    version: latest',
+    '    environment:',
+    '      RUST_LOG: debug # louder',
+    '',
+    '  fp:',
+    '    worker: package://fp',
+    '    version: latest',
+    '',
+  ].join('\n')
+  local.push(view('stack-env', 'With environment', 'local', envYaml))
+
   // New stack is the stack builder. iii-hq/templates could not be read: it
   // says so, the rest still answers, and Try again reads it.
   await page
@@ -680,6 +701,80 @@ try {
     .waitFor()
   await mineSheet.getByRole('button', { name: 'Close', exact: true }).click()
   await mineSheet.waitFor({ state: 'detached' })
+
+  // A copy the form did not touch is the stack as written: Create copies it,
+  // comments, environment and all.
+  await page
+    .getByRole('button', { name: 'New stack', exact: true })
+    .first()
+    .click()
+  await builder.getByRole('radio', { name: /^Copy of a stack/ }).check()
+  await builder
+    .getByRole('radio', { name: /^With environment stack-env/ })
+    .check()
+  assert.equal(await name.inputValue(), 'With environment · copy')
+  await builder
+    .getByText('copied as written from stack-env', { exact: true })
+    .waitFor()
+  assert.equal(
+    await builder
+      .getByRole('region', { name: 'Stack YAML, copied as written' })
+      .locator('.sk-text')
+      .evaluateAll((lines) =>
+        lines.map((line) => line.textContent.trimEnd()).join('\n'),
+      ),
+    envYaml.replace(/\n$/, ''),
+  )
+  await create.click()
+  const envSheet = page.getByRole('dialog', {
+    name: 'Edit With environment · copy',
+  })
+  await envSheet.waitFor()
+  assert.deepEqual(calls.create.at(-1), {
+    from: 'stack-env',
+    label: 'With environment · copy',
+  })
+  assert.equal(await envSheet.locator('#sk-yaml').inputValue(), envYaml)
+  await envSheet.getByRole('button', { name: 'Close', exact: true }).click()
+  await envSheet.waitFor({ state: 'detached' })
+
+  // Touched, it says what the form leaves out; Edit as YAML keeps it, with
+  // the change made to that container's lines only.
+  await page
+    .getByRole('button', { name: 'New stack', exact: true })
+    .first()
+    .click()
+  await builder.getByRole('radio', { name: /^Copy of a stack/ }).check()
+  await builder
+    .getByRole('radio', { name: /^With environment stack-env/ })
+    .check()
+  await builder
+    .locator('[data-worker="fp"]')
+    .getByRole('button', { name: 'Remove fp', exact: true })
+    .click()
+  await builder
+    .getByText(
+      'Creating from the form keeps each worker and its pin; comments and other keys of With environment are left out. Edit as YAML keeps them.',
+      { exact: true },
+    )
+    .waitFor()
+  await builder
+    .getByRole('button', { name: 'Edit as YAML', exact: true })
+    .click()
+  const envDraft = page.locator('[data-stack-sheet="edit"]')
+  assert.equal(
+    await envDraft.locator('#sk-yaml').inputValue(),
+    envYaml.replace(
+      '  fp:\n    worker: package://fp\n    version: latest\n',
+      '',
+    ),
+  )
+  await envDraft.getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page
+    .getByRole('alertdialog', { name: 'Discard this new stack?' })
+    .getByRole('button', { name: 'Discard changes', exact: true })
+    .click()
+  await envDraft.waitFor({ state: 'detached' })
 
   // Without a template, what a worker brings comes from the registry:
   // browser, added first, is blocked once harness brings it, even before
@@ -991,7 +1086,7 @@ try {
   await narrowBuilder.waitFor({ state: 'detached' })
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack built from the harness template (templates tried again, fp refused in the picker and blocked from a copy, removed, harness pinned to a commit, created), without a template (browser blocked as harness brings it, a name the registry does not know, Edit as YAML saved as a new stack); delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the builder in one column.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack built from the harness template (templates tried again, fp refused in the picker and blocked from a copy, removed, harness pinned to a commit, created), a copy the form did not touch created as written and a touched one warned and handed to the editor with only its lines changed, without a template (browser blocked as harness brings it, a name the registry does not know, Edit as YAML saved as a new stack); delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport, the builder in one column.',
   )
 } catch (error) {
   console.error(

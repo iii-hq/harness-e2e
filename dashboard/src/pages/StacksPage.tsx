@@ -95,6 +95,7 @@ export function StackSheet({
   created = false,
   gone = false,
   unsaved = false,
+  notice,
   onCopy,
   onSaved,
   onClose,
@@ -112,6 +113,8 @@ export function StackSheet({
   gone?: boolean
   /** Written by New stack's Edit as YAML: saving creates it. */
   unsaved?: boolean
+  /** What New stack says about what it handed over. */
+  notice?: string
   onCopy: () => void
   onSaved: (stack: Stack) => void
   onClose: () => void
@@ -170,7 +173,12 @@ export function StackSheet({
       : !editing
         ? ['faint', 'Read-only. Copies you make appear under This Console.']
         : unsaved
-          ? ['warn', 'Not saved yet. Save stack creates it in this Console.']
+          ? [
+              'warn',
+              notice
+                ? `${notice} Not saved yet.`
+                : 'Not saved yet. Save stack creates it in this Console.',
+            ]
           : dirty
             ? [
                 'warn',
@@ -743,6 +751,7 @@ export function StacksPage() {
     stack: Stack
     created?: boolean
     unsaved?: boolean
+    notice?: string
   } | null>(null)
   const [deleting, setDeleting] = useState<Stack | null>(null)
   const [creating, setCreating] = useState(false)
@@ -917,6 +926,7 @@ export function StacksPage() {
           created={sheet?.created}
           gone={!sheet?.unsaved && Boolean(stacks) && !listed}
           unsaved={sheet?.unsaved}
+          notice={sheet?.notice}
           onCopy={() => void copy(open)}
           onSaved={(saved) => {
             setStacks((current) => upsertStack(current, saved))
@@ -943,12 +953,13 @@ export function StacksPage() {
             setSheet({ id: made.id, mode: 'edit', stack: made, created: true })
             void load()
           }}
-          onEditYaml={(draft) => {
+          onEditYaml={({ notice, ...draft }) => {
             setCreating(false)
             setSheet({
               id: '',
               mode: 'edit',
               unsaved: true,
+              notice,
               stack: {
                 ...draft,
                 id: '',

@@ -25,9 +25,11 @@ import {
   markedLines,
   orderTemplates,
   packageName,
+  patchYaml,
   pickerGroups,
   pinLabel,
   type Source,
+  sameDeclared,
   templateExtra,
   templateId,
   typedName,
@@ -41,11 +43,12 @@ function errorText(cause: unknown) {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
-/** What the builder hands the YAML editor: a stack not saved yet. */
+/** What the builder hands the YAML editor: a stack not saved yet, and
+ *  what to say about it. */
 export type StackDraft = Pick<
   Stack,
   'label' | 'yaml' | 'iii' | 'template' | 'containers'
->
+> & { notice?: string }
 
 type Templates =
   | { state: 'loading' }
@@ -186,7 +189,7 @@ export function StackBuilder({
   const [template, setTemplate] = useState<string | null>(null)
   const [picking, setPicking] = useState(true)
   const [iii, setIii] = useState('latest')
-  const [copyFrom, setCopyFrom] = useState<string | null>(null)
+  const [copy, setCopy] = useState<Stack | null>(null)
   const [declared, setDeclared] = useState<Declared[]>([])
   const [menu, setMenu] = useState<string | null>(null)
   const [picker, setPicker] = useState(false)
@@ -262,8 +265,17 @@ export function StackBuilder({
     declared,
     verdicts,
   })
-  const lines = yamlOf(iii, template, declared)
-  const yaml = `${lines.join('\n')}\n`
+  // A copy the form has not touched is created as written, comments and
+  // every key; once touched, the form writes each worker and its pin.
+  const copyOf = source === 'copy' ? copy : null
+  const exact =
+    copyOf !== null &&
+    template === copyOf.template &&
+    sameDeclared(declared, declaredOf(copyOf))
+  const lines = exact
+    ? copyOf.yaml.replace(/\n$/, '').split('\n')
+    : yamlOf(iii, template, declared)
+  const yaml = exact ? copyOf.yaml : `${lines.join('\n')}\n`
   const blockedNames = new Set(
     declared
       .filter((_, index) => verdicts[index]?.tone === 'block')
@@ -330,7 +342,7 @@ export function StackBuilder({
     })
   const pickCopy = (stack: Stack) =>
     edit(() => {
-      setCopyFrom(stack.id)
+      setCopy(stack)
       setTemplate(stack.template)
       setIii(stack.iii ?? 'latest')
       setDeclared(declaredOf(stack))
@@ -370,17 +382,37 @@ export function StackBuilder({
     setCreating(true)
     setCreateError(null)
     try {
-      onCreated(await bridge.createStackFromYaml(name.trim(), yaml))
+      onCreated(
+        exact
+          ? await bridge.createStack(copyOf.id, name.trim())
+          : await bridge.createStackFromYaml(name.trim(), yaml),
+      )
     } catch (cause) {
       setCreateError(errorText(cause))
     } finally {
       setCreating(false)
     }
   }
+  // A touched copy goes to the editor as its own YAML with the form's
+  // changes made to those containers' lines, so nothing else is lost.
+  const patched =
+    copyOf && !exact
+      ? patchYaml(
+          copyOf.yaml,
+          declaredOf(copyOf),
+          declared,
+          template,
+          copyOf.template,
+        )
+      : null
   const editYaml = () =>
     onEditYaml({
       label: name.trim() || 'New stack',
-      yaml,
+      yaml: copyOf && !exact ? (patched ?? copyOf.yaml) : yaml,
+      notice:
+        copyOf && !exact && patched === null
+          ? `This is ${copyOf.label} as written, without the form's changes: its YAML isn't laid out as the form writes one (containers two spaces in, their keys four). Make them here.`
+          : undefined,
       iii,
       template,
       containers: declared.map(
@@ -623,13 +655,13 @@ export function StackBuilder({
                   <label
                     key={stack.id}
                     className="sk-option"
-                    data-selected={copyFrom === stack.id || undefined}
+                    data-selected={copy?.id === stack.id || undefined}
                   >
                     <input
                       type="radio"
                       className="sk-radio"
                       name="sb-copy"
-                      checked={copyFrom === stack.id}
+                      checked={copy?.id === stack.id}
                       onChange={() => pickCopy(stack)}
                     />
                     <span className="sk-option-text">
@@ -645,6 +677,13 @@ export function StackBuilder({
                     </span>
                   </label>
                 ))}
+                {copyOf && !exact ? (
+                  <p className="sk-hint sb-copy-note" data-tone="warn">
+                    Creating from the form keeps each worker and its pin;
+                    comments and other keys of {copyOf.label} are left out. Edit
+                    as YAML keeps them.
+                  </p>
+                ) : null}
               </fieldset>
             ) : null}
 
@@ -893,7 +932,11 @@ export function StackBuilder({
             <aside className="sb-side" aria-label="YAML">
               <div className="sb-side-bar">
                 <span className="sk-yaml-file">YAML</span>
-                <span className="sk-faint">written from the form</span>
+                <span className="sk-faint">
+                  {exact
+                    ? `copied as written from ${copyOf.source === 'local' ? copyOf.id : stackFile(copyOf)}`
+                    : 'written from the form'}
+                </span>
                 <button
                   type="button"
                   className="sk-btn sk-btn-small sb-push"
@@ -912,7 +955,11 @@ export function StackBuilder({
               </div>
               <section
                 className="sk-code"
-                aria-label="Stack YAML, written from the form"
+                aria-label={
+                  exact
+                    ? 'Stack YAML, copied as written'
+                    : 'Stack YAML, written from the form'
+                }
                 // biome-ignore lint/a11y/noNoninteractiveTabindex: a scrolling region reads by keyboard
                 tabIndex={0}
               >

@@ -16,7 +16,8 @@ import { plural } from '@/lib/format'
 /** A container the stack declares. */
 export type Declared = {
   name: string
-  worker: string
+  /** As written; null for a container without one, which stays so. */
+  worker: string | null
   /** `latest`, a version, or '' while one is typed; unused with a commit. */
   version: string
   /** A commit, '' while one is typed; null pins a version. */
@@ -108,8 +109,8 @@ export const WORKER_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/
 
 const PACKAGE = 'package://'
 
-export function packageName(worker: string) {
-  return worker.startsWith(PACKAGE) ? worker.slice(PACKAGE.length) : null
+export function packageName(worker: string | null) {
+  return worker?.startsWith(PACKAGE) ? worker.slice(PACKAGE.length) : null
 }
 
 function isProvider(name: string) {
@@ -274,11 +275,135 @@ export function yamlOf(
 /** A container's fields as the form writes them: its worker and its pin. */
 function containerLines(entry: Declared) {
   return [
-    `    worker: ${yamlScalar(entry.worker)}`,
-    entry.commit !== null
-      ? `    commit: ${JSON.stringify(entry.commit)}`
-      : `    version: ${yamlScalar(entry.version || 'latest')}`,
+    ...(entry.worker === null
+      ? []
+      : [`    worker: ${yamlScalar(entry.worker)}`]),
+    pinLine(entry),
   ]
+}
+
+function pinLine(entry: Declared) {
+  return entry.commit !== null
+    ? `    commit: ${JSON.stringify(entry.commit)}`
+    : `    version: ${yamlScalar(entry.version || 'latest')}`
+}
+
+/** Whether the form still holds a stack's containers as they were. */
+export function sameDeclared(left: Declared[], right: Declared[]) {
+  return (
+    left.length === right.length &&
+    left.every((entry, index) => {
+      const other = right[index]
+      return (
+        entry.name === other.name &&
+        entry.worker === other.worker &&
+        entry.version === other.version &&
+        entry.commit === other.commit
+      )
+    })
+  )
+}
+
+/** A copied stack's YAML with the form's changes made to the lines of the
+ *  containers they touch, and to `template:`: a removed container's lines
+ *  go, a pin's line is rewritten, an added container is written after the
+ *  last one. Every other line (comments, other keys) stays as written.
+ *  Null when the stack is not laid out as the form writes one (containers
+ *  two spaces in, their keys four), so it can't be changed line by line. */
+export function patchYaml(
+  original: string,
+  before: Declared[],
+  after: Declared[],
+  template: string | null,
+  beforeTemplate: string | null,
+): string | null {
+  const lines = original.split('\n')
+  if (template !== beforeTemplate) {
+    const at = lines.findIndex((line) => /^template:/.test(line))
+    const written =
+      template === null ? null : `template: ${yamlScalar(template)}`
+    if (at >= 0 && written === null) lines.splice(at, 1)
+    else if (at >= 0 && written) lines[at] = written
+    else if (written)
+      lines.splice(
+        lines.findIndex((line) => /^iii:/.test(line)) + 1,
+        0,
+        written,
+      )
+  }
+  const start = lines.findIndex((line) =>
+    /^containers:\s*(\{\s*\})?\s*(#.*)?$/.test(line),
+  )
+  if (start < 0) return null
+  let end = start + 1
+  while (end < lines.length && !/^[^\s#]/.test(lines[end])) end += 1
+  // Each container's lines: its header and through its last value line.
+  const blocks = new Map<string, { from: number; to: number }>()
+  let current: { from: number; to: number } | null = null
+  for (let index = start + 1; index < end; index += 1) {
+    const line = lines[index]
+    if (line.trim() === '' || /^\s*#/.test(line)) continue
+    const head = /^ {2}([A-Za-z0-9._-]+):\s*(#.*)?$/.exec(line)
+    if (head) {
+      current = { from: index, to: index + 1 }
+      blocks.set(head[1], current)
+    } else if (current && /^ {4}/.test(line)) current.to = index + 1
+    else return null
+  }
+  if (before.some((entry) => !blocks.has(entry.name))) return null
+  const was = new Map(before.map((entry) => [entry.name, entry]))
+  const now = new Map(after.map((entry) => [entry.name, entry]))
+  const added = after.filter((entry) => !was.has(entry.name))
+  const tail = Math.max(
+    start + 1,
+    ...[...blocks.values()].map((block) => block.to),
+  )
+  const out: string[] = []
+  for (let index = 0; index < lines.length; index += 1) {
+    if (index === tail)
+      for (const entry of added)
+        out.push(`  ${yamlScalar(entry.name)}:`, ...containerLines(entry))
+    if (index === start) {
+      // `containers: {}` opens when one is added and closes when none is left.
+      const empty = /\{\s*\}/.test(lines[index])
+      out.push(
+        empty === !after.length
+          ? lines[index]
+          : after.length
+            ? 'containers:'
+            : 'containers: {}',
+      )
+      continue
+    }
+    const name = [...blocks].find(([, block]) => block.from === index)?.[0]
+    if (name === undefined) {
+      out.push(lines[index])
+      continue
+    }
+    const { to } = blocks.get(name) ?? { to: index + 1 }
+    const entry = now.get(name)
+    const body = lines.slice(index, to)
+    index = to - 1
+    if (!entry) continue
+    const old = was.get(name)
+    if (old?.version === entry.version && old.commit === entry.commit) {
+      out.push(...body)
+      continue
+    }
+    // The pin's line in place of the old one, else after the worker.
+    const pins = body.flatMap((line, at) =>
+      /^ {4}(version|commit):/.test(line) ? [at] : [],
+    )
+    const worker = body.findIndex((line) => /^ {4}worker:/.test(line))
+    const at = pins[0] ?? (worker >= 0 ? worker + 1 : 1)
+    const kept = body.filter((_, line) => !pins.includes(line))
+    kept.splice(at - pins.filter((line) => line < at).length, 0, pinLine(entry))
+    out.push(...kept)
+  }
+  if (tail >= lines.length)
+    for (const entry of added)
+      out.push(`  ${yamlScalar(entry.name)}:`, ...containerLines(entry))
+  return out.join('\n')
 }
 
 /** The YAML's lines, each container's block marked when it stops Create. */
@@ -322,7 +447,7 @@ export function templateExtra(tpl: StackTemplate) {
 export function declaredOf(stack: Stack): Declared[] {
   return stack.containers.map((container) => ({
     name: container.name,
-    worker: container.worker ?? `${PACKAGE}${container.name}`,
+    worker: container.worker,
     version: container.version ?? 'latest',
     commit: container.commit,
   }))

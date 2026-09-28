@@ -170,6 +170,10 @@
   padding: 0 0 calc(var(--spacing) * 1.5);
 }
 
+.sb-copy-note {
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5) 0;
+}
+
 .sk-option.sb-template {
   grid-template-columns: calc(var(--spacing) * 4.5) minmax(0, 1fr) auto;
 }
