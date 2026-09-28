@@ -54,10 +54,15 @@ import { screenshotsOf } from '@/lib/screenshots'
 
 export type ResultFilter = 'all' | 'lost' | 'notrun' | 'passed'
 
+/** No run retained and not waiting to report: what Not run counts. */
+function leftNoRun(item: Pick<ScenarioMatrixItem, 'objective' | 'runCount'>) {
+  return item.runCount === 0 && !unreported(item)
+}
+
 export function matchesFilter(item: ScenarioMatrixItem, filter: ResultFilter) {
   const score = itemScore(item)
   if (filter === 'lost') return score !== null && score < 100
-  if (filter === 'notrun') return item.runCount === 0 && !unreported(item)
+  if (filter === 'notrun') return leftNoRun(item)
   if (filter === 'passed')
     return item.objective.status === 'passed' && score === 100
   return true
@@ -449,13 +454,13 @@ export function rowNote(item: ScenarioMatrixItem): string {
 }
 
 /** A row's result in the canvas's vocabulary (RESULT): the tone paints the
- *  dot and, tinted, the word. A slot that left no report reads as not run,
- *  as the Not run filter counts it; cancelling is still live. */
+ *  dot and, tinted, the word. Cancelling is still live; an unavailable
+ *  report of a test that ran is only undetermined. */
 const ROW_RESULT: Record<OperationalStatus, ResultState> = {
   passed: 'passed',
   failed: 'failed',
   inconclusive: 'inconclusive',
-  unavailable: 'not_run',
+  unavailable: 'inconclusive',
   'not-run': 'not_run',
   recommendation: 'inconclusive',
   running: 'running',
@@ -463,6 +468,14 @@ const ROW_RESULT: Record<OperationalStatus, ResultState> = {
   cancelled: 'cancelled',
   incomplete: 'incomplete',
   queued: 'queued',
+}
+
+/** Not run exactly where the Not run filter counts it; otherwise the
+ *  result's own tone. */
+export function rowResultState(
+  item: Pick<ScenarioMatrixItem, 'objective' | 'runCount'>,
+): ResultState {
+  return leftNoRun(item) ? 'not_run' : ROW_RESULT[item.objective.status]
 }
 
 function ScenarioResult({
@@ -604,7 +617,7 @@ function ScenarioResult({
         <td className="ep-cell" data-label="Result">
           <StatusLabel
             tinted
-            state={ROW_RESULT[item.objective.status]}
+            state={rowResultState(item)}
             label={item.objective.label}
           />
         </td>

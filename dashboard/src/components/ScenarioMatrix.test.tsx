@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   contractScent,
   matchesFilter,
+  rowResultState,
   runMetricTiles,
   ScenarioMatrix,
 } from '@/components/ScenarioMatrix'
@@ -355,11 +356,12 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-state="passed" data-tone="ok"')
     expect(html).toContain('data-state="incomplete" data-tone="warn"')
     expect(html).not.toContain('hard gate')
-    expect(html).toContain('data-state="inconclusive" data-tone="warn"')
-    // No report reads as not run, as the filter counts it, in its own word.
-    expect(html).toMatch(
-      /data-state="not_run"[^>]*>(?:(?!<\/td>).)*<span>Unavailable</,
-    )
+    // No run retained reads as not run, as the filter counts it, each in
+    // its own word.
+    for (const word of ['Inconclusive', 'Unavailable'])
+      expect(html).toMatch(
+        new RegExp(`data-state="not_run"[^>]*>(?:(?!</td>).)*<span>${word}<`),
+      )
     expect(html).toContain('security_review · definition a1a1a1a1')
     expect(html).toContain('aria-label="Persistent State scenario result"')
     expect(html).toContain('aria-label="Missing Report scenario result"')
@@ -679,5 +681,26 @@ describe('runMetricTiles', () => {
       ['—', ''],
       ['—', ''],
     ])
+  })
+})
+
+describe('rowResultState', () => {
+  const item = (status: string, runCount: number) =>
+    ({ objective: { status, label: status, raw: status }, runCount }) as never
+
+  it('reads as not run exactly where the Not run filter counts it', () => {
+    expect(rowResultState(item('unavailable', 0))).toBe('not_run')
+    expect(rowResultState(item('incomplete', 0))).toBe('not_run')
+    expect(rowResultState(item('inconclusive', 0))).toBe('not_run')
+    expect(rowResultState(item('queued', 0))).toBe('queued')
+    expect(rowResultState(item('running', 0))).toBe('running')
+    expect(rowResultState(item('cancelled', 0))).toBe('cancelled')
+  })
+
+  it('keeps a test that ran in its own tone, an unavailable one neutral', () => {
+    expect(rowResultState(item('unavailable', 2))).toBe('inconclusive')
+    expect(rowResultState(item('incomplete', 1))).toBe('incomplete')
+    expect(rowResultState(item('failed', 1))).toBe('failed')
+    expect(rowResultState(item('passed', 1))).toBe('passed')
   })
 })
