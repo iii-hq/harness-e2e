@@ -153,13 +153,7 @@ Metric names are stable identifiers:
 <quality|efficiency|reliability>::<subject>::<scenario|suite>::<metric>
 ```
 
-The execution index retains 100 workflow attempts. The latest 30 also retain the
-complete execution report: per-run prompts, transcripts, criteria, metrics,
-costs, retries, runtime checks, traces, and failure evidence. Each publish updates
-the retained report metadata and removes unreferenced run files before deploying
-Pages. It also emits `tests/index.json` for compact definition/test metadata and
-one `tests/data/<digest>.json` evidence shard per retained scenario definition,
-named after that definition's digest without the `sha256:` prefix.
+The execution list holds at most 100 executions.
 
 Each full execution summary also carries compact per-scenario averages for
 tokens, wall time, cost, function calls, function-call errors, sessions, and

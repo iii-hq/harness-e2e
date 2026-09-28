@@ -645,19 +645,6 @@ async fn capture_browser_evidence(context: &E2eContext, directory: &std::path::P
         screenshots.join("captures.json"),
         serde_json::to_vec_pretty(&envelope)?,
     )?;
-    let cards = BROWSER_CAPTURES
-        .iter()
-        .map(|capture| {
-            let filename = format!("{}.jpg", capture.id);
-            if screenshots.join(&filename).is_file() {
-                format!("<figure><img style=\"max-width:100%\" src=\"{filename}\"><figcaption>{}</figcaption></figure>", capture.caption)
-            } else {
-                format!("<p>{}: unavailable; see captures.json</p>", capture.caption)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    std::fs::write(screenshots.join("index.html"), format!("<!doctype html><meta charset=\"utf-8\"><title>Registry evidence</title><h1>Registry screenshots</h1>{cards}"))?;
     Ok(())
 }
 
