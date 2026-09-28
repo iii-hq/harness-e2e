@@ -43,12 +43,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
     case 'stacks':
       return <StacksPage />
     case 'trends':
-      return (
-        <TrendsPage
-          key={JSON.stringify(route.request)}
-          request={route.request}
-        />
-      )
+      return <TrendsPage request={route.request} />
     case 'workspace':
       if (route.view === 'tests') return <TestsCatalogPage />
       return <ExecutionsPage />

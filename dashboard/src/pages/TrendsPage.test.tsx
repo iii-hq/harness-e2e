@@ -5,6 +5,7 @@ import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
 import { changesAt, previousCounted, trendMetric } from '@/lib/trends'
 import {
+  answeredView,
   requestParams,
   requestSeries,
   stackLabel,
@@ -37,6 +38,31 @@ describe('trends page state', () => {
     expect(requestParams({}).toString()).toBe('')
     expect(requestParams({ stack: 'default' }).toString()).toBe('stack=default')
     expect(requestSeries({ suite: 'se' })).toBeNull()
+  })
+
+  it('pins the view to the series and stack the worker answered', () => {
+    const answer = {
+      series: [],
+      selected: {
+        suite: 'regression',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        profile: null,
+      },
+      stack: 'default',
+      stacks: [],
+      points: [],
+    }
+    expect(answeredView({}, answer)).toEqual({
+      ...answer.selected,
+      stack: 'default',
+    })
+    expect(requestParams(answeredView({}, answer)).toString()).toBe(
+      'suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=default',
+    )
+    expect(answeredView({ stack: 'x' }, { ...answer, selected: null })).toEqual(
+      { stack: 'x' },
+    )
   })
 
   it('names the stack a series only ran on this harness', () => {

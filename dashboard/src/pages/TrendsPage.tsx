@@ -7,7 +7,7 @@ import {
   Skeleton,
 } from '@iii-dev/console-ui'
 import { ChartLine, ChevronDown, Download, X } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { useDashboardChrome } from '@/components/DashboardShell'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
@@ -60,6 +60,16 @@ import './executions-page.css'
 import './trends.css'
 
 /* ---------------------------------------------------------------- state */
+
+/** The view an answer shows: its series and the stack it applied, so a
+ *  reload or a link stays on what is on screen even when another series
+ *  has a newer execution. */
+export function answeredView(
+  asked: TrendsRequest,
+  answer: TrendsResponse,
+): TrendsRequest {
+  return answer.selected ? { ...answer.selected, stack: answer.stack } : asked
+}
 
 /** The request's series, when it names one whole. */
 export function requestSeries(request: TrendsRequest): TrendSeriesKey | null {
@@ -310,6 +320,14 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
   const [importOpen, setImportOpen] = useState(false)
   const [rerunError, setRerunError] = useState<string | null>(null)
   const beginRequest = useLatestRequest()
+  // What a reload asks: the request, then the view its answer showed.
+  const shown = useRef<TrendsRequest>(request)
+
+  // The Trends tab or a link lands here again: start over from its request.
+  useEffect(() => {
+    setQuery(request)
+    setFocus('score')
+  }, [request])
 
   const load = useCallback(async () => {
     const pending = beginRequest()
@@ -318,8 +336,10 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
       const next = await getDashboardDataBridge()
       if (!pending.isCurrent()) return
       setBridge(next)
-      const answer = await next.getTrends(query)
+      const asked = shown.current
+      const answer = await next.getTrends(asked)
       if (!pending.isCurrent()) return
+      shown.current = answeredView(asked, answer)
       setData(answer)
       setError(null)
     } catch (cause) {
@@ -328,12 +348,13 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     } finally {
       if (pending.isCurrent()) setLoading(false)
     }
-  }, [beginRequest, query])
+  }, [beginRequest])
 
   useEffect(() => {
+    shown.current = query
     setPicked(null)
     void load()
-  }, [load])
+  }, [load, query])
 
   // The trend follows new executions quietly, as the executions list does.
   useEffect(() => {
@@ -358,16 +379,19 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     }
   }, [bridge, load])
 
+  // The hash names what is on screen, once the worker said what that is.
+  const view = data ? answeredView(query, data) : query
+  const viewParams = requestParams(view).toString()
   useEffect(() => {
-    replaceRouteParams(requestParams(query))
-  }, [query])
+    replaceRouteParams(new URLSearchParams(viewParams))
+  }, [viewParams])
 
   const points = data?.points ?? []
   const changes = useMemo(
     () => points.map((_, index) => changesAt(points, index)),
     [points],
   )
-  const here = hashForTrends(requestParams(query))
+  const here = hashForTrends(requestParams(view))
   const selected = points.findIndex((item) => item.execution_id === picked)
   const pick = (index: number) => {
     const id = points[index]?.execution_id ?? null
@@ -430,10 +454,7 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     })
   }
   const pickStack = (stack: string) =>
-    setQuery((current) => ({
-      ...(requestSeries(current) ?? data?.selected ?? {}),
-      stack,
-    }))
+    setQuery({ ...(data?.selected ?? requestSeries(query) ?? {}), stack })
 
   const failedFirstLoad = Boolean(error) && data === null
   const nothingCounted = data !== null && !points.some(counted)

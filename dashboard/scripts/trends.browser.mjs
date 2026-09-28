@@ -38,6 +38,21 @@ const newer = {
   started_at: '2026-09-28T14:17:00-03:00',
 }
 let landed = false
+// Another series has the newest execution: the default view would move.
+let elsewhere = false
+const se = {
+  suite: 'software-engineering',
+  provider: 'deepseek',
+  model: 'deepseek-flash',
+  profile: 'ade-worker-builder',
+}
+const pinned = {
+  suite: 'regression',
+  provider: 'deepseek',
+  model: 'deepseek-flash',
+  profile: null,
+  stack: 'default',
+}
 // trends-get answers that fail before one succeeds again.
 let failing = 0
 
@@ -52,7 +67,7 @@ const trigger = (name, request = {}) => {
       failing -= 1
       throw new Error('engine unavailable')
     }
-    const answer = trendsAnswer(request)
+    const answer = trendsAnswer(elsewhere && !request.suite ? se : request)
     if (
       landed &&
       answer.selected.provider === 'deepseek' &&
@@ -178,16 +193,24 @@ try {
     await page.locator('[data-by-test] [aria-pressed="true"]').count(),
     1,
   )
-  // A run lands: the trend reloads quietly and keeps the picked execution.
+  // The default view is pinned to what it showed, in the hash too.
+  assert.match(
+    await hash(),
+    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=default$/,
+  )
+
+  // A run lands, and another series has the newest execution: the trend
+  // reloads quietly on the same series and stack and keeps the pick.
   const asked = requests('trends-get').length
   landed = true
+  elsewhere = true
   const change = () =>
     page.evaluate(() => {
       for (const handler of window.__changeHandlers ?? []) handler({})
     })
   await change()
   await summary.getByText('12 executions ·', { exact: false }).waitFor()
-  assert.deepEqual(requests('trends-get').at(asked), requests('trends-get')[0])
+  assert.deepEqual(requests('trends-get').at(asked), pinned)
   await latest.getByRole('button', { name: 'Close' }).waitFor()
   // A reload that fails keeps the trend and says so over it.
   failing = 1
@@ -199,6 +222,7 @@ try {
     .getByText('Couldn’t reload the trend')
     .waitFor({ state: 'detached' })
   landed = false
+  elsewhere = false
   await latest.getByRole('button', { name: 'Close' }).click()
   assert.equal(await page.locator('[data-trend-panel]').count(), 0)
 
@@ -253,6 +277,12 @@ try {
     2,
   )
 
+  // The Trends tab starts over on the default view, the hash with it.
+  await page.getByRole('link', { name: 'Trends', exact: true }).click()
+  await summary.getByText('11 executions ·', { exact: false }).waitFor()
+  assert.match(await series.innerText(), /Regression/)
+  assert.match(await hash(), /\/trends\?suite=regression&.*stack=default$/)
+
   // This harness: the runner moved between two checkouts.
   await series.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
@@ -304,7 +334,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, a run landing reloaded quietly with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, commits between two checkouts, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, commits between two checkouts, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()
