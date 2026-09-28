@@ -73,6 +73,7 @@ import {
 import '@/design-system/styles.css'
 import './executions-page.css'
 import './tests-catalog.css'
+import { copyText } from '@/lib/clipboard'
 
 /** The worker lists at most this many tests per request. */
 const PAGE_SIZE = 100
@@ -131,7 +132,8 @@ function CatalogRevision({ revision }: { revision: string }) {
       title={copied ? 'Copied' : 'Copy the full catalog revision'}
       aria-label={`Copy the full catalog revision, ${revision}`}
       onClick={() => {
-        void navigator.clipboard?.writeText(revision).then(() => {
+        void copyText(revision).then((ok) => {
+          if (!ok) return
           setCopied(true)
           window.setTimeout(() => setCopied(false), 1500)
         })

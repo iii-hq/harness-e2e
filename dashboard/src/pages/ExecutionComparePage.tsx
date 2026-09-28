@@ -36,6 +36,7 @@ import { plural } from '@/lib/format'
 import { watchExecution } from '@/lib/watch-execution'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
+import { copyText } from '@/lib/clipboard'
 
 type Choice = { include: string[]; exclude: string[] }
 
@@ -338,7 +339,8 @@ export function ExecutionComparePage({
     )
 
   const copy = (what: 'summary' | 'link', value: string) => {
-    void navigator.clipboard?.writeText(value).then(() => {
+    void copyText(value).then((ok) => {
+      if (!ok) return
       setCopied(what)
       window.setTimeout(() => setCopied(null), 1500)
     })

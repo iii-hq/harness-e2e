@@ -7,6 +7,7 @@ import {
   FilterChipGroup,
   Input,
 } from '@/design-system'
+import { copyText } from '@/lib/clipboard'
 import { providerModel } from '@/lib/execution-view'
 import {
   formatTranscriptPayload,
@@ -98,7 +99,8 @@ function CopyButton({ value, label }: { value: string; label: string }) {
       title={label}
       onClick={(click) => {
         click.stopPropagation()
-        void navigator.clipboard?.writeText(value).then(() => {
+        void copyText(value).then((ok) => {
+          if (!ok) return
           setCopied(true)
           window.setTimeout(() => setCopied(false), 1500)
         })
