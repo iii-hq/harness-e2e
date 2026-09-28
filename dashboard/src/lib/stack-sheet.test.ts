@@ -205,9 +205,10 @@ describe('stack sheet: draft, preview and rules', () => {
       warnings: ['w'],
     })
     // A pin being typed reads back as the form holds it.
-    expect(
-      declaredOf(read([{ ...pkg('fp'), version: '' }, pinned])),
-    ).toEqual([{ ...pkg('fp'), version: '' }, { ...pinned, version: 'latest' }])
+    expect(declaredOf(read([{ ...pkg('fp'), version: '' }, pinned]))).toEqual([
+      { ...pkg('fp'), version: '' },
+      { ...pinned, version: 'latest' },
+    ])
   })
 
   it('blocks in both tabs: ignored, empty pins, a revision, the refusal, no name', () => {
@@ -243,7 +244,9 @@ describe('stack sheet: draft, preview and rules', () => {
         declared,
         verdicts,
       }),
-    ).toEqual([{ text: 'The runner refuses this YAML: The stack is not YAML: …' }])
+    ).toEqual([
+      { text: 'The runner refuses this YAML: The stack is not YAML: …' },
+    ])
 
     const base = {
       name: 'Mine',
@@ -284,9 +287,7 @@ describe('stack sheet: draft, preview and rules', () => {
         declared: ignored,
         verdicts: [judge(pkg('fp'), 'harness', harness, ignored, {})],
       }).text,
-    ).toBe(
-      'Can’t save it yet: fp would be ignored by the harness template.',
-    )
+    ).toBe('Can’t save it yet: fp would be ignored by the harness template.')
   })
 
   it('marks the lines of a container that holds it back, not its comments', () => {
@@ -349,13 +350,15 @@ describe('stack sheet: iii and the template revision', () => {
     expect(iiiChoice('0.24.2', releases)).toBe('release:0.24.2')
     expect(iiiChoice('0.9.0', releases)).toBe('other')
     const now = new Date('2026-09-26T12:00:00')
-    expect(releasedOn(releases.releases[0], new Date('2026-09-25T20:00:00'))).toBe(
-      'today',
-    )
+    expect(
+      releasedOn(releases.releases[0], new Date('2026-09-25T20:00:00')),
+    ).toBe('today')
     expect(releasedOn(releases.releases[1], now)).toBe('yesterday')
     expect(releasedOn(releases.releases[2], now)).toBe('Sep 21')
     // A typed version is used only when its release exists and ships the CLI.
-    expect(iiiRefusal({ version: '0.24.2', release: releases.releases[2] })).toBeNull()
+    expect(
+      iiiRefusal({ version: '0.24.2', release: releases.releases[2] }),
+    ).toBeNull()
     expect(iiiRefusal({ version: '9.9.9', release: null })).toBe(
       'iii-hq/iii has no release iii/v9.9.9.',
     )
@@ -383,9 +386,14 @@ describe('stack sheet: iii and the template revision', () => {
         { ...releases, latest_candidate: '0.23.0-rc.2' },
         harness,
       ),
-    ).toBe('The harness template needs iii 0.24.0 or newer; latest is 0.23.0-rc.2.')
+    ).toBe(
+      'The harness template needs iii 0.24.0 or newer; latest is 0.23.0-rc.2.',
+    )
     expect(
-      belowMinimum('0.1.0', releases, { ...harness, min_iii_version: undefined }),
+      belowMinimum('0.1.0', releases, {
+        ...harness,
+        min_iii_version: undefined,
+      }),
     ).toBeNull()
   })
 })

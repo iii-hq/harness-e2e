@@ -186,10 +186,7 @@ function pinLock(lines: string[], block: { from: number; to: number }) {
   for (let index = block.from + 1; index < block.to; index += 1) {
     const key = /^ {4}(worker|version|commit):(.*)$/.exec(lines[index])
     if (!key) continue
-    if (
-      !SIMPLE_VALUE.test(key[2]) ||
-      /^ {5,}\S/.test(lines[index + 1] ?? '')
-    )
+    if (!SIMPLE_VALUE.test(key[2]) || /^ {5,}\S/.test(lines[index + 1] ?? ''))
       return `Its ${key[1]} is written in a way the form doesn’t rewrite. ${IN_YAML}`
   }
   return null
@@ -407,7 +404,11 @@ export function compareVersions(left: string, right: string) {
   for (let index = 0; index < 3; index += 1)
     if (a.core[index] !== b.core[index]) return a.core[index] - b.core[index]
   if (!a.pre || !b.pre) return a.pre ? -1 : b.pre ? 1 : 0
-  for (let index = 0; index < Math.max(a.pre.length, b.pre.length); index += 1) {
+  for (
+    let index = 0;
+    index < Math.max(a.pre.length, b.pre.length);
+    index += 1
+  ) {
     const x = a.pre[index]
     const y = b.pre[index]
     if (x === undefined || y === undefined) return x === undefined ? -1 : 1
@@ -465,8 +466,7 @@ export function iiiChoice(iii: string | null, releases: IiiReleases | null) {
 /** Why a typed iii version can't be used, or null when it can. */
 export function iiiRefusal(check: IiiReleases['checked']) {
   if (!check) return null
-  if (!check.release)
-    return `iii-hq/iii has no release iii/v${check.version}.`
+  if (!check.release) return `iii-hq/iii has no release iii/v${check.version}.`
   if (!check.release.cli)
     return `iii/v${check.version} publishes no iii CLI for x86_64 Linux, which a group installs.`
   return null

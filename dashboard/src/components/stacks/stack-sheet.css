@@ -1,8 +1,10 @@
-/* New stack as the redesign canvas draws it (StackBuilder.dc.html): the
-   form beside the YAML it writes (or the picker, in its place), the status
-   and Create below. It builds on the sheet recipe of stacks-page.css and,
-   rendering in the host's portal, uses host token names only, with the
-   extension's sizes carried as fallbacks. Every branch written out. */
+/* The stack sheet: one screen to create, edit and view a stack. The name and
+   the Form and YAML tabs on top; on the Form, the form beside the draft's
+   YAML (or the picker, in its place); on the YAML tab, the editor beside
+   what the runner reads; the status and Create or Save below. It builds on
+   the sheet recipe of stacks-page.css and, rendering in the host's portal,
+   uses host token names only, with the extension's sizes carried as
+   fallbacks. Every branch written out. */
 
 .sk-sheet.sb {
   width: min(calc(var(--spacing) * 330), calc(100vw - var(--spacing) * 12));
@@ -27,11 +29,25 @@
   line-height: calc(var(--spacing) * 5.5);
 }
 
+/* The name, and the tabs at its right; wrapped under it when narrow. */
+.sb-head-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: calc(var(--spacing) * 2) calc(var(--spacing) * 4);
+}
+
 .sb-name {
   display: flex;
+  flex: 1 1 calc(var(--spacing) * 70);
   flex-direction: column;
   gap: var(--spacing);
   max-width: calc(var(--spacing) * 130);
+}
+
+.sb-tabs {
+  flex: none;
 }
 
 .sb-name-input {
@@ -56,6 +72,9 @@
 
 .sb-form {
   display: flex;
+  min-inline-size: 0;
+  margin: 0;
+  border: 0;
   flex-direction: column;
   gap: calc(var(--spacing) * 5.5);
   min-width: 0;
@@ -168,10 +187,6 @@
   align-items: baseline;
   gap: calc(var(--spacing) * 2);
   padding: 0 0 calc(var(--spacing) * 1.5);
-}
-
-.sb-copy-note {
-  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5) 0;
 }
 
 .sk-option.sb-template {
@@ -460,8 +475,7 @@
   line-height: calc(var(--spacing) * 4.5);
 }
 
-.sb-add,
-.sb-outline {
+.sb-add {
   outline: 1px solid var(--color-edge);
   outline-offset: -1px;
 }
@@ -471,8 +485,7 @@
   padding: 0 calc(var(--spacing) * 2.5);
 }
 
-.sb-add:focus-visible,
-.sb-outline:focus-visible {
+.sb-add:focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 1px;
 }
@@ -704,4 +717,143 @@
 .sb-status > svg {
   flex: none;
   margin-top: calc(var(--spacing) * 0.25);
+}
+
+/* ------------------------------------------------------------ the fields */
+
+/* A field the form leaves to the YAML tab says why, beside a lock. */
+.sk-hint[data-locked] {
+  display: inline-flex;
+  align-items: flex-start;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.sk-hint[data-locked] > svg {
+  flex: none;
+  margin-top: calc(var(--spacing) * 0.75);
+}
+
+.sb-revision {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  max-width: calc(var(--spacing) * 110);
+}
+
+.sb-iii {
+  align-items: flex-start;
+}
+
+.sb-iii > .sk-hint {
+  align-self: stretch;
+}
+
+/* The iii menu: below its button, the releases scrolling inside it. */
+.sb-menu.sb-iii-menu {
+  right: auto;
+  left: 0;
+  width: calc(var(--spacing) * 100);
+  max-height: calc(var(--spacing) * 120);
+  overflow: auto;
+}
+
+.sb[data-narrow] .sb-menu.sb-iii-menu {
+  width: calc(100vw - var(--spacing) * 10);
+}
+
+.sb-iii-releases {
+  display: flex;
+  flex-direction: column;
+  padding: calc(var(--spacing) * 1.5) 0;
+}
+
+.sb-iii-releases > .sb-eyebrow {
+  padding: 0 calc(var(--spacing) * 2.5) var(--spacing);
+}
+
+.sb-iii-other {
+  display: flex;
+  align-items: flex-end;
+  gap: calc(var(--spacing) * 2);
+}
+
+.sb-iii-other > .sk-input {
+  flex: 1 1 auto;
+}
+
+/* ------------------------------------------------------------ YAML tab */
+
+.sk-sheet-body.sb-yaml-body {
+  grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 95);
+}
+
+.sb[data-narrow] .sk-sheet-body.sb-yaml-body {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sb-yaml-body > .sk-yaml {
+  border-left: 0;
+}
+
+.sb-yaml-body > .sk-aside {
+  border-left: var(--ds-row-divider, 1px solid var(--color-edge));
+}
+
+.sb[data-narrow] .sb-yaml-body > .sk-aside {
+  border-top: var(--ds-row-divider, 1px solid var(--color-edge));
+  border-left: 0;
+}
+
+/* What holds Create or Save back, above the editor. */
+.sb-blocks {
+  display: flex;
+  flex: none;
+  gap: calc(var(--spacing) * 2);
+  padding: calc(var(--spacing) * 2.5) calc(var(--spacing) * 4);
+  background: var(--color-alert-muted);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.sb-blocks > svg {
+  flex: none;
+  margin-top: calc(var(--spacing) * 0.25);
+  color: var(--ds-danger-text);
+}
+
+.sb-blocks strong {
+  font-weight: 600;
+}
+
+.sb-blocks ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing);
+  margin: var(--spacing) 0 0;
+  padding: 0 0 0 calc(var(--spacing) * 4);
+  list-style: disc;
+}
+
+/* The gutter: one number per line, a blocked line's marked. */
+.sk-gutter > span {
+  display: block;
+}
+
+.sk-gutter > span[data-blocked] {
+  background: var(--color-alert-muted);
+  color: var(--ds-danger-text);
+}
+
+.sb-yaml-body .sk-line[data-blocked] {
+  background: var(--color-alert-muted);
+}
+
+.sb-yaml-body .sk-line[data-blocked] > .sk-ln {
+  color: var(--ds-danger-text);
+}
+
+/* Delete, apart from Discard and Save. */
+.sk-btn.sb-delete {
+  margin-right: auto;
+  color: var(--ds-danger-text);
 }
