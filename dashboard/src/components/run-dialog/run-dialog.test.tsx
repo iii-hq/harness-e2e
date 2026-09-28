@@ -81,8 +81,21 @@ describe('run dialog model', () => {
       hasModel: false,
       tests: 0,
     })
+    // A list, in field order, each item naming the field it focuses.
+    expect(pending.map((item) => item.field)).toEqual([
+      'stack',
+      'github',
+      'model',
+      'tests',
+    ])
     expect(pendingText(true, pending)).toBe(
-      'Before running, pick the stack it runs on and sign in with gh on the worker’s machine and choose a model and tick at least one test.',
+      'Before running, pick the stack it runs on, sign in with gh on the worker’s machine, choose a model and tick at least one test.',
+    )
+    expect(pendingText(true, pending.slice(2))).toBe(
+      'Before running, choose a model and tick at least one test.',
+    )
+    expect(pendingText(true, pending.slice(3))).toBe(
+      'Before running, tick at least one test.',
     )
     expect(pendingText(false, [])).toBe(
       'The catalog has to load before running.',
@@ -253,5 +266,9 @@ describe('tests column', () => {
     expect(failed).toContain('Couldn’t load the test catalog')
     expect(failed).toContain('Catalog unavailable')
     expect(failed).toContain('Retry')
+    // With no catalog, All is not shown as picked.
+    for (const html of [loading, failed])
+      expect(html).not.toContain('aria-pressed="true"')
+    expect(column()).toContain('aria-pressed="true"')
   })
 })

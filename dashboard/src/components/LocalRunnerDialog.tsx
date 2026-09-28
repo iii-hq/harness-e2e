@@ -7,10 +7,19 @@ import {
   Plus,
   TriangleAlert,
 } from 'lucide-react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react'
 import { GithubCard } from '@/components/run-dialog/GithubCard'
 import { Picker, type PickerGroup } from '@/components/run-dialog/Picker'
 import {
+  listSeparator,
+  type PendingField,
   pendingReasons,
   pendingText,
   plural,
@@ -446,6 +455,14 @@ function shortSha(sha?: string) {
   return sha ? sha.replace('sha256:', '').slice(0, 12) : ''
 }
 
+/** Where each missing thing is filled in, inside the dialog's form. */
+const PENDING_FIELD: Record<PendingField, string> = {
+  stack: '#run-dialog-stack',
+  github: '.rd-github button',
+  model: '.rd-model button, .rd-model select',
+  tests: '.rd-tests input[type="checkbox"]',
+}
+
 /** Run tests and Run again: one dialog that starts an execution on this
  *  harness, in Docker or on GitHub, then follows it on its page. */
 export function LocalRunnerDialog({
@@ -818,6 +835,11 @@ export function LocalRunnerDialog({
       : `Starts a new execution with the suite and parameters of ${label ? `“${label}”` : 'this one'}. Change anything first.`
     : 'Starts a new execution on this harness, in Docker or on GitHub.'
   const busy = running !== null && where === 'harness'
+  const focusPending = (field: PendingField) =>
+    document
+      .getElementById(id('form'))
+      ?.querySelector<HTMLElement>(PENDING_FIELD[field])
+      ?.focus()
   const whereNote = unrecordedStackNote(parameters, where)
 
   return (
@@ -892,7 +914,27 @@ export function LocalRunnerDialog({
               ) : !ready || pending.length > 0 ? (
                 <p className="rd-summary-line rd-faint">
                   <Info size={16} aria-hidden="true" />
-                  {pendingText(ready, pending)}
+                  {ready ? (
+                    // LyForms: one sentence, each item a link to its field.
+                    <span>
+                      Before running,{' '}
+                      {pending.map((item, index) => (
+                        <Fragment key={item.field}>
+                          {listSeparator(index, pending.length)}
+                          <button
+                            type="button"
+                            className="rd-pend"
+                            onClick={() => focusPending(item.field)}
+                          >
+                            {item.text}
+                          </button>
+                        </Fragment>
+                      ))}
+                      .
+                    </span>
+                  ) : (
+                    pendingText(ready, pending)
+                  )}
                 </p>
               ) : (
                 <p className="rd-summary-line rd-faint rd-ellipsis">

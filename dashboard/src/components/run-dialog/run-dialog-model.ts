@@ -89,7 +89,12 @@ export type PendingInput = {
   tests: number
 }
 
-/** What is still missing before Run; empty when it can run. */
+/** A field something is missing from, for its item to focus it. */
+export type PendingField = 'stack' | 'github' | 'model' | 'tests'
+export type Pending = { field: PendingField; text: string }
+
+/** What is still missing before Run, in field order; empty when it can
+ *  run. */
 export function pendingReasons({
   ready,
   where,
@@ -97,21 +102,32 @@ export function pendingReasons({
   githubBlocked,
   hasModel,
   tests,
-}: PendingInput): string[] {
+}: PendingInput): Pending[] {
   if (!ready) return []
-  const pending: string[] = []
+  const pending: Pending[] = []
   if (where !== 'harness' && !hasStack)
-    pending.push('pick the stack it runs on')
+    pending.push({ field: 'stack', text: 'pick the stack it runs on' })
   if (where === 'github' && githubBlocked)
-    pending.push('sign in with gh on the worker’s machine')
-  if (!hasModel) pending.push('choose a model')
-  if (tests === 0) pending.push('tick at least one test')
+    pending.push({
+      field: 'github',
+      text: 'sign in with gh on the worker’s machine',
+    })
+  if (!hasModel) pending.push({ field: 'model', text: 'choose a model' })
+  if (tests === 0)
+    pending.push({ field: 'tests', text: 'tick at least one test' })
   return pending
 }
 
-export function pendingText(ready: boolean, pending: string[]) {
+/** What goes before the item at `index` of a list of `count`: `a, b and c`. */
+export function listSeparator(index: number, count: number) {
+  return index === 0 ? '' : index === count - 1 ? ' and ' : ', '
+}
+
+export function pendingText(ready: boolean, pending: Pending[]) {
   if (!ready) return 'The catalog has to load before running.'
-  return `Before running, ${pending.join(' and ')}.`
+  return `Before running, ${pending
+    .map((item, index) => listSeparator(index, pending.length) + item.text)
+    .join('')}.`
 }
 
 export function summaryCounts(tests: number, runs: number) {

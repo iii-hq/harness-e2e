@@ -639,6 +639,19 @@ try {
   await fresh
     .getByText('Before running, choose a model and tick at least one test.')
     .waitFor()
+  // Each missing thing is a link to its field.
+  await fresh.getByRole('button', { name: 'choose a model' }).click()
+  assert.ok(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('.rd-model')),
+    ),
+  )
+  await fresh.getByRole('button', { name: 'tick at least one test' }).click()
+  assert.ok(
+    await page.evaluate(() =>
+      Boolean(document.activeElement?.closest('.rd-tests')),
+    ),
+  )
   assert.equal(
     await fresh.getByText('The model of your last execution.').count(),
     0,

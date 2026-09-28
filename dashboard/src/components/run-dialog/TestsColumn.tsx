@@ -135,7 +135,7 @@ export function TestsColumn({
           <button
             type="button"
             className="rd-segment"
-            aria-pressed={!onlySelected}
+            aria-pressed={ready && !onlySelected}
             disabled={!ready}
             onClick={() => onOnlySelected(false)}
           >
@@ -144,7 +144,7 @@ export function TestsColumn({
           <button
             type="button"
             className="rd-segment"
-            aria-pressed={onlySelected}
+            aria-pressed={ready && onlySelected}
             disabled={!ready}
             onClick={() => onOnlySelected(true)}
           >
