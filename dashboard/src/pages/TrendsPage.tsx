@@ -52,6 +52,7 @@ import {
   trendsParams,
 } from '@/lib/trends'
 import { rerunParameters } from '@/pages/ExecutionPage'
+import { LedgerLoadFailure } from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
 import './executions-page.css'
 import './trends.css'
@@ -431,20 +432,21 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
         </p>
       </header>
 
+      {error && data ? (
+        <LedgerLoadFailure
+          what="trend"
+          reload
+          message={error}
+          onRetry={() => void load()}
+        />
+      ) : null}
+
       {failedFirstLoad ? (
-        <EmptyState
-          tone="error"
-          title="The trend could not be loaded"
-          description={error}
-          actions={
-            <button
-              type="button"
-              className={buttonClassName({ variant: 'secondary' })}
-              onClick={() => void load()}
-            >
-              Try again
-            </button>
-          }
+        <LedgerLoadFailure
+          what="trend"
+          reload={false}
+          message={error ?? ''}
+          onRetry={() => void load()}
         />
       ) : data === null ? (
         <div className="tr-skeleton" role="status" aria-busy="true">
@@ -465,11 +467,6 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
                   {summaryText(points)}
                 </p>
                 {note ? <p className="tr-faint">{note}</p> : null}
-                {error ? (
-                  <p className="tr-faint" role="alert">
-                    Could not reload: {error}
-                  </p>
-                ) : null}
               </div>
             </>
           ) : null}
@@ -492,45 +489,46 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
               }
             />
           ) : nothingCounted ? (
-            <EmptyState
-              className="tr-empty"
-              icon={<ChartLine size={24} />}
-              title="Nothing to draw yet"
-              description={
-                <>
-                  {emptyText(points)}
-                  {rerunError ? (
-                    <span className="tr-empty-error" role="alert">
-                      Could not open Run again: {rerunError}
-                    </span>
-                  ) : null}
-                </>
-              }
-              actions={
-                latest ? (
-                  <>
-                    <a
-                      className={buttonClassName({
-                        variant: 'secondary',
-                        className: 'no-underline',
-                      })}
-                      href={hashForExecution(latest.execution_id)}
-                    >
-                      Open the execution
-                    </a>
-                    {bridge ? (
-                      <button
-                        type="button"
-                        className={buttonClassName({ variant: 'primary' })}
-                        onClick={() => void runAgain(latest)}
+            <>
+              {rerunError && latest ? (
+                <LedgerLoadFailure
+                  what="execution to run again"
+                  reload={false}
+                  message={rerunError}
+                  onRetry={() => void runAgain(latest)}
+                />
+              ) : null}
+              <EmptyState
+                className="tr-empty"
+                icon={<ChartLine size={24} />}
+                title="Nothing to draw yet"
+                description={emptyText(points)}
+                actions={
+                  latest ? (
+                    <>
+                      <a
+                        className={buttonClassName({
+                          variant: 'secondary',
+                          className: 'no-underline',
+                        })}
+                        href={hashForExecution(latest.execution_id)}
                       >
-                        Run again
-                      </button>
-                    ) : null}
-                  </>
-                ) : null
-              }
-            />
+                        Open the execution
+                      </a>
+                      {bridge ? (
+                        <button
+                          type="button"
+                          className={buttonClassName({ variant: 'primary' })}
+                          onClick={() => void runAgain(latest)}
+                        >
+                          Run again
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null
+                }
+              />
+            </>
           ) : (
             <>
               <div

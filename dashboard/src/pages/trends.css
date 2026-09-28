@@ -260,12 +260,6 @@
   background: var(--color-surface);
 }
 
-.tr-empty-error {
-  display: block;
-  margin-top: calc(var(--spacing) * 2);
-  color: var(--ds-danger-text);
-}
-
 /* The large chart and the panel of the picked execution */
 .tr-top {
   display: grid;

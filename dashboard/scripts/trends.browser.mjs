@@ -38,6 +38,8 @@ const newer = {
   started_at: '2026-09-28T14:17:00-03:00',
 }
 let landed = false
+// trends-get answers that fail before one succeeds again.
+let failing = 0
 
 const calls = []
 const requests = (id) =>
@@ -46,6 +48,10 @@ const trigger = (name, request = {}) => {
   const id = name.replace('e2e::dashboard::', '')
   calls.push({ id, request })
   if (id === 'trends-get') {
+    if (failing > 0) {
+      failing -= 1
+      throw new Error('engine unavailable')
+    }
     const answer = trendsAnswer(request)
     if (
       landed &&
@@ -86,8 +92,13 @@ try {
   const hash = () => page.evaluate(() => location.hash)
 
   // The series with the latest execution, on its latest execution's stack.
+  // A first load that fails says so on the host's StatusPanel and retries.
+  failing = 1
   await page.goto(`${server.url}#/ext/harness-e2e/trends`)
   await page.getByRole('heading', { name: 'Trends', level: 1 }).waitFor()
+  await page.getByText('Couldn’t load the trend').waitFor()
+  await page.getByText('engine unavailable').waitFor()
+  await page.getByRole('button', { name: 'Retry' }).click()
   assert.equal(
     await page
       .getByRole('link', { name: 'Trends', exact: true })
@@ -167,12 +178,23 @@ try {
   // A run lands: the trend reloads quietly and keeps the picked execution.
   const asked = requests('trends-get').length
   landed = true
-  await page.evaluate(() => {
-    for (const handler of window.__changeHandlers ?? []) handler({})
-  })
+  const change = () =>
+    page.evaluate(() => {
+      for (const handler of window.__changeHandlers ?? []) handler({})
+    })
+  await change()
   await summary.getByText('12 executions ·', { exact: false }).waitFor()
   assert.deepEqual(requests('trends-get').at(asked), requests('trends-get')[0])
   await latest.getByRole('button', { name: 'Close' }).waitFor()
+  // A reload that fails keeps the trend and says so over it.
+  failing = 1
+  await change()
+  await page.getByText('Couldn’t reload the trend').waitFor()
+  await summary.getByText('12 executions ·', { exact: false }).waitFor()
+  await page.getByRole('button', { name: 'Retry' }).click()
+  await page
+    .getByText('Couldn’t reload the trend')
+    .waitFor({ state: 'detached' })
   landed = false
   await latest.getByRole('button', { name: 'Close' }).click()
   assert.equal(await page.locator('[data-trend-panel]').count(), 0)
@@ -278,7 +300,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, a run landing reloaded quietly with the pick kept, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, commits between two checkouts, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, a run landing reloaded quietly with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, commits between two checkouts, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()
