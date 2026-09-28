@@ -189,6 +189,11 @@ export type StackWorker = {
   name: string
   source: 'package' | 'path'
   requested: string | null
+  /** The version the compose lock resolved: the release a packaged worker
+   *  ran. Only executions that ran from a lock (GitHub, Docker) have one. */
+  resolved?: string | null
+  /** The version the engine reported: the binary's Cargo version, which
+   *  lagged the published release (iii-hq/workers before 9cf019231). */
   observed: string | null
   commit: string | null
   dirty: boolean | null

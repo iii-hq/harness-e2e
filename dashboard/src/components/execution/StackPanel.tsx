@@ -290,7 +290,10 @@ export function StackPanel({
                   <td
                     className={`ep-stack-version ${worker.observed ? '' : 'ep-stack-lock'}`}
                   >
-                    {worker.observed ?? worker.requested ?? 'from the lock'}
+                    {worker.resolved ??
+                      worker.observed ??
+                      worker.requested ??
+                      'from the lock'}
                   </td>
                 </tr>
               ))}

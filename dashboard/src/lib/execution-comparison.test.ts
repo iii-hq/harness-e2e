@@ -397,7 +397,7 @@ describe('comparing two executions', () => {
       'GitHub run 35823421664 · RC 366030b3 · runner 0.9.3',
     )
     expect(comparison.b.origin).toBe(
-      'local · runner 0.9.3 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+      'local · runner 0.9.3 (self-reported) · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
     )
     expect(comparison.parameters).toEqual([])
     // A stack that pinned harness to a commit ran that commit, whatever
@@ -745,7 +745,10 @@ describe('comparing two executions', () => {
     const runnerOf = (detail: typeof a, version: string) => {
       for (const stack of [detail.stack, detail.plan_execution?.stack])
         for (const worker of Array.isArray(stack) ? stack : [])
-          if (worker.name === 'harness-e2e') worker.observed = version
+          if (worker.name === 'harness-e2e') {
+            worker.observed = version
+            if (worker.resolved) worker.resolved = version
+          }
     }
     runnerOf(a, '0.11.24')
     runnerOf(b, '0.11.27')
@@ -801,7 +804,11 @@ describe('comparing two executions', () => {
     })
     const { stack } = compareExecutions(a, b)
     expect(stack.versions).toEqual([
-      { field: 'state', a: '0.22.3', b: '0.22.17' },
+      {
+        field: 'state',
+        a: '0.22.3 (self-reported)',
+        b: '0.22.17 (self-reported)',
+      },
     ])
     expect(stack.onlyA).toEqual(['legacy'])
     expect(stack.onlyB).toEqual([])
@@ -830,7 +837,7 @@ describe('comparing two executions', () => {
     harness(a, '3f2a9c1dddddddddddddddddddddddddddddddd')
     harness(b, null)
     expect(compareExecutions(a, b).stack.versions).toEqual([
-      { field: 'harness', a: '@3f2a9c1', b: '1.8.8-rc.3' },
+      { field: 'harness', a: '@3f2a9c1', b: '1.8.8-rc.3 (self-reported)' },
     ])
     const same = local()
     harness(same, '3f2a9c1dddddddddddddddddddddddddddddddd')
@@ -893,6 +900,56 @@ describe('comparing two executions', () => {
       ['state', 'commit not recorded'],
     ])
   })
+
+  it('tells packages apart by the version their lock resolved, not the one they report', () => {
+    // Harness releases 1.8.9 to 1.8.36 all reported 1.8.8-rc.3.
+    const harness = (
+      detail: DashboardExecutionDetail,
+      resolved: string | null,
+      observed = '1.8.8-rc.3',
+    ) => {
+      detail.plan_execution?.stack.push({
+        name: 'harness',
+        source: 'package',
+        requested: resolved && 'latest',
+        resolved,
+        observed,
+        commit: null,
+        dirty: null,
+      })
+      return detail
+    }
+    const comparison = compareExecutions(
+      harness(imported(), '1.8.31'),
+      harness(imported(), '1.8.36'),
+    )
+    expect(comparison.stack.changed).toEqual([
+      { field: 'harness', a: '1.8.31', b: '1.8.36' },
+    ])
+    expect(comparison.stack.versions).toEqual(comparison.stack.changed)
+    expect(comparison.stack.same).toEqual(['harness-e2e', 'llm-router'])
+    expect(comparison.b.origin).toBe(
+      'GitHub run 35823421664 · RC 366030b3 · harness 1.8.36 · runner 0.9.3',
+    )
+    // Without a lock the engine's version is all there is, and it says so.
+    const unlocked = compareExecutions(
+      harness(imported(), '1.8.31'),
+      harness(local(), null),
+    )
+    expect(unlocked.stack.versions).toEqual([
+      { field: 'harness', a: '1.8.31', b: '1.8.8-rc.3 (self-reported)' },
+    ])
+    expect(unlocked.b.origin).toBe(
+      'local · harness 1.8.8-rc.3 (self-reported) · runner 0.9.3 (self-reported) · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+    )
+    // Saying so is not a difference: the same version is the same build.
+    expect(
+      compareExecutions(
+        harness(imported(), '1.8.37'),
+        harness(local(), null, '1.8.37'),
+      ).stack.same,
+    ).toContain('harness')
+  })
 })
 
 describe('comparison summary', () => {
@@ -905,7 +962,10 @@ describe('comparison summary', () => {
       [b, '0.11.27'],
     ] as const)
       for (const worker of detail.plan_execution?.stack ?? [])
-        if (worker.name === 'harness-e2e') worker.observed = version
+        if (worker.name === 'harness-e2e') {
+          worker.observed = version
+          if (worker.resolved) worker.resolved = version
+        }
     const persistent = b.reports[1].report?.scenarios[0]
     if (persistent) persistent.behavior_sha256 = 'sha256:rescored'
     // Scenarios that moved nowhere: one counted, one the reader left out.
@@ -924,7 +984,7 @@ describe('comparison summary', () => {
         '### deepseek/flash · no profile',
         '',
         'A (base): smoke nightly · GitHub run 35823421664 · RC 366030b3 · runner 0.11.24',
-        'B: smoke · local · runner 0.11.27 · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
+        'B: smoke · local · runner 0.11.27 (self-reported) · llm-router, session-manager @ a1b2c3d (uncommitted changes)',
         '',
         '> **Different runners: 0.11.24 → 0.11.27 — scenario definitions and scoring may differ. Definitions changed: persistent_state.**',
         '',

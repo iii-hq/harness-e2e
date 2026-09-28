@@ -28,7 +28,10 @@ function withRunners(a = imported(), b = local()) {
     [b, '0.11.27'],
   ] as const)
     for (const worker of detail.plan_execution?.stack ?? [])
-      if (worker.name === 'harness-e2e') worker.observed = version
+      if (worker.name === 'harness-e2e') {
+        worker.observed = version
+        if (worker.resolved) worker.resolved = version
+      }
   return { a, b }
 }
 
