@@ -365,13 +365,16 @@ export function TrendsPage({ request }: { request: TrendsRequest }) {
     }
   }
 
-  const pickSeries = (key: TrendSeriesKey) =>
+  // Another series starts over: its latest stack, the score in front.
+  const pickSeries = (key: TrendSeriesKey) => {
+    setFocus('score')
     setQuery({
       suite: key.suite,
       provider: key.provider,
       model: key.model,
       profile: key.profile,
     })
+  }
   const pickStack = (stack: string) =>
     setQuery((current) => ({
       ...(requestSeries(current) ?? data?.selected ?? {}),
