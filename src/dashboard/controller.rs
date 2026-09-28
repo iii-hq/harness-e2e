@@ -323,6 +323,21 @@ impl Controller {
         .context("read the runs of a test history")
     }
 
+    /// The trends of a series, from the executions listed and the runs the
+    /// read model holds.
+    pub(super) async fn trends(
+        &self,
+        request: super::trends::TrendsRequest,
+    ) -> Result<super::trends::TrendsResponse> {
+        let model = self.read_model().await?;
+        let summaries = self.execution_summaries().await?;
+        Ok(super::trends::trends(
+            &request,
+            &summaries,
+            &model.trend_runs(),
+        ))
+    }
+
     async fn invalidate_summaries(&self) {
         self.read_model.write().await.take();
     }

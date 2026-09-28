@@ -18,6 +18,7 @@ use super::read_model::{
     EvaluatedVersionsRequest, EvaluatedVersionsResponse, TestHistoryRequest, TestHistoryResponse,
     TestVersionGetRequest, TestVersionResult, TestsListRequest, TestsListResponse,
 };
+use super::trends::TrendsRequest;
 use crate::catalog::CatalogModel;
 use crate::context::E2eContext;
 use crate::plans::credentials::CredentialView;
@@ -46,6 +47,7 @@ pub(super) const EVALUATED_VERSIONS_LIST: &str = "e2e::dashboard::evaluated-vers
 pub(super) const TESTS_LIST: &str = "e2e::dashboard::tests-list";
 pub(super) const TEST_VERSION_GET: &str = "e2e::dashboard::test-version-get";
 pub(super) const TEST_HISTORY_GET: &str = "e2e::dashboard::test-history-get";
+pub(super) const TRENDS_GET: &str = "e2e::dashboard::trends-get";
 pub(super) const CATALOG_GET: &str = "e2e::dashboard::catalog-get";
 pub(super) const SUITES_LIST: &str = "e2e::dashboard::suites-list";
 pub(super) const SUITE_CREATE: &str = "e2e::dashboard::suite-create";
@@ -633,6 +635,23 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     );
     register(
         iii,
+        TRENDS_GET,
+        "Read how one suite moves over time on one provider, model and profile: every series, the stacks of the selected one, and a point per execution measured over its technically valid runs.",
+        {
+            let controller = controller.clone();
+            RegisterFunction::new_async(move |request: TrendsRequest| {
+                let controller = controller.clone();
+                async move {
+                    controller
+                        .trends(request)
+                        .await
+                        .map_err(handler_error)
+                }
+            })
+        },
+    );
+    register(
+        iii,
         SUITES_LIST,
         "List the suites an execution can run: the master plan's (read-only) and this Console's.",
         {
@@ -1209,5 +1228,86 @@ mod response_contract_tests {
             let typed: PlanControlResponse = serde_json::from_value(payload.clone()).unwrap();
             assert_eq!(serde_json::to_value(typed).unwrap(), payload);
         }
+    }
+
+    #[test]
+    fn trends_answer_with_the_names_the_console_reads() {
+        use super::super::trends::{trends, TrendRun, TrendsResponse};
+        let schema = serde_json::to_value(schemars::schema_for!(TrendsResponse)).unwrap();
+        for field in ["series", "selected", "stack", "stacks", "points"] {
+            assert!(schema["properties"][field].is_object(), "missing {field}");
+        }
+        let request: TrendsRequest = serde_json::from_value(json!({
+            "suite": "regression", "provider": "deepseek", "model": "flash", "profile": null,
+            "stack": "any", "_caller_worker_id": "console",
+        }))
+        .unwrap();
+        assert_eq!(request.profile, Some(None));
+        let summaries = [
+            json!({"id": "plan-a", "label": "", "started_at": "2026-09-22T14:35:00Z",
+                "source": {"kind": "github", "repository": "iii-hq/harness-e2e", "run_id": 42, "run_attempt": 1,
+                    "url": "https://github.com/iii-hq/harness-e2e/actions/runs/42", "release_control_execution_id": "75b03d86"},
+                "stack": [{"name": "harness", "source": "package", "requested": "1.8.31", "observed": "1.8.8", "commit": null, "dirty": null}],
+                "parameters": {"suite": {"id": "regression", "label": "Regression", "sha256": "sha256:r"},
+                    "scenarios": ["minimal_path"], "runs": 1, "technical_retries": 0,
+                    "model": "flash", "provider": "deepseek", "agent": null, "where": "github",
+                    "stack": {"name": "default", "yaml": "iii: 0.24.2\n", "sha256": ""}}}),
+            json!({"id": "native", "parent_plan_execution_id": "plan-a", "engine_version": "0.24.2"}),
+        ];
+        let runs = BTreeMap::from([(
+            "native".to_owned(),
+            vec![TrendRun {
+                test: "minimal_path".into(),
+                counted: true,
+                completed: true,
+                score: Some(40.0),
+                ..TrendRun::default()
+            }],
+        )]);
+        let response = serde_json::to_value(trends(&request, &summaries, &runs)).unwrap();
+        let keys = |value: &Value| {
+            let mut keys = value
+                .as_object()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+            keys.sort();
+            keys.join(",")
+        };
+        assert_eq!(keys(&response), "points,selected,series,stack,stacks");
+        assert_eq!(
+            keys(&response["series"][0]),
+            "executions,latest_at,model,profile,provider,suite,suite_label,where"
+        );
+        assert_eq!(response["series"][0]["where"], json!(["github"]));
+        assert_eq!(keys(&response["selected"]), "model,profile,provider,suite");
+        assert_eq!(
+            response["stacks"],
+            json!([{"name": "default", "executions": 1}, {"name": "any", "executions": 1}])
+        );
+        let point = &response["points"][0];
+        assert_eq!(
+            keys(point),
+            "counted,engine,execution_id,label,measures,planned,reason,runner,runs,source,stack,started_at,tests,workers"
+        );
+        assert_eq!(
+            point["source"],
+            json!({"kind": "github", "run_id": 42, "run_attempt": 1, "release_control_execution_id": "75b03d86",
+                "url": "https://github.com/iii-hq/harness-e2e/actions/runs/42"})
+        );
+        assert_eq!(
+            point["stack"],
+            json!({"name": "default", "matched_by_workers": false})
+        );
+        assert_eq!(point["workers"], json!({"harness": "1.8.31"}));
+        assert_eq!(
+            keys(&point["measures"]),
+            "completed,duration_ms_mean,function_call_errors,function_calls,function_calls_mean,input_tokens_mean,planned,score_mean,turns_mean"
+        );
+        assert_eq!(
+            point["tests"],
+            json!([{"id": "minimal_path", "state": "scored", "score": 40.0, "behavior_sha256": null}])
+        );
     }
 }
