@@ -497,11 +497,11 @@ Worker configuration:
   own (below): where both name a variable, the Console's value wins.
 
 Provider credentials are the Console's, on the Stacks page: environment
-variables by name (`OPENAI_API_KEY`), set, replaced or deleted there, or
-imported from the worker's own environment for the names
-[`config/provider-credentials.json`](config/provider-credentials.json) lists.
-What is set in neither the Console nor `provider_env_file` is inherited from
-the worker's environment for those names, as llm-router falls back from its
+variables by name (`OPENAI_API_KEY`), set, replaced or deleted there. What is
+set in neither the Console nor `provider_env_file` is inherited from the
+worker's environment for the names
+[`config/provider-credentials.json`](config/provider-credentials.json) lists,
+as llm-router falls back from its
 configuration to `credential_env_var`: give the harness-e2e worker the keys
 as its compose entry gives llm-router (`env_file`, or `environment` with
 `KEY: "${KEY}"`).

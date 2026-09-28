@@ -93,13 +93,6 @@ pub(crate) struct CredentialView {
     pub providers: Vec<String>,
 }
 
-/// What an import from this machine's environment found.
-#[derive(Debug, Clone, Serialize, JsonSchema, PartialEq, Eq)]
-pub(crate) struct Imported {
-    pub found: Vec<String>,
-    pub not_found: Vec<String>,
-}
-
 /// An environment variable's name that no phase sets itself.
 pub(crate) fn validate_name(name: &str) -> Result<()> {
     let mut chars = name.chars();
@@ -325,33 +318,6 @@ impl Credentials {
             bail!("No credential {name} is set in this Console.");
         }
         self.write(&stored)
-    }
-
-    /// Set each credential the catalog knows that `lookup` (this worker's
-    /// environment) holds, and say which it did not.
-    pub(crate) fn import(&self, lookup: impl Fn(&str) -> Option<String>) -> Result<Imported> {
-        let names = catalog_names();
-        let _guard = WRITES
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut stored = self.stored()?;
-        let mut imported = Imported {
-            found: Vec::new(),
-            not_found: Vec::new(),
-        };
-        for name in names {
-            match lookup(&name).as_deref().and_then(clean_value) {
-                Some(value) => {
-                    stored.insert(name.clone(), value.to_owned());
-                    imported.found.push(name);
-                }
-                None => imported.not_found.push(name),
-            }
-        }
-        if !imported.found.is_empty() {
-            self.write(&stored)?;
-        }
-        Ok(imported)
     }
 
     /// What a phase receives: the worker's environment, its file over it,
@@ -607,25 +573,7 @@ mod tests {
     }
 
     #[test]
-    fn an_import_takes_the_catalogs_names_from_this_machine_and_says_which() {
-        let root = tempfile::tempdir().unwrap();
-        let credentials = Credentials::new(root.path(), None);
-        let environment = BTreeMap::from([
-            ("DEEPSEEK_API_KEY", "sk-deepseek"),
-            ("ZAI_API_KEY", "  "),
-            ("GITHUB_TOKEN", "never-imported"),
-            ("CHOCOLATEY_API_KEY", "never-imported"),
-        ]);
-        let imported = credentials
-            .import(|name| environment.get(name).map(|value| (*value).to_owned()))
-            .unwrap();
-        assert_eq!(imported.found, vec!["DEEPSEEK_API_KEY"]);
-        assert!(imported.not_found.contains(&"ZAI_API_KEY".to_owned()));
-        assert!(imported.not_found.contains(&"OPENAI_API_KEY".to_owned()));
-        assert_eq!(
-            fs::read_to_string(root.path().join(FILE)).unwrap(),
-            "DEEPSEEK_API_KEY=sk-deepseek\n"
-        );
+    fn a_provider_reads_the_key_the_catalog_names() {
         assert_eq!(
             provider_key("deepseek").as_deref(),
             Some("DEEPSEEK_API_KEY")

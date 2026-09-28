@@ -91,6 +91,7 @@ const known = {
 }
 const stored = new Map()
 const fromFile = new Set(['ZAI_API_KEY'])
+const fromEnvironment = new Set(['DEEPSEEK_API_KEY'])
 const credentials = () => ({
   credentials: [...new Set([...Object.keys(known), ...stored.keys()])]
     .sort()
@@ -99,7 +100,9 @@ const credentials = () => ({
         ? 'console'
         : fromFile.has(name)
           ? 'provider_env_file'
-          : undefined
+          : fromEnvironment.has(name)
+            ? 'environment'
+            : undefined
       return {
         name,
         set: source !== undefined,
@@ -171,15 +174,6 @@ const trigger = (name, request = {}) => {
     calls.credentials.push(['delete', request])
     stored.delete(request.name)
     return credentials()
-  }
-  if (id === 'credentials-import') {
-    calls.credentials.push(['import', request])
-    stored.set('DEEPSEEK_API_KEY', 'sk-imported-4d2e')
-    return {
-      found: ['DEEPSEEK_API_KEY'],
-      not_found: ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'ZAI_API_KEY'],
-      ...credentials(),
-    }
   }
   throw new Error(`Unexpected RPC ${name}`)
 }
@@ -499,19 +493,14 @@ try {
     0,
   )
 
-  // Imported from the worker's environment: it says what it found.
-  await section
-    .getByRole('button', { name: 'Import from this machine', exact: true })
-    .click()
-  await section
-    .getByText(
-      "Set from the worker's environment: DEEPSEEK_API_KEY. Not found there: ANTHROPIC_API_KEY, OPENAI_API_KEY, ZAI_API_KEY.",
-      { exact: true },
-    )
-    .waitFor()
+  // Inherited from the worker's environment: nothing to import or delete.
   await status('DEEPSEEK_API_KEY')
-    .getByText('Set here', { exact: true })
+    .getByText('Set by the worker’s environment', { exact: true })
     .waitFor()
+  assert.equal(
+    await section.getByRole('button', { name: /^Import/ }).count(),
+    0,
+  )
 
   // Set one: its name is fixed, the value goes once, masked, never shown.
   await section
@@ -613,7 +602,7 @@ try {
   )
   assert.deepEqual(errors, [])
   console.log(
-    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, imported, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
+    'Stacks browser flow passed: a failed first read tried again; repository stacks apart and read-only; one viewed with its YAML as written, its workers and Copy YAML; Copy to edit; a path worker pinning a commit saved with both warnings beside the editor and on the stack; YAML the runner refuses said beside the editor while typing goes on; Discard; closing unsaved changes asks first; New stack from a copy, named; delete behind the host confirmation, confirmed twice and run once; a stack deleted elsewhere keeps its sheet and says so; the error of a failed copy left behind; provider credentials listed by name, inherited from the worker environment, set masked, added by a valid name only, deleted, no value shown; narrow viewport.',
   )
 } catch (error) {
   console.error(
