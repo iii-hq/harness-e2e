@@ -354,6 +354,29 @@ describe('Run tests from scratch', () => {
     )
     const other = await describeStartError(bridge, new Error('stack missing'))
     expect(other).toEqual({ error: 'stack missing', running: null })
+    // The execution unreadable: still busy, named from the refusal itself
+    // (its quoted title, else its id), so the alert and Run in Docker show.
+    const unreadable = {
+      getExecution: async () => {
+        throw new Error('engine unavailable')
+      },
+    } as unknown as DashboardDataBridge
+    expect(
+      (await describeStartError(unreadable, new Error(message))).running,
+    ).toEqual({ id: 'plan-0123456789abcdef0123456789abcdef', title: 'Nightly' })
+    expect(
+      (
+        await describeStartError(
+          unreadable,
+          new Error(
+            'Another execution (0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.',
+          ),
+        )
+      ).running,
+    ).toEqual({
+      id: '0123456789abcdef0123456789abcdef',
+      title: '0123456789abcdef0123456789abcdef',
+    })
   })
 
   it('ticks and unticks a sequential group whole', () => {

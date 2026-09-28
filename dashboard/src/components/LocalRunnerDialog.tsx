@@ -433,9 +433,13 @@ export async function describeStartError(
 ): Promise<{ error: string; running: { id: string; title: string } | null }> {
   const message = errorMessage(cause)
   const id = runningExecutionId(message)
-  const detail = id ? await bridge.getExecution(id).catch(() => null) : null
-  if (!id || !detail) return { error: message, running: null }
-  const { title } = executionTitle(buildExecutionPresentation(detail))
+  if (!id) return { error: message, running: null }
+  const detail = await bridge.getExecution(id).catch(() => null)
+  // Unreadable, it is still what holds the harness: named from the refusal
+  // itself, its quoted title or else its id.
+  const title = detail
+    ? executionTitle(buildExecutionPresentation(detail)).title
+    : (/"([^"]+)" \(/.exec(message)?.[1] ?? id)
   return {
     error: `"${title}" is still running. Wait for it to finish or cancel it.`,
     running: { id, title },
