@@ -2063,7 +2063,8 @@ tr.ep-detail-row:hover {
   font-size: var(--text-xs);
 }
 
-/* The row's result word: 12 px, tinted by its tone (StatusLabel). */
+/* The row's result word: 12 px Inter, tinted by its tone (StatusLabel). */
 .ep-result-row .ds-status-label {
+  font-family: var(--font-sans);
   font-size: 0.75rem;
 }
