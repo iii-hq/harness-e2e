@@ -321,9 +321,12 @@ try {
     await page.locator('[data-change="stack"] .ds-fact-value').innerText(),
     '1 worker changed · 1 only in B',
   )
-  // Stack details opens the stack worker by worker.
+  // Stack details opens the stack worker by worker, and focus lands on it.
   await page.getByRole('button', { name: 'Stack details' }).click()
   await page.locator('[data-stack-worker="harness-e2e"]').waitFor()
+  await page.waitForFunction(
+    () => document.activeElement?.closest('#comparison-stack') !== null,
+  )
   assert.equal(
     await page.locator('[data-stack-only="b"] dd').innerText(),
     'llm-router',
@@ -349,7 +352,11 @@ try {
       '/attachments/board.png',
     ]),
   )
-  await page.getByRole('button', { name: 'Open A · board full size' }).click()
+  // Opened without focusing the button, as WebKit clicks: focus still
+  // comes back to it.
+  await page
+    .getByRole('button', { name: 'Open A · board full size' })
+    .dispatchEvent('click')
   const viewer = page.getByRole('dialog', { name: 'board' })
   await viewer.getByRole('link', { name: 'Evidence record' }).waitFor()
   await page.keyboard.press('Escape')

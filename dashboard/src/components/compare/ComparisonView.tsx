@@ -1069,6 +1069,13 @@ export function pairByCaption(
 }
 
 /** One side of a pair: the image, which opens full size, and its record. */
+/** Scrolls to a part of the page and moves focus to its control, so the
+ *  keyboard and a screen reader land where the page moved. */
+function reach(target: Element | null, control: string) {
+  target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  target?.querySelector<HTMLElement>(control)?.focus({ preventScroll: true })
+}
+
 export function ScreenshotFigure({
   which,
   screenshot,
@@ -1076,6 +1083,7 @@ export function ScreenshotFigure({
   evidenceHref,
   onOpen,
   onSize,
+  buttonRef,
 }: {
   which: Which
   screenshot: ScreenshotEntry | null
@@ -1083,6 +1091,8 @@ export function ScreenshotFigure({
   evidenceHref: string | null
   onOpen?: () => void
   onSize?: (size: string) => void
+  /** The thumbnail's button, for focus to come back to. */
+  buttonRef?: (button: HTMLButtonElement | null) => void
 }) {
   const side = which.toUpperCase()
   return (
@@ -1093,6 +1103,7 @@ export function ScreenshotFigure({
     >
       {screenshot ? (
         <button
+          ref={buttonRef}
           type="button"
           className="cmp-shot-frame"
           aria-label={`Open ${side} · ${screenshot.caption} full size`}
@@ -1154,8 +1165,10 @@ function ScreenshotPairs({
   const [viewer, setViewer] = useState<{ which: Which; index: number } | null>(
     null,
   )
-  // Focus goes back to the screenshot the viewer opened from.
-  const trigger = useRef<HTMLElement | null>(null)
+  // Focus goes back to the thumbnail of the screenshot the viewer shows, by
+  // a ref per button: WebKit does not focus a clicked button, so the active
+  // element at the click is not it.
+  const triggers = useRef(new Map<string, HTMLButtonElement>())
   const pairs = pairByCaption(shots.a, shots.b)
   if (pairs.length === 0) return null
   const evidence = (which: Which, screenshot: ScreenshotEntry | null) =>
@@ -1191,10 +1204,13 @@ function ScreenshotPairs({
                     screenshot={screenshot}
                     image={screenshot ? images[screenshot.key] : undefined}
                     evidenceHref={evidence(which, screenshot)}
+                    buttonRef={(button) => {
+                      if (!screenshot) return
+                      if (button) triggers.current.set(screenshot.key, button)
+                      else triggers.current.delete(screenshot.key)
+                    }}
                     onOpen={() => {
                       if (!screenshot) return
-                      trigger.current =
-                        document.activeElement as HTMLElement | null
                       setViewer({
                         which,
                         index: shots[which].indexOf(screenshot),
@@ -1220,7 +1236,7 @@ function ScreenshotPairs({
           onIndex={(index) => setViewer({ which: viewer.which, index })}
           onClose={() => {
             setViewer(null)
-            trigger.current?.focus()
+            triggers.current.get(current.key)?.focus()
           }}
           evidenceHref={evidence(viewer.which, current) ?? undefined}
         />
@@ -1410,9 +1426,10 @@ export function ComparisonView({
     setOpen((current) => new Set(current).add(id))
     window.setTimeout(
       () =>
-        document
-          .querySelector(`[data-scenario="${CSS.escape(id)}"]`)
-          ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+        reach(
+          document.querySelector(`[data-scenario="${CSS.escape(id)}"]`),
+          '.cmp-row-toggle',
+        ),
       0,
     )
   }
@@ -1502,9 +1519,7 @@ export function ComparisonView({
               setStackOpen(true)
               window.setTimeout(
                 () =>
-                  document
-                    .getElementById('comparison-stack')
-                    ?.scrollIntoView({ block: 'start', behavior: 'smooth' }),
+                  reach(document.getElementById('comparison-stack'), 'summary'),
                 0,
               )
             }}
