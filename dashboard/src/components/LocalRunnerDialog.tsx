@@ -734,9 +734,6 @@ export function LocalRunnerDialog({
     } catch (cause) {
       const described = await describeStartError(bridge, cause)
       setRunning(described.running)
-      // A busy harness is said once, by its alert; the error line is kept
-      // for anything else, which then shows under the alert instead of
-      // being hidden by it. Switching Where drops the refusal with it.
       setError(described.running ? null : described.error)
     } finally {
       setSubmitting(false)
@@ -875,9 +872,6 @@ export function LocalRunnerDialog({
                   This harness runs one execution at a time. Docker and GitHub
                   don’t wait for it.
                 </p>
-                {error ? (
-                  <p className="rd-alert-message rd-faint">{error}</p>
-                ) : null}
               </div>
               <button
                 type="button"
