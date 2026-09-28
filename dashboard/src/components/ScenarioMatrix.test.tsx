@@ -326,7 +326,7 @@ describe('ScenarioMatrix', () => {
     )
     // The last run is named and its short id stays in sight; the retained
     // runs below carry the same numbers.
-    expect(html).toContain('3 runs · last run 3 · third · attempt 1')
+    expect(html).toContain('3 runs · last run 3 · attempt 1')
     expect(html).toMatch(
       /aria-label="Retained runs">(?:(?!<\/ul>).)*run 1(?:(?!<\/ul>).)*run 2(?:(?!<\/ul>).)*run 3/,
     )
@@ -445,7 +445,7 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('data-primary-metric="Total tokens"')
     expect(html).toContain('aria-label="Run metrics · security_review"')
     expect(html).toContain('aria-label="Run actions · security_review"')
-    expect(html).toContain('run 1 · run-secu · attempt 1')
+    expect(html).toContain('run 1 · attempt 1')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
     expect(html).not.toContain('data-step-metric="Findings"')

@@ -635,13 +635,13 @@ function ScenarioResult({
   // last one's, and both say so.
   const runNumber = item.runs.length
   const several = runNumber > 1
-  // The run is named by its number and its short id, as the retained runs
-  // below; the whole id on hover.
+  // As the canvas: the run by its number; the whole id on hover and in the
+  // numbered retained runs below.
   const runMeta = !runId
     ? ''
     : several
-      ? `${runNumber} runs · last run ${runNumber} · ${runId.slice(0, 8)} · attempt ${attempt}`
-      : `run 1 · ${runId.slice(0, 8)} · attempt ${attempt}`
+      ? `${runNumber} runs · last run ${runNumber} · attempt ${attempt}`
+      : `run 1 · attempt ${attempt}`
   const criteriaTitle = [
     several ? `Criteria of run ${runNumber}` : 'Criteria',
     lost.length ? 'that lost points' : '',
