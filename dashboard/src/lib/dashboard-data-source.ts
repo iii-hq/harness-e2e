@@ -14,6 +14,12 @@ import type {
   TestVersionInput,
   TestVersionResult,
 } from '@/lib/test-catalog'
+import type {
+  TrendsRequest,
+  TrendsResponse,
+  VersionCompareRequest,
+  VersionCompareResponse,
+} from '@/lib/trends'
 
 export type JsonObject = Record<string, unknown>
 export type JsonValue =
@@ -704,6 +710,8 @@ export type RuntimeConfig = {
     credentials_list: string
     credential_set: string
     credential_delete: string
+    trends_get: string
+    version_compare: string
     changed_trigger: string
   }
 }
@@ -741,6 +749,14 @@ export type DashboardDataBridge = {
   listTests(input?: TestsListInput): Promise<TestsListResponse>
   getTestVersion(input: TestVersionInput): Promise<TestVersionResult>
   getTestHistory(input: TestHistoryInput): Promise<TestHistoryResponse>
+  /** One series' executions over time, the series chosen by the request
+   *  (else the one with the latest execution) and its stack filter. */
+  getTrends(request: TrendsRequest): Promise<TrendsResponse>
+  /** The GitHub compare between two versions or commits of iii, the runner
+   *  or a worker, and how many commits it holds when GitHub answers. */
+  compareVersions(
+    request: VersionCompareRequest,
+  ): Promise<VersionCompareResponse>
   /** The master plan's suites, then this Console's. */
   listSuites(): Promise<{ suites: Suite[] }>
   /** A suite of this Console that starts as a copy of `from`. */
@@ -874,6 +890,10 @@ function makeBridge(runtime: RuntimeConfig): DashboardDataBridge {
         runtime.functions.test_history_get,
         input as unknown as JsonObject,
       ),
+    getTrends: (request) =>
+      call(runtime.functions.trends_get, request as JsonObject),
+    compareVersions: (request) =>
+      cachedCall(runtime.functions.version_compare, request),
     listSuites: () => call(runtime.functions.suites_list, {}),
     createSuite: (from, label = '') =>
       call(runtime.functions.suite_create, { from, label }),

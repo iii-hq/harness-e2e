@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { dashboardHash, dashboardRouteHash } from '@/lib/dashboard-runtime'
+import { type TrendsRequest, trendsRequestFromParams } from '@/lib/trends'
 
 export type WorkspaceView = 'tests' | 'executions'
 
@@ -24,6 +25,8 @@ export type DashboardRoute =
   | { page: 'test-history'; testId: string; compare?: boolean }
   | { page: 'suites' }
   | { page: 'stacks' }
+  /** One series over time; the series and its stack in the hash's params. */
+  | { page: 'trends'; request: TrendsRequest }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
 const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
@@ -74,6 +77,7 @@ export function replaceRouteParams(params: URLSearchParams) {
 }
 
 export function routeFromHash(rawHash: string): DashboardRoute | null {
+  const params = routeParams(rawHash)
   const routedHash = dashboardRouteHash(rawHash.split('?')[0])
   if (routedHash === null) return null
   rawHash = routedHash
@@ -126,6 +130,8 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   }
   if (head === 'suites' && !rest[0]) return { page: 'suites' }
   if (head === 'stacks' && !rest[0]) return { page: 'stacks' }
+  if (head === 'trends' && !rest[0])
+    return { page: 'trends', request: trendsRequestFromParams(params) }
   return null
 }
 
@@ -226,6 +232,12 @@ export function hashForSuites(suiteId?: string | null): string {
 
 export function hashForStacks(): string {
   return dashboardHash('stacks')
+}
+
+/** Trends, on a series and stack when the params name them. */
+export function hashForTrends(params?: URLSearchParams): string {
+  const hash = dashboardHash('trends')
+  return params ? hashWithParams(hash, params) : hash
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {

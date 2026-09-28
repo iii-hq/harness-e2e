@@ -6,6 +6,7 @@ import {
   hashForStacks,
   hashForSuites,
   hashForTestHistory,
+  hashForTrends,
   hashForVersionComparison,
   hashForWorkspace,
   hashFrom,
@@ -120,6 +121,33 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash(hashForSuites('suite-1'))).toEqual({ page: 'suites' })
     expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
     expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
+    expect(hashForTrends()).toBe('#/ext/harness-e2e/trends')
+    expect(routeFromHash(hashForTrends())).toEqual({
+      page: 'trends',
+      request: {},
+    })
+    expect(
+      routeFromHash(
+        hashForTrends(
+          new URLSearchParams({
+            suite: 'regression',
+            provider: 'deepseek',
+            model: 'deepseek-flash',
+            profile: '',
+            stack: 'not_recorded',
+          }),
+        ),
+      ),
+    ).toEqual({
+      page: 'trends',
+      request: {
+        suite: 'regression',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        profile: null,
+        stack: 'not_recorded',
+      },
+    })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()
     expect(routeFromHash('#/ext/harness-e2e/plans/new')).toBeNull()

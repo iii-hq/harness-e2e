@@ -20,6 +20,7 @@ import {
   type DashboardRoute,
   hashForStacks,
   hashForSuites,
+  hashForTrends,
   hashForWorkspace,
   routeRenderIdentity,
   type WorkspaceView,
@@ -28,7 +29,12 @@ import { useViewportPhone } from '@/hooks/use-viewport-phone'
 import '@/design-system/styles.css'
 import './dashboard-shell.css'
 
-export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
+export type DashboardSection =
+  | 'tests'
+  | 'executions'
+  | 'trends'
+  | 'suites'
+  | 'stacks'
 
 export type DashboardHeaderState = {
   key: string
@@ -62,6 +68,7 @@ export function useDashboardChrome() {
 export function sectionForRoute(route: DashboardRoute): DashboardSection {
   if (route.page === 'suites') return 'suites'
   if (route.page === 'stacks') return 'stacks'
+  if (route.page === 'trends') return 'trends'
   if (
     route.page === 'execution' ||
     route.page === 'compare' ||
@@ -82,12 +89,14 @@ export function sectionForRoute(route: DashboardRoute): DashboardSection {
 function hashForSection(section: DashboardSection): string {
   if (section === 'suites') return hashForSuites()
   if (section === 'stacks') return hashForStacks()
+  if (section === 'trends') return hashForTrends()
   return hashForWorkspace(section as WorkspaceView)
 }
 
 const navigation: Array<{ value: DashboardSection; label: string }> = [
   { value: 'tests', label: 'Tests' },
   { value: 'executions', label: 'Executions' },
+  { value: 'trends', label: 'Trends' },
   { value: 'suites', label: 'Suites' },
   { value: 'stacks', label: 'Stacks' },
 ]

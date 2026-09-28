@@ -41,6 +41,8 @@ const runtimeConfig: RuntimeConfig = {
     credentials_list: 'e2e::dashboard::credentials-list',
     credential_set: 'e2e::dashboard::credential-set',
     credential_delete: 'e2e::dashboard::credential-delete',
+    trends_get: 'e2e::dashboard::trends-get',
+    version_compare: 'e2e::dashboard::version-compare',
     changed_trigger: 'e2e::dashboard::changed',
   },
 }
