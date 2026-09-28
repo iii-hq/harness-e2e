@@ -275,9 +275,12 @@ ran stay, without a suite.
 `e2e::dashboard::suites-list`, `suite-create`, `suite-update` and
 `suite-delete` read and change suites; `stacks-list`, `stack-create`,
 `stack-update` and `stack-delete` read and change stacks (`stack-create` copies
-a stack or takes the YAML the New stack builder writes); `stack-templates-list`
-reads the iii-hq/templates projects and `worker-resolve` what the iii registry
-resolves a worker to, both kept ten minutes; `credentials-list`,
+a stack or takes the YAML the stack sheet holds); `stack-preview` reads a
+draft's YAML as a saved stack would, without saving it, for the sheet's Form
+and rules; `stack-templates-list` reads the iii-hq/templates projects at a
+revision (`main` by default), `iii-releases-list` the iii CLI's releases and
+newest release candidate (or checks one version), and `worker-resolve` what
+the iii registry resolves a worker to, each kept ten minutes; `credentials-list`,
 `credential-set` and `credential-delete` read (names only) and change the provider credentials Docker executions receive, shown
 below the stacks; `execution-cancel` stops an execution.
 
