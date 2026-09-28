@@ -459,8 +459,13 @@ export function TranscriptPage({
                 ) : (
                   <li key={block.id}>
                     {/* Closed at first, errors or not: the outline, Next
-                        error and each summary's error count lead in. */}
-                    <details className="ep-tools">
+                        error and each summary's error count lead in. Open
+                        when filtered to errors or searched, so what matched
+                        shows. */}
+                    <details
+                      className="ep-tools"
+                      open={filter === 'errors' || Boolean(needle) || undefined}
+                    >
                       <summary>
                         <span className="ep-strong">
                           {plural(block.events.length, 'tool call')}
