@@ -98,6 +98,13 @@
   font-size: var(--ds-text-label, 0.6875rem);
 }
 
+.tr-direction {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+  white-space: nowrap;
+}
+
 .tr-footnote {
   margin: calc(var(--spacing) * 1) 0 0;
   color: var(--color-ink-faint);
@@ -222,7 +229,7 @@
   width: calc(var(--spacing) * 2.5);
   height: calc(var(--spacing) * 2.5);
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--color-ink);
 }
 
 /* A diamond as the legend and the panel draw it: filled for a major
@@ -391,8 +398,10 @@
   stroke-width: 1;
 }
 
+/* Data in ink, as the test history draws its first series; the accent is
+   kept for what is live, focused or primary. */
 .tr-line {
-  stroke: var(--color-accent);
+  stroke: var(--color-ink);
   stroke-linecap: round;
   stroke-width: 1.5;
 }
@@ -406,16 +415,13 @@
 }
 
 .tr-dot {
-  fill: var(--color-accent);
-}
-
-.tr-dot[data-selected] {
   fill: var(--color-ink);
 }
 
-.tr-miss-glyph {
-  fill: var(--ds-danger-text);
-  font-size: var(--ds-text-label, 0.6875rem);
+.tr-miss-mark {
+  stroke: var(--ds-danger-text);
+  stroke-linecap: round;
+  stroke-width: 1.5;
 }
 
 /* The points of the large chart, the executions without a counted run and
@@ -434,7 +440,7 @@
   height: calc(var(--spacing) * 3);
   margin: calc(var(--spacing) * -1.5) 0 0 calc(var(--spacing) * -1.5);
   border-radius: 50%;
-  background: var(--color-accent);
+  background: var(--color-ink);
   outline: 2px solid var(--color-panel-raised);
 }
 
@@ -808,6 +814,10 @@
   font-variant-numeric: tabular-nums;
   text-align: center;
   white-space: nowrap;
+}
+
+.tr-grid .tr-cell svg {
+  vertical-align: middle;
 }
 
 .tr-grid .tr-cell[data-kind="uncounted"] {

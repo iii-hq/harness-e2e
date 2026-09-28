@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { PointPanel } from '@/components/trends/PointPanel'
-import { LargeChart } from '@/components/trends/TrendsChart'
+import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
 import { changesAt, previousCounted, trendMetric } from '@/lib/trends'
 import {
@@ -79,6 +79,24 @@ describe('trends page parts', () => {
     expect(html).toContain('>harness 1.8.34 +1</text>')
   })
 
+  it('draws a small chart with its direction under the title and crosses as strokes', () => {
+    const html = renderToStaticMarkup(
+      <SmallChart
+        metric={trendMetric('completed')}
+        points={regression}
+        changes={changes}
+        selected={-1}
+        narrow={false}
+        onFocus={() => undefined}
+      />,
+    )
+    expect(html).toMatch(
+      /<p class="tr-footnote"><span class="tr-direction">.*higher is better<\/span> · counted runs that completed their task<\/p>/,
+    )
+    expect(html.match(/class="tr-miss-mark"/g)).toHaveLength(2)
+    expect(html).not.toContain('×')
+  })
+
   it('says what changed, the measures and where to go from one execution', () => {
     const index = regression.length - 1
     const html = renderToStaticMarkup(
@@ -143,6 +161,12 @@ describe('trends page parts', () => {
     )
     expect(html).toContain('aria-label="Score by test and execution"')
     expect(html.match(/data-kind="not_run"/g)).toHaveLength(2)
+    // Marks, never text glyphs: a cross icon said as words.
+    expect(html).not.toContain('×')
+    expect(html).toContain(
+      '<span class="ds-visually-hidden">technically invalid</span>',
+    )
+    expect(html).toContain('>no score<')
     expect(html).toContain('href="#/ext/harness-e2e/tests/kanban_c7_live"')
     expect(html).toContain('aria-pressed="true"')
   })

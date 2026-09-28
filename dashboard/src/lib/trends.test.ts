@@ -11,6 +11,7 @@ import {
   latestPair,
   notRun,
   previousCounted,
+  roomyMarks,
   segments,
   stackNote,
   summaryText,
@@ -248,6 +249,14 @@ describe('axes', () => {
       { index: 2, text: 'Sep 23' },
       { index: 3, text: 'Sep 26' },
     ])
+  })
+
+  it('labels a day only where it has room, first and last kept', () => {
+    const at = (x: number) => x
+    expect(roomyMarks([0, 30, 60, 100, 130], at, 56)).toEqual([0, 60, 130])
+    expect(roomyMarks([0, 60, 90], at, 56)).toEqual([0, 90])
+    expect(roomyMarks([0, 20], at, 56)).toEqual([0])
+    expect(roomyMarks([], at, 56)).toEqual([])
   })
 
   it('draws the line faint across executions without a value', () => {

@@ -1,4 +1,4 @@
-import { Maximize2, X } from 'lucide-react'
+import { ArrowDown, ArrowUp, Maximize2, X } from 'lucide-react'
 import { DeltaValue, deltaDirection, deltaTone } from '@/design-system'
 import { useMeasuredWidth } from '@/hooks/use-measured-width'
 import {
@@ -9,6 +9,7 @@ import {
   laneLabel,
   latestPair,
   pointTime,
+  roomyMarks,
   segments,
   slotX,
   type TrendChange,
@@ -48,10 +49,16 @@ export function DeltaPill({
   )
 }
 
-const DIRECTION = {
-  higher: '↑ higher is better',
-  lower: '↓ lower is better',
-  neither: '',
+/** Which way the measure is better, with its arrow. */
+function Direction({ better }: { better: TrendMetric['better'] }) {
+  if (better === 'neither') return null
+  const Arrow = better === 'higher' ? ArrowUp : ArrowDown
+  return (
+    <span className="tr-direction">
+      <Arrow size={12} aria-hidden="true" />
+      {better} is better
+    </span>
+  )
 }
 
 /** The latest value of a measure and its delta against the previous
@@ -189,17 +196,19 @@ function Plot({
             y2={yAt(values[segment.to] as number)}
           />
         ))}
-        {dayMarks(points).map((mark) => (
-          <text
-            key={mark.index}
-            className="tr-axis"
-            x={xAt(mark.index)}
-            y={bottom + 15}
-            textAnchor="middle"
-          >
-            {mark.text}
-          </text>
-        ))}
+        {roomyMarks(dayMarks(points), (mark) => xAt(mark.index), 56).map(
+          (mark) => (
+            <text
+              key={mark.index}
+              className="tr-axis"
+              x={xAt(mark.index)}
+              y={bottom + 15}
+              textAnchor="middle"
+            >
+              {mark.text}
+            </text>
+          ),
+        )}
         {lane.map((item) =>
           item.label ? (
             <text
@@ -218,16 +227,14 @@ function Plot({
           : points.map((point, index) => {
               const value = values[index]
               const picked = index === selected
+              // A cross drawn as two strokes, above the floor line.
+              const x = xAt(index)
+              const y = bottom - 5
               return value === null ? (
-                <text
-                  key={point.execution_id}
-                  className="tr-miss-glyph"
-                  x={xAt(index)}
-                  y={bottom + 4}
-                  textAnchor="middle"
-                >
-                  ×
-                </text>
+                <g key={point.execution_id} className="tr-miss-mark">
+                  <line x1={x - 3} y1={y - 3} x2={x + 3} y2={y + 3} />
+                  <line x1={x - 3} y1={y + 3} x2={x + 3} y2={y - 3} />
+                </g>
               ) : (
                 <circle
                   key={point.execution_id}
@@ -269,7 +276,8 @@ function Plot({
                 title={label}
                 style={{
                   left: xAt(index),
-                  top: value === null ? bottom : yAt(value),
+                  // Above the floor, clear of the day labels under it.
+                  top: value === null ? bottom - 11 : yAt(value),
                 }}
                 onClick={() => onPick?.(index)}
               >
@@ -308,7 +316,9 @@ export function LargeChart({
         <h2 id="tr-big" className="tr-h2">
           {metric.label}
         </h2>
-        <span className="tr-tag">{DIRECTION[metric.better]}</span>
+        <span className="tr-tag">
+          <Direction better={metric.better} />
+        </span>
         <span className="tr-faint">{metric.note}</span>
         <span className="tr-spacer" />
         <Latest metric={metric} points={points} />
@@ -357,11 +367,12 @@ export function SmallChart({
           {metric.label}
           <Maximize2 size={14} aria-hidden="true" />
         </button>
-        <span className="tr-faint tr-mono">{DIRECTION[metric.better]}</span>
         <span className="tr-spacer" />
         <Latest metric={metric} points={points} />
       </div>
-      <p className="tr-footnote">{metric.note}</p>
+      <p className="tr-footnote">
+        <Direction better={metric.better} /> · {metric.note}
+      </p>
       <Plot
         metric={metric}
         points={points}

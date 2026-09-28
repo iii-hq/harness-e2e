@@ -652,6 +652,24 @@ export function dayMarks(points: Pick<TrendPoint, 'started_at'>[]) {
   return marks
 }
 
+/** The marks that have room: none closer than `gap` to the one kept
+ *  before it. The first always stays; the last takes the place of a kept
+ *  one it would touch. */
+export function roomyMarks<T>(
+  marks: T[],
+  xOf: (mark: T) => number,
+  gap: number,
+): T[] {
+  const kept: T[] = []
+  marks.forEach((mark, index) => {
+    const last = kept.at(-1)
+    if (last === undefined || xOf(mark) - xOf(last) >= gap) kept.push(mark)
+    else if (index === marks.length - 1 && kept.length > 1)
+      kept[kept.length - 1] = mark
+  })
+  return kept
+}
+
 /** One step per execution: the centre of its slot, as a fraction. */
 export function slotX(index: number, count: number) {
   return (index + 0.5) / count

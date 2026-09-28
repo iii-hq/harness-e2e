@@ -9,7 +9,7 @@ import {
   TableRow,
   TableViewport,
 } from '@iii-dev/console-ui'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRight, X } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { isInteractiveTarget } from '@/design-system'
 import { hashForExecution, hashForTestHistory } from '@/hooks/use-hash-route'
@@ -38,9 +38,14 @@ function cellText(cell: TestCell) {
     case 'not_run':
       return 'not run'
     case 'technical_invalid':
-      return '×'
+      return (
+        <>
+          <X size={16} aria-hidden="true" />
+          <span className="ds-visually-hidden">technically invalid</span>
+        </>
+      )
     case 'no_score':
-      return '·'
+      return 'no score'
     case 'scored':
       return String(cell.score)
   }
@@ -91,7 +96,8 @@ export function ByTest({
         </h2>
         <span className="tr-faint">
           The score of each run. Blank: not in the suite then. Not run: planned,
-          no run. × technically invalid. The diamond marks a changed definition.
+          no run. A cross: technically invalid. The diamond marks a changed
+          definition.
         </span>
       </div>
       <div className="tr-grid-scroll">
