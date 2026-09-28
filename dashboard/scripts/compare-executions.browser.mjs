@@ -577,7 +577,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, a run's transcript that goes back to the comparison, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
+    'Compare browser flow passed: tick A then B, A × B with both sides, suite difference by name and digest, an exclusion with its reason brought back and restored through the URL, the stack worker by worker, screenshots paired by caption and opened full size, a run’s transcript that goes back to the comparison, Run again of B on the tests it scored lower on, a test run again with more ticked in the dialog on B parameters, a running side whose refresh fails once keeps the comparison and its open row; rename, import again, copy the id and run again from the row menu, focus back on the row, load older, delete the selection with a refusal said.',
   )
 } finally {
   await browser.close()

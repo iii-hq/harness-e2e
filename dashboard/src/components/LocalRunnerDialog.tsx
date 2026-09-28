@@ -430,19 +430,16 @@ function errorMessage(cause: unknown) {
 export async function describeStartError(
   bridge: DashboardDataBridge,
   cause: unknown,
-): Promise<{
-  error: string | null
-  running: { id: string; title: string } | null
-}> {
+): Promise<{ error: string; running: { id: string; title: string } | null }> {
   const message = errorMessage(cause)
   const id = runningExecutionId(message)
   const detail = id ? await bridge.getExecution(id).catch(() => null) : null
   if (!id || !detail) return { error: message, running: null }
   const { title } = executionTitle(buildExecutionPresentation(detail))
-  // The busy alert is the refusal, in words; the error is kept for anything
-  // else, which then shows under the alert instead of being hidden by it.
-  // Switching Where drops the refusal with the alert.
-  return { error: null, running: { id, title } }
+  return {
+    error: `"${title}" is still running. Wait for it to finish or cancel it.`,
+    running: { id, title },
+  }
 }
 
 const SUITE_SOURCE: Record<string, string> = {
@@ -733,7 +730,10 @@ export function LocalRunnerDialog({
     } catch (cause) {
       const described = await describeStartError(bridge, cause)
       setRunning(described.running)
-      setError(described.error)
+      // A busy harness is said once, by its alert; the error line is kept
+      // for anything else, which then shows under the alert instead of
+      // being hidden by it. Switching Where drops the refusal with it.
+      setError(described.running ? null : described.error)
     } finally {
       setSubmitting(false)
     }

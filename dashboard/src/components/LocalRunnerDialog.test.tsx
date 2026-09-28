@@ -331,7 +331,7 @@ describe('Run tests from scratch', () => {
     expect(runningExecutionId('Select an execution model.')).toBeNull()
   })
 
-  it('says a busy harness once, in the alert, not again as an error', async () => {
+  it('names the execution a busy harness is running', async () => {
     const message =
       'handler error: "Nightly" (plan-0123456789abcdef0123456789abcdef) is still running; wait for it to finish or cancel it.'
     const bridge = {
@@ -349,8 +349,9 @@ describe('Run tests from scratch', () => {
       id: 'plan-0123456789abcdef0123456789abcdef',
       title: 'Nightly',
     })
-    // The alert names what runs; an error beside it is something else.
-    expect(described.error).toBeNull()
+    expect(described.error).toBe(
+      '"Nightly" is still running. Wait for it to finish or cancel it.',
+    )
     const other = await describeStartError(bridge, new Error('stack missing'))
     expect(other).toEqual({ error: 'stack missing', running: null })
   })
