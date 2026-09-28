@@ -1,9 +1,19 @@
-import { Check, ChevronRight, ScrollText } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  FileCheck,
+  RotateCcw,
+  ScrollText,
+} from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import {
+  formatFull,
   formatSpan,
   formatTokens,
   formatUsd,
+  type Kpi,
+  KpiTile,
+  plural,
 } from '@/components/execution/ExecutionTotals'
 import { ScreenshotGallery } from '@/components/execution/screenshots'
 import { ScenarioChatAction } from '@/components/ScenarioChatAction'
@@ -335,6 +345,61 @@ export function runCriteria(run: unknown): RunCriterion[] {
   })
 }
 
+/** A test's figures, summed over its attempts. */
+export type RunFigures = {
+  durationMs: number | null
+  costUsd: number | null
+  inputTokens: number | null
+  outputTokens: number | null
+  tokens: number | null
+  cacheRead: number | null
+  cacheWrite: number | null
+  turns: number | null
+  functionCalls: number | null
+  functionErrors: number | null
+}
+
+/** The open row's six run cards, as the canvas captions them. */
+export function runMetricTiles(f: RunFigures): Kpi[] {
+  return [
+    {
+      label: 'Duration',
+      value: formatSpan(f.durationMs),
+      sub: 'sum of attempts',
+    },
+    {
+      label: 'Cost',
+      value: formatUsd(f.costUsd),
+      sub: f.costUsd === null ? 'not reported' : 'recorded spend',
+    },
+    {
+      label: 'Tokens',
+      value: formatTokens(f.tokens),
+      sub: `in ${formatTokens(f.inputTokens)} · out ${formatTokens(f.outputTokens)}`,
+      full:
+        f.tokens === null
+          ? undefined
+          : `${formatFull(f.tokens)} input + output`,
+    },
+    {
+      label: 'Cache',
+      value: formatTokens(f.cacheRead),
+      sub: `read · written ${formatTokens(f.cacheWrite)}`,
+      full:
+        f.cacheRead === null ? undefined : `${formatFull(f.cacheRead)} read`,
+    },
+    { label: 'Turns', value: formatFull(f.turns), sub: '' },
+    {
+      label: 'Function calls',
+      value: formatFull(f.functionCalls),
+      sub:
+        f.functionErrors === null
+          ? ''
+          : plural(f.functionErrors, 'error', 'errors'),
+    },
+  ]
+}
+
 /** Mean of the retained runs' scores, null when none was scored. */
 export function itemScore(item: ScenarioMatrixItem): number | null {
   const scores = item.runs
@@ -460,26 +525,21 @@ function ScenarioResult({
     value === null
       ? '—'
       : new Intl.NumberFormat('en-US').format(Math.round(value))
-  const runFacts: Array<[string, string]> = [
-    ['Input tokens', formatTokens(pick(metrics.inputTokens))],
-    ['Output tokens', formatTokens(pick(metrics.outputTokens))],
-    ['Cache read', formatTokens(pick(metrics.cacheReadTokens))],
-    ...(pick(metrics.cacheWriteTokens) !== null
-      ? [
-          ['Cache written', formatTokens(pick(metrics.cacheWriteTokens))] as [
-            string,
-            string,
-          ],
-        ]
-      : []),
-    ['Turns', count(turns)],
-    ['Function calls', count(pick(metrics.functionCalls))],
-    ['Function errors', count(pick(metrics.functionErrors))],
-  ]
+  const runTiles = runMetricTiles({
+    durationMs: duration,
+    costUsd: cost,
+    inputTokens: pick(metrics.inputTokens),
+    outputTokens: pick(metrics.outputTokens),
+    tokens,
+    cacheRead: pick(metrics.cacheReadTokens),
+    cacheWrite: pick(metrics.cacheWriteTokens),
+    turns,
+    functionCalls: pick(metrics.functionCalls),
+    functionErrors: pick(metrics.functionErrors),
+  })
   const attempt = Number(item.primaryRun?.attempt_number ?? 1)
-  const runMeta = runId
-    ? `run ${runId.slice(0, 8)} · attempt ${attempt} · ${formatSpan(duration)} · ${formatUsd(cost)}`
-    : ''
+  // The last retained run is the one shown: its number among them.
+  const runMeta = runId ? `run ${item.runs.length} · attempt ${attempt}` : ''
   const screenshots = expanded ? screenshotsOf(detail, item.scenarioId) : []
   const title = `${item.scenarioId}${definition ? ` · definition ${definition}` : ''}`
   return (
@@ -580,7 +640,7 @@ function ScenarioResult({
               <div className="ep-notrun">
                 <p>
                   {item.reason
-                    ? `The test didn’t start, so it has no score or evidence. ${item.reason}`
+                    ? 'The test didn’t start, so it has no score or evidence. Needs attention above has the error.'
                     : 'No run was retained for this test, so it has no score or evidence.'}
                 </p>
                 {onRerun ? (
@@ -603,7 +663,7 @@ function ScenarioResult({
                   </h3>
                   {criteria.length > 0 && lost.length === 0 ? (
                     <p className="ep-met">
-                      <Check size={14} aria-hidden="true" />
+                      <Check size={16} aria-hidden="true" />
                       Every criterion met.
                     </p>
                   ) : null}
@@ -635,21 +695,32 @@ function ScenarioResult({
                   ) : null}
                 </div>
                 <div className="ep-row-run">
-                  <h3 className="ep-h3">Run</h3>
-                  <dl className="ep-run-tiles">
-                    {runFacts.map(([label, value]) => (
-                      <div key={label} className="ep-run-tile">
-                        <dt>{label}</dt>
-                        <dd>{value}</dd>
-                      </div>
+                  <div className="ep-run-head">
+                    <h3 className="ep-h3">Run</h3>
+                    <span className="ep-run-meta" title={runId}>
+                      {runMeta}
+                    </span>
+                  </div>
+                  <ul
+                    // biome-ignore lint/a11y/noRedundantRoles: Safari drops the list role under list-style none
+                    role="list"
+                    className="ep-kpis ep-run-kpis"
+                    aria-label="Run metrics"
+                  >
+                    {runTiles.map((kpi) => (
+                      <KpiTile key={kpi.label} kpi={kpi} as="li" />
                     ))}
-                  </dl>
-                  <div className="ep-run-actions">
-                    <span className="ep-run-meta">{runMeta}</span>
+                  </ul>
+                  {/* biome-ignore lint/a11y/useSemanticElements: a labelled group of commands, not a form fieldset */}
+                  <div
+                    role="group"
+                    className="ep-run-actions"
+                    aria-label="Run actions"
+                  >
                     {primaryAssessment?.transcript ? (
                       <button
                         type="button"
-                        className="ep-act ep-act-ctl"
+                        className="ep-act ep-row-act"
                         aria-label={`View transcript for ${titleCase(item.scenarioId)}`}
                         onClick={() =>
                           onTranscript(
@@ -658,22 +729,23 @@ function ScenarioResult({
                           )
                         }
                       >
-                        <ScrollText size={14} aria-hidden="true" />
+                        <ScrollText aria-hidden="true" />
                         Transcript
                       </button>
                     ) : null}
                     {runId ? (
                       <a
-                        className="ep-act"
+                        className="ep-act ep-row-act"
                         href={hashForExecution(executionId, null, runId)}
                         aria-label={`Evidence record for ${titleCase(item.scenarioId)}`}
                       >
+                        <FileCheck aria-hidden="true" />
                         Evidence record
                       </a>
                     ) : null}
                     <ScenarioChatAction
                       label="Ask in chat"
-                      buttonClass="ep-act"
+                      buttonClass="ep-act ep-row-act"
                       detail={detail}
                       scenarioId={item.scenarioId}
                       subjectId={item.subjectId}
@@ -681,11 +753,12 @@ function ScenarioResult({
                     {onRerun ? (
                       <button
                         type="button"
-                        className={`ep-act ${item.objective.status === 'passed' ? '' : 'ep-act-ctl'}`}
+                        className="ep-act ep-row-act"
                         aria-label={`Run ${titleCase(item.scenarioId)} again`}
                         data-rerun-scenario={item.scenarioId}
                         onClick={() => onRerun(item.scenarioId)}
                       >
+                        <RotateCcw aria-hidden="true" />
                         Run again
                       </button>
                     ) : null}

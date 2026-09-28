@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   contractScent,
   matchesFilter,
+  runMetricTiles,
   ScenarioMatrix,
 } from '@/components/ScenarioMatrix'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
@@ -221,7 +222,9 @@ describe('ScenarioMatrix', () => {
     expect(html).toMatch(/data-primary-metric="Total tokens"[^>]*>300</)
     expect(html).toMatch(/data-primary-metric="Reported cost"[^>]*>\$0\.2000</)
     expect(html).toMatch(/data-primary-metric="Runtime"[^>]*>2s</)
-    expect(html).toMatch(/<dt>Function calls<\/dt><dd[^>]*>20</)
+    expect(html).toMatch(
+      /ep-kpi-label">Function calls<\/span><span class="ep-kpi-value">20</,
+    )
     expect(html).toContain('ep-results-table')
     expect(html).not.toContain(' lg:')
     const partial = executionMetricsFixture([
@@ -373,7 +376,9 @@ describe('ScenarioMatrix', () => {
     expect(html).toContain('$0.0123')
     expect(html).toContain('data-primary-metric="Runtime"')
     expect(html).toContain('data-primary-metric="Total tokens"')
-    expect(html).toContain('<dt>Function calls</dt>')
+    expect(html).toContain('aria-label="Run metrics"')
+    expect(html).toContain('aria-label="Run actions"')
+    expect(html).toContain('run 1 · attempt 1')
     expect(html).toContain('data-primary-metric="Reported cost"')
     expect(html).not.toContain('data-primary-metric="Hard gates"')
     expect(html).not.toContain('data-step-metric="Findings"')
@@ -611,4 +616,53 @@ it('shows every retained outcome in aggregate provenance', () => {
       { ...contracts[0], objectiveOutcome: 'failed' },
     ]),
   ).toContain('passed / failed')
+})
+
+describe('runMetricTiles', () => {
+  it('builds the six run cards with the canvas captions', () => {
+    const tiles = runMetricTiles({
+      durationMs: 220_000,
+      costUsd: 0.0048,
+      inputTokens: 5981,
+      outputTokens: 12681,
+      tokens: 18662,
+      cacheRead: 161024,
+      cacheWrite: null,
+      turns: 12,
+      functionCalls: 14,
+      functionErrors: 1,
+    })
+    expect(tiles.map(({ label, value, sub }) => [label, value, sub])).toEqual([
+      ['Duration', '3m 40s', 'sum of attempts'],
+      ['Cost', '$0.0048', 'recorded spend'],
+      ['Tokens', '18.7K', 'in 6K · out 12.7K'],
+      ['Cache', '161K', 'read · written —'],
+      ['Turns', '12', ''],
+      ['Function calls', '14', '1 error'],
+    ])
+    expect(tiles[2].full).toBe('18,662 input + output')
+  })
+
+  it('says what was not reported', () => {
+    const tiles = runMetricTiles({
+      durationMs: null,
+      costUsd: null,
+      inputTokens: null,
+      outputTokens: null,
+      tokens: null,
+      cacheRead: null,
+      cacheWrite: null,
+      turns: null,
+      functionCalls: null,
+      functionErrors: null,
+    })
+    expect(tiles.map(({ value, sub }) => [value, sub])).toEqual([
+      ['—', 'sum of attempts'],
+      ['—', 'not reported'],
+      ['—', 'in — · out —'],
+      ['—', 'read · written —'],
+      ['—', ''],
+      ['—', ''],
+    ])
+  })
 })

@@ -258,8 +258,7 @@ try {
   const errors = []
   page.on('pageerror', (error) => errors.push(error.message))
 
-  // Every scenario can run again from its open row; the one that did not
-  // pass says so with the prominent button.
+  // Every scenario can run again from its open row.
   await page.goto(`${server.url}#/ext/harness-e2e/execution/${localId}`)
   const openRow = (id) =>
     page.locator(`[data-scenario-row*=":${id}:"] .ep-row-toggle`).click()
@@ -271,14 +270,13 @@ try {
     exact: true,
   })
   await timerAgain.waitFor()
-  assert.ok((await timerAgain.getAttribute('class')).includes('ep-act-ctl'))
-  assert.ok(
-    (
-      await page
-        .getByRole('button', { name: 'Run Minimal Path again', exact: true })
-        .getAttribute('class')
-    ).includes('ep-act-ctl') === false,
-  )
+  // The canvas draws Run again as one of the run's bordered actions, the
+  // same whether the test passed or not.
+  for (const again of [
+    timerAgain,
+    page.getByRole('button', { name: 'Run Minimal Path again', exact: true }),
+  ])
+    assert.ok((await again.getAttribute('class')).includes('ep-row-act'))
 
   // A scenario of a sequential group says its group runs with it.
   await page
@@ -395,7 +393,7 @@ try {
   assert.equal(reruns[1].execution_id, importedId)
   assert.deepEqual(errors, [])
   console.log(
-    'Rerun scenario browser flow passed: every row offers it, prominent where it failed, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, the job of an imported execution re-run on GitHub.',
+    'Rerun scenario browser flow passed: every row offers it among the run’s bordered actions, group warned, busy runner named, running followed with the scenario running and the others kept, last attempt counted with the previous one listed and linked, the job of an imported execution re-run on GitHub.',
   )
 } finally {
   await browser.close()
