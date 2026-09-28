@@ -90,19 +90,23 @@ pub(crate) struct RegistryRefusal {
     pub message: String,
 }
 
-static TEMPLATES: Mutex<Option<(Instant, StackTemplates)>> = Mutex::new(None);
+/// The templates and until when they are kept. Held while they are read, so
+/// the Consoles that open New stack at once wait for one read.
+static TEMPLATES: tokio::sync::Mutex<Option<(Instant, StackTemplates)>> =
+    tokio::sync::Mutex::const_new(None);
 /// Each worker's resolution and until when it is kept.
 static RESOLVED: Mutex<BTreeMap<String, (Instant, WorkerResolution)>> = Mutex::new(BTreeMap::new());
 
 /// The projects of iii-hq/templates as `main` has them, kept ten minutes.
 pub(crate) async fn templates() -> Result<StackTemplates> {
-    if let Some((at, kept)) = TEMPLATES.lock().unwrap().as_ref() {
-        if at.elapsed() < KEEP_FOR {
-            return Ok(kept.clone());
+    let mut kept = TEMPLATES.lock().await;
+    if let Some((until, read)) = kept.as_ref() {
+        if *until > Instant::now() {
+            return Ok(read.clone());
         }
     }
     let read = read_templates().await?;
-    *TEMPLATES.lock().unwrap() = Some((Instant::now(), read.clone()));
+    *kept = Some((Instant::now() + KEEP_FOR, read.clone()));
     Ok(read)
 }
 
@@ -239,7 +243,12 @@ fn resolution(worker: &str, status: u16, body: &Value) -> Result<WorkerResolutio
 
 async fn read_templates() -> Result<StackTemplates> {
     let client = client()?;
-    let revision = main_revision(&client).await?;
+    let revision = main_revision(
+        &client,
+        &format!("https://api.github.com/repos/{TEMPLATES_REPOSITORY}/commits/{TEMPLATES_REF}"),
+        github_token(),
+    )
+    .await?;
     let raw = |path: &str| {
         format!("https://raw.githubusercontent.com/{TEMPLATES_REPOSITORY}/{revision}/iii/{path}")
     };
@@ -277,22 +286,32 @@ async fn read_templates() -> Result<StackTemplates> {
 }
 
 /// The commit `main` of iii-hq/templates is at.
-async fn main_revision(client: &reqwest::Client) -> Result<String> {
-    let url =
-        format!("https://api.github.com/repos/{TEMPLATES_REPOSITORY}/commits/{TEMPLATES_REF}");
-    let mut request = client
-        .get(&url)
-        .header("accept", "application/vnd.github+json");
-    let token = ["GITHUB_TOKEN", "GH_TOKEN"]
-        .into_iter()
-        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()));
-    if let Some(token) = token {
-        request = request.bearer_auth(token);
+/// A token only raises GitHub's rate limit; one it refuses (401) is dropped
+/// and the public repository asked again without it.
+async fn main_revision(
+    client: &reqwest::Client,
+    url: &str,
+    token: Option<String>,
+) -> Result<String> {
+    let ask = |token: Option<&str>| {
+        let mut request = client
+            .get(url)
+            .header("accept", "application/vnd.github+json");
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        async move {
+            request
+                .send()
+                .await
+                .map_err(|error| anyhow!("GitHub did not answer: {}", error.without_url()))
+        }
+    };
+    let mut response = ask(token.as_deref()).await?;
+    if response.status() == reqwest::StatusCode::UNAUTHORIZED && token.is_some() {
+        tracing::warn!("GitHub refused GITHUB_TOKEN/GH_TOKEN; reading iii-hq/templates without it");
+        response = ask(None).await?;
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| anyhow!("GitHub did not answer: {}", error.without_url()))?;
     let status = response.status();
     let body = read_capped(response, "GitHub's answer").await?;
     let body = serde_json::from_slice::<Value>(&body).unwrap_or(Value::Null);
@@ -306,6 +325,12 @@ async fn main_revision(client: &reqwest::Client) -> Result<String> {
         .as_str()
         .map(str::to_owned)
         .with_context(|| format!("GitHub's answer for {url} has no sha."))
+}
+
+fn github_token() -> Option<String> {
+    ["GITHUB_TOKEN", "GH_TOKEN"]
+        .into_iter()
+        .find_map(|name| std::env::var(name).ok().filter(|token| !token.is_empty()))
 }
 
 /// A file's text, or `None` when it does not exist.
@@ -683,6 +708,50 @@ mod tests {
                 .to_string(),
             "The answer is past 1 MB; it was not read."
         );
+    }
+
+    #[tokio::test]
+    async fn a_token_github_refuses_is_dropped_and_asked_again_without() {
+        use std::sync::Arc;
+        let asked = Arc::new(Mutex::new(Vec::new()));
+        let app = axum::Router::new().route(
+            "/commits/main",
+            axum::routing::get({
+                let asked = asked.clone();
+                move |headers: axum::http::HeaderMap| {
+                    let token = headers.contains_key("authorization");
+                    asked.lock().unwrap().push(token);
+                    async move {
+                        if token {
+                            (
+                                axum::http::StatusCode::UNAUTHORIZED,
+                                axum::Json(json!({"message": "Bad credentials"})),
+                            )
+                        } else {
+                            (
+                                axum::http::StatusCode::OK,
+                                axum::Json(json!({"sha": "4077e670"})),
+                            )
+                        }
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/commits/main", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = client().unwrap();
+        assert_eq!(
+            main_revision(&client, &url, Some("stale".into()))
+                .await
+                .unwrap(),
+            "4077e670"
+        );
+        assert_eq!(*asked.lock().unwrap(), [true, false]);
+        // Without a token, once.
+        asked.lock().unwrap().clear();
+        main_revision(&client, &url, None).await.unwrap();
+        assert_eq!(*asked.lock().unwrap(), [false]);
     }
 
     #[test]
