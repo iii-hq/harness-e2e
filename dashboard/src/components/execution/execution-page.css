@@ -2063,7 +2063,12 @@ tr.ep-detail-row:hover {
   font-size: var(--text-xs);
 }
 
-/* The row's result word: 12 px Inter, tinted by its tone (StatusLabel). */
+/* The row's result word: 12 px Inter in ink (the cell is muted), tinted
+   by its tone where StatusLabel paints one: alert strong, ghost faint. */
+.ep-result-row .ep-cell[data-label="Result"] {
+  color: var(--color-ink, var(--text));
+}
+
 .ep-result-row .ds-status-label {
   font-family: var(--font-sans);
   font-size: 0.75rem;
