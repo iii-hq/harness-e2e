@@ -51,7 +51,7 @@ const pinned = {
   provider: 'deepseek',
   model: 'deepseek-flash',
   profile: null,
-  stack: 'default',
+  stack: 'any',
 }
 // trends-get answers that fail before one succeeds again.
 let failing = 0
@@ -109,7 +109,7 @@ try {
   const summary = page.locator('[data-trend-summary]')
   const hash = () => page.evaluate(() => location.hash)
 
-  // The series with the latest execution, on its latest execution's stack.
+  // The series with the latest execution, on every stack it ran on.
   // A first load that fails says so on the host's StatusPanel and retries.
   failing = 1
   await page.goto(`${server.url}#/ext/harness-e2e/trends`)
@@ -126,7 +126,7 @@ try {
   assert.deepEqual(requests('trends-get')[0], {})
   await summary
     .getByText(
-      '11 executions · 9 with counted runs, 2 without · 81 counted runs',
+      '14 executions · 11 with counted runs, 3 without · 99 counted runs',
       { exact: false },
     )
     .waitFor()
@@ -135,7 +135,7 @@ try {
     await series.innerText(),
     /Regression[\s\S]*deepseek\/deepseek-flash[\s\S]*none/,
   )
-  assert.match(await page.locator('[data-stack-picker]').innerText(), /default/)
+  assert.match(await page.locator('[data-stack-picker]').innerText(), /any/)
   await page
     .getByText('4 of these ran before the Console recorded stacks', {
       exact: false,
@@ -204,7 +204,7 @@ try {
   // The default view is pinned to what it showed, in the hash too.
   assert.match(
     await hash(),
-    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=default$/,
+    /\/trends\?suite=regression&provider=deepseek&model=deepseek-flash&profile=&stack=any$/,
   )
 
   // A run lands, and another series has the newest execution: the trend
@@ -217,14 +217,14 @@ try {
       for (const handler of window.__changeHandlers ?? []) handler({})
     })
   await change()
-  await summary.getByText('12 executions ·', { exact: false }).waitFor()
+  await summary.getByText('15 executions ·', { exact: false }).waitFor()
   assert.deepEqual(requests('trends-get').at(asked), pinned)
   await latest.getByRole('button', { name: 'Close' }).waitFor()
   // A reload that fails keeps the trend and says so over it.
   failing = 1
   await change()
   await page.getByText('Couldn’t reload the trend').waitFor()
-  await summary.getByText('12 executions ·', { exact: false }).waitFor()
+  await summary.getByText('15 executions ·', { exact: false }).waitFor()
   await page.getByRole('button', { name: 'Retry' }).click()
   await page
     .getByText('Couldn’t reload the trend')
@@ -242,13 +242,13 @@ try {
     .waitFor()
   assert.equal(await page.locator('[data-trend-mini="score"]').count(), 1)
 
-  // Every stack of the series, kept in the hash.
+  // One stack of the series, kept in the hash.
   await page.locator('[data-stack-picker]').click()
-  await page.getByRole('menuitemradio', { name: /^any/ }).click()
-  await summary.getByText('14 executions ·', { exact: false }).waitFor()
-  assert.equal(requests('trends-get').at(-1).stack, 'any')
+  await page.getByRole('menuitemradio', { name: /^default/ }).click()
+  await summary.getByText('11 executions ·', { exact: false }).waitFor()
+  assert.equal(requests('trends-get').at(-1).stack, 'default')
   assert.equal(requests('trends-get').at(-1).suite, 'regression')
-  assert.match(await hash(), /\/trends\?suite=regression&.*stack=any$/)
+  assert.match(await hash(), /\/trends\?suite=regression&.*stack=default$/)
   const here = await hash()
 
   // Compare with the previous counted execution, and back to this view.
@@ -261,7 +261,7 @@ try {
   await back.waitFor()
   assert.equal(await back.getAttribute('href'), here)
   await back.click()
-  await summary.getByText('14 executions ·', { exact: false }).waitFor()
+  await summary.getByText('11 executions ·', { exact: false }).waitFor()
   assert.equal(await hash(), here)
 
   // Another series: two executions, the stack not recorded, two planned
@@ -279,7 +279,7 @@ try {
   })
   const stack = page.locator('[data-stack-picker]')
   assert.equal(await stack.isDisabled(), true)
-  assert.match(await stack.innerText(), /not recorded/)
+  assert.match(await stack.innerText(), /any/)
   assert.equal(
     await page.locator('[data-by-test] [data-kind="not_run"]').count(),
     2,
@@ -287,9 +287,9 @@ try {
 
   // The Trends tab starts over on the default view, the hash with it.
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
-  await summary.getByText('11 executions ·', { exact: false }).waitFor()
+  await summary.getByText('14 executions ·', { exact: false }).waitFor()
   assert.match(await series.innerText(), /Regression/)
-  assert.match(await hash(), /\/trends\?suite=regression&.*stack=default$/)
+  assert.match(await hash(), /\/trends\?suite=regression&.*stack=any$/)
 
   // A link to a stack the series never ran on: the worker applies its
   // default, and the page says so.
@@ -299,21 +299,21 @@ try {
   await page
     .locator('[data-stack-notice]')
     .getByText(
-      'No execution of this series ran on lean, so this shows default',
+      'No execution of this series ran on lean, so this shows every stack',
       {
         exact: false,
       },
     )
     .waitFor()
   assert.equal(requests('trends-get').at(-1).stack, 'lean')
-  assert.match(await stack.innerText(), /default/)
-  assert.match(await hash(), /stack=default$/)
+  assert.match(await stack.innerText(), /any/)
+  assert.match(await hash(), /stack=any$/)
 
   // This harness: nothing changed between its executions, no diamond.
   await series.click()
   await page.getByRole('menuitemradio', { name: /^2 tests, unsaved/ }).click()
   await summary.getByText('5 executions ·', { exact: false }).waitFor()
-  assert.match(await stack.innerText(), /this harness/)
+  assert.match(await stack.innerText(), /any/)
   assert.equal(await page.locator('.tr-diamond').count(), 0)
 
   // Nothing counted: say why, open the execution or run it again.
@@ -351,7 +351,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on its stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, every stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, the empty state’s Run again, narrow pane.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a series with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the Harness’s tags, the empty state’s Run again, narrow pane.',
   )
 } finally {
   await browser.close()

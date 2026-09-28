@@ -24,8 +24,8 @@ export type TrendsRequest = {
   model?: string
   /** null or '' = no profile. */
   profile?: string | null
-  /** A stack name, 'not_recorded' or 'any'; default: the latest
-   *  execution's stack. */
+  /** A stack name, 'not_recorded' or 'any'; default (and for a stack the
+   *  series never ran on): 'any'. */
   stack?: string
 }
 
@@ -105,7 +105,8 @@ export type TrendsResponse = {
   series: TrendSeries[]
   selected: TrendSeriesKey | null
   stack: string
-  /** Of the selected series, then 'not_recorded' (if any) and 'any'. */
+  /** Every stack the selected series ran on, latest first, then
+   *  'not_recorded' (if any) and 'any'. */
   stacks: Array<{ name: string; executions: number }>
   /** Oldest first. */
   points: TrendPoint[]

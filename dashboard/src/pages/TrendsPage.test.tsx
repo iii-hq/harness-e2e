@@ -81,9 +81,15 @@ describe('trends page state', () => {
     expect(stackNotice({ stack: 'default' }, answer)).toBeNull()
     expect(stackNotice({}, answer)).toBeNull()
     expect(stackNotice({ stack: 'lean' }, answer)).toEqual({
-      text: 'No execution of this series ran on lean, so this shows default, the stack of its latest execution.',
+      text: 'No execution of this series ran on lean, so this shows default.',
       anyStack: false,
     })
+    expect(stackNotice({ stack: 'lean' }, { ...answer, stack: 'any' })).toEqual(
+      {
+        text: 'No execution of this series ran on lean, so this shows every stack.',
+        anyStack: false,
+      },
+    )
     expect(stackChoosable(answer)).toBe(false)
     const unknown = { ...answer, stack: 'lean' }
     expect(stackNotice({ stack: 'lean' }, unknown)).toEqual({

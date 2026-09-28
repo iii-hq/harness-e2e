@@ -16,9 +16,10 @@ const key = ({ suite, provider, model, profile }) => ({
 })
 
 /** trends-get as the worker answers it: the request's series, else the one
- *  with the latest execution; the stack filter when the series has it, else
- *  (none asked, or one it never ran on) the latest execution's stack, the
- *  one applied always said in `stack`. */
+ *  with the latest execution; every stack the series ran on, latest first,
+ *  then not_recorded and any; the stack filter when the series lists it,
+ *  else (none asked, or one it never ran on) any, the one applied always
+ *  said in `stack`. */
 export function trendsAnswer(request = {}) {
   const chosen =
     fixture.series.find(
@@ -29,9 +30,9 @@ export function trendsAnswer(request = {}) {
         (series.profile || null) === (request.profile || null),
     ) ?? fixture.series[0]
   const points = chosen.points
-  const names = [...new Set(points.map((point) => point.stack.name))].filter(
-    Boolean,
-  )
+  const names = [
+    ...new Set(points.map((point) => point.stack.name).reverse()),
+  ].filter(Boolean)
   const stacks = names.map((name) => ({
     name,
     executions: points.filter((point) => point.stack.name === name).length,
@@ -41,7 +42,7 @@ export function trendsAnswer(request = {}) {
   stacks.push({ name: 'any', executions: points.length })
   const stack = stacks.some((item) => item.name === request.stack)
     ? request.stack
-    : stackOf(points.at(-1))
+    : 'any'
   return {
     series: fixture.series.map((item) => item.series),
     selected: key(chosen.series),

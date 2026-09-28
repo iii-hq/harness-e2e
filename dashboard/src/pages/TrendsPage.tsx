@@ -128,7 +128,7 @@ export function stackNotice(asked: TrendsRequest, data: TrendsResponse) {
     }
   if (asked.stack && asked.stack !== data.stack)
     return {
-      text: `No execution of this series ran on ${stackOptionText(asked.stack)}, so this shows ${stackOptionText(data.stack)}, the stack of its latest execution.`,
+      text: `No execution of this series ran on ${stackOptionText(asked.stack)}, so this shows ${data.stack === ANY_STACK ? 'every stack' : stackOptionText(data.stack)}.`,
       anyStack: false,
     }
   return null
