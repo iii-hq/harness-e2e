@@ -24,6 +24,8 @@ describe('live dashboard transport', () => {
         stack_create: 'stack-create',
         stack_update: 'stack-update',
         stack_delete: 'stack-delete',
+        stack_templates_list: 'stack-templates-list',
+        worker_resolve: 'worker-resolve',
         credentials_list: 'credentials-list',
         credential_set: 'credential-set',
         credential_delete: 'credential-delete',
@@ -58,6 +60,17 @@ describe('live dashboard transport', () => {
     expect(trigger).toHaveBeenCalledWith('stack-create', {
       from: 'default',
       label: '',
+    })
+    await live.createStackFromYaml('Built', 'containers: {}\n')
+    expect(trigger).toHaveBeenCalledWith('stack-create', {
+      label: 'Built',
+      yaml: 'containers: {}\n',
+    })
+    await live.listStackTemplates()
+    expect(trigger).toHaveBeenCalledWith('stack-templates-list', {})
+    await live.resolveWorker('harness')
+    expect(trigger).toHaveBeenCalledWith('worker-resolve', {
+      worker: 'harness',
     })
     await live.updateStack('stack-1', { yaml: 'containers: {}\n' })
     expect(trigger).toHaveBeenCalledWith('stack-update', {
