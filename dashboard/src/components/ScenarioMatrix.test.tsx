@@ -236,6 +236,9 @@ describe('ScenarioMatrix', () => {
     )
     expect(partialHtml).toMatch(/data-primary-metric="Total tokens"[^>]*>100</)
     expect(partialHtml).toContain('Partial · 1/2 runs reported')
+    expect(partialHtml).toMatch(
+      /ep-kpi-label">Tokens<\/span><span class="ep-kpi-value">100<\/span><span class="ep-kpi-sub"[^>]*>Partial · 1\/2 runs reported</,
+    )
   })
 
   it('retains evidence and transcript access for every run across subjects', () => {
@@ -697,7 +700,7 @@ describe('runMetricTiles', () => {
         functionCalls: 30,
         functionErrors: 0,
       },
-      3,
+      { runs: 3 },
     )
     expect(tiles.map(({ label, sub }) => [label, sub])).toEqual([
       ['Duration', 'sum of runs'],
@@ -707,6 +710,32 @@ describe('runMetricTiles', () => {
       ['Turns', 'sum of runs'],
       ['Function calls', '0 errors'],
     ])
+  })
+
+  it('says a figure only part of the runs reported, and what is not available', () => {
+    const tiles = runMetricTiles(
+      {
+        durationMs: 1_000,
+        costUsd: null,
+        inputTokens: null,
+        outputTokens: null,
+        tokens: 100,
+        cacheRead: null,
+        cacheWrite: null,
+        turns: null,
+        functionCalls: null,
+        functionErrors: null,
+      },
+      {
+        partial: { tokens: 'Partial · 1/2 runs reported' },
+        available: false,
+      },
+    )
+    expect(tiles[2]).toMatchObject({
+      sub: 'Partial · 1/2 runs reported',
+      full: 'in — · out — · 100 input + output',
+    })
+    expect(tiles[1].sub).toBe('not available')
   })
 
   it('says what was not reported', () => {

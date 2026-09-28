@@ -366,11 +366,40 @@ export type RunFigures = {
   functionErrors: number | null
 }
 
+type TileKey =
+  | 'durationMs'
+  | 'costUsd'
+  | 'tokens'
+  | 'cacheRead'
+  | 'turns'
+  | 'functionCalls'
+const TILE_KEYS: TileKey[] = [
+  'durationMs',
+  'costUsd',
+  'tokens',
+  'cacheRead',
+  'turns',
+  'functionCalls',
+]
+
 /** The open row's six run cards, as the canvas captions them; over
- *  several retained runs each figure is their sum and says so. */
-export function runMetricTiles(f: RunFigures, runs = 1): Kpi[] {
+ *  several retained runs each figure is their sum and says so. A figure
+ *  only part of the runs reported says that instead, its caption kept on
+ *  hover; with no report at all, what is missing is not available. */
+export function runMetricTiles(
+  f: RunFigures,
+  {
+    runs = 1,
+    partial = {},
+    available = true,
+  }: {
+    runs?: number
+    partial?: Partial<Record<TileKey, string | undefined>>
+    available?: boolean
+  } = {},
+): Kpi[] {
   const summed = runs > 1
-  return [
+  const tiles: Kpi[] = [
     {
       label: 'Duration',
       value: formatSpan(f.durationMs),
@@ -381,7 +410,9 @@ export function runMetricTiles(f: RunFigures, runs = 1): Kpi[] {
       value: formatUsd(f.costUsd),
       sub:
         f.costUsd === null
-          ? 'not reported'
+          ? available
+            ? 'not reported'
+            : 'not available'
           : summed
             ? 'sum of runs'
             : 'recorded spend',
@@ -416,6 +447,12 @@ export function runMetricTiles(f: RunFigures, runs = 1): Kpi[] {
           : plural(f.functionErrors, 'error', 'errors'),
     },
   ]
+  return tiles.map((tile, index) => {
+    const note = partial[TILE_KEYS[index]]
+    if (!note) return tile
+    const full = [tile.sub, tile.full].filter(Boolean).join(' · ')
+    return { ...tile, sub: note, full: full || undefined }
+  })
 }
 
 /** Mean of the retained runs' scores, null when none was scored. */
@@ -581,7 +618,17 @@ function ScenarioResult({
       functionCalls: pick(metrics.functionCalls),
       functionErrors: pick(metrics.functionErrors),
     },
-    item.runs.length,
+    {
+      runs: item.runs.length,
+      partial: {
+        durationMs: partialNote(metrics.durationMs),
+        costUsd: partialNote(metrics.cost),
+        tokens: partialNote(metrics.subjectTokens),
+        cacheRead: partialNote(metrics.cacheReadTokens),
+        functionCalls: partialNote(metrics.functionCalls),
+      },
+      available: metrics.includedScenarios > 0,
+    },
   )
   const attempt = Number(item.primaryRun?.attempt_number ?? 1)
   // The cards sum every retained run; the criteria and the actions are the
