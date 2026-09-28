@@ -75,7 +75,9 @@ pub(crate) struct VersionCompareResponse {
 
 /// Comparisons GitHub answered, for the worker's lifetime: tags and commits
 /// do not move.
-static COMPARISONS: OnceLock<Mutex<HashMap<(String, String, String), u64>>> = OnceLock::new();
+static COMPARISONS: OnceLock<Mutex<Comparisons>> = OnceLock::new();
+/// Commits between two refs, by repository, base and head.
+type Comparisons = HashMap<(String, String, String), u64>;
 
 /// How the worker calls the GitHub CLI; tests point it at a stand-in.
 #[derive(Debug, Clone)]

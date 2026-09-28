@@ -1334,13 +1334,5 @@ mod response_contract_tests {
         )
         .unwrap();
         assert_eq!(compare.head, "@3f2a9c1*");
-        assert_eq!(
-            serde_json::to_value(crate::plans::store::VersionCompareResponse {
-                url: "https://github.com/iii-hq/workers/compare/harness/v1.8.31...3f2a9c1".into(),
-                total_commits: None,
-            })
-            .unwrap(),
-            json!({"url": "https://github.com/iii-hq/workers/compare/harness/v1.8.31...3f2a9c1", "total_commits": null})
-        );
     }
 }

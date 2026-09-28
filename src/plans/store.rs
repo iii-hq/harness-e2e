@@ -33,8 +33,7 @@ mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
 pub(crate) use github::{
-    GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest,
-    VersionCompareRequest, VersionCompareResponse,
+    GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest, VersionCompareRequest,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3671,7 +3670,7 @@ pub(crate) mod tests {
             base: "1.0.0".into(),
             head: "@4e5d6c7*".into(),
         };
-        let expected = VersionCompareResponse {
+        let expected = github::VersionCompareResponse {
             url: "https://github.com/iii-hq/workers/compare/compare-probe/v1.0.0...4e5d6c7".into(),
             total_commits: Some(7),
         };
@@ -3692,10 +3691,11 @@ pub(crate) mod tests {
             ..request
         };
         let answer = failing.version_compare(&missing).await.unwrap();
-        assert_eq!(answer.total_commits, None);
-        assert!(answer
-            .url
-            .ends_with("compare-probe/v1.0.0...compare-probe/v1.0.1"));
+        assert_eq!(
+            serde_json::to_value(answer).unwrap(),
+            json!({"url": "https://github.com/iii-hq/workers/compare/compare-probe/v1.0.0...compare-probe/v1.0.1",
+                "total_commits": null})
+        );
         let absent = manager_with_gh(
             &data,
             runner,
