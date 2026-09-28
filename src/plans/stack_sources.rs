@@ -333,7 +333,8 @@ fn client() -> Result<reqwest::Client> {
         .build()?)
 }
 
-/// The template ids `iii/template.yaml` lists.
+/// The template ids `iii/template.yaml` lists; one that is not a folder
+/// name a stack could write (a worker's name) is left out, and logged.
 fn template_ids(index: &str) -> Result<Vec<String>> {
     let index: serde_yaml::Value = serde_yaml::from_str(index)
         .map_err(|error| anyhow!("iii/template.yaml is not YAML: {error}"))?;
@@ -343,6 +344,16 @@ fn template_ids(index: &str) -> Result<Vec<String>> {
     Ok(listed
         .iter()
         .filter_map(serde_yaml::Value::as_str)
+        .filter(|id| {
+            let valid = worker_name(id);
+            if !valid {
+                tracing::warn!(
+                    id,
+                    "iii/template.yaml lists an id that is not a template folder name"
+                );
+            }
+            valid
+        })
         .map(str::to_owned)
         .collect())
 }
@@ -446,6 +457,11 @@ mod tests {
             ]
         );
         assert!(template_ids("shared_files: []\n").is_err());
+        // Only names a URL path and a stack's `template:` can hold.
+        assert_eq!(
+            template_ids("templates: [harness, ../evil, Bad, a/b, \"\", 7, ok-2]\n").unwrap(),
+            ["harness", "ok-2"]
+        );
     }
 
     #[test]
