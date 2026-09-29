@@ -1,6 +1,11 @@
 import importlib.util
+import io
+import os
+import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT = Path(__file__).parents[2] / "scripts" / "verify_stack.py"
@@ -98,6 +103,21 @@ class RunTests(unittest.TestCase):
         self.assertTrue(body.startswith(verify_stack.MARKER))
         self.assertIn("1/2 passed", body)
         self.assertIn("failed: shell_coder_sandbox", body)
+
+    def test_a_registry_outage_still_leaves_a_one_line_verdict(self):
+        """A multi-line error must neither crash the tool nor break GITHUB_OUTPUT."""
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "output"
+            argv = ["verify_stack.py", "--pins", '["ade"]', "--commit", COMMIT, "--exit-zero"]
+            outage = RuntimeError("https://api.workers.iii.dev/resolve did not answer:\nHTTP 503")
+            with patch.object(sys, "argv", argv), patch.dict(os.environ, {"GITHUB_OUTPUT": str(output)}), \
+                    patch.object(verify_stack, "graph_workers", side_effect=outage), \
+                    patch("sys.stdout", new=io.StringIO()):
+                self.assertEqual(verify_stack.main(), 0)
+            lines = output.read_text().splitlines()
+        self.assertEqual(lines[0], "status=not_measured")
+        self.assertTrue(lines[1].startswith("summary=") and "HTTP 503" in lines[1])
+        self.assertEqual(len(lines), 3)
 
 
 if __name__ == "__main__":

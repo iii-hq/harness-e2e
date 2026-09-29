@@ -14,7 +14,8 @@ artifacts), waits for the run and reads `execution-summary.json`:
     skipped       nothing the caller changed is part of the harness graph
 
 A green workflow proves nothing here: the campaign is advisory, so the
-verdict is read from the summary. Only `passed` and `skipped` exit 0.
+verdict is read from the summary. Only `passed` and `skipped` exit 0, unless
+`--exit-zero` leaves the decision to the caller, which reads `status`.
 """
 
 from __future__ import annotations
@@ -88,6 +89,12 @@ def build_stack(pins: list[str], commit: str, iii: str, graph: set[str]) -> dict
     return stack
 
 
+def pinned(stack: dict[str, Any]) -> list[str]:
+    """The containers the stack builds from a commit."""
+    return sorted(name for name, container in stack["containers"].items()
+                  if isinstance(container, dict) and "commit" in container)
+
+
 def run_id_of(output: str) -> int:
     match = RUN_URL.search(output)
     if not match:
@@ -157,7 +164,7 @@ def emit(result: dict[str, Any], body: str, run_url: str) -> None:
         summary += f" · not measured: {'; '.join(result['not_measured'])}"
     if result.get("reason"):
         summary += f" · {result['reason']}"
-    fields = {"status": result["status"], "summary": summary, "run_url": run_url}
+    fields = {"status": result["status"], "summary": " ".join(summary.split()), "run_url": run_url}
     if path := os.environ.get("GITHUB_OUTPUT"):
         with open(path, "a") as out:
             out.write("".join(f"{key}={value}\n" for key, value in fields.items()))
@@ -176,14 +183,17 @@ def measure(stack: dict[str, Any], suite: str, model: str, token: str | None) ->
     run_id = run_id_of(started)
     run_url = f"https://github.com/{EXECUTOR_REPOSITORY}/actions/runs/{run_id}"
 
-    # A newer push cancels this job; the run it started should not go on.
-    def cancel(*_: Any) -> None:
+    def cancel() -> None:
         subprocess.run(["gh", "run", "cancel", str(run_id), "-R", EXECUTOR_REPOSITORY],
                        capture_output=True, env={**os.environ, **({"GH_TOKEN": token} if token else {})})
+
+    # A newer push cancels the calling job; the run it started should not go on.
+    def cancelled(*_: Any) -> None:
+        cancel()
         sys.exit(143)
 
-    signal.signal(signal.SIGTERM, cancel)
-    signal.signal(signal.SIGINT, cancel)
+    signal.signal(signal.SIGTERM, cancelled)
+    signal.signal(signal.SIGINT, cancelled)
 
     deadline = time.monotonic() + DEADLINE_SECONDS
     while True:
@@ -192,6 +202,7 @@ def measure(stack: dict[str, Any], suite: str, model: str, token: str | None) ->
         if run["status"] == "completed":
             break
         if time.monotonic() > deadline:
+            cancel()
             return {"status": "not_measured", "passed": 0, "planned": 0, "failed": [], "not_measured": [],
                     "reason": f"the run did not finish in {DEADLINE_SECONDS // 60} minutes"}, run_url
         time.sleep(POLL_SECONDS)
@@ -215,6 +226,7 @@ def main() -> int:
     parser.add_argument("--suite", default="pr")
     parser.add_argument("--model", default="deepseek/deepseek-flash")
     parser.add_argument("--comment-pr", default="", metavar="OWNER/REPO#N")
+    parser.add_argument("--exit-zero", action="store_true", help="exit 0 whatever the verdict")
     args = parser.parse_args()
 
     pins = json.loads(args.pins)
@@ -223,19 +235,22 @@ def main() -> int:
     if not pins and not args.iii:
         parser.error("nothing to verify: give --pins or --iii")
     token = os.environ.get("GH_TOKEN")
-    label = " + ".join(filter(None, [f"{', '.join(pins)} @ {args.commit[:7]}" if pins else "", f"iii {args.iii}" if args.iii else ""]))
-
-    run_url = ""
+    run_url, stack = "", None
     try:
         stack = build_stack(pins, args.commit, args.iii, graph_workers() if pins else set())
         if stack is None:
             result = {"status": "skipped", "passed": 0, "planned": 0, "failed": [], "not_measured": []}
         else:
             result, run_url = measure(stack, args.suite, args.model, token)
-    except VerifyError as error:
+    # Whatever went wrong (the Registry, gh, the summary), the caller still
+    # needs a verdict and the PR its comment.
+    except Exception as error:  # noqa: BLE001
         result = {"status": "not_measured", "passed": 0, "planned": 0, "failed": [], "not_measured": [],
-                  "reason": str(error)}
+                  "reason": f"{type(error).__name__}: {error}"}
 
+    built = pinned(stack) if stack else pins
+    label = " + ".join(filter(None, [f"{', '.join(built)} @ {args.commit[:7]}" if built else "",
+                                     f"iii {args.iii}" if args.iii else ""]))
     body = describe(result, label, run_url)
     emit(result, body, run_url)
     if args.comment_pr and result["status"] != "skipped":
@@ -243,7 +258,7 @@ def main() -> int:
             comment(args.comment_pr, body, os.environ.get("COMMENT_GH_TOKEN") or token)
         except VerifyError as error:
             print(f"::warning::could not update the PR comment: {error}", file=sys.stderr)
-    return 0 if result["status"] in ("passed", "skipped") else 1
+    return 0 if args.exit_zero or result["status"] in ("passed", "skipped") else 1
 
 
 if __name__ == "__main__":

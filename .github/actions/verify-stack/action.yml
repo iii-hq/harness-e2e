@@ -67,7 +67,9 @@ runs:
         COMMENT_PR: ${{ inputs.comment-pr }}
       # The verdict is the `status` output, not this step's exit code: the
       # caller's next steps (a Slack reply) need the outputs whatever it was.
+      # `exec` makes the script the step's process, so the signal a cancelled
+      # job sends reaches it and it cancels the run it started.
       run: |
-        python3 "$ACTION_PATH/../../../scripts/verify_stack.py" \
+        exec python3 "$ACTION_PATH/../../../scripts/verify_stack.py" --exit-zero \
           --pins "$PINS" --commit "$COMMIT" --iii "$III" --suite "$SUITE" --model "$MODEL" \
-          ${COMMENT_PR:+--comment-pr "$COMMENT_PR"} || true
+          ${COMMENT_PR:+--comment-pr "$COMMENT_PR"}
