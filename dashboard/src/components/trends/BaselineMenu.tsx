@@ -10,8 +10,9 @@ import { ChevronDown } from 'lucide-react'
 import {
   type BaselineWhy,
   counted,
+  mixesSeries,
   pointTime,
-  seriesModel,
+  seriesText,
   type TrendPoint,
   trendMetric,
 } from '@/lib/trends'
@@ -46,7 +47,7 @@ export function BaselineMenu({
   onPick: (id: string | null) => void
 }) {
   const point = points.find((item) => item.execution_id === base) ?? null
-  const mixed = new Set(points.map((item) => seriesModel(item))).size > 1
+  const mixed = mixesSeries(points)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -94,7 +95,7 @@ export function BaselineMenu({
                           item.workers?.harness
                             ? `harness ${item.workers.harness}`
                             : null,
-                          mixed ? seriesModel(item) : null,
+                          mixed ? seriesText(item) : null,
                         ]
                           .filter(Boolean)
                           .join(' · ')

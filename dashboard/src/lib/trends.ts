@@ -147,6 +147,24 @@ export function profileText(profile: string | null) {
   return profile || 'none'
 }
 
+/** Whether a view mixes models or profiles (only under `any`). */
+export function mixesSeries(
+  points: Pick<TrendPoint, 'provider' | 'model' | 'profile'>[],
+) {
+  return (
+    new Set(
+      points.map((point) => `${seriesModel(point)}|${point.profile ?? ''}`),
+    ).size > 1
+  )
+}
+
+/** An execution's model and profile, said where a view mixes them. */
+export function seriesText(
+  point: Pick<TrendPoint, 'provider' | 'model' | 'profile'>,
+) {
+  return `${seriesModel(point)} · profile ${profileText(point.profile)}`
+}
+
 /** The series and stack in the hash, so a link reopens the same view. */
 export function trendsRequestFromParams(params: URLSearchParams) {
   const request: TrendsRequest = {}
