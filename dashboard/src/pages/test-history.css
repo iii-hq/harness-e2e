@@ -887,8 +887,6 @@
 
 .th-criterion-history > li {
   min-width: 0;
-  padding-bottom: 0.75rem;
-  border-bottom: 1px solid var(--color-line);
 }
 
 .th-criterion-history-head {
