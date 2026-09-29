@@ -19,6 +19,7 @@ import {
   notRun,
   pointTime,
   releaseControlId,
+  seriesModel,
   sourceText,
   stackText,
   type TestCell,
@@ -199,6 +200,10 @@ export function ExecutionsTable({
   const rows = points
     .map((point, index) => ({ point, index, before: points[index - 1] }))
     .reverse()
+  // Under `any` the view mixes models or profiles: say each row's.
+  const mixed =
+    new Set(points.map((item) => `${seriesModel(item)}|${item.profile ?? ''}`))
+      .size > 1
   const open = (point: TrendPoint) => () => {
     window.location.hash = hashForExecution(point.execution_id)
   }
@@ -304,6 +309,10 @@ export function ExecutionsTable({
                           counted(point) ? null : 'no counted run',
                           sourceText(point),
                           rc ? `RC ${rc}` : null,
+                          mixed ? seriesModel(point) : null,
+                          mixed && point.profile
+                            ? `profile ${point.profile}`
+                            : null,
                           point.label,
                         ]
                           .filter(Boolean)

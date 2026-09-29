@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { BaselineChip } from '@/components/trends/BaselineChip'
+import { BaselineMenu, baselineText } from '@/components/trends/BaselineMenu'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
@@ -373,30 +373,30 @@ describe('trends page parts', () => {
       expect(html).not.toContain('tr-baseline')
     })
 
-    it('says the baseline in the toolbar, or that this view does not show it', () => {
-      const set = renderToStaticMarkup(
-        <BaselineChip
-          point={all[BASE]}
-          why={null}
-          onPick={() => undefined}
-          onClear={() => undefined}
-        />,
+    it('says the baseline in the toolbar: the previous execution until one is picked', () => {
+      const menu = (base: string | null, why: 'not_in_view' | null = null) =>
+        renderToStaticMarkup(
+          <BaselineMenu
+            points={all}
+            base={base}
+            why={why}
+            onPick={() => undefined}
+          />,
+        )
+      expect(menu(null)).toContain('data-picker="baseline"')
+      expect(menu(null)).toContain('>previous execution<')
+      expect(menu(all[BASE].execution_id)).toContain('>Sep 23, 2:17 AM<')
+      expect(menu('github-elsewhere', 'not_in_view')).toContain(
+        '>not in this view<',
       )
-      expect(set).toContain('data-baseline-chip="set"')
-      expect(set).toContain('Baseline')
-      expect(set).toContain('Sep 23, 2:17 AM')
-      expect(set).toContain('aria-label="Clear baseline"')
-      const out = renderToStaticMarkup(
-        <BaselineChip
-          point={null}
-          why="not_in_view"
-          onPick={() => undefined}
-          onClear={() => undefined}
-        />,
-      )
-      expect(out).toContain('Baseline not in this view')
-      expect(out).toMatch(/class="tr-chip-pick"[^>]*disabled/)
-      expect(out).toContain('aria-label="Clear baseline"')
+      const failed = all.find((point) => !point.counted)
+      expect(
+        baselineText(
+          failed ?? null,
+          failed?.execution_id ?? null,
+          'no_counted_run',
+        ),
+      ).toMatch(/ · no counted run$/)
     })
 
     const panel = (index: number, baseline: number | null) =>

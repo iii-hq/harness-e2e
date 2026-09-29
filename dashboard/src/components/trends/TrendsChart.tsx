@@ -403,8 +403,9 @@ export function LargeChart({
         onPick={onPick}
       />
       <p className="tr-footnote">
-        Pick a point or a diamond to see that execution and what changed. One
-        step per execution; the axis marks where a day starts.
+        Pick a point or a diamond to see that execution and what changed, or set
+        it as the baseline to read the others against it. One step per
+        execution; the axis marks where a day starts.
       </p>
     </section>
   )

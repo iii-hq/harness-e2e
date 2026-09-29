@@ -17,7 +17,9 @@ import {
   majorsFirst,
   notRun,
   pointTime,
+  profileText,
   releaseControlId,
+  seriesModel,
   sourceText,
   TREND_METRICS,
   type TrendChange,
@@ -152,9 +154,15 @@ export function PointPanel({
   const lookups = useCommitLookups(bridge, listed.shown)
   const missing = notRun(point)
   const rc = releaseControlId(point)
+  // Under `any` the view mixes models or profiles: say this one's.
+  const mixed =
+    new Set(points.map((item) => `${seriesModel(item)}|${item.profile ?? ''}`))
+      .size > 1
   const source = [
     sourceText(point),
     rc ? `Release Control ${rc}` : null,
+    mixed ? seriesModel(point) : null,
+    mixed ? `profile ${profileText(point.profile)}` : null,
     point.label,
   ]
     .filter(Boolean)

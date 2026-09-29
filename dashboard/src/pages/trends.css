@@ -155,58 +155,11 @@
 }
 
 .tr-control:focus-visible,
-.tr-chip-pick:focus-visible,
 .tr-mini-title:focus-visible,
 .tr-column:focus-visible,
 .tr-icon-button:focus-visible {
   outline: 2px solid var(--color-rule-focus);
   outline-offset: 1px;
-}
-
-/* The baseline chip: its time picks it, the cross clears it. */
-.tr-chip {
-  display: inline-flex;
-  min-width: 0;
-  max-width: 100%;
-  height: calc(var(--spacing) * 9);
-  align-items: center;
-  gap: calc(var(--spacing) * 0.5);
-  padding-right: calc(var(--spacing) * 1);
-  border-radius: var(--radius-sm);
-  outline: 1px solid var(--color-edge);
-  outline-offset: -1px;
-}
-
-.tr-chip-pick {
-  display: inline-flex;
-  min-width: 0;
-  height: calc(var(--spacing) * 8);
-  align-items: center;
-  gap: calc(var(--spacing) * 2);
-  padding: 0 calc(var(--spacing) * 2) 0 calc(var(--spacing) * 3);
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--color-ink);
-  font: inherit;
-  font-size: var(--ds-text-sm, 0.8125rem);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.tr-chip-pick:hover:not(:disabled) {
-  background: var(--color-surface-hover);
-}
-
-.tr-chip-pick:disabled {
-  cursor: default;
-}
-
-.tr-chip-rule {
-  width: 0;
-  height: calc(var(--spacing) * 3.5);
-  flex: none;
-  border-left: 2px solid var(--color-ink-faint);
 }
 
 .tr-menu {
@@ -220,6 +173,13 @@
 
 .tr-period-menu {
   width: calc(var(--spacing) * 50);
+}
+
+/* Every execution of the view: long views scroll inside the menu. */
+.tr-baseline-menu {
+  width: calc(var(--spacing) * 85);
+  max-height: min(70vh, calc(var(--spacing) * 120));
+  overflow-y: auto;
 }
 
 /* A custom period: From and To, and why they are not one when not. */
