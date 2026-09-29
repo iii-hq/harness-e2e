@@ -195,6 +195,33 @@ describe('scenario chat action', () => {
     expect(html).toContain('aria-haspopup="menu"')
   })
 
+  it('stays beside Transcript only while there is more than one to pick', () => {
+    const html = renderToStaticMarkup(
+      <ScenarioChatAction
+        multipleOnly
+        detail={detail()}
+        scenarioId="direct_answer"
+      />,
+    )
+    expect(html).toContain('Transcripts · 2')
+    const lone = (drop: 'retry' | 'current') => {
+      const value = detail()
+      const run = value.reports[0].report?.scenarios[0].runs[0]
+      if (run && drop === 'retry') run.retry_attempts = []
+      if (run && drop === 'current') run.session_id = ''
+      return renderToStaticMarkup(
+        <ScenarioChatAction
+          multipleOnly
+          detail={value}
+          scenarioId="direct_answer"
+        />,
+      )
+    }
+    expect(lone('retry')).toBe('')
+    // The one left is a retry's, which Transcript does not open.
+    expect(lone('current')).toContain('View transcript')
+  })
+
   it('offers a retained transcript without host chat integration', () => {
     const value = detail()
     const run = value.reports[0].report?.scenarios[0].runs[0]

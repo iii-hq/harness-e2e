@@ -929,9 +929,10 @@ export function ExecutionPage({
                   Compare with…
                 </a>
               ) : null}
-              {detail.evidence_error ? (
-                <InvestigationAction executionId={executionId} />
-              ) : null}
+              <InvestigationAction
+                executionId={executionId}
+                evidenceUnavailable={detail.evidence_error}
+              />
               {/* While it runs the header cancels it (canvas: Execution
                   detail · running); once cancelling, nothing to do but wait. */}
               {ready && canCancel ? (

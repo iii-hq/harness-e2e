@@ -17,6 +17,7 @@ import {
   choiceCounting,
   choiceFromParams,
   choiceToParams,
+  comparisonInvestigation,
   ExecutionComparePage,
   loadExecutionPair,
   viewParams,
@@ -48,6 +49,36 @@ const view = (a = imported(), b = local(), choice = {}) =>
   )
 
 describe('execution comparison page', () => {
+  it('hands the chat the counted tests, the ones left out and why, and what changed', () => {
+    expect(
+      comparisonInvestigation(
+        compareExecutions(imported(), local(), { exclude: ['minimal_path'] }),
+      ),
+    ).toEqual({
+      executionId: 'import-a',
+      comparisonExecutionId: 'local-b',
+      visibleScenarioIds: ['persistent_state'],
+      excludedScenarios: [
+        { scenario_id: 'minimal_path', reason: 'left out by the reader' },
+        {
+          scenario_id: 'shell_coder_sandbox',
+          reason:
+            'technical_invalid in A: infrastructure_error — scenario setup failed: database never became ready',
+        },
+      ],
+      unavailableDeltas: [],
+      changes: [{ what: 'llm-router', change: '1.2.0 → @a1b2c3d + changes' }],
+    })
+  })
+
+  it('tells the chat a side recorded no stack instead of listing nothing', () => {
+    const a = imported()
+    if (a.plan_execution) a.plan_execution.stack = []
+    const { changes } = comparisonInvestigation(compareExecutions(a, local()))
+    expect(changes?.[0]).toMatchObject({ what: 'stack' })
+    expect(changes?.[0].change).toContain('no stack recorded for A')
+  })
+
   it('keeps the reader’s choices in the hash', () => {
     const choice = choiceFromParams(
       new URLSearchParams('include=shell_coder_sandbox&exclude=a,b'),

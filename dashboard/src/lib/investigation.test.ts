@@ -51,4 +51,37 @@ describe('investigation prompt', () => {
     expect(prompt).toContain('do not assume that B got worse')
     expect(prompt).toContain('If there is no comparable regression, say so')
   })
+
+  it('starts from the focused run, weighs what changed and says when the evidence is gone', () => {
+    const prompt = investigationPrompt({
+      executionId: 'baseline',
+      comparisonExecutionId: 'candidate',
+      focus: { scenarioId: 'direct_answer', runId: 'run-2' },
+      changes: [
+        {
+          what: 'harness (the Harness under test)',
+          change: '1.8.31 → 1.8.35',
+          commits: { name: 'harness', base: '1.8.31', head: '1.8.35' },
+        },
+      ],
+      evidenceUnavailable: 'No native evidence path was retained',
+    })
+    expect(selectedContext(prompt)).toMatchObject({
+      focus: { scenario_id: 'direct_answer', run_id: 'run-2' },
+      changes_between_a_and_b: [
+        { commits: { name: 'harness', base: '1.8.31', head: '1.8.35' } },
+      ],
+      evidence_unavailable: 'No native evidence path was retained',
+    })
+    expect(prompt).toContain('Start from the focused test and run')
+    expect(prompt).toContain('e2e::dashboard::version-compare')
+    expect(prompt).toContain('detail.reports is empty')
+  })
+
+  it('asks for no commit range when nothing changed', () => {
+    const prompt = investigationPrompt({ executionId: 'execution-1' })
+    expect(prompt).not.toContain('version-compare')
+    expect(prompt).not.toContain('focused test')
+    expect(prompt).not.toContain('detail.reports is empty')
+  })
 })

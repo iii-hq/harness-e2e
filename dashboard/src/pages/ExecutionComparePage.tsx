@@ -9,6 +9,7 @@ import {
 import { ComparisonView, type Sides } from '@/components/compare/ComparisonView'
 import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ExecutionMoreMenu } from '@/components/execution/NeedsAttention'
+import { InvestigationAction } from '@/components/InvestigationAction'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import { buttonClassName, EmptyState, PageHeader } from '@/design-system'
 import {
@@ -30,10 +31,13 @@ import {
   compareExecutions,
   comparisonMarkdown,
   type ExecutionComparison,
+  exclusionPhrase,
   type ScenarioComparison,
+  stackChanges,
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { plural } from '@/lib/format'
+import type { Investigation } from '@/lib/investigation'
 import { watchExecution } from '@/lib/watch-execution'
 import { rerunParameters } from '@/pages/ExecutionPage'
 import '@/design-system/styles.css'
@@ -148,6 +152,69 @@ function summaryLine(comparison: ExecutionComparison) {
   ]
     .filter(Boolean)
     .join(' · ')
+}
+
+/** What the chat gets from this page: the tests the totals count, the ones
+ *  left out and why, the deltas that cannot be read, and what changed. */
+export function comparisonInvestigation({
+  a,
+  b,
+  scenarios,
+  totals,
+  parameters,
+  stack,
+  runner,
+}: ExecutionComparison): Investigation {
+  return {
+    executionId: a.id,
+    comparisonExecutionId: b.id,
+    visibleScenarioIds: scenarios
+      .filter((scenario) => scenario.counted)
+      .map((scenario) => scenario.id),
+    excludedScenarios: scenarios
+      .filter((scenario) => !scenario.counted)
+      .map((scenario) => ({
+        scenario_id: scenario.id,
+        reason: exclusionPhrase(scenario) ?? 'not counted',
+      })),
+    unavailableDeltas: totals
+      .filter((metric) => metric.delta === null)
+      .map((metric) => metric.id),
+    changes: [
+      ...parameters.map(({ field, a, b }) => ({
+        what: field,
+        change: `${a} → ${b}`,
+      })),
+      // Without a recorded stack on a side nothing below is listed.
+      ...(!stack.recorded.a || !stack.recorded.b
+        ? [{ what: 'stack', change: stackChanges(stack) ?? 'not recorded' }]
+        : []),
+      ...stack.changed.map(({ field, a, b }) => ({
+        what: field,
+        change: `${a} → ${b}`,
+      })),
+      ...stack.notComparable.map(({ field, a, b, reason }) => ({
+        what: field,
+        change: `${a} → ${b} (not comparable: ${reason})`,
+      })),
+      ...(['a', 'b'] as const).flatMap((side) => {
+        const only = side === 'a' ? stack.onlyA : stack.onlyB
+        return only.length > 0
+          ? [{ what: `only in ${side.toUpperCase()}`, change: only.join(', ') }]
+          : []
+      }),
+      // The runner is a worker of the stack; listed once.
+      ...(runner.differs &&
+      !stack.changed.some((change) => change.field === 'harness-e2e')
+        ? [
+            {
+              what: 'runner',
+              change: `${runner.a ?? '—'} → ${runner.b ?? '—'}`,
+            },
+          ]
+        : []),
+    ],
+  }
 }
 
 /** The header every state of the page shares: back to Executions, the
@@ -402,6 +469,7 @@ export function ExecutionComparePage({
               <ClipboardCopy size={16} aria-hidden="true" />
               {copied === 'summary' ? 'Summary copied' : 'Copy summary'}
             </button>
+            <InvestigationAction {...comparisonInvestigation(comparison)} />
             {bridge ? (
               <button
                 className={buttonClassName({ variant: 'primary' })}
