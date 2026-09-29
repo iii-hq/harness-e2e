@@ -297,6 +297,29 @@ one. A group that produced neither still reports that fact.
 `workers` supplies versioned stack components. It does not orchestrate
 campaigns.
 
+### Verify from another pipeline
+
+The composite action
+[`.github/actions/verify-stack`](.github/actions/verify-stack/action.yml)
+lets a pipeline in another repository run the `pr` suite on a candidate stack:
+workers built from a commit (`pins`, `commit`), or an iii release (`iii`).
+`scripts/verify_stack.py` dispatches `exact-stack-e2e.yml` without an
+execution, waits for it and reads `execution-summary.json`, because a green
+workflow does not say the scenarios passed (the campaign is advisory). The
+action never fails its job; it sets `status`, and the caller decides.
+
+| `status` | Means |
+| --- | --- |
+| `passed` | Every group was measured and passed. |
+| `failed` | A measured group failed. |
+| `not_measured` | No readable summary, an inconclusive group, invalid infrastructure or a run that never finished. |
+| `skipped` | None of the pinned workers is part of the harness graph. |
+
+Pinned workers are filtered against the Registry graph of the harness release,
+and the harness is always pinned with them at the same commit. The token needs
+`actions: read` and `write` on this repository. Runs from these pipelines do
+not reach Release Control's ledger, which accepts only its own bot's dispatches.
+
 ### Executor image
 
 Every phase runs in one image of tools, `ghcr.io/iii-hq/harness-e2e:tools-<first

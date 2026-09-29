@@ -1,0 +1,73 @@
+name: Verify a stack with Harness E2E
+description: >-
+  Runs the Harness E2E suite on a candidate stack (workers built from a commit,
+  or an iii release), waits for it and reports what it measured. It never fails
+  the calling job: read `status` and decide there.
+
+inputs:
+  token:
+    description: Token that can dispatch and read runs of iii-hq/harness-e2e (actions read and write)
+    required: true
+  comment-token:
+    description: Token that can write comments on the pull request (defaults to `token`)
+    required: false
+    default: ''
+  pins:
+    description: JSON list of the workers the change touches; those outside the harness graph are ignored
+    required: false
+    default: '[]'
+  commit:
+    description: Commit the pinned workers are built from
+    required: false
+    default: ''
+  iii:
+    description: iii release version to install instead of the newest candidate
+    required: false
+    default: ''
+  suite:
+    description: Suite of config/test-plan.json
+    required: false
+    default: pr
+  model:
+    description: provider/model the subject runs
+    required: false
+    default: deepseek/deepseek-flash
+  comment-pr:
+    description: owner/repo#N of a pull request to keep one comment on
+    required: false
+    default: ''
+
+outputs:
+  status:
+    description: passed, failed, not_measured or skipped
+    value: ${{ steps.verify.outputs.status }}
+  summary:
+    description: One line saying what passed and what did not
+    value: ${{ steps.verify.outputs.summary }}
+  run_url:
+    description: The run of iii-hq/harness-e2e that measured it
+    value: ${{ steps.verify.outputs.run_url }}
+
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: python3 -m pip install --quiet pyyaml
+    - id: verify
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        COMMENT_GH_TOKEN: ${{ inputs.comment-token }}
+        ACTION_PATH: ${{ github.action_path }}
+        PINS: ${{ inputs.pins }}
+        COMMIT: ${{ inputs.commit }}
+        III: ${{ inputs.iii }}
+        SUITE: ${{ inputs.suite }}
+        MODEL: ${{ inputs.model }}
+        COMMENT_PR: ${{ inputs.comment-pr }}
+      # The verdict is the `status` output, not this step's exit code: the
+      # caller's next steps (a Slack reply) need the outputs whatever it was.
+      run: |
+        python3 "$ACTION_PATH/../../../scripts/verify_stack.py" \
+          --pins "$PINS" --commit "$COMMIT" --iii "$III" --suite "$SUITE" --model "$MODEL" \
+          ${COMMENT_PR:+--comment-pr "$COMMENT_PR"} || true
