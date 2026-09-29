@@ -78,7 +78,7 @@ test("section links and header actions are sentence-case sans, not mono lowercas
     rules('.harness-e2e-section-tab[aria-current="page"]::after').join(""),
     /height:\s*2px[^}]*background:\s*var\(--color-ink\)/,
   );
-  for (const label of ["Tests", "Executions", "Suites", "Stacks"]) {
+  for (const label of ["Tests", "Executions", "Trends", "Suites", "Stacks"]) {
     assert.match(shellTsx, new RegExp(`label: '${label}'`));
   }
   assert.doesNotMatch(sectionNav, /font-mono|lowercase/);

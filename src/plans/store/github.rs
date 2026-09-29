@@ -4,15 +4,16 @@
 //! `gh` only lists runs and downloads artifacts. Installing reads an
 //! extracted bundle: every native run in it becomes an ordinary retained run
 //! and the execution records how the groups map onto them.
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{bail, ensure, Context, Result};
 use futures_util::StreamExt;
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::process::Command;
 
@@ -55,6 +56,28 @@ pub(crate) struct GithubRunImportRequest {
     pub repository: Option<String>,
     pub run_id: u64,
 }
+
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+pub(crate) struct VersionCompareRequest {
+    /// `iii`, `harness-e2e` or a worker of iii-hq/workers.
+    pub name: String,
+    /// A version, or a `@sha7` identity (`*` marks uncommitted changes).
+    pub base: String,
+    pub head: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+pub(crate) struct VersionCompareResponse {
+    pub url: String,
+    /// Null when `gh` is missing or GitHub answers an error.
+    pub total_commits: Option<u64>,
+}
+
+/// Comparisons GitHub answered, for the worker's lifetime: tags and commits
+/// do not move.
+static COMPARISONS: OnceLock<Mutex<Comparisons>> = OnceLock::new();
+/// Commits between two refs, by repository, base and head.
+type Comparisons = HashMap<(String, String, String), u64>;
 
 /// How the worker calls the GitHub CLI; tests point it at a stand-in.
 #[derive(Debug, Clone)]
@@ -523,10 +546,12 @@ impl PlanStore {
     /// Install an extracted exact-stack bundle: each group's native run is
     /// moved into the data directory and retained like a finished local run.
     /// A group without a readable native run becomes a slot with its error;
-    /// a bundle with no readable group fails and leaves the execution as it
-    /// was. Runs of the previous import that the new one does not carry are
-    /// deleted only once the new execution is written. An execution that
-    /// `stopped` before it ran everything ends interrupted, with the reason.
+    /// a bundle with no readable group fails and leaves the execution's runs
+    /// as they were, recording what its contract says it ran where the
+    /// execution recorded nothing yet (a first import). Runs of the previous
+    /// import that the new one does not carry are deleted only once the new
+    /// execution is written. An execution that `stopped` before it ran
+    /// everything ends interrupted, with the reason.
     pub(super) async fn install_bundle(
         &self,
         execution: &mut PlanExecution,
@@ -630,12 +655,6 @@ impl PlanStore {
                 }
             }
         }
-        ensure!(
-            !requests.is_empty(),
-            "No group of this run left a native run this runner can read: {}",
-            errors.join("; ")
-        );
-
         let first = requests.first();
         let text = |value: &Value| value.as_str().map(str::to_owned);
         let asked = execution.parameters.as_ref();
@@ -682,6 +701,28 @@ impl PlanStore {
             r#where,
             stack,
         };
+        if requests.is_empty() {
+            let error = format!(
+                "No group of this run left a native run this runner can read: {}",
+                errors.join("; ")
+            );
+            let recorded = async {
+                let _guard = self.lock.lock().await;
+                let mut latest = self.read_execution(&execution.id).await?;
+                latest.parameters.get_or_insert(parameters);
+                if latest.stack.is_empty() {
+                    latest.stack =
+                        lock_rows(&contract.join("worker-compose.lock"), BTreeMap::new());
+                }
+                latest.label = latest.label.or_else(|| text(&fields["suite_label"]));
+                self.write_execution(&latest).await
+            }
+            .await;
+            if let Err(error) = recorded {
+                tracing::warn!(execution_id = %execution.id, error = %format!("{error:#}"), "cannot record what the contract of a failed import says");
+            }
+            bail!(error);
+        }
         let mut next = execution.clone();
         next.parameters = Some(parameters);
         if let ExecutionSource::Github { stack, .. } = &mut next.source {
@@ -873,6 +914,55 @@ impl PlanStore {
         Ok((slots, request, stack))
     }
 
+    /// Where GitHub shows what changed between two builds of a worker, and
+    /// how many commits apart they are when `gh` can tell.
+    pub(crate) async fn version_compare(
+        &self,
+        request: &VersionCompareRequest,
+    ) -> Result<VersionCompareResponse> {
+        let (repository, base, head) = compare_refs(&request.name, &request.base, &request.head)?;
+        let url = format!("https://github.com/{repository}/compare/{base}...{head}");
+        let cache = COMPARISONS.get_or_init(Default::default);
+        let key = (repository, base, head);
+        let cached = cache
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .get(&key)
+            .copied();
+        if let Some(total) = cached {
+            return Ok(VersionCompareResponse {
+                url,
+                total_commits: Some(total),
+            });
+        }
+        let (repository, base, head) = &key;
+        let answered = self
+            .gh(
+                self.github.api_timeout,
+                &[
+                    "api",
+                    &format!("repos/{repository}/compare/{base}...{head}"),
+                    "--jq",
+                    ".total_commits",
+                ],
+            )
+            .await;
+        let total_commits = match answered {
+            Ok(output) => String::from_utf8_lossy(&output).trim().parse::<u64>().ok(),
+            Err(error) => {
+                tracing::debug!(error = %format!("{error:#}"), %url, "GitHub cannot count the commits between two builds");
+                None
+            }
+        };
+        if let Some(total) = total_commits {
+            cache
+                .lock()
+                .unwrap_or_else(|poison| poison.into_inner())
+                .insert(key, total);
+        }
+        Ok(VersionCompareResponse { url, total_commits })
+    }
+
     /// Run `gh` with its temporary files in the data directory (it stages
     /// downloads there) and a deadline; a missing binary, a failed call or a
     /// call past its deadline becomes the step the user has to take.
@@ -902,6 +992,44 @@ impl PlanStore {
         );
         Ok(output.stdout)
     }
+}
+
+/// The repository builds of `name` come from and the two refs to compare:
+/// a version's release tag, or the commit an identity names (`@sha7`, after
+/// a version or not; `*` dropped).
+fn compare_refs(name: &str, base: &str, head: &str) -> Result<(String, String, String)> {
+    ensure!(
+        !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b)),
+        "name must be iii, harness-e2e or a worker's name"
+    );
+    let repository = match name {
+        "iii" => "iii-hq/iii",
+        "harness-e2e" => "iii-hq/harness-e2e",
+        _ => "iii-hq/workers",
+    };
+    let reference = |identity: &str| -> Result<String> {
+        if let Some((_, commit)) = identity.split_once('@') {
+            let commit = commit.trim_end_matches('*');
+            ensure!(
+                (4..=40).contains(&commit.len()) && commit.bytes().all(|b| b.is_ascii_hexdigit()),
+                "'{identity}' does not name a commit"
+            );
+            return Ok(commit.to_owned());
+        }
+        let version = identity.strip_prefix('v').unwrap_or(identity);
+        ensure!(
+            !version.is_empty()
+                && version
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".+-".contains(&b)),
+            "'{identity}' is not a version"
+        );
+        Ok(format!("{name}/v{version}"))
+    };
+    Ok((repository.into(), reference(base)?, reference(head)?))
 }
 
 /// One execution per repository and run: importing again replaces it.
@@ -968,21 +1096,11 @@ fn contract_fields(contract: &Path) -> Value {
 /// stack pinned to one was built from (its contract says). Engine built-ins
 /// are left out.
 fn group_stack(directory: &Path) -> Vec<StackWorker> {
-    let lock = fs::read_to_string(directory.join("stack/worker-compose.lock"))
-        .ok()
-        .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
-        .unwrap_or(Value::Null);
     let workers = read_json(&directory.join("stack/workers.json")).unwrap_or(Value::Null);
-    let mut rows = super::stack::rows(
-        &lock["containers"],
-        |container| container["requested"].as_str().map(str::to_owned),
+    let mut rows = lock_rows(
+        &directory.join("stack/worker-compose.lock"),
         super::stack::observed_versions(&workers, None),
     );
-    for row in &mut rows {
-        row.resolved = lock["containers"][row.name.as_str()]["resolved"]["version"]
-            .as_str()
-            .map(str::to_owned);
-    }
     let contract = read_json(&directory.join("stack-lock.json")).unwrap_or(Value::Null);
     for (name, pin) in contract["runtime"]["commits"]
         .as_object()
@@ -1003,6 +1121,26 @@ fn group_stack(directory: &Path) -> Vec<StackWorker> {
                 groups: Vec::new(),
             }),
         }
+    }
+    rows
+}
+
+/// One row per container of a compose lock: what it asked for and what it
+/// resolved, with the version the engine reported for each.
+fn lock_rows(lock: &Path, observed: BTreeMap<String, Option<String>>) -> Vec<StackWorker> {
+    let lock = fs::read_to_string(lock)
+        .ok()
+        .and_then(|source| serde_yaml::from_str::<Value>(&source).ok())
+        .unwrap_or(Value::Null);
+    let mut rows = super::stack::rows(
+        &lock["containers"],
+        |container| container["requested"].as_str().map(str::to_owned),
+        observed,
+    );
+    for row in &mut rows {
+        row.resolved = lock["containers"][row.name.as_str()]["resolved"]["version"]
+            .as_str()
+            .map(str::to_owned);
     }
     rows
 }
@@ -1134,6 +1272,47 @@ mod tests {
             "https://github.com/o/r",
         ] {
             assert!(validate_repository(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn builds_compare_as_release_tags_or_commits_of_their_repository() {
+        let refs = |name, base, head| compare_refs(name, base, head).unwrap();
+        assert_eq!(
+            refs("iii", "0.24.2", "0.24.3"),
+            (
+                "iii-hq/iii".into(),
+                "iii/v0.24.2".into(),
+                "iii/v0.24.3".into()
+            )
+        );
+        assert_eq!(
+            refs("harness-e2e", "0.17.0", "0.17.0@abc1234"),
+            (
+                "iii-hq/harness-e2e".into(),
+                "harness-e2e/v0.17.0".into(),
+                "abc1234".into()
+            )
+        );
+        assert_eq!(
+            refs("harness", "@3f2a9c1*", "@4e5d6c7"),
+            ("iii-hq/workers".into(), "3f2a9c1".into(), "4e5d6c7".into())
+        );
+        assert_eq!(
+            refs("llm-router", "1.4.26", "1.4.27").2,
+            "llm-router/v1.4.27"
+        );
+        for (name, base, head) in [
+            ("", "1.0.0", "1.0.1"),
+            ("../iii", "1.0.0", "1.0.1"),
+            ("harness", "1.0.0/../x", "1.0.1"),
+            ("harness", "@not-hex", "1.0.1"),
+            ("harness", "1.0.0", ""),
+        ] {
+            assert!(
+                compare_refs(name, base, head).is_err(),
+                "{name} {base} {head}"
+            );
         }
     }
 

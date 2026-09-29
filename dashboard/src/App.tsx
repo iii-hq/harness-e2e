@@ -9,6 +9,7 @@ import { SuitesPage } from '@/pages/SuitesPage'
 import { TestHistoryPage } from '@/pages/TestHistoryPage'
 import { TestsCatalogPage } from '@/pages/TestsCatalogPage'
 import { TestsPage } from '@/pages/TestsPage'
+import { TrendsPage } from '@/pages/TrendsPage'
 
 function RoutedPage({ route }: { route: DashboardRoute }) {
   switch (route.page) {
@@ -41,6 +42,8 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
       return <SuitesPage />
     case 'stacks':
       return <StacksPage />
+    case 'trends':
+      return <TrendsPage request={route.request} period={route.period} />
     case 'workspace':
       if (route.view === 'tests') return <TestsCatalogPage />
       return <ExecutionsPage />

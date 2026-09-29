@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { useDashboardChrome } from '@/components/DashboardShell'
+import {
+  type DashboardSection,
+  useDashboardChrome,
+} from '@/components/DashboardShell'
 import type { HeaderAction } from '@/components/shell/HeaderActions'
 
-export type { HeaderAction }
-
-export type DashboardSection = 'tests' | 'executions' | 'suites' | 'stacks'
+export type { DashboardSection, HeaderAction }
 
 function classes(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(' ')

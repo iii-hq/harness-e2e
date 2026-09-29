@@ -7,6 +7,7 @@ pub(crate) mod presenter;
 pub(crate) mod read_model;
 mod run_sessions;
 mod store;
+mod trends;
 
 pub(crate) use read_model::ExecutionProjection;
 

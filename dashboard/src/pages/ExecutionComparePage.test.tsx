@@ -19,6 +19,7 @@ import {
   choiceToParams,
   ExecutionComparePage,
   loadExecutionPair,
+  viewParams,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
 
@@ -59,6 +60,12 @@ describe('execution comparison page', () => {
       'include=shell_coder_sandbox&exclude=a%2Cb',
     )
     expect(choiceToParams({ include: [], exclude: [] }).toString()).toBe('')
+    // Opened from Trends: the way back stays in the hash.
+    expect(
+      viewParams(choice, '#/ext/harness-e2e/trends?stack=any').toString(),
+    ).toBe(
+      `include=shell_coder_sandbox&exclude=a%2Cb&from=${encodeURIComponent('#/ext/harness-e2e/trends?stack=any')}`,
+    )
   })
 
   it('counts exactly the tests the reader keeps, automatic exclusions included', () => {

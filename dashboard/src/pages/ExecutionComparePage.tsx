@@ -17,6 +17,7 @@ import {
   hashWithParams,
   replaceRouteParams,
   routeParams,
+  trendsOrigin,
 } from '@/hooks/use-hash-route'
 import { useLatestRequest } from '@/hooks/use-latest-request'
 import {
@@ -57,6 +58,20 @@ export function choiceToParams(choice: Choice): URLSearchParams {
   const params = new URLSearchParams()
   if (choice.include.length > 0) params.set('include', choice.include.join(','))
   if (choice.exclude.length > 0) params.set('exclude', choice.exclude.join(','))
+  return params
+}
+
+/** The Trends view this comparison was opened from, if any. */
+function origin() {
+  return typeof window === 'undefined'
+    ? null
+    : trendsOrigin(window.location.hash)
+}
+
+/** The choice's params, keeping the Trends view to go back to. */
+export function viewParams(choice: Choice, from = origin()): URLSearchParams {
+  const params = choiceToParams(choice)
+  if (from) params.set('from', from)
   return params
 }
 
@@ -146,14 +161,19 @@ function Header({
   summary: ReactNode
   actions?: ReactNode
 }) {
+  const from = origin()
   return (
     <PageHeader
       variant="detail"
       className="cmp-header"
-      back={{
-        label: 'Back to Executions',
-        href: hashForWorkspace('executions'),
-      }}
+      back={
+        from
+          ? { label: 'Back to Trends', href: from }
+          : {
+              label: 'Back to Executions',
+              href: hashForWorkspace('executions'),
+            }
+      }
       title={title}
       summary={summary}
       headingId="comparison-title"
@@ -309,7 +329,7 @@ export function ExecutionComparePage({
   }, [bridge, liveIds, load])
 
   useEffect(() => {
-    replaceRouteParams(choiceToParams(choice))
+    replaceRouteParams(viewParams(choice))
   }, [choice])
 
   const comparison = useMemo(
@@ -417,11 +437,11 @@ export function ExecutionComparePage({
         bridge={bridge}
         swap={hashWithParams(
           hashForComparison(right, left),
-          choiceToParams(choice),
+          viewParams(choice),
         )}
         here={hashWithParams(
           hashForComparison(left, right),
-          choiceToParams(choice),
+          viewParams(choice),
         )}
         refreshError={error}
         onCount={(ids) =>

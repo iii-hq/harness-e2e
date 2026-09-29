@@ -32,7 +32,9 @@ pub(crate) use github_start::GithubFollow;
 mod stack;
 
 pub(crate) use docker::{DockerGroup, DockerSettings};
-pub(crate) use github::{GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest};
+pub(crate) use github::{
+    GithubRunContractsRequest, GithubRunImportRequest, GithubRunsListRequest, VersionCompareRequest,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub(crate) struct Slot {
@@ -3650,6 +3652,69 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_comparison_github_answered_is_kept_and_one_it_did_not_has_no_count() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let runner = Arc::new(FakeRunner::new(data.clone()));
+        let calls = root.path().join("calls");
+        let counting = manager_with_gh(
+            &data,
+            runner.clone(),
+            fake_gh(
+                root.path(),
+                &format!("echo \"$2\" >> {}; echo 7", calls.display()),
+            ),
+        );
+        let request = VersionCompareRequest {
+            name: "compare-probe".into(),
+            base: "1.0.0".into(),
+            head: "@4e5d6c7*".into(),
+        };
+        let expected = github::VersionCompareResponse {
+            url: "https://github.com/iii-hq/workers/compare/compare-probe/v1.0.0...4e5d6c7".into(),
+            total_commits: Some(7),
+        };
+        assert_eq!(counting.version_compare(&request).await.unwrap(), expected);
+        assert_eq!(counting.version_compare(&request).await.unwrap(), expected);
+        assert_eq!(
+            fs::read_to_string(&calls).unwrap(),
+            "repos/iii-hq/workers/compare/compare-probe/v1.0.0...4e5d6c7\n"
+        );
+
+        let failing = manager_with_gh(
+            &data,
+            runner.clone(),
+            fake_gh(root.path(), "echo 'HTTP 404: Not Found' >&2; exit 1"),
+        );
+        let missing = VersionCompareRequest {
+            head: "1.0.1".into(),
+            ..request
+        };
+        let answer = failing.version_compare(&missing).await.unwrap();
+        assert_eq!(
+            serde_json::to_value(answer).unwrap(),
+            json!({"url": "https://github.com/iii-hq/workers/compare/compare-probe/v1.0.0...compare-probe/v1.0.1",
+                "total_commits": null})
+        );
+        let absent = manager_with_gh(
+            &data,
+            runner,
+            github::GithubCli {
+                program: root.path().join("no-gh"),
+                ..github::GithubCli::default()
+            },
+        );
+        assert_eq!(
+            absent
+                .version_compare(&missing)
+                .await
+                .unwrap()
+                .total_commits,
+            None
+        );
+    }
+
+    #[tokio::test]
     async fn restart_fails_an_interrupted_import_and_clears_its_files() {
         let root = tempfile::tempdir().unwrap();
         let manager = manager(root.path(), Arc::new(FakeRunner::new(root.path().into())));
@@ -3755,6 +3820,72 @@ pub(crate) mod tests {
         );
         assert!(runner.record(&first).await.is_some());
         assert!(data.join(&first).join("results.json").is_file());
+    }
+
+    #[tokio::test]
+    async fn a_first_import_without_a_readable_group_keeps_what_its_contract_says() {
+        let root = tempfile::tempdir().unwrap();
+        let data = root.path().join("data");
+        let manager = manager(&data, Arc::new(FakeRunner::new(data.clone())));
+        let mut execution = import_stub();
+        manager.write_execution(&execution).await.unwrap();
+        let (bundle, contract, _) =
+            exact_stack_bundle(&root.path().join("bundle"), "rc:e2e:failed", "1.8.8");
+        fs::remove_dir_all(bundle.join("smoke-r01/groups/case-context/native")).unwrap();
+        fs::write(
+            contract.join("worker-compose.lock"),
+            "containers:\n  harness:\n    worker: package://harness\n    requested: latest\n    resolved:\n      version: 1.8.36\n",
+        )
+        .unwrap();
+        let error = manager
+            .install_bundle(&mut execution, &bundle, &contract, None)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No group of this run"), "{error}");
+        assert!(error.contains("case-registry: group observation artifact was not available"));
+
+        let failed = manager.read_execution(&execution.id).await.unwrap();
+        assert!(failed.slots.is_empty());
+        assert_eq!(failed.label.as_deref(), Some("Smoke"));
+        let parameters = failed.parameters.unwrap();
+        assert_eq!(
+            parameters.suite,
+            Some(ExecutionSuite {
+                id: Some("smoke".into()),
+                label: "Smoke".into(),
+                sha256: "sha256:smoke".into(),
+            })
+        );
+        assert_eq!(
+            (
+                parameters.provider.as_str(),
+                parameters.model.as_str(),
+                parameters.agent.as_deref()
+            ),
+            ("provider", "model", Some("tech-lead"))
+        );
+        assert_eq!(
+            parameters.scenarios,
+            vec![
+                "context_pressure".to_owned(),
+                "registry_planning".to_owned()
+            ]
+        );
+        assert_eq!(parameters.stack.unwrap().yaml, STACK_AS_RUN);
+        assert_eq!(
+            failed.stack,
+            vec![StackWorker {
+                name: "harness".into(),
+                source: WorkerSource::Package,
+                requested: Some("latest".into()),
+                resolved: Some("1.8.36".into()),
+                observed: None,
+                commit: None,
+                dirty: None,
+                groups: Vec::new(),
+            }]
+        );
     }
 
     #[tokio::test]

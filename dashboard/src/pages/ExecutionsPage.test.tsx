@@ -623,6 +623,11 @@ describe('the list when there is nothing to show', () => {
         <LedgerLoadFailure reload message="x" onRetry={noop} />,
       ),
     ).toContain('Couldn’t reload the executions')
+    expect(
+      renderToStaticMarkup(
+        <LedgerLoadFailure what="trend" reload message="x" onRetry={noop} />,
+      ),
+    ).toContain('<strong>Couldn’t reload the trend</strong>')
   })
 })
 

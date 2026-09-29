@@ -1,0 +1,2314 @@
+{
+  "series": [
+    {
+      "key": "regression",
+      "series": {
+        "suite": "regression",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "profile": null,
+        "suite_label": "Regression",
+        "where": ["github"],
+        "executions": 14,
+        "latest_at": "2026-09-28T02:17:00-03:00"
+      },
+      "points": [
+        {
+          "execution_id": "github-35741409074-1",
+          "label": null,
+          "started_at": "2026-09-22T11:35:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35741409074,
+            "run_attempt": 1,
+            "release_control_execution_id": "75b03d86",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35741409074"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": null,
+          "workers": null,
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 0,
+          "counted": 0,
+          "reason": "No group left a run this runner can read: compose::add found no harness-e2e 0.11.21 in the Registry yet (0.11.20 was the newest).",
+          "measures": null,
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "persistent_state",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "timer_wake",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "performance_regression",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "contention_ledger",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35742568444-1",
+          "label": null,
+          "started_at": "2026-09-22T11:45:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35742568444,
+            "run_attempt": 1,
+            "release_control_execution_id": "4d407ce8",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35742568444"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": true
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.38",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.31",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.26",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.20",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.16",
+            "provider-openai-codex": "0.4.16",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 89.1,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 34200,
+            "input_tokens_mean": 13444,
+            "function_calls_mean": 14.8,
+            "function_calls": 133,
+            "function_call_errors": 0,
+            "turns_mean": 10.2
+          },
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "scored",
+              "score": 40,
+              "behavior_sha256": "sha256:d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 62,
+              "behavior_sha256": "sha256:1a9e2df11a9e2df11a9e2df11a9e2df11a9e2df11a9e2df11a9e2df11a9e2df1"
+            },
+            {
+              "id": "performance_regression",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:b5153681b5153681b5153681b5153681b5153681b5153681b5153681b5153681"
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:3874753438747534387475343874753438747534387475343874753438747534"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35743058842-1",
+          "label": null,
+          "started_at": "2026-09-22T11:49:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35743058842,
+            "run_attempt": 1,
+            "release_control_execution_id": "acb1e425",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35743058842"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": null,
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 86.9,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 34000,
+            "input_tokens_mean": 9759,
+            "function_calls_mean": 14,
+            "function_calls": 126,
+            "function_call_errors": 0,
+            "turns_mean": 9.2
+          },
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "scored",
+              "score": 40,
+              "behavior_sha256": "sha256:d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:f98ee1ccf98ee1ccf98ee1ccf98ee1ccf98ee1ccf98ee1ccf98ee1ccf98ee1cc"
+            },
+            {
+              "id": "performance_regression",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:b5153681b5153681b5153681b5153681b5153681b5153681b5153681b5153681"
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "scored",
+              "score": 80,
+              "behavior_sha256": "sha256:2f4899482f4899482f4899482f4899482f4899482f4899482f4899482f489948"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35767230299-1",
+          "label": null,
+          "started_at": "2026-09-22T15:27:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35767230299,
+            "run_attempt": 1,
+            "release_control_execution_id": "8a2a287d",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35767230299"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": true
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.38",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.31",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.26",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.20",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.16",
+            "provider-openai-codex": "0.4.16",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 89.7,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 33300,
+            "input_tokens_mean": 11285,
+            "function_calls_mean": 14.9,
+            "function_calls": 134,
+            "function_call_errors": 0,
+            "turns_mean": 9.2
+          },
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "scored",
+              "score": 40,
+              "behavior_sha256": "sha256:d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 92,
+              "behavior_sha256": "sha256:b041a22eb041a22eb041a22eb041a22eb041a22eb041a22eb041a22eb041a22e"
+            },
+            {
+              "id": "performance_regression",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:b5153681b5153681b5153681b5153681b5153681b5153681b5153681b5153681"
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:187f2719187f2719187f2719187f2719187f2719187f2719187f2719187f2719"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35767246472-1",
+          "label": null,
+          "started_at": "2026-09-22T15:27:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35767246472,
+            "run_attempt": 1,
+            "release_control_execution_id": "850e3263",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35767246472"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": null,
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 91.9,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 29400,
+            "input_tokens_mean": 8802,
+            "function_calls_mean": 15.1,
+            "function_calls": 136,
+            "function_call_errors": 0,
+            "turns_mean": 8.9
+          },
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "scored",
+              "score": 40,
+              "behavior_sha256": "sha256:d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:e1945a6ae1945a6ae1945a6ae1945a6ae1945a6ae1945a6ae1945a6ae1945a6a"
+            },
+            {
+              "id": "performance_regression",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:b5153681b5153681b5153681b5153681b5153681b5153681b5153681b5153681"
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:4dc6f9d54dc6f9d54dc6f9d54dc6f9d54dc6f9d54dc6f9d54dc6f9d54dc6f9d5"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35821773226-2",
+          "label": null,
+          "started_at": "2026-09-23T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35821773226,
+            "run_attempt": 2,
+            "release_control_execution_id": "f96916a6",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35821773226"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": true
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.39",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.31",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.27",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.20",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.16",
+            "provider-openai-codex": "0.4.16",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "minimal_path",
+            "tool_contract_recovery",
+            "persistent_state",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "performance_regression",
+            "git_regression_forensics",
+            "database_migration_recovery",
+            "contention_ledger"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 90.8,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 32700,
+            "input_tokens_mean": 10988,
+            "function_calls_mean": 14.7,
+            "function_calls": 132,
+            "function_call_errors": 0,
+            "turns_mean": 9.7
+          },
+          "tests": [
+            {
+              "id": "minimal_path",
+              "state": "scored",
+              "score": 40,
+              "behavior_sha256": "sha256:d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3d20aa6a3"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:64fb6b3864fb6b3864fb6b3864fb6b3864fb6b3864fb6b3864fb6b3864fb6b38"
+            },
+            {
+              "id": "performance_regression",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:b5153681b5153681b5153681b5153681b5153681b5153681b5153681b5153681"
+            },
+            {
+              "id": "git_regression_forensics",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:0995bc060995bc060995bc060995bc060995bc060995bc060995bc060995bc06"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35959254741-1",
+          "label": null,
+          "started_at": "2026-09-24T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35959254741,
+            "run_attempt": 1,
+            "release_control_execution_id": "f999ca1a",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35959254741"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": true
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.41",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.31",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.29",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.21",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.16",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 93,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 28000,
+            "input_tokens_mean": 36308,
+            "function_calls_mean": 17.1,
+            "function_calls": 154,
+            "function_call_errors": 0,
+            "turns_mean": 8.3
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 62,
+              "behavior_sha256": "sha256:7fbb3d6e7fbb3d6e7fbb3d6e7fbb3d6e7fbb3d6e7fbb3d6e7fbb3d6e7fbb3d6e"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36010839787-2",
+          "label": null,
+          "started_at": "2026-09-24T11:10:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36010839787,
+            "run_attempt": 2,
+            "release_control_execution_id": "ab2e2d9b",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36010839787"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.42",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.34",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.30",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.21",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.16",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 97.4,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 30400,
+            "input_tokens_mean": 36689,
+            "function_calls_mean": 17.4,
+            "function_calls": 157,
+            "function_call_errors": 0,
+            "turns_mean": 9.3
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36097908502-1",
+          "label": null,
+          "started_at": "2026-09-25T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36097908502,
+            "run_attempt": 1,
+            "release_control_execution_id": "315c8dfa",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36097908502"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": {
+            "ade": "1.9.43",
+            "browser": "0.2.23",
+            "context-manager": "1.1.14",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.35",
+            "ide": "0.12.18",
+            "iii-directory": "1.2.30",
+            "judge": "0.2.1",
+            "judge-typesafe": "0.2.1",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.22",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.19",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.25",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 96.9,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 30100,
+            "input_tokens_mean": 35769,
+            "function_calls_mean": 16.6,
+            "function_calls": 149,
+            "function_call_errors": 0,
+            "turns_mean": 7.9
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36220337119-1",
+          "label": null,
+          "started_at": "2026-09-26T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36220337119,
+            "run_attempt": 1,
+            "release_control_execution_id": "e63de635",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36220337119"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.3-rc.1",
+          "workers": null,
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 0,
+          "counted": 0,
+          "reason": "No group left a run this runner can read: the E2E runner did not register e2e::scenarios-list within 300 s, in all 9 groups.",
+          "measures": null,
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "timer_wake",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "contention_ledger",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "context_pressure",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36247956691-1",
+          "label": null,
+          "started_at": "2026-09-26T11:16:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36247956691,
+            "run_attempt": 1,
+            "release_control_execution_id": "dd6afc59",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36247956691"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.3-rc.1",
+          "workers": null,
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 0,
+          "counted": 0,
+          "reason": "No group left a run this runner can read: the E2E runner did not register e2e::scenarios-list within 300 s, in all 9 groups.",
+          "measures": null,
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "timer_wake",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "contention_ledger",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "context_pressure",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36285373498-1",
+          "label": null,
+          "started_at": "2026-09-26T22:23:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36285373498,
+            "run_attempt": 1,
+            "release_control_execution_id": "87f08a12",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36285373498"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.3-rc.1",
+          "workers": {
+            "ade": "1.9.44",
+            "browser": "0.2.24",
+            "context-manager": "1.1.15",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.36",
+            "ide": "0.12.19",
+            "iii-directory": "1.2.31",
+            "judge": "0.2.2",
+            "judge-typesafe": "0.2.1",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.22",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.19",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.26",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 94.1,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 30900,
+            "input_tokens_mean": 29660,
+            "function_calls_mean": 17.3,
+            "function_calls": 156,
+            "function_call_errors": 0,
+            "turns_mean": 8.4
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 62,
+              "behavior_sha256": "sha256:6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36296751640-1",
+          "label": null,
+          "started_at": "2026-09-27T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36296751640,
+            "run_attempt": 1,
+            "release_control_execution_id": "4c8188d8",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36296751640"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.3-rc.1",
+          "workers": {
+            "ade": "1.9.44",
+            "browser": "0.2.24",
+            "context-manager": "1.1.15",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.36",
+            "ide": "0.12.20",
+            "iii-directory": "1.2.31",
+            "judge": "0.2.2",
+            "judge-typesafe": "0.2.1",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.22",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.19",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.26",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 97.4,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 36000,
+            "input_tokens_mean": 39838,
+            "function_calls_mean": 18.2,
+            "function_calls": 164,
+            "function_call_errors": 0,
+            "turns_mean": 9.1
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 87,
+              "behavior_sha256": "sha256:6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        },
+        {
+          "execution_id": "github-36381232467-1",
+          "label": null,
+          "started_at": "2026-09-28T02:17:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 36381232467,
+            "run_attempt": 1,
+            "release_control_execution_id": "cd674932",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/36381232467"
+          },
+          "stack": {
+            "name": "default",
+            "matched_by_workers": false
+          },
+          "engine": "0.24.3-rc.1",
+          "workers": {
+            "ade": "1.9.44",
+            "browser": "0.2.24",
+            "context-manager": "1.1.15",
+            "cron": "0.21.25",
+            "database": "0.5.20",
+            "fp": "0.2.20",
+            "harness": "1.8.36",
+            "ide": "0.12.20",
+            "iii-directory": "1.2.31",
+            "judge": "0.2.2",
+            "judge-typesafe": "0.2.1",
+            "llm-router": "1.4.27",
+            "provider-anthropic": "1.2.22",
+            "provider-deepseek": "0.1.16",
+            "provider-openai": "1.2.19",
+            "provider-openai-codex": "0.4.17",
+            "provider-zai": "0.5.13",
+            "queue": "0.21.17",
+            "session-manager": "1.0.26",
+            "state": "0.22.17",
+            "storage": "0.1.23"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 9,
+          "reason": null,
+          "measures": {
+            "score_mean": 93,
+            "completed": 9,
+            "planned": 9,
+            "duration_ms_mean": 28900,
+            "input_tokens_mean": 36002,
+            "function_calls_mean": 16.7,
+            "function_calls": 150,
+            "function_call_errors": 0,
+            "turns_mean": 8.3
+          },
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:7b322c387b322c387b322c387b322c387b322c387b322c387b322c387b322c38"
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda893e0eda"
+            },
+            {
+              "id": "timer_wake",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b91450c4b9"
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "scored",
+              "score": 52,
+              "behavior_sha256": "sha256:6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f6f93023f"
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": "sha256:325d460c325d460c325d460c325d460c325d460c325d460c325d460c325d460c"
+            },
+            {
+              "id": "contention_ledger",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4056d5ae4"
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:462f1246462f1246462f1246462f1246462f1246462f1246462f1246462f1246"
+            },
+            {
+              "id": "context_pressure",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:24842a6324842a6324842a6324842a6324842a6324842a6324842a6324842a63"
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "opus",
+      "series": {
+        "suite": "regression",
+        "provider": "anthropic",
+        "model": "claude-opus-5-5",
+        "profile": null,
+        "suite_label": "Regression",
+        "where": ["harness"],
+        "executions": 1,
+        "latest_at": "2026-09-27T19:47:00-03:00"
+      },
+      "points": [
+        {
+          "execution_id": "local-opus-1",
+          "label": null,
+          "started_at": "2026-09-27T19:47:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@01d628e",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": [
+            "persistent_state",
+            "tool_contract_recovery",
+            "timer_wake",
+            "shell_coder_sandbox",
+            "database_migration_recovery",
+            "contention_ledger",
+            "validation_self_repair",
+            "context_pressure",
+            "prompt_injection_resilience"
+          ],
+          "runs": 9,
+          "counted": 0,
+          "reason": "Every run is technically invalid, so none of the 9 counts.",
+          "measures": null,
+          "tests": [
+            {
+              "id": "persistent_state",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "tool_contract_recovery",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "timer_wake",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "shell_coder_sandbox",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "database_migration_recovery",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "contention_ledger",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "validation_self_repair",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "context_pressure",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "prompt_injection_resilience",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "local",
+      "series": {
+        "suite": "sha256:5a17ed025a17ed025a17ed025a17ed025a17ed025a17ed025a17ed025a17ed02",
+        "provider": "claude-code",
+        "model": "claude-opus-5-5",
+        "profile": "ade-worker-builder",
+        "suite_label": "2 tests, unsaved",
+        "where": ["harness"],
+        "executions": 5,
+        "latest_at": "2026-09-24T19:13:00-03:00"
+      },
+      "points": [
+        {
+          "execution_id": "local-local-1",
+          "label": "ade-worker-builder · new",
+          "started_at": "2026-09-24T15:11:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@ba3f954",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": ["form_flow_build", "state_machine_canvas_build"],
+          "runs": 2,
+          "counted": 2,
+          "reason": null,
+          "measures": {
+            "score_mean": 100,
+            "completed": 2,
+            "planned": 2,
+            "duration_ms_mean": 863500,
+            "input_tokens_mean": 5396,
+            "function_calls_mean": 139.5,
+            "function_calls": 279,
+            "function_call_errors": 28,
+            "turns_mean": 86
+          },
+          "tests": [
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69"
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
+            }
+          ]
+        },
+        {
+          "execution_id": "local-local-2",
+          "label": "ade-worker-builder · new 2",
+          "started_at": "2026-09-24T15:56:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@ba3f954",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": ["form_flow_build", "state_machine_canvas_build"],
+          "runs": 2,
+          "counted": 2,
+          "reason": null,
+          "measures": {
+            "score_mean": 100,
+            "completed": 2,
+            "planned": 2,
+            "duration_ms_mean": 1033600,
+            "input_tokens_mean": 5378,
+            "function_calls_mean": 164,
+            "function_calls": 328,
+            "function_call_errors": 28,
+            "turns_mean": 96.5
+          },
+          "tests": [
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69"
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
+            }
+          ]
+        },
+        {
+          "execution_id": "local-local-3",
+          "label": "ade-worker-builder · new 2",
+          "started_at": "2026-09-24T17:58:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@ba3f954",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": ["form_flow_build", "state_machine_canvas_build"],
+          "runs": 2,
+          "counted": 2,
+          "reason": null,
+          "measures": {
+            "score_mean": 100,
+            "completed": 2,
+            "planned": 2,
+            "duration_ms_mean": 818100,
+            "input_tokens_mean": 5306,
+            "function_calls_mean": 113.5,
+            "function_calls": 227,
+            "function_call_errors": 16,
+            "turns_mean": 71.5
+          },
+          "tests": [
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69"
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
+            }
+          ]
+        },
+        {
+          "execution_id": "local-local-4",
+          "label": "ade-worker-builder · new 2",
+          "started_at": "2026-09-24T18:39:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@ba3f954",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": ["form_flow_build", "state_machine_canvas_build"],
+          "runs": 2,
+          "counted": 2,
+          "reason": null,
+          "measures": {
+            "score_mean": 100,
+            "completed": 2,
+            "planned": 2,
+            "duration_ms_mean": 735200,
+            "input_tokens_mean": 5208,
+            "function_calls_mean": 101,
+            "function_calls": 202,
+            "function_call_errors": 11,
+            "turns_mean": 61
+          },
+          "tests": [
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69"
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
+            }
+          ]
+        },
+        {
+          "execution_id": "local-local-5",
+          "label": "ade-worker-builder · new 2",
+          "started_at": "2026-09-24T19:13:00-03:00",
+          "source": {
+            "kind": "local"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.0",
+          "workers": {
+            "ade": "@ba3f954",
+            "browser": "0.2.20",
+            "canvas": "0.1.16",
+            "context-manager": "@852b87e",
+            "cron": "@852b87e",
+            "database": "0.5.17",
+            "fp": "0.2.20",
+            "harness": "@852b87e*",
+            "ide": "@852b87e",
+            "iii-directory": "@852b87e",
+            "llm-router": "@852b87e",
+            "provider-anthropic": "@852b87e",
+            "provider-claude-code": "@852b87e",
+            "provider-deepseek": "@852b87e",
+            "provider-openai": "@852b87e",
+            "provider-openai-codex": "@852b87e",
+            "provider-zai": "0.5.13",
+            "queue": "@852b87e",
+            "session-manager": "@852b87e",
+            "state": "@852b87e",
+            "storage": "0.1.20",
+            "web": "1.2.20"
+          },
+          "planned": ["form_flow_build", "state_machine_canvas_build"],
+          "runs": 2,
+          "counted": 2,
+          "reason": null,
+          "measures": {
+            "score_mean": 100,
+            "completed": 2,
+            "planned": 2,
+            "duration_ms_mean": 916400,
+            "input_tokens_mean": 5544,
+            "function_calls_mean": 136.5,
+            "function_calls": 273,
+            "function_call_errors": 17,
+            "turns_mean": 81
+          },
+          "tests": [
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:1768da691768da691768da691768da691768da691768da691768da691768da69"
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "key": "se",
+      "series": {
+        "suite": "software-engineering",
+        "provider": "deepseek",
+        "model": "deepseek-flash",
+        "profile": "ade-worker-builder",
+        "suite_label": "Software engineering",
+        "where": ["github"],
+        "executions": 2,
+        "latest_at": "2026-09-24T03:33:00-03:00"
+      },
+      "points": [
+        {
+          "execution_id": "github-35925167026-1",
+          "label": null,
+          "started_at": "2026-09-23T18:53:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35925167026,
+            "run_attempt": 1,
+            "release_control_execution_id": "e976a3dd",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35925167026"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": null,
+          "workers": null,
+          "planned": [
+            "kanban_c1_foundation",
+            "kanban_c2_persistence",
+            "kanban_c3_board",
+            "kanban_c4_ticket_flow",
+            "kanban_c5_edit_move",
+            "kanban_c6_discussion",
+            "kanban_c7_live",
+            "registry_implementation",
+            "registry_verification",
+            "trending_topics_build",
+            "linkly_tutorial",
+            "alertmanager_route_match",
+            "chess_engine_build"
+          ],
+          "runs": 13,
+          "counted": 12,
+          "reason": null,
+          "measures": {
+            "score_mean": 88.9,
+            "completed": 8,
+            "planned": 13,
+            "duration_ms_mean": 935000,
+            "input_tokens_mean": 801823,
+            "function_calls_mean": 147.3,
+            "function_calls": 1768,
+            "function_call_errors": 72,
+            "turns_mean": 109.7
+          },
+          "tests": [
+            {
+              "id": "kanban_c1_foundation",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c2_persistence",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c3_board",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c4_ticket_flow",
+              "state": "scored",
+              "score": 95,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c5_edit_move",
+              "state": "scored",
+              "score": 55,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c6_discussion",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c7_live",
+              "state": "scored",
+              "score": 65,
+              "behavior_sha256": null
+            },
+            {
+              "id": "registry_implementation",
+              "state": "no_score",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "registry_verification",
+              "state": "no_score",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "trending_topics_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "linkly_tutorial",
+              "state": "scored",
+              "score": 89,
+              "behavior_sha256": null
+            },
+            {
+              "id": "alertmanager_route_match",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "chess_engine_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            }
+          ]
+        },
+        {
+          "execution_id": "github-35965100994-1",
+          "label": null,
+          "started_at": "2026-09-24T03:33:00-03:00",
+          "source": {
+            "kind": "github",
+            "run_id": 35965100994,
+            "run_attempt": 1,
+            "release_control_execution_id": "12d5f973",
+            "url": "https://github.com/iii-hq/harness-e2e/actions/runs/35965100994"
+          },
+          "stack": {
+            "name": null,
+            "matched_by_workers": false
+          },
+          "engine": "0.24.2-rc.2",
+          "workers": null,
+          "planned": [
+            "kanban_c1_foundation",
+            "kanban_c2_persistence",
+            "kanban_c3_board",
+            "kanban_c4_ticket_flow",
+            "kanban_c5_edit_move",
+            "kanban_c6_discussion",
+            "kanban_c7_live",
+            "registry_implementation",
+            "registry_verification",
+            "trending_topics_build",
+            "linkly_tutorial",
+            "alertmanager_route_match",
+            "chess_engine_build",
+            "form_flow_build",
+            "state_machine_canvas_build"
+          ],
+          "runs": 13,
+          "counted": 12,
+          "reason": null,
+          "measures": {
+            "score_mean": 92.7,
+            "completed": 11,
+            "planned": 15,
+            "duration_ms_mean": 633700,
+            "input_tokens_mean": 154163,
+            "function_calls_mean": 59.6,
+            "function_calls": 715,
+            "function_call_errors": 21,
+            "turns_mean": 51.3
+          },
+          "tests": [
+            {
+              "id": "kanban_c1_foundation",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c2_persistence",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c3_board",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c4_ticket_flow",
+              "state": "scored",
+              "score": 80,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c5_edit_move",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c6_discussion",
+              "state": "scored",
+              "score": 90,
+              "behavior_sha256": null
+            },
+            {
+              "id": "kanban_c7_live",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "registry_implementation",
+              "state": "scored",
+              "score": 92,
+              "behavior_sha256": null
+            },
+            {
+              "id": "registry_verification",
+              "state": "scored",
+              "score": 65,
+              "behavior_sha256": null
+            },
+            {
+              "id": "trending_topics_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "linkly_tutorial",
+              "state": "not_run",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "alertmanager_route_match",
+              "state": "technical_invalid",
+              "score": null,
+              "behavior_sha256": null
+            },
+            {
+              "id": "chess_engine_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            },
+            {
+              "id": "form_flow_build",
+              "state": "scored",
+              "score": 85,
+              "behavior_sha256": null
+            },
+            {
+              "id": "state_machine_canvas_build",
+              "state": "scored",
+              "score": 100,
+              "behavior_sha256": null
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

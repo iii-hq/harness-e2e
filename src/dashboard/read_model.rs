@@ -19,6 +19,7 @@ use crate::control::ExecutionRecord;
 use crate::identity::StackIdentity;
 use crate::report::{
     CompletionState, E2eRunReport, E2eScenarioReport, EvaluationDimension, RunStatus,
+    TechnicalState,
 };
 use crate::scenarios::{
     stable_seed, ExecutionPolicy, ScenarioCharacterization, ScenarioId, ScenarioSpec,
@@ -422,6 +423,12 @@ struct RunMetrics {
     completion: CompletionState,
     status: RunStatus,
     assessment: RunAssessmentContract,
+    /// Absent in a projection written before trends read it; projections
+    /// are kept as written.
+    #[serde(default)]
+    technical: Option<TechnicalState>,
+    #[serde(default)]
+    input_tokens: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1062,6 +1069,40 @@ impl DashboardReadModel {
         })
     }
 
+    /// Every run of every test, by the native run it belongs to, as trends
+    /// measure them. Replaced attempts are already left out.
+    pub(super) fn trend_runs(&self) -> BTreeMap<String, Vec<super::trends::TrendRun>> {
+        let mut runs = BTreeMap::<String, Vec<_>>::new();
+        for (test, entry) in &self.tests {
+            for observation in entry.versions.values().flat_map(|v| &v.observations) {
+                let behavior_sha256 = Some(observation.behavior_sha256.clone())
+                    .filter(|definition| definition != UNMATERIALIZED_DEFINITION);
+                let native = runs.entry(observation.execution_id.clone()).or_default();
+                native.extend(observation.runs.iter().map(|run| {
+                    super::trends::TrendRun {
+                        test: test.clone(),
+                        behavior_sha256: behavior_sha256.clone(),
+                        // ponytail: a projection written before runs kept their
+                        // technical state counts a run by its score (an invalid
+                        // run's is dropped): a valid unscored run of one is left
+                        // out, and none has input tokens. Reprojecting lifts it.
+                        counted: run
+                            .technical
+                            .map_or(run.score.is_some(), |t| t == TechnicalState::Valid),
+                        completed: run.completion == CompletionState::Completed,
+                        score: run.score,
+                        duration_ms: run.duration_seconds.map(|seconds| seconds * 1_000.0),
+                        input_tokens: run.input_tokens,
+                        function_calls: run.function_calls,
+                        function_call_errors: run.function_call_errors,
+                        turns: run.turns,
+                    }
+                }));
+            }
+        }
+        runs
+    }
+
     /// Completes a history page with what only the runs' native results and
     /// the listed executions hold: each run's sessions, calls and
     /// criteria, and the execution each observation is listed under.
@@ -1441,6 +1482,12 @@ fn run_metrics(run: &E2eRunReport, assessment: &RunAssessmentContract) -> RunMet
         completion: run.completion,
         status: run.status,
         assessment: assessment.clone(),
+        technical: Some(run.technical),
+        input_tokens: run
+            .metrics
+            .as_ref()
+            .and_then(|metrics| metrics.totals.input_tokens)
+            .map(|tokens| tokens as f64),
     }
 }
 
@@ -2012,6 +2059,55 @@ mod tests {
         assert_eq!(history.total, 1);
         assert_eq!(history.observations[0].mean_score, Some(90.0));
         assert_eq!(history.observations[0].median_tokens, None);
+    }
+
+    #[test]
+    fn trend_runs_count_valid_runs_and_read_an_older_projection_by_its_score() {
+        let projection = |id: &str, technical| {
+            let mut metadata = super::super::tests::metadata();
+            metadata.id = id.into();
+            let mut report = super::super::tests::report();
+            report.scenarios[0].runs[0].technical = technical;
+            ExecutionProjection::from_stored(&StoredRun {
+                metadata,
+                report: Some(report),
+                live_progress: None,
+                live_progress_error: None,
+            })
+            .unwrap()
+        };
+        // Written before runs kept their technical state and input tokens.
+        let older = serde_json::to_string(&projection("local-older", TechnicalState::Valid))
+            .unwrap()
+            .replace(r#","technical":"valid""#, "")
+            .replace(r#","input_tokens":null"#, "");
+        assert!(!older.contains("\"technical\":"));
+        let model = DashboardReadModel::indexed(
+            vec![
+                projection("local-valid", TechnicalState::Valid),
+                projection("local-invalid", TechnicalState::TechnicalInvalid),
+                serde_json::from_str(&older).unwrap(),
+            ],
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        let runs = model.trend_runs();
+        let counted = |id: &str| {
+            let run = &runs[id][0];
+            (run.test.as_str(), run.counted, run.score, run.duration_ms)
+        };
+        assert_eq!(
+            counted("local-valid"),
+            ("direct_answer", true, Some(90.0), Some(1_500.0))
+        );
+        assert_eq!(
+            counted("local-invalid"),
+            ("direct_answer", false, None, Some(1_500.0))
+        );
+        assert_eq!(
+            counted("local-older"),
+            ("direct_answer", true, Some(90.0), Some(1_500.0))
+        );
     }
 
     #[test]

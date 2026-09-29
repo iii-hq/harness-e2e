@@ -264,6 +264,7 @@ pub(super) fn execution_summary(
         "first_failure": first_failure(report),
     });
     summary["parameters"] = parameters;
+    summary["engine_version"] = json!(system.engine_version);
     summary["persistence_errors"] = json!(report.persistence_errors);
     summary["slot_start_deadline_seconds"] = json!(report.slot_start_deadline_seconds);
     if !report.persistence_errors.is_empty() {

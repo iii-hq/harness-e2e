@@ -148,6 +148,40 @@ describe('live dashboard transport', () => {
     })
   })
 
+  it('asks for a series over time and looks each version range up once', async () => {
+    const trigger = vi.fn(async (id: string) =>
+      id === 'version-compare'
+        ? { url: 'https://github.com/iii-hq/iii/compare', total_commits: 9 }
+        : { series: [], selected: null, stack: 'any', stacks: [], points: [] },
+    )
+    installDashboardIiiClient({ trigger } as unknown as DashboardIiiClient)
+    installDashboardRuntimeConfig({
+      functions: {
+        trends_get: 'trends-get',
+        version_compare: 'version-compare',
+      },
+    } as RuntimeConfig)
+    const live = await getDashboardDataBridge()
+    const request = {
+      suite: 'regression',
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+      profile: null,
+      stack: 'any',
+    }
+    await live.getTrends(request)
+    expect(trigger).toHaveBeenCalledWith('trends-get', request)
+    const range = { name: 'iii', base: '0.24.2-rc.2', head: '0.24.3-rc.1' }
+    await expect(live.compareVersions(range)).resolves.toEqual({
+      url: 'https://github.com/iii-hq/iii/compare',
+      total_commits: 9,
+    })
+    await live.compareVersions(range)
+    expect(
+      trigger.mock.calls.filter(([id]) => id === 'version-compare'),
+    ).toEqual([['version-compare', range]])
+  })
+
   it('does not retry iii failures through HTTP', async () => {
     const fetch = vi.fn()
     vi.stubGlobal('fetch', fetch)

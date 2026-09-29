@@ -131,6 +131,23 @@ again. Screenshots a run's deliverables declare are read on demand through
 declares, inside that execution's directory, up to 10 MB. **Rerun selected**
 opens Run again with B's parameters and only the ticked scenarios.
 
+**Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
+digest of an unsaved suite, × provider × model × agent profile) over time, from
+what the read model already holds. Each execution is a point measured over its
+technically valid runs only; completed runs are counted out of the planned ones
+(tests × runs per test), and a planned test with no run is `not_run`. The stack
+filter defaults to `any`, also when it names a stack the series never ran on;
+an execution that recorded no stack joins the stack whose first execution ran
+workers of the same names. `since` and `until` (RFC 3339, inclusive, on the
+start) limit the points and the stacks' counts; the series listed and the
+stack each execution joins are still read over all time. A worker is named by its commit
+(`@sha7`, `*` when dirty), else the version its compose lock resolved (on this
+harness, a concrete version its compose file pins), never the version the
+engine observed (a binary's Cargo version, which releases did not always move). `e2e::dashboard::version-compare` links
+two builds of iii, the runner or a worker on GitHub (release tags
+`<name>/v<version>`, or commits) and counts the commits between them through
+`gh`, keeping what GitHub answered for the worker's lifetime.
+
 The execution label is optional and intentionally descriptive only. The local
 page does not infer a system version from that label: it uses the immutable
 source revision or registry stack lock captured in `results.json`. Tests compares

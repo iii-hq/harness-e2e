@@ -6,12 +6,27 @@ import {
   hashForStacks,
   hashForSuites,
   hashForTestHistory,
+  hashForTrends,
   hashForVersionComparison,
   hashForWorkspace,
   hashFrom,
   routeFromHash,
   routeRenderIdentity,
+  trendsOrigin,
 } from '@/hooks/use-hash-route'
+
+describe('a comparison opened from Trends', () => {
+  it('goes back to the Trends view it came from, and to nothing else', () => {
+    const trends = hashForTrends(new URLSearchParams({ stack: 'any' }))
+    const compare = hashFrom(hashForComparison('plan-a', 'plan-b'), trends)
+    expect(trendsOrigin(compare)).toBe(trends)
+    expect(trendsOrigin(hashForComparison('plan-a', 'plan-b'))).toBeNull()
+    for (const from of ['https://example.com/', hashForExecution('plan-a')])
+      expect(
+        trendsOrigin(hashFrom(hashForComparison('plan-a', 'plan-b'), from)),
+      ).toBeNull()
+  })
+})
 
 describe('a run page opened from a comparison', () => {
   const comparison = `${hashForComparison('plan-a', 'plan-b')}?exclude=minimal_path`
@@ -120,6 +135,37 @@ describe('dashboard hash routes', () => {
     expect(routeFromHash(hashForSuites('suite-1'))).toEqual({ page: 'suites' })
     expect(hashForStacks()).toBe('#/ext/harness-e2e/stacks')
     expect(routeFromHash(hashForStacks())).toEqual({ page: 'stacks' })
+    expect(hashForTrends()).toBe('#/ext/harness-e2e/trends')
+    expect(routeFromHash(hashForTrends())).toEqual({
+      page: 'trends',
+      request: {},
+      period: { range: '30d' },
+    })
+    expect(
+      routeFromHash(
+        hashForTrends(
+          new URLSearchParams({
+            suite: 'regression',
+            provider: 'deepseek',
+            model: 'deepseek-flash',
+            profile: '',
+            stack: 'not_recorded',
+            since: '2026-09-01',
+            until: '2026-09-10',
+          }),
+        ),
+      ),
+    ).toEqual({
+      page: 'trends',
+      request: {
+        suite: 'regression',
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        profile: null,
+        stack: 'not_recorded',
+      },
+      period: { since: '2026-09-01', until: '2026-09-10' },
+    })
     // The retired plan pages are no route of this page any more.
     expect(routeFromHash('#/ext/harness-e2e/plans')).toBeNull()
     expect(routeFromHash('#/ext/harness-e2e/plans/new')).toBeNull()

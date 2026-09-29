@@ -1,0 +1,996 @@
+/* Trends as the redesign canvas draws it (Trends.dc.html): the series and
+   stack controls, the large chart with its lane of what changed, the six
+   small charts, the panel of one execution, the scores by test and the
+   executions. Host tokens only; outlines instead of shadows; every selector
+   branch written out (the bundle's scoping prefixes each branch). Menus
+   render in a portal outside .harness-e2e-shell, where the --ds-* scale is
+   not defined: their sizes carry a fallback. */
+
+.tr-page {
+  --tr-label: var(--ds-text-label, 0.6875rem);
+}
+
+.tr-faint {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.tr-faint-ink {
+  color: var(--color-ink-faint);
+}
+
+.tr-ghost {
+  color: var(--color-ink-ghost);
+}
+
+.tr-danger {
+  color: var(--ds-danger-text);
+}
+
+.tr-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-small {
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.tr-strong {
+  font-weight: 500;
+}
+
+.tr-ellipsis {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-wrap {
+  overflow-wrap: anywhere;
+}
+
+.tr-spacer {
+  flex: 1 1 auto;
+}
+
+.tr-h2 {
+  margin: 0;
+  font-size: var(--ds-text-md, 0.875rem);
+  font-weight: 600;
+  line-height: calc(var(--spacing) * 5.5);
+}
+
+.tr-h3 {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.tr-card {
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-panel-raised);
+  outline: 1px solid var(--color-edge);
+  outline-offset: -1px;
+}
+
+.tr-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2.5);
+}
+
+.tr-tag {
+  display: inline-flex;
+  height: calc(var(--spacing) * 5);
+  align-items: center;
+  padding: 0 calc(var(--spacing) * 1.5);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.tr-direction {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1);
+  white-space: nowrap;
+}
+
+.tr-footnote {
+  margin: calc(var(--spacing) * 1) 0 0;
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+/* Series and stack */
+.tr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
+.tr-control {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: calc(var(--spacing) * 9);
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  padding: 0 calc(var(--spacing) * 2.5) 0 calc(var(--spacing) * 3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font: inherit;
+  font-size: var(--ds-text-sm, 0.8125rem);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tr-control:hover {
+  background: var(--color-surface-hover);
+}
+
+.tr-control[data-state="open"] {
+  background: var(--color-surface-selected);
+}
+
+.tr-control:disabled {
+  cursor: default;
+}
+
+.tr-control:disabled:hover {
+  background: var(--color-surface);
+}
+
+.tr-control:focus-visible,
+.tr-mini-title:focus-visible,
+.tr-column:focus-visible,
+.tr-icon-button:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: 1px;
+}
+
+.tr-menu {
+  max-width: calc(100vw - var(--spacing) * 4);
+  padding: calc(var(--spacing) * 1);
+}
+
+.tr-choice-menu {
+  width: calc(var(--spacing) * 90);
+}
+
+.tr-period-menu {
+  width: calc(var(--spacing) * 50);
+}
+
+/* A custom period: From and To, and why they are not one when not. */
+.tr-custom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-width: 0;
+}
+
+.tr-day {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  font-size: var(--ds-text-sm, 0.8125rem);
+}
+
+.tr-period-error {
+  margin: 0;
+  color: var(--ds-danger-text);
+  font-size: var(--text-xs);
+}
+
+.tr-stack-menu {
+  width: calc(var(--spacing) * 85);
+}
+
+/* The host's radio item keeps its padding: the left gutter holds the check. */
+.tr-menu-item {
+  display: flex;
+  min-height: calc(var(--spacing) * 11);
+  align-items: center;
+  gap: calc(var(--spacing) * 3);
+  font-size: var(--ds-text-sm, 0.8125rem);
+}
+
+.tr-menu-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tr-menu-note {
+  margin: calc(var(--spacing) * 1) calc(var(--spacing) * 2.5)
+    calc(var(--spacing) * 1.5);
+  color: var(--color-ink-faint);
+  font-size: var(--ds-text-label, 0.6875rem);
+  line-height: calc(var(--spacing) * 4);
+}
+
+.tr-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 1) calc(var(--spacing) * 3.5);
+  margin: 0;
+  padding: 0;
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  list-style: none;
+}
+
+.tr-legend > li {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.tr-legend-dot {
+  width: calc(var(--spacing) * 2.5);
+  height: calc(var(--spacing) * 2.5);
+  border-radius: 50%;
+  background: var(--color-ink);
+}
+
+/* A diamond as the legend and the panel draw it: filled for a major
+   change, outlined for another worker or a definition. */
+.tr-change-dot {
+  flex: none;
+  width: calc(var(--spacing) * 2);
+  height: calc(var(--spacing) * 2);
+  transform: rotate(45deg);
+  background: var(--color-ink);
+}
+
+.tr-change-dot[data-major="false"] {
+  border: 1.5px solid var(--color-ink-faint);
+  background: var(--color-panel-raised);
+}
+
+.tr-summary {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.5);
+}
+
+.tr-summary p {
+  margin: 0;
+}
+
+.tr-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+}
+
+.tr-num-text {
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-loading {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3.5);
+}
+
+.tr-skel {
+  display: block;
+  max-width: 100%;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.tr-skel-series {
+  width: calc(var(--spacing) * 110);
+  height: calc(var(--spacing) * 9);
+}
+
+.tr-skel-stack {
+  width: calc(var(--spacing) * 32);
+  height: calc(var(--spacing) * 9);
+}
+
+.tr-skel-line {
+  width: calc(var(--spacing) * 120);
+  height: calc(var(--spacing) * 4);
+}
+
+.tr-skel-big {
+  height: calc(var(--spacing) * 96);
+}
+
+.tr-skel-mini {
+  height: calc(var(--spacing) * 48);
+}
+
+.tr-skel-row {
+  height: calc(var(--spacing) * 12);
+}
+
+/* The large chart and the panel of the picked execution */
+.tr-top {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: calc(var(--spacing) * 4);
+}
+
+.tr-top[data-panel] {
+  grid-template-columns: minmax(0, 1fr) calc(var(--spacing) * 90);
+}
+
+.tr-big {
+  padding: calc(var(--spacing) * 3.5) calc(var(--spacing) * 4)
+    calc(var(--spacing) * 3);
+}
+
+.tr-latest {
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-display, 1.375rem);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: calc(var(--spacing) * 7);
+  white-space: nowrap;
+}
+
+.tr-mini .tr-latest {
+  font-size: var(--ds-text-md, 0.875rem);
+  line-height: calc(var(--spacing) * 5);
+}
+
+/* A difference on a tinted pill, in the tone of the measure's direction. */
+.tr-delta {
+  display: inline-flex;
+  height: calc(var(--spacing) * 5.5);
+  align-items: center;
+  padding: 0 calc(var(--spacing) * 1.75);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.tr-delta[data-tone="positive"] {
+  background: var(--color-ok-muted);
+}
+
+.tr-delta[data-tone="negative"] {
+  background: var(--color-alert-muted);
+}
+
+.tr-delta .ds-delta-negative {
+  color: var(--ds-danger-text);
+}
+
+.tr-mini .tr-delta,
+.tr-measures .tr-delta {
+  height: calc(var(--spacing) * 5);
+  padding: 0 calc(var(--spacing) * 1.5);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.tr-plot {
+  position: relative;
+  margin-top: calc(var(--spacing) * 1.5);
+}
+
+.tr-svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+}
+
+.tr-gridline {
+  stroke: var(--color-edge);
+  stroke-width: 1;
+}
+
+.tr-axis {
+  fill: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+}
+
+.tr-major {
+  stroke: var(--color-ink-ghost);
+  stroke-dasharray: 3 3;
+  stroke-width: 1;
+}
+
+.tr-cross {
+  stroke: var(--color-ink-ghost);
+  stroke-width: 1;
+}
+
+/* Data in ink, as the test history draws its first series; the accent is
+   kept for what is live, focused or primary. */
+.tr-line {
+  stroke: var(--color-ink);
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+
+.tr-line[data-large] {
+  stroke-width: 2;
+}
+
+.tr-line[data-faded] {
+  stroke-opacity: 0.3;
+}
+
+.tr-dot {
+  fill: var(--color-ink);
+}
+
+.tr-miss-mark {
+  stroke: var(--ds-danger-text);
+  stroke-linecap: round;
+  stroke-width: 1.5;
+}
+
+/* The points of the large chart, the executions without a counted run and
+   the diamonds of the lane are buttons. */
+.tr-point,
+.tr-missed,
+.tr-diamond {
+  position: absolute;
+  padding: 0;
+  border: 0;
+  cursor: pointer;
+}
+
+.tr-point {
+  width: calc(var(--spacing) * 3);
+  height: calc(var(--spacing) * 3);
+  margin: calc(var(--spacing) * -1.5) 0 0 calc(var(--spacing) * -1.5);
+  border-radius: 50%;
+  background: var(--color-ink);
+  outline: 2px solid var(--color-panel-raised);
+}
+
+.tr-point:hover {
+  transform: scale(1.3);
+}
+
+.tr-point[data-selected] {
+  background: var(--color-ink);
+  outline: 2px solid var(--color-ink);
+  outline-offset: 2px;
+}
+
+.tr-missed {
+  display: flex;
+  width: calc(var(--spacing) * 4.5);
+  height: calc(var(--spacing) * 4.5);
+  align-items: center;
+  justify-content: center;
+  margin: calc(var(--spacing) * -2.25) 0 0 calc(var(--spacing) * -2.25);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--ds-danger-text);
+}
+
+.tr-missed:hover {
+  background: var(--color-alert-muted);
+}
+
+.tr-missed[data-selected] {
+  background: var(--color-alert-muted);
+  outline: 2px solid var(--ds-danger-text);
+}
+
+.tr-diamond {
+  width: calc(var(--spacing) * 2.5);
+  height: calc(var(--spacing) * 2.5);
+  margin-left: calc(var(--spacing) * -1.25);
+  transform: rotate(45deg);
+  background: var(--color-ink);
+}
+
+.tr-diamond[data-major="false"] {
+  border: 1.5px solid var(--color-ink-faint);
+  background: var(--color-panel-raised);
+}
+
+.tr-diamond:hover {
+  outline: 3px solid var(--color-surface-selected);
+}
+
+.tr-diamond[data-selected] {
+  outline: 3px solid var(--color-rule-focus);
+}
+
+.tr-point:focus-visible,
+.tr-missed:focus-visible,
+.tr-diamond:focus-visible {
+  outline: 2px solid var(--color-rule-focus);
+  outline-offset: 2px;
+}
+
+/* The six small charts */
+.tr-minis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(var(--spacing) * 3);
+}
+
+.tr-minis[data-narrow] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.tr-mini {
+  padding: calc(var(--spacing) * 3) calc(var(--spacing) * 3.5)
+    calc(var(--spacing) * 2);
+}
+
+.tr-mini .tr-card-head {
+  flex-wrap: nowrap;
+  gap: calc(var(--spacing) * 2);
+}
+
+.tr-mini-title {
+  display: inline-flex;
+  height: calc(var(--spacing) * 6.5);
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  margin-left: calc(var(--spacing) * -1.5);
+  padding: 0 calc(var(--spacing) * 1.5);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink);
+  font: inherit;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tr-mini-title:hover {
+  background: var(--color-surface-hover);
+}
+
+.tr-mini-title svg {
+  color: var(--color-ink-faint);
+}
+
+.tr-mini .tr-footnote {
+  margin: 0;
+}
+
+/* Under the latest value: which execution it is, against which one. */
+.tr-reference {
+  margin: 0;
+  text-align: right;
+}
+
+/* The panel */
+.tr-panel {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 3);
+  padding: calc(var(--spacing) * 3.5) calc(var(--spacing) * 4);
+}
+
+.tr-panel p {
+  margin: 0;
+}
+
+.tr-panel-head {
+  display: flex;
+  align-items: flex-start;
+  gap: calc(var(--spacing) * 2);
+}
+
+.tr-panel-title {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.5);
+  min-width: 0;
+}
+
+.tr-icon-button {
+  display: inline-flex;
+  width: calc(var(--spacing) * 7);
+  height: calc(var(--spacing) * 7);
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-faint);
+  cursor: pointer;
+}
+
+.tr-icon-button:hover {
+  background: var(--color-surface-hover);
+  color: var(--color-ink);
+}
+
+.tr-panel .tr-note {
+  padding: calc(var(--spacing) * 2) calc(var(--spacing) * 2.5);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  line-height: calc(var(--spacing) * 4.5);
+}
+
+.tr-panel .tr-note[data-tone="alert"] {
+  background: var(--color-alert-muted);
+}
+
+.tr-panel .tr-note[data-tone="warn"] {
+  background: var(--color-warn-muted);
+}
+
+.tr-panel-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+}
+
+.tr-changes {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1.5);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tr-changes > li {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 0.25);
+  padding: calc(var(--spacing) * 1.5) calc(var(--spacing) * 2);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+}
+
+.tr-change-head {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 1.5);
+  font-size: var(--text-xs);
+}
+
+.tr-change-head .tr-change-dot {
+  width: calc(var(--spacing) * 1.75);
+  height: calc(var(--spacing) * 1.75);
+}
+
+.tr-inline-link {
+  color: var(--color-ink);
+  text-decoration: underline;
+}
+
+.tr-link {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(var(--spacing) * 0.5);
+  color: var(--color-accent);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.tr-link:hover {
+  text-decoration: underline;
+}
+
+.tr-measures {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 1);
+  margin: 0;
+}
+
+.tr-measures > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto calc(var(--spacing) * 19);
+  align-items: center;
+  gap: calc(var(--spacing) * 2);
+  min-height: calc(var(--spacing) * 6);
+}
+
+.tr-measures dt {
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+}
+
+.tr-measures dd {
+  margin: 0;
+  font-size: var(--text-xs);
+}
+
+.tr-measures dd:last-child {
+  justify-self: end;
+}
+
+.tr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--spacing) * 2);
+}
+
+/* By test and the executions */
+.tr-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--spacing) * 2);
+  min-width: 0;
+}
+
+.tr-section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: calc(var(--spacing) * 1) calc(var(--spacing) * 2.5);
+}
+
+.tr-grid-scroll {
+  /* Holds the cells' visually hidden notes, so they scroll with it. */
+  position: relative;
+  overflow-x: auto;
+  padding-bottom: calc(var(--spacing) * 1);
+}
+
+/* legacy.css styles bare th and td (mono, lowercase, padded): these set
+   them back to the canvas's grid of pills. */
+.tr-grid {
+  min-width: max-content;
+  border-collapse: separate;
+  border-spacing: calc(var(--spacing) * 1) calc(var(--spacing) * 0.75);
+  margin: calc(var(--spacing) * -0.75) calc(var(--spacing) * -1);
+  table-layout: fixed;
+}
+
+.tr-grid th,
+.tr-grid td {
+  padding: 0;
+  border: 0;
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+  text-align: left;
+  text-transform: none;
+}
+
+.tr-grid-corner {
+  width: var(--tr-test-width);
+  color: var(--color-ink-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  vertical-align: bottom;
+}
+
+.tr-grid-head {
+  width: var(--tr-column-width);
+}
+
+.tr-column {
+  display: flex;
+  width: 100%;
+  height: calc(var(--spacing) * 8.5);
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-ink-faint);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-weight: 400;
+  line-height: calc(var(--spacing) * 3.5);
+  cursor: pointer;
+}
+
+.tr-column:hover {
+  background: var(--color-surface-hover);
+}
+
+.tr-column[data-selected] {
+  background: var(--color-surface-selected);
+}
+
+.tr-grid-test {
+  max-width: var(--tr-test-width);
+  height: calc(var(--spacing) * 6.5);
+  overflow: hidden;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-grid-test a {
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.tr-grid-test a:hover {
+  color: var(--color-accent);
+  text-decoration: underline;
+}
+
+.tr-grid .tr-cell {
+  height: calc(var(--spacing) * 6.5);
+  border-radius: var(--radius-sm);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: var(--ds-text-label, 0.6875rem);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tr-grid .tr-cell svg {
+  vertical-align: middle;
+}
+
+.tr-grid .tr-cell[data-kind="uncounted"] {
+  color: var(--color-ink-ghost);
+}
+
+.tr-grid .tr-cell[data-kind="not_run"] {
+  background: var(--color-warn-muted);
+  color: var(--warning, var(--color-warn));
+}
+
+.tr-grid .tr-cell[data-kind="technical_invalid"],
+.tr-grid .tr-cell[data-kind="no_score"] {
+  background: var(--color-surface);
+  color: var(--color-ink-faint);
+}
+
+.tr-grid .tr-cell[data-tone="full"] {
+  background: var(--color-surface);
+}
+
+.tr-grid .tr-cell[data-tone="lost"] {
+  background: var(--color-warn-muted);
+}
+
+.tr-grid .tr-cell[data-tone="low"] {
+  background: var(--color-alert-muted);
+}
+
+.tr-grid .tr-cell[data-selected] {
+  outline: 1.5px solid var(--color-ink-ghost);
+  outline-offset: -1.5px;
+}
+
+.tr-redefined {
+  display: inline-block;
+  margin-left: calc(var(--spacing) * 0.75);
+  width: calc(var(--spacing) * 1.25);
+  height: calc(var(--spacing) * 1.25);
+  transform: rotate(45deg);
+  border: 1.2px solid var(--color-ink-faint);
+}
+
+.tr-table.iii-ui-table .iii-ui-table__head,
+.tr-table.iii-ui-table .iii-ui-table__cell {
+  padding: calc(var(--spacing) * 1.5);
+  vertical-align: middle;
+  font-family: var(--font-sans);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.tr-table.iii-ui-table .iii-ui-table__head {
+  font-weight: 500;
+}
+
+.tr-table.iii-ui-table .iii-ui-table__cell {
+  color: var(--color-ink);
+}
+
+.tr-table.iii-ui-table .iii-ui-table__head.tr-num,
+.tr-table.iii-ui-table .iii-ui-table__cell.tr-num {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.tr-table.iii-ui-table .iii-ui-table__cell.tr-num,
+.tr-table.iii-ui-table .tr-version {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.tr-table.iii-ui-table {
+  width: 100%;
+  min-width: 64rem;
+  table-layout: fixed;
+}
+
+.tr-table.iii-ui-table[data-narrow] {
+  min-width: 0;
+}
+
+.tr-table .tr-col-open {
+  width: calc(var(--spacing) * 8);
+}
+
+.tr-table .tr-w-14 {
+  width: calc(var(--spacing) * 14);
+}
+
+.tr-table .tr-w-16 {
+  width: calc(var(--spacing) * 16);
+}
+
+.tr-table .tr-w-18 {
+  width: calc(var(--spacing) * 18);
+}
+
+.tr-table .tr-w-26 {
+  width: calc(var(--spacing) * 26);
+}
+
+.tr-table .tr-w-38 {
+  width: calc(var(--spacing) * 38);
+}
+
+.tr-cell-stack {
+  min-width: 0;
+}
+
+.tr-cell-stack > a {
+  display: block;
+  overflow: hidden;
+  color: var(--color-ink);
+  text-overflow: ellipsis;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.tr-cell-stack > a:hover {
+  text-decoration: underline;
+}
+
+.tr-sub {
+  display: block;
+  overflow: hidden;
+  color: var(--color-ink-faint);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tr-sub[data-tone="alert"] {
+  color: var(--ds-danger-text);
+}
+
+.tr-version {
+  padding: calc(var(--spacing) * 0.25) calc(var(--spacing) * 1.25);
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.tr-version[data-new] {
+  background: var(--color-accent-muted);
+}

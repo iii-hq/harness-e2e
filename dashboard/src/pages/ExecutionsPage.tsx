@@ -671,21 +671,20 @@ export function LedgerLoadFailure({
   reload,
   message,
   onRetry,
+  what = 'executions',
 }: {
   /** Rows are still shown from an earlier load. */
   reload: boolean
   message: string
   onRetry: () => void
+  /** What failed to load, after "the" (Trends: `trend`). */
+  what?: string
 }) {
   return (
     <StatusPanel
       variant="alert"
       icon={<AlertCircle size={18} />}
-      headline={
-        reload
-          ? 'Couldn’t reload the executions'
-          : 'Couldn’t load the executions'
-      }
+      headline={`Couldn’t ${reload ? 'reload' : 'load'} the ${what}`}
       detail={
         <>
           Check that the harness worker is running on this stack, then retry.

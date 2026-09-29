@@ -52,6 +52,13 @@ describe('section navigation in the Console header', () => {
     expect(sectionForRoute({ page: 'stacks' })).toBe('stacks')
     expect(
       sectionForRoute({
+        page: 'trends',
+        request: {},
+        period: { range: '30d' },
+      }),
+    ).toBe('trends')
+    expect(
+      sectionForRoute({
         page: 'execution',
         executionId: 'x',
         anchor: null,
@@ -70,7 +77,7 @@ describe('section navigation in the Console header', () => {
     expect(header).toContain(
       'href="#/ext/harness-e2e/executions" aria-current="page"',
     )
-    for (const label of ['Tests', 'Suites', 'Stacks'])
+    for (const label of ['Tests', 'Trends', 'Suites', 'Stacks'])
       expect(header).toContain(`>${label}</a>`)
     expect(html).not.toContain('harness-e2e-navigation')
     expect(html).not.toContain('<select')
@@ -90,7 +97,7 @@ describe('section navigation in the Console header', () => {
     expect(html).toMatch(
       /role="menuitemradio"[^>]*aria-checked="true">Executions</,
     )
-    for (const label of ['Tests', 'Executions', 'Suites', 'Stacks'])
+    for (const label of ['Tests', 'Executions', 'Trends', 'Suites', 'Stacks'])
       expect(html).toContain(`>${label}<`)
     expect(html).not.toContain('harness-e2e-section-tabs')
   })

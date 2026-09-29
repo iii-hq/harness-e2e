@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { dashboardHash, dashboardRouteHash } from '@/lib/dashboard-runtime'
+import {
+  periodFromParams,
+  type TrendPeriod,
+  type TrendsRequest,
+  trendsRequestFromParams,
+} from '@/lib/trends'
 
 export type WorkspaceView = 'tests' | 'executions'
 
@@ -24,6 +30,9 @@ export type DashboardRoute =
   | { page: 'test-history'; testId: string; compare?: boolean }
   | { page: 'suites' }
   | { page: 'stacks' }
+  /** One series over time; the series, its stack and the period in the
+   *  hash's params. */
+  | { page: 'trends'; request: TrendsRequest; period: TrendPeriod }
 
 const workspaceViews = new Set<WorkspaceView>(['tests', 'executions'])
 const defaultRoute: DashboardRoute = { page: 'workspace', view: 'executions' }
@@ -74,6 +83,7 @@ export function replaceRouteParams(params: URLSearchParams) {
 }
 
 export function routeFromHash(rawHash: string): DashboardRoute | null {
+  const params = routeParams(rawHash)
   const routedHash = dashboardRouteHash(rawHash.split('?')[0])
   if (routedHash === null) return null
   rawHash = routedHash
@@ -126,6 +136,12 @@ export function routeFromHash(rawHash: string): DashboardRoute | null {
   }
   if (head === 'suites' && !rest[0]) return { page: 'suites' }
   if (head === 'stacks' && !rest[0]) return { page: 'stacks' }
+  if (head === 'trends' && !rest[0])
+    return {
+      page: 'trends',
+      request: trendsRequestFromParams(params),
+      period: periodFromParams(params),
+    }
   return null
 }
 
@@ -192,6 +208,13 @@ export function comparisonOrigin(rawHash: string): string | null {
     : null
 }
 
+/** The Trends view a comparison was opened from (its Compare with), to go
+ *  back to. Only a Trends hash of this dashboard is taken. */
+export function trendsOrigin(rawHash: string): string | null {
+  const from = routeParams(rawHash).get('from')
+  return from && routeFromHash(from)?.page === 'trends' ? from : null
+}
+
 /** Two evaluated system versions of the test catalog. */
 export function hashForVersionComparison(
   left: string | null = null,
@@ -226,6 +249,12 @@ export function hashForSuites(suiteId?: string | null): string {
 
 export function hashForStacks(): string {
   return dashboardHash('stacks')
+}
+
+/** Trends, on a series and stack when the params name them. */
+export function hashForTrends(params?: URLSearchParams): string {
+  const hash = dashboardHash('trends')
+  return params ? hashWithParams(hash, params) : hash
 }
 
 export function routeRenderIdentity(route: DashboardRoute): string {

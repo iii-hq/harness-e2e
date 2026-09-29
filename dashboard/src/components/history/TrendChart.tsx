@@ -1,5 +1,5 @@
 import { SegmentedControl } from '@iii-dev/console-ui'
-import { useEffect, useRef, useState } from 'react'
+import { useMeasuredWidth } from '@/hooks/use-measured-width'
 import { shortDefinition } from '@/lib/definition-digest'
 import { formatDateTime, formatTime } from '@/lib/format'
 import {
@@ -14,23 +14,6 @@ import {
   shortModel,
 } from '@/lib/test-history'
 import '@/pages/test-history.css'
-
-/** The rendered width of an element, so the SVG's units are its pixels. */
-function useMeasuredWidth(fallback: number) {
-  const ref = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(fallback)
-  useEffect(() => {
-    const element = ref.current
-    if (!element || typeof ResizeObserver === 'undefined') return
-    const observer = new ResizeObserver((entries) => {
-      const next = entries[0]?.contentRect.width
-      if (next) setWidth(Math.round(next))
-    })
-    observer.observe(element)
-    return () => observer.disconnect()
-  }, [])
-  return { ref, width }
-}
 
 // The first series in ink, the second in the accent, then the host glyphs.
 const SERIES_COLORS = [
