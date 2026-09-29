@@ -13,16 +13,19 @@ import {
 import { compareExecutions } from '@/lib/execution-comparison'
 import { type ScreenshotEntry, screenshotsOf } from '@/lib/screenshots'
 import {
+  CandidateList,
   ComparisonPlaceholder,
   choiceCounting,
   choiceFromParams,
   choiceToParams,
   comparisonInvestigation,
   ExecutionComparePage,
+  loadCandidates,
   loadExecutionPair,
   viewParams,
 } from '@/pages/ExecutionComparePage'
 import { imported, local } from '@/test-fixtures/execution-comparison'
+import { LEDGER_EXECUTIONS } from '@/test-fixtures/executions-ledger'
 
 function withRunners(a = imported(), b = local()) {
   for (const [detail, version] of [
@@ -313,7 +316,7 @@ describe('execution comparison page', () => {
 
   it('asks for two executions, shows loading, then the error', () => {
     const empty = renderToStaticMarkup(
-      <ExecutionComparePage left="a" right={null} />,
+      <ExecutionComparePage left={null} right={null} />,
     )
     expect(empty).toContain('Choose two executions')
     expect(empty).toContain('Back to Executions')
@@ -332,6 +335,39 @@ describe('execution comparison page', () => {
     expect(failed).toContain('The comparison could not be loaded')
     expect(failed).toContain('B (gone) could not be loaded')
     expect(failed).toContain('Retry')
+  })
+
+  it('Compare with… lists the latest executions but A, each opening A × B', async () => {
+    const [a, ...others] = LEDGER_EXECUTIONS
+    const asked: unknown[] = []
+    const candidates = await loadCandidates(
+      {
+        listExecutions: async (input = {}) => {
+          asked.push(input)
+          return {
+            executions: input.ids ? [a] : LEDGER_EXECUTIONS,
+          }
+        },
+      },
+      a.id,
+    )
+    expect(asked).toEqual([{ limit: 50 }, { ids: [a.id], limit: 1 }])
+    expect(candidates.a?.id).toBe(a.id)
+    expect(candidates.rows.map((row) => row.id)).toEqual(
+      others.map((other) => other.id),
+    )
+    const html = renderToStaticMarkup(
+      <CandidateList left={a.id} {...candidates} />,
+    )
+    expect(html).toContain('Compare with…')
+    expect(html).toContain(candidates.a?.title)
+    expect(html).toContain(
+      `href="#/ext/harness-e2e/compare/${a.id}/${others[0].id}"`,
+    )
+    expect(html).not.toContain(`data-candidate="${a.id}"`)
+    expect(
+      renderToStaticMarkup(<CandidateList left={a.id} a={null} rows={[]} />),
+    ).toContain('No other execution to compare with')
   })
 
   it('says a side is still running and its figures are partial', () => {

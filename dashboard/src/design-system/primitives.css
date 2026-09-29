@@ -505,6 +505,21 @@
   background: var(--surface);
 }
 
+/* A cell that holds only a checkbox is all checkbox: a click beside the box
+   ticks it and never opens the row. The cover sits over the cell's
+   background and under the box. `:where` keeps a sticky head sticky. */
+:where(td, th):has(> .iii-ui-checkbox:only-child) {
+  position: relative;
+  z-index: 0;
+}
+
+:where(td, th) > .iii-ui-checkbox:only-child::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  content: "";
+}
+
 .ds-table-numeric {
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;

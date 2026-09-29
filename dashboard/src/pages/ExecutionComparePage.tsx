@@ -1,3 +1,14 @@
+import {
+  Table,
+  TableBody,
+  TableCaption,
+  TableCell,
+  TableFrame,
+  TableHead,
+  TableHeader,
+  TableRow,
+  TableViewport,
+} from '@iii-dev/console-ui'
 import { ClipboardCopy, RotateCcw } from 'lucide-react'
 import {
   type ReactNode,
@@ -11,7 +22,13 @@ import { DashboardPageActions } from '@/components/DashboardPageActions'
 import { ExecutionMoreMenu } from '@/components/execution/NeedsAttention'
 import { InvestigationAction } from '@/components/InvestigationAction'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
-import { buttonClassName, EmptyState, PageHeader } from '@/design-system'
+import {
+  buttonClassName,
+  EmptyState,
+  isInteractiveTarget,
+  PageHeader,
+  StatusLabel,
+} from '@/design-system'
 import {
   hashForComparison,
   hashForWorkspace,
@@ -40,10 +57,18 @@ import { plural } from '@/lib/format'
 import type { Investigation } from '@/lib/investigation'
 import { watchExecution } from '@/lib/watch-execution'
 import { rerunParameters } from '@/pages/ExecutionPage'
+import {
+  buildLedgerRows,
+  groupLedgerRows,
+  type LedgerRow,
+} from '@/pages/ExecutionsPage'
 import '@/design-system/styles.css'
 import { copyText } from '@/lib/clipboard'
 
 type Choice = { include: string[]; exclude: string[] }
+
+/** How many of the latest executions Compare with… offers as B. */
+const CANDIDATES = 50
 
 function listParam(params: URLSearchParams, key: string): string[] {
   return (params.get(key) ?? '').split(',').filter(Boolean)
@@ -249,6 +274,151 @@ function Header({
   )
 }
 
+type Candidates = { a: LedgerRow | null; rows: LedgerRow[] }
+
+/** A, named, and the latest executions but A, to pick B from. */
+export async function loadCandidates(
+  bridge: Pick<DashboardDataBridge, 'listExecutions'>,
+  left: string,
+): Promise<Candidates> {
+  const [latest, own] = await Promise.all([
+    bridge.listExecutions({ limit: CANDIDATES }),
+    bridge.listExecutions({ ids: [left], limit: 1 }),
+  ])
+  return {
+    a: buildLedgerRows(own.executions)[0] ?? null,
+    rows: buildLedgerRows(latest.executions).filter((row) => row.id !== left),
+  }
+}
+
+/** Compare with…: A is set, B is picked from the latest executions. */
+function ChooseB({ left }: { left: string }) {
+  const [candidates, setCandidates] = useState<Candidates | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const beginRequest = useLatestRequest()
+  const load = useCallback(async () => {
+    const request = beginRequest()
+    try {
+      const next = await loadCandidates(await getDashboardDataBridge(), left)
+      if (!request.isCurrent()) return
+      setCandidates(next)
+      setError(null)
+    } catch (cause) {
+      if (request.isCurrent())
+        setError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [beginRequest, left])
+  useEffect(() => {
+    void load()
+  }, [load])
+
+  if (error)
+    return (
+      <ComparisonPlaceholder
+        missing={false}
+        error={error}
+        onRetry={() => void load()}
+      />
+    )
+  if (!candidates) return <ComparisonPlaceholder missing={false} error={null} />
+  return <CandidateList left={left} {...candidates} />
+}
+
+export function CandidateList({
+  left,
+  a,
+  rows,
+}: Candidates & { left: string }) {
+  const pick = (row: LedgerRow) => hashForComparison(left, row.id)
+  return (
+    <>
+      <Header
+        title="Compare with…"
+        summary={
+          <>
+            A is <strong>{a?.title ?? left}</strong>, the reference. Pick B,
+            compared with it.
+          </>
+        }
+      />
+      {rows.length === 0 ? (
+        <EmptyState
+          className="cmp-empty"
+          title="No other execution to compare with"
+          description="Run tests or import a GitHub run, then compare it with this one."
+        />
+      ) : (
+        <TableViewport className="ex-table-viewport cmp-choose">
+          <TableFrame>
+            <Table density="compact" inset className="ex-table" data-narrow>
+              <TableCaption className="ds-visually-hidden">
+                Executions to compare with A
+              </TableCaption>
+              <TableHeader>
+                <TableRow>
+                  <TableHead scope="col">Execution</TableHead>
+                  <TableHead className="ex-col-result" scope="col">
+                    Result
+                  </TableHead>
+                  <TableHead className="ex-col-model" scope="col">
+                    Model
+                  </TableHead>
+                  <TableHead className="ex-col-score ex-num" scope="col">
+                    Score
+                  </TableHead>
+                </TableRow>
+              </TableHeader>
+              {groupLedgerRows(rows).map((group) => (
+                <TableBody key={group.key} aria-label={group.label}>
+                  <TableRow className="ex-group">
+                    <TableHead colSpan={4} scope="colgroup">
+                      <span className="ds-label">{group.label}</span>
+                    </TableHead>
+                  </TableRow>
+                  {group.rows.map((row) => (
+                    <TableRow
+                      key={row.id}
+                      interactive
+                      tabIndex={-1}
+                      className="ex-row"
+                      data-candidate={row.id}
+                      onClick={(event) => {
+                        if (!isInteractiveTarget(event.target))
+                          window.location.hash = pick(row)
+                      }}
+                    >
+                      <TableCell className="ex-cell-stack">
+                        <span className="ex-title">
+                          <a href={pick(row)} title={row.title}>
+                            {row.title}
+                          </a>
+                        </span>
+                        <span className="ex-sub ex-mono">{row.meta}</span>
+                      </TableCell>
+                      <TableCell className="ex-cell-stack">
+                        <StatusLabel
+                          className="ex-result"
+                          state={row.result.state}
+                          label={row.result.label}
+                        />
+                      </TableCell>
+                      <TableCell className="ex-cell-stack" title={row.models}>
+                        <span className="ex-mono ex-model">{row.model}</span>
+                        <span className="ex-sub ex-mono">{row.profile}</span>
+                      </TableCell>
+                      <TableCell className="ex-num">{row.score}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              ))}
+            </Table>
+          </TableFrame>
+        </TableViewport>
+      )}
+    </>
+  )
+}
+
 /** What the page shows before a comparison: a choice to make, an error or
  *  the loading skeleton. */
 export function ComparisonPlaceholder({
@@ -411,6 +581,7 @@ export function ExecutionComparePage({
     </div>
   )
 
+  if (left && !right) return shell(<ChooseB left={left} />)
   // Only a first load that failed replaces the page: a refresh that fails
   // keeps what was loaded (open rows, dialogs, the viewer) and says so.
   if (!left || !right || !sides || !comparison)
