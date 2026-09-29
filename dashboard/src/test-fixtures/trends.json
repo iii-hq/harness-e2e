@@ -100,7 +100,10 @@
               "score": null,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35742568444-1",
@@ -219,7 +222,10 @@
               "score": 100,
               "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35743058842-1",
@@ -318,7 +324,10 @@
               "score": 100,
               "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35767230299-1",
@@ -437,7 +446,10 @@
               "score": 100,
               "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35767246472-1",
@@ -536,7 +548,10 @@
               "score": 100,
               "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35821773226-2",
@@ -655,7 +670,10 @@
               "score": 100,
               "behavior_sha256": "sha256:d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236d8e20236"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-35959254741-1",
@@ -774,7 +792,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36010839787-2",
@@ -893,7 +914,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36097908502-1",
@@ -1014,7 +1038,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36220337119-1",
@@ -1103,7 +1130,10 @@
               "score": null,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36247956691-1",
@@ -1192,7 +1222,10 @@
               "score": null,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36285373498-1",
@@ -1313,7 +1346,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36296751640-1",
@@ -1434,7 +1470,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         },
         {
           "execution_id": "github-36381232467-1",
@@ -1555,7 +1594,10 @@
               "score": 100,
               "behavior_sha256": "sha256:82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e82c1dd9e"
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": null
         }
       ]
     },
@@ -1678,7 +1720,10 @@
               "score": null,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "anthropic",
+          "model": "claude-opus-5-5",
+          "profile": null
         }
       ]
     },
@@ -1759,7 +1804,10 @@
               "score": 100,
               "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
             }
-          ]
+          ],
+          "provider": "claude-code",
+          "model": "claude-opus-5-5",
+          "profile": "ade-worker-builder"
         },
         {
           "execution_id": "local-local-2",
@@ -1825,7 +1873,10 @@
               "score": 100,
               "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
             }
-          ]
+          ],
+          "provider": "claude-code",
+          "model": "claude-opus-5-5",
+          "profile": "ade-worker-builder"
         },
         {
           "execution_id": "local-local-3",
@@ -1891,7 +1942,10 @@
               "score": 100,
               "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
             }
-          ]
+          ],
+          "provider": "claude-code",
+          "model": "claude-opus-5-5",
+          "profile": "ade-worker-builder"
         },
         {
           "execution_id": "local-local-4",
@@ -1957,7 +2011,10 @@
               "score": 100,
               "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
             }
-          ]
+          ],
+          "provider": "claude-code",
+          "model": "claude-opus-5-5",
+          "profile": "ade-worker-builder"
         },
         {
           "execution_id": "local-local-5",
@@ -2023,7 +2080,10 @@
               "score": 100,
               "behavior_sha256": "sha256:083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7083e93e7"
             }
-          ]
+          ],
+          "provider": "claude-code",
+          "model": "claude-opus-5-5",
+          "profile": "ade-worker-builder"
         }
       ]
     },
@@ -2165,7 +2225,10 @@
               "score": 100,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": "ade-worker-builder"
         },
         {
           "execution_id": "github-35965100994-1",
@@ -2306,7 +2369,10 @@
               "score": 100,
               "behavior_sha256": null
             }
-          ]
+          ],
+          "provider": "deepseek",
+          "model": "deepseek-flash",
+          "profile": "ade-worker-builder"
         }
       ]
     }

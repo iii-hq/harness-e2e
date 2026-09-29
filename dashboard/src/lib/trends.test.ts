@@ -28,6 +28,7 @@ import {
   referenceText,
   roomyMarks,
   segments,
+  seriesModel,
   stackNote,
   suiteChoices,
   summaryText,
@@ -531,6 +532,7 @@ describe('suite, model and profile pickers', () => {
       },
     ])
     expect(modelChoices(series, 'regression')).toEqual([
+      { provider: 'any', model: 'any', executions: 15 },
       { provider: 'deepseek', model: 'deepseek-flash', executions: 14 },
       { provider: 'anthropic', model: 'claude-opus-5-5', executions: 1 },
     ])
@@ -540,14 +542,61 @@ describe('suite, model and profile pickers', () => {
         provider: 'deepseek',
         model: 'deepseek-flash',
       }),
-    ).toEqual([{ profile: 'ade-worker-builder', executions: 2 }])
+    ).toEqual([
+      { profile: 'any', executions: 2 },
+      { profile: 'ade-worker-builder', executions: 2 },
+    ])
     expect(
       profileChoices(series, {
         suite: 'regression',
         provider: 'anthropic',
         model: 'claude-opus-5-5',
       }),
-    ).toEqual([{ profile: null, executions: 1 }])
+    ).toEqual([
+      { profile: 'any', executions: 1 },
+      { profile: null, executions: 1 },
+    ])
+    // Any model: the profiles that ran the suite on any of them, summed.
+    expect(
+      profileChoices(series, {
+        suite: 'regression',
+        provider: 'any',
+        model: 'any',
+      }),
+    ).toEqual([
+      { profile: 'any', executions: 15 },
+      { profile: null, executions: 15 },
+    ])
+    expect(seriesModel({ provider: 'any', model: 'any' })).toBe('any')
+  })
+
+  it('marks where the model or the profile changes on a line over all of them', () => {
+    const both = [...seriesPoints('regression'), ...seriesPoints('opus')].sort(
+      (one, two) => one.started_at.localeCompare(two.started_at),
+    )
+    const opus = both.findIndex((point) => point.model === 'claude-opus-5-5')
+    const model = changesAt(both, opus).find(
+      (change) => change.kind === 'model',
+    )
+    expect(model).toMatchObject({
+      major: true,
+      text: 'deepseek/deepseek-flash → anthropic/claude-opus-5-5',
+    })
+    expect(laneLabel(changesAt(both, opus))).toMatch(/^model claude-opus-5-5/)
+    const profiled = [
+      seriesPoints('regression')[1],
+      { ...seriesPoints('regression')[3], profile: 'tech-lead' },
+    ]
+    expect(changesAt(profiled, 1)[0]).toMatchObject({
+      kind: 'profile',
+      text: 'none → tech-lead',
+    })
+    // One model and profile: no such change, as before.
+    expect(
+      changesAt(regression, regression.length - 1).some(
+        (change) => change.kind === 'model' || change.kind === 'profile',
+      ),
+    ).toBe(false)
   })
 })
 

@@ -37,14 +37,37 @@ function bound(name, value) {
 export function trendsAnswer(request = {}) {
   const since = bound('since', request.since)
   const until = bound('until', request.until)
+  // `any` model or profile: every series of the suite that shares the rest,
+  // as one line.
+  const anyModel = request.model === 'any'
+  const anyProfile = request.profile === 'any'
   const fits = ({ series }) =>
     (!request.suite || series.suite === request.suite) &&
-    (!request.provider || series.provider === request.provider) &&
-    (!request.model || series.model === request.model) &&
-    (request.profile === undefined ||
+    (anyModel ||
+      ((!request.provider || series.provider === request.provider) &&
+        (!request.model || series.model === request.model))) &&
+    (anyProfile ||
+      request.profile === undefined ||
       (series.profile || null) === (request.profile || null))
   const chosen = fixture.series.find(fits) ?? fixture.series[0]
-  const all = chosen.points
+  const all =
+    anyModel || anyProfile
+      ? fixture.series
+          .filter(
+            ({ series }) =>
+              series.suite === chosen.series.suite &&
+              (anyModel ||
+                (series.provider === chosen.series.provider &&
+                  series.model === chosen.series.model)) &&
+              (anyProfile ||
+                (series.profile || null) === (chosen.series.profile || null)),
+          )
+          .flatMap((item) => item.points)
+          .sort(
+            (one, two) =>
+              Date.parse(one.started_at) - Date.parse(two.started_at),
+          )
+      : chosen.points
   const points =
     since === null && until === null
       ? all
@@ -71,7 +94,11 @@ export function trendsAnswer(request = {}) {
     : 'any'
   return {
     series: fixture.series.map((item) => item.series),
-    selected: key(chosen.series),
+    selected: {
+      ...key(chosen.series),
+      ...(anyModel ? { provider: 'any', model: 'any' } : {}),
+      ...(anyProfile ? { profile: 'any' } : {}),
+    },
     stack,
     stacks,
     points:

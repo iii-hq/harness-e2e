@@ -82,6 +82,10 @@ export type TrendPoint = {
   execution_id: string
   label: string | null
   started_at: string
+  /** Its own model and profile: under `any` they differ between points. */
+  provider: string
+  model: string
+  profile: string | null
   source: {
     kind: 'local' | 'docker' | 'github'
     run_id?: number
@@ -124,13 +128,16 @@ export type VersionCompareResponse = {
   total_commits: number | null
 }
 
-export const ANY_STACK = 'any'
+/** Every stack, model or profile: one line over all of them. */
+export const ANY = 'any'
+export const ANY_STACK = ANY
 export const NOT_RECORDED_STACK = 'not_recorded'
 
 /* --------------------------------------------------------------- series */
 
 /** `deepseek/deepseek-flash`; a model id may already carry its provider. */
 export function seriesModel(key: Pick<TrendSeriesKey, 'provider' | 'model'>) {
+  if (key.model === ANY) return ANY
   return key.model.startsWith(`${key.provider}/`)
     ? key.model
     : `${key.provider}/${key.model}`
@@ -138,6 +145,24 @@ export function seriesModel(key: Pick<TrendSeriesKey, 'provider' | 'model'>) {
 
 export function profileText(profile: string | null) {
   return profile || 'none'
+}
+
+/** Whether a view mixes models or profiles (only under `any`). */
+export function mixesSeries(
+  points: Pick<TrendPoint, 'provider' | 'model' | 'profile'>[],
+) {
+  return (
+    new Set(
+      points.map((point) => `${seriesModel(point)}|${point.profile ?? ''}`),
+    ).size > 1
+  )
+}
+
+/** An execution's model and profile, said where a view mixes them. */
+export function seriesText(
+  point: Pick<TrendPoint, 'provider' | 'model' | 'profile'>,
+) {
+  return `${seriesModel(point)} · profile ${profileText(point.profile)}`
 }
 
 /** The series and stack in the hash, so a link reopens the same view. */
@@ -179,10 +204,17 @@ export function suiteChoices(series: TrendSeries[]) {
   return out
 }
 
-/** The models that ran a suite, latest first. */
+/** `any`, then the models that ran a suite, latest first. */
 export function modelChoices(series: TrendSeries[], suite: string) {
-  const out: Array<{ provider: string; model: string; executions: number }> = []
-  for (const item of series.filter((each) => each.suite === suite)) {
+  const ofSuite = series.filter((each) => each.suite === suite)
+  const out: Array<{ provider: string; model: string; executions: number }> = [
+    {
+      provider: ANY,
+      model: ANY,
+      executions: ofSuite.reduce((sum, item) => sum + item.executions, 0),
+    },
+  ]
+  for (const item of ofSuite) {
     const found = out.find(
       (choice) =>
         choice.provider === item.provider && choice.model === item.model,
@@ -198,22 +230,31 @@ export function modelChoices(series: TrendSeries[], suite: string) {
   return out
 }
 
-/** The profiles (null: none) that ran a suite on a model, latest first. */
+/** `any`, then the profiles (null: none) that ran a suite on a model (on
+ *  any model under `any`), latest first. */
 export function profileChoices(
   series: TrendSeries[],
   key: Pick<TrendSeriesKey, 'suite' | 'provider' | 'model'>,
 ) {
-  return series
-    .filter(
-      (item) =>
-        item.suite === key.suite &&
-        item.provider === key.provider &&
-        item.model === key.model,
-    )
-    .map((item) => ({
-      profile: item.profile || null,
-      executions: item.executions,
-    }))
+  const ran = series.filter(
+    (item) =>
+      item.suite === key.suite &&
+      (key.model === ANY ||
+        (item.provider === key.provider && item.model === key.model)),
+  )
+  const out: Array<{ profile: string | null; executions: number }> = [
+    {
+      profile: ANY,
+      executions: ran.reduce((sum, item) => sum + item.executions, 0),
+    },
+  ]
+  for (const item of ran) {
+    const profile = item.profile || null
+    const found = out.find((choice) => choice.profile === profile)
+    if (found) found.executions += item.executions
+    else out.push({ profile, executions: item.executions })
+  }
+  return out
 }
 
 /* --------------------------------------------------------------- period */
@@ -382,6 +423,8 @@ export function notRun(point: Pick<TrendPoint, 'tests'>) {
 /* ------------------------------------------------------------- changes */
 
 export type ChangeKind =
+  | 'model'
+  | 'profile'
   | 'iii'
   | 'harness'
   | 'tests'
@@ -403,6 +446,8 @@ export type TrendChange = {
 }
 
 export const CHANGE_KIND_TEXT: Record<ChangeKind, string> = {
+  model: 'model',
+  profile: 'agent profile',
   iii: 'engine',
   harness: 'the Harness under test',
   tests: 'suite',
@@ -494,6 +539,25 @@ export function changesBetween(
   const previous = points[from]
   const reversed = from > to
   const out: TrendChange[] = []
+  // Only under `any` do two executions of a view differ in these.
+  if (seriesModel(previous) !== seriesModel(current))
+    out.push({
+      kind: 'model',
+      major: true,
+      name: 'model',
+      text: `${seriesModel(previous)} → ${seriesModel(current)}`,
+      note: 'another model, so the measures on either side are not the same agent',
+      compare: null,
+    })
+  if ((previous.profile || null) !== (current.profile || null))
+    out.push({
+      kind: 'profile',
+      major: true,
+      name: 'profile',
+      text: `${profileText(previous.profile)} → ${profileText(current.profile)}`,
+      note: null,
+      compare: null,
+    })
   if (previous.engine && current.engine && previous.engine !== current.engine)
     out.push(
       versionChange('iii', 'iii', previous.engine, current.engine, reversed),
@@ -586,10 +650,18 @@ export function changesBetween(
   return out
 }
 
-const LANE_RANK: ChangeKind[] = ['iii', 'harness', 'tests', 'stack']
+const LANE_RANK: ChangeKind[] = [
+  'model',
+  'profile',
+  'iii',
+  'harness',
+  'tests',
+  'stack',
+]
 
-/** The label over a diamond: the first major change by iii > harness >
- *  tests > stack, and how many more. Minor changes go unlabelled. */
+/** The label over a diamond: the first major change by model > profile >
+ *  iii > harness > tests > stack, and how many more. Minor changes go
+ *  unlabelled. */
 export function laneLabel(changes: TrendChange[]) {
   const majors = changes
     .filter((change) => change.major)
@@ -600,13 +672,17 @@ export function laneLabel(changes: TrendChange[]) {
   if (!first) return ''
   const to = first.text.split(' → ')[1] ?? ''
   const text =
-    first.kind === 'iii'
-      ? `iii ${to}`
-      : first.kind === 'harness'
-        ? `harness ${to}`
-        : first.kind === 'tests'
-          ? 'tests changed'
-          : 'stack changed'
+    first.kind === 'model'
+      ? `model ${to.split('/').at(-1)}`
+      : first.kind === 'profile'
+        ? `profile ${to}`
+        : first.kind === 'iii'
+          ? `iii ${to}`
+          : first.kind === 'harness'
+            ? `harness ${to}`
+            : first.kind === 'tests'
+              ? 'tests changed'
+              : 'stack changed'
   return majors.length > 1 ? `${text} +${majors.length - 1}` : text
 }
 
@@ -855,8 +931,8 @@ export function baselineOf(
     : { index: -1, why: 'no_counted_run' }
 }
 
-/** iii, the Harness, the tests and the stack first, then the rest as they
- *  came. */
+/** The model, the profile, iii, the Harness, the tests and the stack
+ *  first, then the rest as they came. */
 export function majorsFirst(changes: TrendChange[]) {
   const majors = changes
     .filter((change) => change.major)

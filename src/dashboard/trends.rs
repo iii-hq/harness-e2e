@@ -21,11 +21,14 @@ pub(super) struct TrendsRequest {
     /// A suite id, or the sha256 of an unsaved suite.
     #[serde(default)]
     pub suite: Option<String>,
+    /// Left open (with the provider) when the model is `any`.
     #[serde(default)]
     pub provider: Option<String>,
+    /// A model, or `any`: the suite's executions on every model, one line.
     #[serde(default)]
     pub model: Option<String>,
-    /// Null or empty: no profile; absent: any.
+    /// Null or empty: no profile; `any`: every profile, one line; absent:
+    /// the latest series that fits the rest.
     #[serde(default, deserialize_with = "present")]
     pub profile: Option<Option<String>>,
     /// A stack name, `not_recorded` or `any`; absent, or one the series
@@ -90,7 +93,9 @@ pub(super) struct StackCount {
 pub(super) struct TrendsResponse {
     /// Every series, latest execution first.
     pub series: Vec<TrendSeries>,
-    /// The request's series, else the one with the latest execution.
+    /// The request's series, else the one with the latest execution; its
+    /// provider and model, or its profile, are `any` when the request left
+    /// them open.
     pub selected: Option<TrendSeriesKey>,
     /// The stack filter applied.
     pub stack: String,
@@ -126,6 +131,10 @@ pub(super) struct TrendPoint {
     pub execution_id: String,
     pub label: Option<String>,
     pub started_at: String,
+    /// Its own model and profile: under `any` they differ between points.
+    pub provider: String,
+    pub model: String,
+    pub profile: Option<String>,
     pub source: TrendSource,
     pub stack: TrendStack,
     pub engine: Option<String>,
@@ -264,6 +273,36 @@ pub(super) fn trends(
             points: Vec::new(),
         };
     };
+    // `any` model or profile: every series of the suite that shares the
+    // rest, as one line.
+    let (any_model, any_profile) = (any_model(request), any_profile(request));
+    let mut selected = executions[0].key.clone();
+    let widened;
+    let executions: &[Execution] = if any_model || any_profile {
+        let mut joined = summaries
+            .iter()
+            .filter_map(execution)
+            .filter(|execution| {
+                let key = &execution.key;
+                key.suite == selected.suite
+                    && (any_model
+                        || (key.provider == selected.provider && key.model == selected.model))
+                    && (any_profile || key.profile == selected.profile)
+            })
+            .collect::<Vec<_>>();
+        joined.sort_by(|left, right| instant(left.started_at).cmp(&instant(right.started_at)));
+        widened = joined;
+        &widened
+    } else {
+        executions
+    };
+    if any_model {
+        selected.provider = ANY.into();
+        selected.model = ANY.into();
+    }
+    if any_profile {
+        selected.profile = Some(ANY.into());
+    }
 
     let stacks = stacks_of(executions);
     let name = |stack: &TrendStack| stack.name.clone().unwrap_or_else(|| NOT_RECORDED.into());
@@ -322,7 +361,7 @@ pub(super) fn trends(
         .collect();
     TrendsResponse {
         series,
-        selected: Some(executions[0].key.clone()),
+        selected: Some(selected),
         stack: applied,
         stacks: counts,
         points,
@@ -378,15 +417,25 @@ fn suite_label(execution: &Execution) -> String {
     }
 }
 
-/// Whether a series is the one asked for: every field sent matches.
+fn any_model(request: &TrendsRequest) -> bool {
+    request.model.as_deref() == Some(ANY)
+}
+
+fn any_profile(request: &TrendsRequest) -> bool {
+    matches!(&request.profile, Some(Some(profile)) if profile == ANY)
+}
+
+/// Whether a series is the one asked for: every field sent matches, `any`
+/// matching every model or profile.
 fn requested(request: &TrendsRequest, key: &TrendSeriesKey) -> bool {
     let matches = |asked: &Option<String>, value: &str| asked.as_deref().is_none_or(|a| a == value);
     matches(&request.suite, &key.suite)
-        && matches(&request.provider, &key.provider)
-        && matches(&request.model, &key.model)
-        && request.profile.as_ref().is_none_or(|profile| {
-            profile.as_deref().filter(|p| !p.is_empty()) == key.profile.as_deref()
-        })
+        && (any_model(request)
+            || matches(&request.provider, &key.provider) && matches(&request.model, &key.model))
+        && (any_profile(request)
+            || request.profile.as_ref().is_none_or(|profile| {
+                profile.as_deref().filter(|p| !p.is_empty()) == key.profile.as_deref()
+            }))
 }
 
 /// The stack of each execution (oldest first). One not recorded joins the
@@ -592,6 +641,9 @@ fn point(
             .filter(|label| !label.is_empty())
             .map(str::to_owned),
         started_at: execution.started_at.to_owned(),
+        provider: execution.key.provider.clone(),
+        model: execution.key.model.clone(),
+        profile: execution.key.profile.clone(),
         source,
         stack,
         engine: engine(execution, natives),
@@ -989,6 +1041,77 @@ mod tests {
             asked(json!({"suite": "regression"})),
             Some(key("regression", Some("tech-lead")))
         );
+    }
+
+    #[test]
+    fn any_model_or_profile_draws_the_suites_executions_on_one_line() {
+        let at = |day: u32| format!("2026-09-{day:02}T10:00:00Z");
+        let mut opus = listed("b", &at(2), None, &[]);
+        opus["parameters"]["provider"] = json!("anthropic");
+        opus["parameters"]["model"] = json!("opus");
+        let mut profiled = listed("c", &at(3), None, &[]);
+        profiled["parameters"]["agent"] = json!("tech-lead");
+        let mut other = listed("d", &at(4), None, &[]);
+        other["parameters"]["suite"] = json!({"id": "se", "label": "SE", "sha256": "sha256:s"});
+        let summaries = [listed("a", &at(1), None, &[]), opus, profiled, other];
+        let runs = BTreeMap::new();
+        let asked = |request: Value| {
+            let request = serde_json::from_value::<TrendsRequest>(request).unwrap();
+            let response = trends(&request, &summaries, &runs);
+            let points = response
+                .points
+                .iter()
+                .map(|point| {
+                    format!(
+                        "{} {}/{} {}",
+                        point.execution_id,
+                        point.provider,
+                        point.model,
+                        point.profile.as_deref().unwrap_or("-")
+                    )
+                })
+                .collect::<Vec<_>>();
+            (response.selected.unwrap(), points, response.series.len())
+        };
+        let key = |provider: &str, model: &str, profile: Option<&str>| TrendSeriesKey {
+            suite: "regression".into(),
+            provider: provider.into(),
+            model: model.into(),
+            profile: profile.map(str::to_owned),
+        };
+
+        let (selected, points, series) =
+            asked(json!({"suite": "regression", "model": "any", "profile": null}));
+        assert_eq!(selected, key("any", "any", None));
+        assert_eq!(points, ["a deepseek/flash -", "b anthropic/opus -"]);
+        // The pickers still list every concrete series.
+        assert_eq!(series, 4);
+
+        let (selected, points, _) = asked(
+            json!({"suite": "regression", "provider": "any", "model": "any", "profile": "any"}),
+        );
+        assert_eq!(selected, key("any", "any", Some("any")));
+        assert_eq!(
+            points,
+            [
+                "a deepseek/flash -",
+                "b anthropic/opus -",
+                "c deepseek/flash tech-lead"
+            ]
+        );
+
+        let (selected, points, _) = asked(
+            json!({"suite": "regression", "provider": "deepseek", "model": "flash", "profile": "any"}),
+        );
+        assert_eq!(selected, key("deepseek", "flash", Some("any")));
+        assert_eq!(points, ["a deepseek/flash -", "c deepseek/flash tech-lead"]);
+
+        // A concrete request is one series, as before.
+        let (selected, points, _) = asked(
+            json!({"suite": "regression", "provider": "anthropic", "model": "opus", "profile": null}),
+        );
+        assert_eq!(selected, key("anthropic", "opus", None));
+        assert_eq!(points, ["b anthropic/opus -"]);
     }
 
     #[test]

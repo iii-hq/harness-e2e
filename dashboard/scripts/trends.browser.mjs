@@ -298,12 +298,13 @@ try {
   })
   assert.match(await profile.innerText(), /ade-worker-builder/)
   await profile.click()
+  // Its one profile, and any.
   assert.equal(
     await page
       .getByRole('menu', { name: 'Profile' })
       .getByRole('menuitemradio')
       .count(),
-    1,
+    2,
   )
   await page.getByRole('menuitemradio', { name: /^ade-worker-builder/ }).click()
   await page.waitForFunction(
@@ -393,15 +394,25 @@ try {
   assert.equal(await from.count(), 0)
 
   // A baseline: pin Sep 23, read the others against it, keep it in the URL.
-  const chip = page.locator('[data-baseline-chip]')
+  // The Baseline picker: "previous execution" until one is picked.
+  const baselinePicker = page.locator('[data-picker="baseline"]')
+  const baselineIs = (text) =>
+    baselinePicker.getByText(text, { exact: true }).waitFor()
+  const pickBaseline = async (name) => {
+    await baselinePicker.click()
+    await page
+      .getByRole('menu', { name: 'Baseline' })
+      .getByRole('menuitemradio', { name })
+      .click()
+  }
   const scoreCard = page.locator('[data-trend-chart="score"]')
   const scoreRef = scoreCard.locator('.tr-reference')
   const scoreAt = (label) => scoreCard.getByRole('button', { name: label })
-  assert.equal(await chip.count(), 0)
+  await baselineIs('previous execution')
   await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
   const sep23 = page.locator('[data-trend-panel="github-35821773226-2"]')
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   await hashMatches(/&range=all&base=github-35821773226-2$/)
   // Focus stays in the panel, on the button that now clears it.
   assert.equal(
@@ -454,13 +465,13 @@ try {
   assert.equal(await sep25.locator('li[data-change]').count(), 7)
   // Clearing the baseline with the list unfolded leaves nothing to fold back.
   await sep25.getByRole('button', { name: 'Show 3 more' }).click()
-  await chip.getByRole('button', { name: 'Clear baseline' }).click()
+  await pickBaseline(/^Previous execution/)
   await sep25.getByRole('heading', { name: /^What changed since / }).waitFor()
   assert.equal(await sep25.getByRole('button', { name: /^Show/ }).count(), 0)
   await sep25.getByRole('button', { name: 'Set as baseline' }).waitFor()
   await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   await scoreAt(/^Sep 25, 2:17 AM · Score 96\.9$/).click()
   await sep25.getByRole('button', { name: 'Show 3 more' }).waitFor()
   await sep25.getByText('Against the baseline, Sep 23, 2:17 AM').waitFor()
@@ -490,7 +501,7 @@ try {
   // It survives a reload; a period that leaves it out says so and reads
   // against the execution before; all time brings it back.
   await page.reload()
-  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   assert.equal(
     await scoreRef.innerText(),
     'Sep 28, 2:17 AM against Sep 23, 2:17 AM (baseline)',
@@ -498,7 +509,7 @@ try {
   await period.click()
   await page.getByRole('menuitemradio', { name: 'Custom' }).click()
   await from.fill('2026-09-26')
-  await chip.getByText('Baseline not in this view').waitFor()
+  await baselineIs('not in this view')
   assert.equal(
     await scoreRef.innerText(),
     'Sep 28, 2:17 AM against Sep 27, 2:17 AM',
@@ -509,7 +520,7 @@ try {
   )
   await period.click()
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
-  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   assert.equal(await page.locator('.tr-baseline').count(), 7)
 
   // Another stack keeps it while its execution is there.
@@ -517,47 +528,65 @@ try {
   await page.getByRole('menuitemradio', { name: /^default/ }).click()
   await summary.getByText('11 executions ', { exact: false }).waitFor()
   await hashMatches(/stack=default&range=all&base=github-35821773226-2$/)
-  await chip.getByText('Sep 23, 2:17 AM').waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   await page.locator('[data-stack-picker]').click()
   await page.getByRole('menuitemradio', { name: /^any/ }).click()
   await summary.getByText('14 executions ', { exact: false }).waitFor()
   await hashMatches(/stack=any&range=all&base=github-35821773226-2$/)
 
-  // The chip's time shows the baseline; its cross clears it.
-  await chip.getByRole('button', { name: /^Baseline/ }).click()
-  await sep23.waitFor()
-  await sep23.getByRole('button', { name: 'Clear baseline' }).click()
-  assert.equal(await chip.count(), 0)
+  // Previous execution in the picker clears it; the picker sets one too,
+  // each execution listed newest first with its score.
+  await pickBaseline(/^Previous execution/)
+  await baselineIs('previous execution')
   assert.equal(await page.locator('.tr-baseline').count(), 0)
   assert.doesNotMatch(await hash(), /base=/)
-  await sep23.getByRole('button', { name: 'Close' }).click()
   assert.equal(
     await scoreRef.innerText(),
     'Sep 28, 2:17 AM against Sep 27, 2:17 AM',
   )
+  await baselinePicker.click()
+  const listed = page
+    .getByRole('menu', { name: 'Baseline' })
+    .getByRole('menuitemradio')
+  assert.equal(await listed.count(), 15)
+  assert.match(
+    await listed.nth(1).innerText(),
+    /^Sep 28, 2:17 AM\s+score 93\.0/,
+  )
+  // An execution without a counted run cannot be one.
+  assert.equal(
+    await listed
+      .filter({ hasText: 'no counted run' })
+      .first()
+      .getAttribute('aria-disabled'),
+    'true',
+  )
+  await listed.filter({ hasText: /^Sep 23, 2:17 AM/ }).click()
+  await baselineIs('Sep 23, 2:17 AM')
+  await hashMatches(/&base=github-35821773226-2$/)
+  // Its own panel clears it as well.
   await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
-  await sep23.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.getByRole('button', { name: 'Clear baseline' }).click()
-  assert.equal(await chip.count(), 0)
+  await sep23.getByRole('button', { name: 'Clear baseline' }).click()
+  await baselineIs('previous execution')
 
   // Another series, and the Trends tab, start without one. Sep 23's panel
   // is still open.
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   await suite.click()
   await page.getByRole('menuitemradio', { name: /^Regression/ }).click()
   await page
     .getByRole('menuitemradio', { name: /^Regression/ })
     .waitFor({ state: 'detached' })
-  assert.equal(await chip.count(), 0)
+  await baselineIs('previous execution')
   assert.doesNotMatch(await hash(), /base=/)
   await scoreAt(/^Sep 23, 2:17 AM · Score 90\.8$/).click()
   await sep23.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.waitFor()
+  await baselineIs('Sep 23, 2:17 AM')
   await page.getByRole('link', { name: 'Trends', exact: true }).click()
   await summary.getByText('in the last 30 days', { exact: false }).waitFor()
   await hashMatches(/stack=any&range=30d$/)
-  assert.equal(await chip.count(), 0)
+  await baselineIs('previous execution')
   // Back to all time, where the flow goes on.
   await period.click()
   await page.getByRole('menuitemradio', { name: 'All time' }).click()
@@ -569,6 +598,75 @@ try {
   await summary.getByText('5 executions ', { exact: false }).waitFor()
   assert.match(await stack.innerText(), /any/)
   assert.equal(await page.locator('.tr-diamond').count(), 0)
+
+  // Any model: Regression on deepseek and on Opus, one line, a diamond
+  // where the model changed; any profile on top of it; back to one model.
+  await suite.click()
+  await page.getByRole('menuitemradio', { name: /^Regression/ }).click()
+  await summary.getByText('14 executions ', { exact: false }).waitFor()
+  await model.click()
+  await page
+    .getByRole('menu', { name: 'Model' })
+    .getByRole('menuitemradio', {
+      name: /^any\s*every model, on one line\s*15 executions$/,
+    })
+    .click()
+  await summary.getByText('15 executions ', { exact: false }).waitFor()
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'regression',
+    model: 'any',
+    profile: null,
+  })
+  assert.match(await model.innerText(), /any/)
+  await hashMatches(/provider=any&model=any&profile=&stack=any&range=all$/)
+  // Two model changes: to Opus on Sep 27 and back on Sep 28.
+  const modelDiamonds = page.getByRole('button', {
+    name: /^What changed · .+: model/,
+  })
+  assert.equal(await modelDiamonds.count(), 2)
+  await modelDiamonds.first().click()
+  const opusPanel = page.locator(`[data-trend-panel="${opusDetail.id}"]`)
+  await opusPanel
+    .getByText('deepseek/deepseek-flash → anthropic/claude-opus-5-5')
+    .waitFor()
+  await opusPanel
+    .getByText('anthropic/claude-opus-5-5 · profile none', { exact: false })
+    .waitFor()
+  await opusPanel.getByRole('button', { name: 'Close' }).click()
+  await page
+    .getByText('model, profile, iii, Harness, tests or stack changed')
+    .waitFor()
+  await profile.click()
+  await page
+    .getByRole('menu', { name: 'Profile' })
+    .getByRole('menuitemradio', { name: /^any/ })
+    .click()
+  await hashMatches(/model=any&profile=any&stack=any&range=all$/)
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'regression',
+    provider: 'any',
+    model: 'any',
+    profile: 'any',
+  })
+  // A model picked keeps the profile at any.
+  await model.click()
+  await page
+    .getByRole('menu', { name: 'Model' })
+    .getByRole('menuitemradio', { name: /^deepseek\/deepseek-flash/ })
+    .click()
+  await summary.getByText('14 executions ', { exact: false }).waitFor()
+  assert.deepEqual(requests('trends-get').at(-1), {
+    suite: 'regression',
+    provider: 'deepseek',
+    model: 'deepseek-flash',
+    profile: 'any',
+  })
+  await profile.click()
+  await page
+    .getByRole('menu', { name: 'Profile' })
+    .getByRole('menuitemradio', { name: /^none/ })
+    .click()
+  await hashMatches(/model=deepseek-flash&profile=&stack=any&range=all$/)
 
   // Nothing counted: say why, open the execution or run it again.
   // Regression again (its latest series is deepseek's), then the model that
@@ -621,11 +719,12 @@ try {
     .click()
   await page.locator('[data-trend-panel]').waitFor()
   assert.equal(await page.locator('.tr-top[data-panel]').count(), 0)
-  // The baseline chip wraps under the pickers instead of running off the pane.
+  // The Baseline picker wraps under the others instead of running off the
+  // pane.
   await page.getByRole('button', { name: 'Set as baseline' }).click()
-  await chip.waitFor()
-  const box = await chip.boundingBox()
-  assert.ok(box && box.x >= 0 && box.x + box.width <= 640, 'the chip fits')
+  await baselineIs('Sep 28, 2:17 AM')
+  const box = await baselinePicker.boundingBox()
+  assert.ok(box && box.x >= 0 && box.x + box.width <= 640, 'the picker fits')
   assert.equal(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,
@@ -635,7 +734,7 @@ try {
 
   assert.deepEqual(errors, [])
   console.log(
-    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, a model of a suite and the empty state’s Run again, narrow pane with the chip.',
+    'Trends browser flow passed: a failed first load retried from the StatusPanel, the latest series on every stack with the Trends tab current, the Sep 26 diamond with the commits asked when it opened, the latest point against the previous counted one, the default view pinned to its series and stack, a run landing reloaded quietly on it (another series newer) with the pick kept and a failed reload said over the trend, a small chart in the large one’s place, one stack kept in the hash, Compare with and back to the same view, a suite, then its one profile, with planned tests not run, the Trends tab starting over, a stack the series never ran on said, the period (all time, custom, From after To refused, none in it and back to all time), the Harness’s tags, a baseline pinned, read against by the cards and the panel with the commits earlier to later and the minor changes folded, kept across a reload and out of a period that leaves it out, cleared, and dropped by another series and the Trends tab, any model on one line with the model change as a diamond, any profile kept across a model, a model of a suite and the empty state’s Run again, narrow pane with the Baseline picker.',
   )
 } finally {
   await browser.close()

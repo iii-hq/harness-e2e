@@ -15,9 +15,11 @@ import {
   counted,
   deltaOf,
   majorsFirst,
+  mixesSeries,
   notRun,
   pointTime,
   releaseControlId,
+  seriesText,
   sourceText,
   TREND_METRICS,
   type TrendChange,
@@ -155,6 +157,7 @@ export function PointPanel({
   const source = [
     sourceText(point),
     rc ? `Release Control ${rc}` : null,
+    mixesSeries(points) ? seriesText(point) : null,
     point.label,
   ]
     .filter(Boolean)

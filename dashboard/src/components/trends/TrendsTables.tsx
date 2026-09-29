@@ -16,9 +16,11 @@ import { hashForExecution, hashForTestHistory } from '@/hooks/use-hash-route'
 import { formatDay, formatTime } from '@/lib/format'
 import {
   counted,
+  mixesSeries,
   notRun,
   pointTime,
   releaseControlId,
+  seriesText,
   sourceText,
   stackText,
   type TestCell,
@@ -199,6 +201,7 @@ export function ExecutionsTable({
   const rows = points
     .map((point, index) => ({ point, index, before: points[index - 1] }))
     .reverse()
+  const mixed = mixesSeries(points)
   const open = (point: TrendPoint) => () => {
     window.location.hash = hashForExecution(point.execution_id)
   }
@@ -304,6 +307,7 @@ export function ExecutionsTable({
                           counted(point) ? null : 'no counted run',
                           sourceText(point),
                           rc ? `RC ${rc}` : null,
+                          mixed ? seriesText(point) : null,
                           point.label,
                         ]
                           .filter(Boolean)

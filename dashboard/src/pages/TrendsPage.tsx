@@ -14,7 +14,7 @@ import { useDashboardChrome } from '@/components/DashboardShell'
 import { GithubImportDialog } from '@/components/GithubImportDialog'
 import { LocalRunnerDialog } from '@/components/LocalRunnerDialog'
 import type { HeaderAction } from '@/components/shell/HeaderActions'
-import { BaselineChip } from '@/components/trends/BaselineChip'
+import { BaselineMenu } from '@/components/trends/BaselineMenu'
 import { PointPanel } from '@/components/trends/PointPanel'
 import { LargeChart, SmallChart } from '@/components/trends/TrendsChart'
 import { ByTest, ExecutionsTable } from '@/components/trends/TrendsTables'
@@ -33,6 +33,7 @@ import {
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { plural } from '@/lib/format'
 import {
+  ANY,
   ANY_STACK,
   baselineOf,
   changesAt,
@@ -163,7 +164,12 @@ function ChoiceMenu({
   value: string
   text: string
   mono?: boolean
-  choices: Array<{ value: string; label: string; executions: number }>
+  choices: Array<{
+    value: string
+    label: string
+    executions: number
+    sub?: string
+  }>
   note?: string
   onPick: (value: string) => void
 }) {
@@ -198,14 +204,13 @@ function ChoiceMenu({
               value={choice.value}
               className="tr-menu-item"
             >
-              <span
-                className={
-                  mono
-                    ? 'tr-menu-text tr-mono tr-small'
-                    : 'tr-menu-text tr-strong'
-                }
-              >
-                {choice.label}
+              <span className="tr-menu-text">
+                <span className={mono ? 'tr-mono tr-small' : 'tr-strong'}>
+                  {choice.label}
+                </span>
+                {choice.sub ? (
+                  <span className="tr-faint">{choice.sub}</span>
+                ) : null}
               </span>
               <span className="tr-mono tr-faint">
                 {plural(choice.executions, 'execution')}
@@ -222,9 +227,10 @@ function ChoiceMenu({
 const modelId = (key: Pick<TrendSeriesKey, 'provider' | 'model'>) =>
   JSON.stringify([key.provider, key.model])
 
-/** Suite, then the models that ran it, then the profiles that ran both.
- *  Picking one asks for it with the ones before it; the worker answers the
- *  latest series that fits. */
+/** Suite, then the models that ran it, then the profiles that ran both;
+ *  `any` model or profile puts all of them on one line. Picking one asks for
+ *  it with the ones before it; the worker answers the latest series that
+ *  fits. `any` stays picked across a suite or a model. */
 function SeriesPickers({
   data,
   onPick,
@@ -237,6 +243,8 @@ function SeriesPickers({
   const suites = suiteChoices(data.series)
   const models = modelChoices(data.series, current.suite)
   const profiles = profileChoices(data.series, current)
+  const anyModel = current.model === ANY
+  const anyProfile = current.profile === ANY
   return (
     <>
       <ChoiceMenu
@@ -251,8 +259,14 @@ function SeriesPickers({
           label: choice.label,
           executions: choice.executions,
         }))}
-        note="A series is every execution of one suite on one model and profile, wherever it ran. Stack changes stay inside the series and show as diamonds."
-        onPick={(suite) => onPick({ suite })}
+        note="A series is every execution of one suite on one model and profile, wherever it ran. Any model or profile puts them all on one line. Stack, model and profile changes show as diamonds."
+        onPick={(suite) =>
+          onPick({
+            suite,
+            ...(anyModel ? { model: ANY } : {}),
+            ...(anyProfile ? { profile: ANY } : {}),
+          })
+        }
       />
       <ChoiceMenu
         name="Model"
@@ -263,14 +277,23 @@ function SeriesPickers({
           value: modelId(choice),
           label: seriesModel(choice),
           executions: choice.executions,
+          sub: choice.model === ANY ? 'every model, on one line' : undefined,
         }))}
         onPick={(value) => {
           const picked = models.find((choice) => modelId(choice) === value)
-          if (picked)
+          if (!picked) return
+          if (picked.model === ANY)
+            onPick({
+              suite: current.suite,
+              model: ANY,
+              profile: current.profile,
+            })
+          else
             onPick({
               suite: current.suite,
               provider: picked.provider,
               model: picked.model,
+              ...(anyProfile ? { profile: ANY } : {}),
             })
         }}
       />
@@ -283,6 +306,8 @@ function SeriesPickers({
           value: choice.profile ?? '',
           label: profileText(choice.profile),
           executions: choice.executions,
+          sub:
+            choice.profile === ANY ? 'every profile, on one line' : undefined,
         }))}
         onPick={(profile) =>
           onPick({
@@ -441,7 +466,7 @@ function CustomPeriod({
   )
 }
 
-function Legend() {
+function Legend({ mixed }: { mixed: boolean }) {
   return (
     <ul className="tr-legend" aria-label="Legend">
       <li>
@@ -454,7 +479,9 @@ function Legend() {
       </li>
       <li>
         <span className="tr-change-dot" data-major="true" aria-hidden="true" />
-        iii, Harness, tests or stack changed
+        {mixed
+          ? 'model, profile, iii, Harness, tests or stack changed'
+          : 'iii, Harness, tests or stack changed'}
       </li>
       <li>
         <span className="tr-change-dot" data-major="false" aria-hidden="true" />
@@ -614,8 +641,6 @@ export function TrendsPage({
   const selected = points.findIndex((item) => item.execution_id === picked)
   // Where the baseline is in this view, else why it is not used.
   const baseline = baselineOf(points, base)
-  const baselinePoint =
-    points.find((item) => item.execution_id === base) ?? null
   const pick = (index: number) => {
     const id = points[index]?.execution_id ?? null
     setPicked((current) => (current === id ? null : id))
@@ -713,9 +738,9 @@ export function TrendsPage({
       <header className="ex-header">
         <h1 id="trends-title">Trends</h1>
         <p>
-          How one suite moves over time on one model and profile. Each point is
-          an execution; a diamond above the chart marks what changed since the
-          execution before it.
+          How one suite moves over time on one model and profile, or on all of
+          them. Each point is an execution; a diamond above the chart marks what
+          changed since the execution before it.
         </p>
       </header>
 
@@ -752,18 +777,19 @@ export function TrendsPage({
                     onChange={typeDay}
                   />
                 ) : null}
-                {base ? (
-                  <BaselineChip
-                    point={baselinePoint}
-                    why={baseline.why ?? (baselinePoint ? null : 'not_in_view')}
-                    onPick={() =>
-                      baselinePoint && setPicked(baselinePoint.execution_id)
-                    }
-                    onClear={() => setBase(null)}
-                  />
-                ) : null}
+                <BaselineMenu
+                  points={points}
+                  base={base}
+                  why={baseline.why}
+                  onPick={setBase}
+                />
                 <span className="tr-spacer" />
-                <Legend />
+                <Legend
+                  mixed={
+                    data.selected?.model === ANY ||
+                    data.selected?.profile === ANY
+                  }
+                />
               </div>
               <div className="tr-summary" aria-busy={loading || undefined}>
                 <p className="tr-faint tr-num-text" data-trend-summary>

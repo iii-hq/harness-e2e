@@ -643,7 +643,7 @@ pub(super) fn register_functions(iii: &IIIClient, controller: Arc<Controller>) {
     register(
         iii,
         TRENDS_GET,
-        "Read how one suite moves over time on one provider, model and profile: every series, the stacks of the selected one, and a point per execution measured over its technically valid runs.",
+        "Read how one suite moves over time on one provider, model and profile (or `any` model or profile, on one line): every series, the stacks of the selected one, and a point per execution measured over its technically valid runs.",
         {
             let controller = controller.clone();
             RegisterFunction::new_async(move |request: TrendsRequest| {
@@ -1334,7 +1334,7 @@ mod response_contract_tests {
         let point = &response["points"][0];
         assert_eq!(
             keys(point),
-            "counted,engine,execution_id,label,measures,planned,reason,runs,source,stack,started_at,tests,workers"
+            "counted,engine,execution_id,label,measures,model,planned,profile,provider,reason,runs,source,stack,started_at,tests,workers"
         );
         assert_eq!(
             point["source"],

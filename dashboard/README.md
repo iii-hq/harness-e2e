@@ -133,7 +133,10 @@ opens Run again with B's parameters and only the ticked scenarios.
 
 **Trends** (`e2e::dashboard::trends-get`) follows one series (suite id, or the
 digest of an unsaved suite, × provider × model × agent profile) over time, from
-what the read model already holds. Each execution is a point measured over its
+what the read model already holds. `model: "any"` or `profile: "any"` joins
+every series of the suite that shares the rest into one line (the answer's
+`selected` says `any` back, and each point carries its own provider, model and
+profile); the page marks a change of model or profile with a diamond. Each execution is a point measured over its
 technically valid runs only; completed runs are counted out of the planned ones
 (tests × runs per test), and a planned test with no run is `not_run`. The stack
 filter defaults to `any`, also when it names a stack the series never ran on;
@@ -148,8 +151,9 @@ two builds of iii, the runner or a worker on GitHub (release tags
 `<name>/v<version>`, or commits) and counts the commits between them through
 `gh`, keeping what GitHub answered for the worker's lifetime.
 
-On the page, an execution can be pinned as the **baseline** (`&base=<execution
-id>` in the hash; the worker is never asked about it). The cards and the panel
+On the page, an execution can be pinned as the **baseline**, from the Baseline
+picker next to Period or from a point's panel (`&base=<execution id>` in the
+hash; the worker is never asked about it). The cards and the panel
 then read the picked execution, or else the latest, against the baseline instead
 of the execution before it, and the panel lists everything that differs between
 the two, each version change with the commits from the earlier version to the
