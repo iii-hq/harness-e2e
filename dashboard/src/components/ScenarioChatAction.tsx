@@ -32,7 +32,8 @@ type ScenarioChatActionProps = {
   /** Replaces the button's own class (a page with its own action style). */
   buttonClass?: string
   /** Only when there is more than one transcript to pick from (retries or
-   *  repetitions): a single one already has its own Transcript button. */
+   *  repetitions), or the one there is is a retry's: the current attempt's
+   *  already has its own Transcript button. */
   multipleOnly?: boolean
 }
 
@@ -123,7 +124,8 @@ export function ScenarioChatAction({
 
   if (!resolvedExecutionId) return null
   if (detailTargets?.length === 0) return null
-  if (multipleOnly && (detailTargets?.length ?? 0) < 2) return null
+  if (multipleOnly && detailTargets?.length === 1 && detailTargets[0].current)
+    return null
 
   const positionMenu = (count: number) => {
     const rect = triggerRef.current?.getBoundingClientRect()

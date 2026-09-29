@@ -204,18 +204,22 @@ describe('scenario chat action', () => {
       />,
     )
     expect(html).toContain('Transcripts · 2')
-    const single = detail()
-    const run = single.reports[0].report?.scenarios[0].runs[0]
-    if (run) run.retry_attempts = []
-    expect(
-      renderToStaticMarkup(
+    const lone = (drop: 'retry' | 'current') => {
+      const value = detail()
+      const run = value.reports[0].report?.scenarios[0].runs[0]
+      if (run && drop === 'retry') run.retry_attempts = []
+      if (run && drop === 'current') run.session_id = ''
+      return renderToStaticMarkup(
         <ScenarioChatAction
           multipleOnly
-          detail={single}
+          detail={value}
           scenarioId="direct_answer"
         />,
-      ),
-    ).toBe('')
+      )
+    }
+    expect(lone('retry')).toBe('')
+    // The one left is a retry's, which Transcript does not open.
+    expect(lone('current')).toContain('View transcript')
   })
 
   it('offers a retained transcript without host chat integration', () => {

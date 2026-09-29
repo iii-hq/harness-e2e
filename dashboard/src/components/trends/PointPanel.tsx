@@ -106,20 +106,21 @@ function CommitsLink({
   )
 }
 
-/** The chat reads the point against its reference, the reference as A,
- *  with what changed between them. */
+/** The chat reads the point against its reference in the order Compare
+ *  opens them, the earlier as A, so each change's commits run from A to B. */
 export function pointInvestigation(
   points: TrendPoint[],
   reference: TrendPoint,
   index: number,
 ): Investigation {
-  const from = points.findIndex(
+  const other = points.findIndex(
     (item) => item.execution_id === reference.execution_id,
   )
+  const [a, b] = other < index ? [other, index] : [index, other]
   return {
-    executionId: reference.execution_id,
-    comparisonExecutionId: points[index].execution_id,
-    changes: changesBetween(points, from, index).map((change) => ({
+    executionId: points[a].execution_id,
+    comparisonExecutionId: points[b].execution_id,
+    changes: changesBetween(points, a, b).map((change) => ({
       what: `${change.name} (${CHANGE_KIND_TEXT[change.kind]})`,
       change: change.text,
       commits: change.compare,

@@ -320,6 +320,10 @@ describe('a baseline', () => {
       change: '1.8.31 → 1.8.35',
       commits: { name: 'harness', base: '1.8.31', head: '1.8.35' },
     })
+    // A baseline after the point: still the earlier as A, as Compare opens.
+    expect(pointInvestigation(all, all[SEP25], BASE)).toEqual(
+      pointInvestigation(all, all[BASE], SEP25),
+    )
   })
 
   it('reads an execution before the baseline the same way, commits still earlier → later', () => {

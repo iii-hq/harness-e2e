@@ -67,7 +67,7 @@ ${
   context.changes?.length
     ? `\n5. Weigh each change in changes_between_a_and_b as a possible cause${
         context.changes.some((change) => change.commits)
-          ? '; for one with commits, call e2e::dashboard::version-compare with that object to get the commit range, and name the commits that plausibly explain a regression'
+          ? '; for one with commits, call e2e::dashboard::version-compare with that object, which returns only the GitHub compare url and total_commits between A (base) and B (head). Read that url if you can reach GitHub and name the commits that plausibly explain a regression; otherwise report the range and its commit count, never commit names you have not read'
           : ''
       }. A change is a lead, not a proof.`
     : ''

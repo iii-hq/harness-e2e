@@ -879,7 +879,11 @@ function ScenarioResult({
                       focus={{
                         scenarioId: item.scenarioId,
                         subjectId: item.subjectId,
-                        runId: runId || undefined,
+                        // Repetitions: the test, not its last run.
+                        runId:
+                          item.runs.length === 1
+                            ? runId || undefined
+                            : undefined,
                       }}
                     />
                     {onRerun ? (

@@ -31,7 +31,9 @@ import {
   compareExecutions,
   comparisonMarkdown,
   type ExecutionComparison,
+  exclusionPhrase,
   type ScenarioComparison,
+  stackChanges,
 } from '@/lib/execution-comparison'
 import { buildExecutionPresentation } from '@/lib/execution-view'
 import { plural } from '@/lib/format'
@@ -158,7 +160,6 @@ export function comparisonInvestigation({
   a,
   b,
   scenarios,
-  exclusions,
   totals,
   parameters,
   stack,
@@ -170,19 +171,49 @@ export function comparisonInvestigation({
     visibleScenarioIds: scenarios
       .filter((scenario) => scenario.counted)
       .map((scenario) => scenario.id),
-    excludedScenarios: exclusions
-      .filter((exclusion) => exclusion.applied)
-      .map(({ scenario_id, reason }) => ({ scenario_id, reason })),
+    excludedScenarios: scenarios
+      .filter((scenario) => !scenario.counted)
+      .map((scenario) => ({
+        scenario_id: scenario.id,
+        reason: exclusionPhrase(scenario) ?? 'not counted',
+      })),
     unavailableDeltas: totals
       .filter((metric) => metric.delta === null)
       .map((metric) => metric.id),
     changes: [
-      ...parameters,
-      ...stack.changed,
-      ...(runner.differs
-        ? [{ field: 'runner', a: runner.a ?? '—', b: runner.b ?? '—' }]
+      ...parameters.map(({ field, a, b }) => ({
+        what: field,
+        change: `${a} → ${b}`,
+      })),
+      // Without a recorded stack on a side nothing below is listed.
+      ...(!stack.recorded.a || !stack.recorded.b
+        ? [{ what: 'stack', change: stackChanges(stack) ?? 'not recorded' }]
         : []),
-    ].map(({ field, a, b }) => ({ what: field, change: `${a} → ${b}` })),
+      ...stack.changed.map(({ field, a, b }) => ({
+        what: field,
+        change: `${a} → ${b}`,
+      })),
+      ...stack.notComparable.map(({ field, a, b, reason }) => ({
+        what: field,
+        change: `${a} → ${b} (not comparable: ${reason})`,
+      })),
+      ...(['a', 'b'] as const).flatMap((side) => {
+        const only = side === 'a' ? stack.onlyA : stack.onlyB
+        return only.length > 0
+          ? [{ what: `only in ${side.toUpperCase()}`, change: only.join(', ') }]
+          : []
+      }),
+      // The runner is a worker of the stack; listed once.
+      ...(runner.differs &&
+      !stack.changed.some((change) => change.field === 'harness-e2e')
+        ? [
+            {
+              what: 'runner',
+              change: `${runner.a ?? '—'} → ${runner.b ?? '—'}`,
+            },
+          ]
+        : []),
+    ],
   }
 }
 
