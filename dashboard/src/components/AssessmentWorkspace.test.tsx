@@ -152,6 +152,29 @@ describe('assessment detail', () => {
     expect(html).toContain('Only execution and infrastructure were checked')
     expect(html).toContain('nothing about the deliverable')
     expect(html).toContain('Not reported')
+    expect(html).toContain('No assessments retained')
+    expect(html).toContain('No assessments were retained for this run.')
     expect(html).not.toContain('0/0')
+  })
+
+  it('does not blame the subject for criteria an infrastructure failure never reached', () => {
+    // The assessments exist, but the run died before any of them ran.
+    const html = render({
+      ...model.runs[0],
+      systemStatus: 'infrastructure_error',
+      score: null,
+      metrics: { ...model.runs[0].metrics, durationMs: 100 },
+      assessments: model.runs[0].assessments.map((entry) => ({
+        ...entry,
+        outcome: 'not_evaluated' as const,
+        score: undefined,
+      })),
+    })
+    expect(html).toContain('No score retained')
+    expect(html).toContain('1 not evaluated')
+    expect(html).not.toContain('1 failed')
+    expect(html).not.toContain('1 need review')
+    // The tiles measured nothing, so they are not painted as a failure.
+    expect(html).not.toContain('[&_[data-metric-value]]:text-danger')
   })
 })
