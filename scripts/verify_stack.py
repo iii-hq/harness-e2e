@@ -177,23 +177,40 @@ def emit(result: dict[str, Any], body: str, run_url: str) -> None:
 def measure(stack: dict[str, Any], suite: str, model: str, token: str | None) -> tuple[dict[str, Any], str]:
     import yaml
 
-    started = gh("workflow", "run", WORKFLOW, "-R", EXECUTOR_REPOSITORY, "--ref", "main",
-                 "-f", f"suite={suite}", "-f", f"model={model}",
-                 "-f", f"stack={yaml.safe_dump(stack, sort_keys=False)}", token=token, merged=True)
-    run_id = run_id_of(started)
-    run_url = f"https://github.com/{EXECUTOR_REPOSITORY}/actions/runs/{run_id}"
+    dispatched: list[int] = []
+    stop: list[bool] = []
 
     def cancel() -> None:
-        subprocess.run(["gh", "run", "cancel", str(run_id), "-R", EXECUTOR_REPOSITORY],
-                       capture_output=True, env={**os.environ, **({"GH_TOKEN": token} if token else {})})
+        # GitHub refuses to cancel a run it has only just queued (409) for a
+        # few seconds; a cancelled job leaves about ten before it is killed.
+        for _ in range(8):
+            done = subprocess.run(["gh", "run", "cancel", str(dispatched[0]), "-R", EXECUTOR_REPOSITORY],
+                                  capture_output=True, env={**os.environ, **({"GH_TOKEN": token} if token else {})})
+            if done.returncode == 0:
+                return
+            time.sleep(1)
 
-    # A newer push cancels the calling job; the run it started should not go on.
+    # A newer push cancels the calling job; the run it started should not go
+    # on. A signal while the dispatch is still in flight waits for its run id:
+    # exiting then would leave a run nobody can name.
     def cancelled(*_: Any) -> None:
+        if not dispatched:
+            stop.append(True)
+            return
         cancel()
         sys.exit(143)
 
     signal.signal(signal.SIGTERM, cancelled)
     signal.signal(signal.SIGINT, cancelled)
+
+    started = gh("workflow", "run", WORKFLOW, "-R", EXECUTOR_REPOSITORY, "--ref", "main",
+                 "-f", f"suite={suite}", "-f", f"model={model}",
+                 "-f", f"stack={yaml.safe_dump(stack, sort_keys=False)}", token=token, merged=True)
+    run_id = run_id_of(started)
+    dispatched.append(run_id)
+    run_url = f"https://github.com/{EXECUTOR_REPOSITORY}/actions/runs/{run_id}"
+    if stop:
+        cancelled()
 
     deadline = time.monotonic() + DEADLINE_SECONDS
     while True:

@@ -1,10 +1,12 @@
 import importlib.util
 import io
 import os
+import signal
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -103,6 +105,30 @@ class RunTests(unittest.TestCase):
         self.assertTrue(body.startswith(verify_stack.MARKER))
         self.assertIn("1/2 passed", body)
         self.assertIn("failed: shell_coder_sandbox", body)
+
+    def test_a_signal_during_the_dispatch_cancels_the_run_once_it_is_known(self):
+        """The job is cancelled while `gh workflow run` still waits for the run URL."""
+        def fake_gh(*args, **_):
+            if args[:2] == ("workflow", "run"):
+                signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+                return "https://github.com/iii-hq/harness-e2e/actions/runs/42\n"
+            raise AssertionError(f"nothing should run after the cancel: {args}")
+
+        previous = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
+        try:
+            # A run GitHub has only just queued refuses the first cancel (409).
+            answers = [SimpleNamespace(returncode=1), SimpleNamespace(returncode=0)]
+            with patch.object(verify_stack, "gh", side_effect=fake_gh), \
+                    patch.object(verify_stack.subprocess, "run", side_effect=answers) as run, \
+                    patch.object(verify_stack.time, "sleep"), \
+                    self.assertRaises(SystemExit) as exited:
+                verify_stack.measure({"containers": {}}, "pr", "deepseek/deepseek-flash", None)
+        finally:
+            signal.signal(signal.SIGTERM, previous[0])
+            signal.signal(signal.SIGINT, previous[1])
+        self.assertEqual(exited.exception.code, 143)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.args[0][:4], ["gh", "run", "cancel", "42"])
 
     def test_a_registry_outage_still_leaves_a_one_line_verdict(self):
         """A multi-line error must neither crash the tool nor break GITHUB_OUTPUT."""
