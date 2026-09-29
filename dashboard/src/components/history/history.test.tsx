@@ -58,7 +58,7 @@ describe('the runs list', () => {
     expect(html).toContain('root session · the subject')
     expect(html).toContain('>Cache read</dt><dd>17.1M</dd>')
     expect(html).toContain(
-      'title="compose_valid=true, worker_ready=true, function_surface=false"',
+      '>compose_valid=true, worker_ready=true, function_surface=false</p>',
     )
     expect(html).toContain(
       `href="#/ext/harness-e2e/execution/${tree.plan_execution_id}"`,
