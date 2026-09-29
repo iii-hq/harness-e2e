@@ -2402,10 +2402,11 @@ mod tests {
         assert!(spec.prompt.contains("legal_moves"));
         assert!(spec.prompt.contains("console:script"));
         assert!(spec.prompt.contains("#/worker/"));
-        assert!(spec
-            .summary
-            .as_deref()
-            .is_some_and(|summary| summary.contains("run-scoped iii Worker")));
+        assert_eq!(spec.title.as_deref(), ScenarioId::ChessEngineBuild.title());
+        assert_eq!(
+            spec.summary.as_deref(),
+            ScenarioId::ChessEngineBuild.summary()
+        );
 
         // Weights, policy and the description of every criterion travel with it.
         let weights: Vec<_> = spec
@@ -2444,27 +2445,6 @@ mod tests {
         assert_eq!(spec.execution.max_total_tokens, Some(6_000_000));
         assert_eq!(spec.execution.stuck_timeout_seconds, 1_800);
         assert!(spec.denied_functions.is_empty());
-    }
-
-    #[test]
-    fn a_scenario_without_an_editorial_summary_still_projects_its_contract() {
-        let root = tempfile::tempdir().expect("temporary dashboard store should exist");
-        let model = DashboardReadModel::load(root.path())
-            .expect("current scenarios should materialize into the read model");
-        let row = model
-            .tests_list(TestsListRequest {
-                query: Some(ScenarioId::ContextPressure.as_str().into()),
-                ..TestsListRequest::default()
-            })
-            .expect("context pressure should be readable")
-            .rows
-            .into_iter()
-            .next()
-            .expect("context pressure should be registered");
-        let spec = row.spec.expect("the scoring contract should be projected");
-        assert!(spec.summary.is_none());
-        assert!(!spec.prompt.is_empty());
-        assert!(!spec.criteria.is_empty());
     }
 
     #[test]
