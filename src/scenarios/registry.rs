@@ -679,9 +679,9 @@ async fn capture<const N: u8>(
     let result = if N == 1 {
         check_plan(run_id)
     } else if matches!(N, 2 | 4) && delivery["runtime_ready"] != true {
-        Err(anyhow::anyhow!(
-            "Delivered source could not be started for validation: {delivery}"
-        ))
+        undeliverable_observations(N, &delivery).ok_or_else(|| {
+            anyhow::anyhow!("Delivered source could not be started for validation: {delivery}")
+        })
     } else {
         let mut command = Command::new("python3");
         command
@@ -704,6 +704,35 @@ async fn capture<const N: u8>(
         invariants:vec![], provenance:vec![ProvenanceEvidence {kind:"filesystem_path".into(),source_id:directory.display().to_string(),relation:"validated_before_cleanup".into()}],
     }])
 }
+/// A delivery the validator cannot start because of what the subject did —
+/// source that does not come up, or Registry source changed in a verification
+/// task — is a product failure and scores zero on every metric. Only a Docker
+/// daemon that stopped answering keeps the metrics unavailable.
+fn undeliverable_observations(test: u8, delivery: &Value) -> Option<Value> {
+    let error = delivery["runtime_error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    if [
+        "cannot connect to the docker daemon",
+        "is the docker daemon running",
+        "permission denied while trying to connect",
+    ]
+    .iter()
+    .any(|token| error.contains(token))
+    {
+        return None;
+    }
+    let reason = format!("delivered source could not be validated: {delivery}");
+    let observations = metrics(test)
+        .iter()
+        .map(|metric| {
+            json!({"id": metric["id"], "status": "measured", "value": 0,
+                   "numerator": 0, "denominator": 1, "reason": reason})
+        })
+        .collect::<Vec<_>>();
+    Some(json!({ "observations": observations }))
+}
 fn awards(test: u8, validation: &Value) -> Result<Vec<CriterionAward>> {
     super::common::atomic_awards(metrics(test), validation)
 }
@@ -723,7 +752,9 @@ async fn evaluate<const N: u8>(
     let validation =
         json!({"observations": evidence["observations"], "error": evidence["validation_error"]});
     Ok(ObjectiveEvaluation {
-        completion: if observation.metrics.complete {
+        completion: if observation.metrics.complete
+            && evidence["delivery"]["runtime_ready"] != false
+        {
             CompletionState::Completed
         } else {
             CompletionState::TaskIncomplete
@@ -834,6 +865,23 @@ mod tests {
                     .sum::<u16>(),
                 100
             );
+        }
+    }
+    #[test]
+    fn a_delivery_that_does_not_start_scores_zero_unless_docker_is_gone() {
+        for n in [2, 4] {
+            for delivery in [
+                json!({"runtime_ready": false, "runtime_error": "app exited with code 1"}),
+                json!({"runtime_ready": false, "scope_deviation": "Registry source changed"}),
+            ] {
+                let validation = undeliverable_observations(n, &delivery).unwrap();
+                let awards = awards(n, &validation).unwrap();
+                assert_eq!(awards.len(), metrics(n).len());
+                assert!(awards.iter().all(|award| award.awarded == Some(0)));
+            }
+            let daemon = json!({"runtime_ready": false,
+                "runtime_error": "Cannot connect to the Docker daemon at unix:///var/run/docker.sock"});
+            assert!(undeliverable_observations(n, &daemon).is_none());
         }
     }
     #[test]

@@ -2665,6 +2665,7 @@ fn captured_measurements(
 }
 
 fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    zero_unreached_criteria(spec, report);
     ensure_assessment_results(spec, report);
     if report.failures.is_empty() {
         if report.evaluators.completion == crate::report::EvaluatorAvailability::Available
@@ -2682,6 +2683,33 @@ fn finish_native_assessment(spec: &ScenarioSpec, report: &mut E2eRunReport) {
             );
         }
     }
+}
+
+/// A subject stopped by a resource limit spent the budget the task allows
+/// without finishing it: every criterion it did not reach scores zero, so the
+/// run keeps a score and a comparison counts it instead of dropping it. A
+/// scenario that scored the partial delivery keeps that score.
+fn zero_unreached_criteria(spec: &ScenarioSpec, report: &mut E2eRunReport) {
+    if report.status != RunStatus::ResourceLimit || report.score.is_some() {
+        return;
+    }
+    let cause = report
+        .failures
+        .first()
+        .map_or("the subject was stopped", |failure| &failure.message);
+    let reason = format!("not reached within the run's resource limits: {cause}");
+    let awards = spec
+        .criteria
+        .iter()
+        .map(|criterion| CriterionAward {
+            id: criterion.id.into(),
+            awarded: Some(0),
+            reason: reason.clone(),
+        })
+        .collect();
+    report.criteria = criterion_reports(spec, awards);
+    report.assessment_results = materialize_assessment_results(spec, &report.criteria);
+    update_score(report);
 }
 
 fn ensure_assessment_results(spec: &ScenarioSpec, report: &mut E2eRunReport) {
@@ -4424,6 +4452,77 @@ mod tests {
         // The unevaluated criterion adds nothing; the evaluated one awarded zero.
         assert_eq!(report.score, Some(0));
         assert_eq!(report.score, Some(0));
+    }
+
+    #[test]
+    fn resource_limited_subject_scores_zero_on_every_unreached_criterion() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        report.push_failure(
+            RunStatus::ResourceLimit,
+            FailurePhase::Execute,
+            "maximum turn count reached",
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.status, RunStatus::ResourceLimit);
+        assert_eq!(report.technical, crate::report::TechnicalState::Valid);
+        assert_eq!(report.completion, CompletionState::TaskIncomplete);
+        assert_eq!(report.score, Some(0));
+        assert!(report.criteria.iter().all(|criterion| {
+            criterion.awarded == Some(0) && criterion.reason.contains("maximum turn count")
+        }));
+        assert!(report
+            .assessment_results
+            .iter()
+            .all(|result| result.outcome == AssessmentOutcome::Failed));
+    }
+
+    #[test]
+    fn resource_limit_keeps_a_score_the_partial_delivery_earned() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        apply_objective_evaluation(
+            &spec,
+            &mut report,
+            ObjectiveEvaluation {
+                completion: CompletionState::TaskIncomplete,
+                awards: vec![
+                    CriterionAward {
+                        id: "required".into(),
+                        awarded: Some(70),
+                        reason: "partial delivery".into(),
+                    },
+                    CriterionAward {
+                        id: "quality".into(),
+                        awarded: None,
+                        reason: "not reached".into(),
+                    },
+                ],
+                infrastructure_error: None,
+            },
+        )
+        .unwrap_or_else(|error| panic!("{}", error.message));
+        report.push_failure(
+            RunStatus::ResourceLimit,
+            FailurePhase::Execute,
+            "token budget exhausted",
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.score, Some(70));
+        assert_eq!(report.criteria[1].awarded, None);
+    }
+
+    #[test]
+    fn subject_error_without_evaluation_stays_unscored() {
+        let spec = mixed_assessment_spec();
+        let mut report = test_run_report();
+        report.push_failure(
+            RunStatus::SubjectError,
+            FailurePhase::Execute,
+            "turn ended as Failed: provider returned 500",
+        );
+        finish_native_assessment(&spec, &mut report);
+        assert_eq!(report.score, None);
     }
 
     #[test]

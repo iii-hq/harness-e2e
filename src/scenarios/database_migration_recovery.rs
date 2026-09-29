@@ -61,7 +61,7 @@ const IDEMPOTENT_REPLAY: AssessmentSpec = AssessmentSpec::scored(
 const SOURCE_AND_SENTINEL_PRESERVED: AssessmentSpec = AssessmentSpec::scored(
     "source_and_sentinel_preserved",
     25,
-    "The six legacy rows and the sentinel row are unchanged.",
+    "At least one database::transaction succeeds, and the six legacy rows and the sentinel row are unchanged.",
 );
 const TRANSACTION_SCOPE_AND_REPORT: AssessmentSpec = AssessmentSpec::scored(
     "transaction_scope_and_report",
@@ -383,7 +383,7 @@ impl Scenario for DatabaseMigrationRecovery {
 
         let exact_migration = target_ok && quarantine_ok && compat_ok;
         let idempotent = journal_ok && successful_transactions == 2 && target_ok && quarantine_ok;
-        let preserved = legacy_ok && sentinel_ok;
+        let preserved = source_preserved(legacy_ok, sentinel_ok, successful_transactions);
         let disciplined = !writes.is_empty()
             && non_transaction_writes == 0
             && transactions == 2
@@ -413,7 +413,9 @@ impl Scenario for DatabaseMigrationRecovery {
                 ),
                 SOURCE_AND_SENTINEL_PRESERVED.full_or_zero(
                     preserved,
-                    format!("legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"),
+                    format!(
+                        "successful_transactions={successful_transactions} (need at least 1), legacy_rows={legacy_ok}, sentinel_row={sentinel_ok}"
+                    ),
                 ),
                 TRANSACTION_SCOPE_AND_REPORT.full_or_zero(
                     disciplined,
@@ -544,6 +546,12 @@ fn text<'a>(row: &'a Value, column: &str) -> Option<&'a str> {
 
 fn integer(row: &Value, column: &str) -> Option<i64> {
     row.get(column).and_then(Value::as_i64)
+}
+
+/// An untouched source only counts alongside a migration attempt: a subject
+/// that committed nothing preserved nothing.
+fn source_preserved(legacy_ok: bool, sentinel_ok: bool, successful_transactions: usize) -> bool {
+    successful_transactions > 0 && legacy_ok && sentinel_ok
 }
 
 fn target_rows_exact(rows: &[Value]) -> bool {
@@ -785,6 +793,13 @@ mod tests {
             write_statements(&json!({ "statements": ["A", { "sql": "B" }] })),
             vec!["A".to_string(), "B".to_string()]
         );
+    }
+
+    #[test]
+    fn a_subject_that_committed_nothing_preserved_nothing() {
+        assert!(!source_preserved(true, true, 0));
+        assert!(source_preserved(true, true, 1));
+        assert!(!source_preserved(false, true, 2));
     }
 
     #[test]
