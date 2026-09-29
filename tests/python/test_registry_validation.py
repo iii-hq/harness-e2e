@@ -103,6 +103,18 @@ class ValidationTests(unittest.TestCase):
                 self.assertEqual((found["verification.execution_coverage"]["numerator"], found["verification.execution_coverage"]["denominator"]), (0, 24))
                 self.assertEqual((found["verification.precision"]["status"], found["verification.precision"]["numerator"], found["verification.precision"]["denominator"]), ("not_applicable", 0, 0))
                 self.assertEqual((found["verification.evidence_coverage"]["numerator"], found["verification.evidence_coverage"]["denominator"], found["verification.evidence_coverage"]["value"]), (0, 0, 0))
+                self.assertEqual(found["verification.source_preservation"]["value"], 0)
+
+    def test_no_report_earns_nothing_even_when_nothing_fails(self):
+        task, state = self.verification_task()
+        (task / "workspace" / "output" / "checks.json").unlink(missing_ok=True)
+        with patch.object(module, "feature_probe", return_value=(self.feature(), None)):
+            found = {item["id"]: item for item in module.verification_observations(task, ASSETS, state)}
+        self.assertEqual(len(found), 5)
+        self.assertEqual(found.pop("verification.precision")["status"], "not_applicable")
+        for metric, item in found.items():
+            self.assertEqual(item["status"], "measured", metric)
+            self.assertEqual(item.get("value", item.get("numerator")), 0, metric)
 
     def test_all_passing_implementation_has_full_recall_and_unassessed_precision(self):
         task, state = self.verification_task()
