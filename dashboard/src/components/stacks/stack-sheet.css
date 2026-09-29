@@ -251,16 +251,6 @@
   gap: calc(var(--spacing) * 2.5) calc(var(--spacing) * 2.5);
 }
 
-.sb-iii-value {
-  display: inline-flex;
-  align-items: center;
-  height: calc(var(--spacing) * 8);
-  padding: 0 calc(var(--spacing) * 2.5);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  font-family: var(--font-mono);
-}
-
 /* Workers: the template's, what this stack declares, what is added. */
 .sb-workers {
   display: flex;
@@ -740,12 +730,31 @@
   max-width: calc(var(--spacing) * 110);
 }
 
-.sb-iii {
-  align-items: flex-start;
+/* What the iii field warns about, or why it is left to the YAML tab: the
+   whole row. */
+.sb-iii > .sk-hint[data-tone] {
+  grid-column: 1 / -1;
 }
 
-.sb-iii > .sk-hint {
-  align-self: stretch;
+.sb[data-narrow] .sb-iii {
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: start;
+}
+
+/* Narrow, a menu opens across its row rather than beside its button. */
+.sb[data-narrow] .sb-pin {
+  position: static;
+}
+
+.sb[data-narrow] .sb-declared > li,
+.sb[data-narrow] .sb-iii {
+  position: relative;
+}
+
+.sb[data-narrow] .sb-menu {
+  left: 0;
+  right: 0;
+  width: auto;
 }
 
 /* The iii menu: below its button, the releases scrolling inside it. */
@@ -755,10 +764,6 @@
   width: calc(var(--spacing) * 100);
   max-height: calc(var(--spacing) * 120);
   overflow: auto;
-}
-
-.sb[data-narrow] .sb-menu.sb-iii-menu {
-  width: calc(100vw - var(--spacing) * 10);
 }
 
 .sb-iii-releases {
