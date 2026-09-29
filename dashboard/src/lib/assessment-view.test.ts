@@ -6,9 +6,7 @@ import type {
 } from '@/lib/assessment-contract'
 import {
   aggregateAssessmentMetrics,
-  assessmentFilterCounts,
   buildAssessmentWorkspace,
-  matchesAssessmentFilter,
 } from '@/lib/assessment-view'
 import type { DashboardExecutionDetail } from '@/lib/dashboard-data-source'
 import { RESULT_CONTRACT_SHA256 } from '@/lib/result-contract.generated'
@@ -227,29 +225,6 @@ describe('assessment presentation model', () => {
       detail(contract({ system_status: 'subject_error' })),
     )
     expect(model.runs[0].systemStatus).toBe('subject_error')
-  })
-
-  it('filters failed, unavailable and asset assessments', () => {
-    const run = contract({
-      assessments: [
-        result({ outcome: 'failed' }),
-        result({ criterion_id: 'scored' }),
-        result({ criterion_id: 'missing', outcome: 'unavailable' }),
-      ],
-    })
-    const entries = buildAssessmentWorkspace(detail(run)).runs[0].assessments
-    expect(
-      entries.some((entry) => matchesAssessmentFilter(entry, 'failed')),
-    ).toBe(true)
-    expect(
-      entries.some((entry) => matchesAssessmentFilter(entry, 'unavailable')),
-    ).toBe(true)
-    expect(
-      entries.filter((entry) => matchesAssessmentFilter(entry, 'asset')),
-    ).toHaveLength(1)
-    expect(
-      assessmentFilterCounts(buildAssessmentWorkspace(detail(run)).runs),
-    ).toEqual({ all: 4, failed: 1, unavailable: 1, asset: 1 })
   })
 
   it('projects an asset validation as a deterministic objective entry', () => {

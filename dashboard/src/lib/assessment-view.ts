@@ -13,8 +13,6 @@ import type {
   DashboardRunProjection,
 } from '@/lib/dashboard-data-source'
 
-export type AssessmentFilter = 'all' | 'failed' | 'unavailable' | 'asset'
-
 export type AssessmentEntry = {
   id: string
   criterionId: string
@@ -103,17 +101,6 @@ export function aggregateAssessmentMetrics(
     turns: sumRunMetric(runs, 'turns'),
   }
 }
-
-const FAILED_ASSET_OUTCOMES = new Set([
-  'invalid',
-  'malformed',
-  'oversized',
-  'not_produced',
-  'unreadable',
-  'unsafe_path',
-  'removed_during_cleanup',
-  'unexpected',
-])
 
 export function buildAssessmentWorkspace(
   detail: DashboardExecutionDetail | null | undefined,
@@ -269,41 +256,4 @@ function uniqueEvidence(references: EvidenceReference[]) {
     unique.set(key, reference)
   }
   return [...unique.values()]
-}
-
-export function matchesAssessmentFilter(
-  entry: AssessmentEntry,
-  filter: AssessmentFilter,
-) {
-  if (filter === 'all') return true
-  if (filter === 'failed') {
-    return (
-      entry.outcome === 'failed' ||
-      entry.outcome === 'error' ||
-      (entry.validationOutcome != null &&
-        FAILED_ASSET_OUTCOMES.has(entry.validationOutcome))
-    )
-  }
-  if (filter === 'unavailable') {
-    return (
-      entry.outcome === 'unavailable' ||
-      entry.outcome === 'not_evaluated' ||
-      entry.outcome === 'error'
-    )
-  }
-  return entry.kind === 'asset_validation'
-}
-
-export function assessmentFilterCounts(runs: AssessmentRunView[]) {
-  const entries = runs.flatMap((run) => run.assessments)
-  return {
-    all: entries.length,
-    failed: entries.filter((entry) => matchesAssessmentFilter(entry, 'failed'))
-      .length,
-    unavailable: entries.filter((entry) =>
-      matchesAssessmentFilter(entry, 'unavailable'),
-    ).length,
-    asset: entries.filter((entry) => matchesAssessmentFilter(entry, 'asset'))
-      .length,
-  } satisfies Record<AssessmentFilter, number>
 }
