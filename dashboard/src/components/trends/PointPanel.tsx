@@ -7,7 +7,9 @@ import {
   hashFrom,
 } from '@/hooks/use-hash-route'
 import type { DashboardDataBridge } from '@/lib/dashboard-data-source'
+import { plural } from '@/lib/format'
 import {
+  baselineId,
   CHANGE_KIND_TEXT,
   changesBetween,
   commitsLinkText,
@@ -154,17 +156,27 @@ export function PointPanel({
   const lookups = useCommitLookups(bridge, listed.shown)
   const missing = notRun(point)
   const rc = releaseControlId(point)
-  const source = [
-    sourceText(point),
-    rc ? `Release Control ${rc}` : null,
-    mixesSeries(points) ? seriesText(point) : null,
-    point.label,
-  ]
+  // A day or a release: several executions read together.
+  const group = point.group
+  const source = (
+    group
+      ? [
+          plural(group.members.length, 'execution'),
+          plural(point.counted, 'counted run'),
+        ]
+      : [
+          sourceText(point),
+          rc ? `Release Control ${rc}` : null,
+          mixesSeries(points) ? seriesText(point) : null,
+          point.label,
+        ]
+  )
     .filter(Boolean)
     .join(' · ')
-  // What the measures and Compare read against.
+  // What the measures and Compare read against. Compare takes two
+  // executions, not two groups.
   const reference = against ?? previous
-  const canCompare = reference !== null && counted(point)
+  const canCompare = !group && reference !== null && counted(point)
   // The comparison opens with the earlier execution as A.
   const [earlier, later] =
     againstIndex > index ? [point, reference] : [reference, point]
@@ -198,6 +210,13 @@ export function PointPanel({
           {point.reason ?? 'None of its runs is technically valid.'}
         </p>
       )}
+      {group && group.mixed.length > 0 ? (
+        <p role="status" className="tr-note" data-tone="warn">
+          Its executions did not all run the same versions and tests (
+          {group.mixed.map((change) => change.name).join(', ')}), so its
+          measures mix them.
+        </p>
+      ) : null}
       {counted(point) && missing.length > 0 ? (
         <p role="status" className="tr-note" data-tone="warn">
           Planned but not run: {missing.join(', ')}. They count as not
@@ -263,6 +282,43 @@ export function PointPanel({
           </button>
         ) : null}
       </section>
+      {group ? (
+        <section className="tr-panel-section" aria-labelledby="tr-mb">
+          <h3 id="tr-mb" className="tr-h3">
+            Its executions
+          </h3>
+          <ul className="tr-members">
+            {[...group.members].reverse().map((member) => {
+              const score = TREND_METRICS[0].value(member)
+              return (
+                <li key={member.execution_id}>
+                  <a
+                    className="tr-inline-link"
+                    href={hashForExecution(member.execution_id)}
+                  >
+                    {pointTime(member)}
+                  </a>
+                  <span className="tr-mono tr-small tr-faint-ink">
+                    {!counted(member)
+                      ? 'no counted run'
+                      : [
+                          score === null
+                            ? null
+                            : `score ${TREND_METRICS[0].figure(score, member)}`,
+                          plural(member.counted, 'counted run'),
+                          group.by === 'day' && member.workers?.harness
+                            ? `harness ${member.workers.harness}`
+                            : null,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      ) : null}
       {counted(point) ? (
         <section className="tr-panel-section" aria-labelledby="tr-mx">
           <h3 id="tr-mx" className="tr-h3">
@@ -296,6 +352,7 @@ export function PointPanel({
         </section>
       ) : null}
       <p className="tr-mono tr-small tr-faint-ink tr-wrap">
+        {group ? 'Its last execution: ' : null}
         {versionsText(point)}
       </p>
       {point.workers ? null : (
@@ -306,15 +363,17 @@ export function PointPanel({
         </p>
       )}
       <div className="tr-actions">
-        <a
-          className={buttonClassName({
-            variant: 'secondary',
-            className: 'no-underline',
-          })}
-          href={hashForExecution(point.execution_id)}
-        >
-          Open execution
-        </a>
+        {group ? null : (
+          <a
+            className={buttonClassName({
+              variant: 'secondary',
+              className: 'no-underline',
+            })}
+            href={hashForExecution(point.execution_id)}
+          >
+            Open execution
+          </a>
+        )}
         {canCompare && reference && earlier && later ? (
           <a
             className={buttonClassName({
@@ -335,7 +394,7 @@ export function PointPanel({
           <button
             type="button"
             className={buttonClassName({ variant: 'secondary' })}
-            onClick={() => onBaseline(isBaseline ? null : point.execution_id)}
+            onClick={() => onBaseline(isBaseline ? null : baselineId(point))}
           >
             {isBaseline ? 'Clear baseline' : 'Set as baseline'}
           </button>

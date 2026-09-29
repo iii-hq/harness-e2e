@@ -48,6 +48,7 @@ function RoutedPage({ route }: { route: DashboardRoute }) {
           request={route.request}
           period={route.period}
           base={route.base}
+          group={route.group}
         />
       )
     case 'workspace':

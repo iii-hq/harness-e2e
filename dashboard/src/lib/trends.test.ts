@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  axisMarks,
   baseFromParams,
+  baselineId,
   baselineOf,
   changesAt,
   changesBetween,
   commitsLinkText,
   comparedPair,
+  counted,
   customDays,
   DEFAULT_PERIOD,
   dayMarks,
@@ -13,6 +16,8 @@ import {
   deltaOf,
   domain,
   emptyText,
+  groupFromParams,
+  groupPoints,
   laneLabel,
   majorsFirst,
   modelChoices,
@@ -32,6 +37,7 @@ import {
   stackNote,
   suiteChoices,
   summaryText,
+  type TrendMeasures,
   type TrendMetric,
   type TrendPoint,
   testCell,
@@ -39,9 +45,11 @@ import {
   trendMetric,
   trendsParams,
   trendsRequestFromParams,
+  unversioned,
   utcOffsetText,
   versionsText,
   withBase,
+  withGroup,
   withPeriod,
 } from '@/lib/trends'
 import { seriesPoints, trendSeries } from '@/test-fixtures/trends'
@@ -402,6 +410,127 @@ describe('a baseline', () => {
     expect(withBase(new URLSearchParams('stack=any'), null).toString()).toBe(
       'stack=any',
     )
+  })
+})
+
+describe('grouping', () => {
+  const all = seriesPoints('regression')
+  const byDay = groupPoints(all, 'day', NOW)
+  const byRelease = groupPoints(all, 'release', NOW)
+  const day = (key: string) =>
+    byDay.find((point) => point.group?.key === key) as TrendPoint
+
+  it('draws each execution as it is unless asked to group', () => {
+    expect(groupPoints(all, 'execution')).toBe(all)
+  })
+
+  it('reads a day’s executions together, means weighted by counted runs', () => {
+    expect(byDay.map((point) => pointTime(point, NOW))).toEqual([
+      'Sep 22',
+      'Sep 23',
+      'Sep 24',
+      'Sep 25',
+      'Sep 26',
+      'Sep 27',
+      'Sep 28',
+    ])
+    const sep22 = day('2026-09-22')
+    // Five executions, one without a counted run: 4 × 9 runs.
+    expect(sep22.group?.members).toHaveLength(5)
+    expect(sep22.counted).toBe(36)
+    // Tests completed per execution: a sum would grow with the executions.
+    expect(sep22.measures?.completed).toBe(9)
+    expect(sep22.measures?.planned).toBe(9)
+    expect(sep22.measures?.score_mean).toBeCloseTo(
+      (89.1 + 86.9 + 89.7 + 91.9) / 4,
+    )
+    expect(sep22.execution_id).toBe('day:2026-09-22')
+    // Its versions are its last execution's.
+    expect(sep22.workers).toEqual(sep22.group?.members.at(-1)?.workers)
+  })
+
+  it('weights by counted runs and sums the calls behind the error rate', () => {
+    const [one, two] = all.filter((point) => counted(point)).slice(0, 2)
+    const pair = [
+      {
+        ...one,
+        started_at: '2026-09-22T09:00:00-03:00',
+        counted: 1,
+        measures: {
+          ...(one.measures as TrendMeasures),
+          score_mean: 10,
+          function_calls: 10,
+          function_call_errors: 5,
+        },
+      },
+      {
+        ...two,
+        started_at: '2026-09-22T10:00:00-03:00',
+        counted: 3,
+        measures: {
+          ...(two.measures as TrendMeasures),
+          score_mean: 50,
+          function_calls: 90,
+          function_call_errors: 0,
+        },
+      },
+    ]
+    const [grouped] = groupPoints(pair, 'day', NOW)
+    expect(grouped.measures?.score_mean).toBe(40)
+    expect(trendMetric('error_rate').value(grouped)).toBe(5)
+  })
+
+  it('says a day mixed versions, and a day with no counted run has no measures', () => {
+    expect(
+      day('2026-09-24').group?.mixed.map((change) => change.name),
+    ).toContain('harness')
+    expect(day('2026-09-23').group?.mixed).toEqual([])
+    const failed = groupPoints(
+      all.filter(
+        (point) => !counted(point) && point.started_at.startsWith('2026-09-26'),
+      ),
+      'day',
+      NOW,
+    )
+    expect(failed[0].measures).toBeNull()
+    expect(failed[0].reason).toBe('None of its 2 executions has a counted run.')
+  })
+
+  it('draws one point per Harness release in the order they first ran, the unrecorded left out', () => {
+    expect(byRelease.map((point) => pointTime(point))).toEqual([
+      'harness 1.8.31',
+      'harness 1.8.34',
+      'harness 1.8.35',
+      'harness 1.8.36',
+    ])
+    expect(axisMarks(byRelease).map((mark) => mark.text)).toEqual([
+      '1.8.31',
+      '1.8.34',
+      '1.8.35',
+      '1.8.36',
+    ])
+    expect(unversioned(all)).toHaveLength(5)
+    expect(
+      byRelease.reduce(
+        (sum, point) => sum + (point.group?.members.length ?? 0),
+        0,
+      ),
+    ).toBe(all.length - 5)
+    // Between releases, what changed from one's last execution to the next's.
+    expect(changesAt(byRelease, 0)).toEqual([])
+    expect(
+      changesAt(byRelease, 1).find((change) => change.name === 'harness')?.text,
+    ).toBe('1.8.31 → 1.8.34')
+  })
+
+  it('keeps the baseline on the group that holds it, set by its last execution', () => {
+    const sep23 = 'github-35821773226-2'
+    expect(baselineOf(byDay, sep23).index).toBe(1)
+    expect(baselineId(byDay[1])).toBe(sep23)
+    expect(baselineId(all[3])).toBe(all[3].execution_id)
+    expect(groupFromParams(withGroup(new URLSearchParams(), 'day'))).toBe('day')
+    expect(withGroup(new URLSearchParams(), 'execution').toString()).toBe('')
+    expect(groupFromParams(new URLSearchParams('group=week'))).toBe('execution')
   })
 })
 

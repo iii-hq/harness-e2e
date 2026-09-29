@@ -13,7 +13,7 @@ import { ChevronRight, X } from 'lucide-react'
 import type { CSSProperties } from 'react'
 import { isInteractiveTarget } from '@/design-system'
 import { hashForExecution, hashForTestHistory } from '@/hooks/use-hash-route'
-import { formatDay, formatTime } from '@/lib/format'
+import { formatDay, formatTime, plural } from '@/lib/format'
 import {
   counted,
   mixesSeries,
@@ -128,8 +128,23 @@ export function ByTest({
                     aria-label={`Select ${pointTime(point)}`}
                     onClick={() => onPick(index)}
                   >
-                    <span>{formatDay(point.started_at)}</span>
-                    <span>{formatTime(point.started_at)}</span>
+                    {point.group ? (
+                      <>
+                        <span>
+                          {point.group.by === 'day'
+                            ? formatDay(point.started_at)
+                            : point.group.key}
+                        </span>
+                        <span>
+                          {plural(point.group.members.length, 'execution')}
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span>{formatDay(point.started_at)}</span>
+                        <span>{formatTime(point.started_at)}</span>
+                      </>
+                    )}
                   </button>
                 </th>
               ))}

@@ -9,6 +9,7 @@ import {
 import { ChevronDown } from 'lucide-react'
 import {
   type BaselineWhy,
+  baselineId,
   counted,
   mixesSeries,
   pointTime,
@@ -46,7 +47,13 @@ export function BaselineMenu({
   why: BaselineWhy | null
   onPick: (id: string | null) => void
 }) {
-  const point = points.find((item) => item.execution_id === base) ?? null
+  // A day or a release holds the baseline when one of its executions is it.
+  const point =
+    points.find(
+      (item) =>
+        item.execution_id === base ||
+        item.group?.members.some((member) => member.execution_id === base),
+    ) ?? null
   const mixed = mixesSeries(points)
   return (
     <DropdownMenu>
@@ -65,8 +72,11 @@ export function BaselineMenu({
         className="tr-menu tr-baseline-menu"
       >
         <DropdownMenuRadioGroup
-          value={base ?? PREVIOUS}
-          onValueChange={(value) => onPick(value === PREVIOUS ? null : value)}
+          value={point?.execution_id ?? base ?? PREVIOUS}
+          onValueChange={(value) => {
+            const picked = points.find((item) => item.execution_id === value)
+            onPick(picked ? baselineId(picked) : null)
+          }}
         >
           <DropdownMenuRadioItem value={PREVIOUS} className="tr-menu-item">
             <span className="tr-menu-text">

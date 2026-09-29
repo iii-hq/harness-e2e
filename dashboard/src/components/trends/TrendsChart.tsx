@@ -2,9 +2,9 @@ import { ArrowDown, ArrowUp, Maximize2, X } from 'lucide-react'
 import { DeltaValue, deltaDirection, deltaTone } from '@/design-system'
 import { useMeasuredWidth } from '@/hooks/use-measured-width'
 import {
+  axisMarks,
   comparedPair,
   counted,
-  dayMarks,
   deltaFormat,
   deltaOf,
   domain,
@@ -248,7 +248,7 @@ function Plot({
             </text>
           </g>
         ) : null}
-        {roomyMarks(dayMarks(points), (mark) => xAt(mark.index), 56).map(
+        {roomyMarks(axisMarks(points), (mark) => xAt(mark.index), 56).map(
           (mark) => (
             <text
               key={mark.index}
@@ -347,6 +347,21 @@ function Plot({
   )
 }
 
+const UNITS = {
+  execution: {
+    that: 'that execution',
+    step: 'One step per execution; the axis marks where a day starts.',
+  },
+  day: {
+    that: 'that day',
+    step: 'One step per day: its executions read together, means weighted by counted runs.',
+  },
+  release: {
+    that: 'that release',
+    step: 'One step per Harness release, in the order they first ran: its executions read together.',
+  },
+}
+
 /** The large chart: one measure, the lane of what changed, pickable. */
 export function LargeChart({
   metric,
@@ -365,6 +380,7 @@ export function LargeChart({
   narrow: boolean
   onPick: (index: number) => void
 }) {
+  const unit = UNITS[points[0]?.group?.by ?? 'execution']
   return (
     <section
       className="tr-card tr-big"
@@ -403,9 +419,8 @@ export function LargeChart({
         onPick={onPick}
       />
       <p className="tr-footnote">
-        Pick a point or a diamond to see that execution and what changed, or set
-        it as the baseline to read the others against it. One step per
-        execution; the axis marks where a day starts.
+        Pick a point or a diamond to see {unit.that} and what changed, or set it
+        as the baseline to read the others against it. {unit.step}
       </p>
     </section>
   )
