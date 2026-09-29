@@ -28,7 +28,6 @@ import {
   type HistoryObservation,
   type HistoryRun,
   listedExecution,
-  lostCriteria,
   lostText,
   modelText,
   observationState,
@@ -93,7 +92,6 @@ function RunDetail({
   run: HistoryRun | undefined
   label: string | null
 }) {
-  const lost = run ? lostCriteria(run) : []
   const links = runLinks(observation, run)
   const headingId = `th-subs-${runKey(observation)}-${run?.run_id ?? 'run'}`
   return (
@@ -123,7 +121,7 @@ function RunDetail({
             </p>
           </section>
         )}
-        <section className="th-lost" data-criteria-lost={lost.length}>
+        <section className="th-lost">
           <h3 className="th-h3">Criteria in this run</h3>
           {run?.details?.criteria.length ? (
             <ul className="th-criterion-history">

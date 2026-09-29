@@ -404,12 +404,12 @@ export function TestHistoryPage({ testId }: { testId: string }) {
         }}
         title={spec?.title ?? testId}
         headingId="test-history-title"
-        summary={
-          [testId, spec?.summary].filter(Boolean).join(' · ') ||
+        summary={`${testId} · ${
+          spec?.summary ||
           (loading && !history
             ? 'Loading the history…'
             : 'Every run of this test, newest first.')
-        }
+        }`}
         actions={
           <>
             {copied ? (

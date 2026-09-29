@@ -54,99 +54,6 @@ const SUMMARIES: [&str; 7] = [
     "Implements persistent, safely rendered comments and replies while preserving drafts across failures and navigation.",
     "Synchronizes board activity across sessions while preserving local interaction state and handling stale responses.",
 ];
-const QUESTIONS: [&[&str]; 7] = [
-    &[
-        "Does Compose start the standalone application and serve HTML?",
-        "Do prototype-like asset paths return 404?",
-        "Does missing configuration initialize the default data directory?",
-        "Does saving preserve unrelated configuration fields?",
-        "Do direct iii configuration changes update the effective directory?",
-        "Is an empty data directory rejected with HTTP 400?",
-        "Does configuration survive restart?",
-        "Does the mobile settings form load and save the effective directory?",
-        "Does the desktop settings form remain usable without horizontal overflow?",
-        "Does a source change take effect without a manual rebuild?",
-    ],
-    &[
-        "Does ticket creation normalize the title and use the requested default field values?",
-        "Are UUIDs, timestamps, and increasing readable keys valid?",
-        "Do real iii list and get operations preserve creation order and accept both UUID and readable key?",
-        "Are invalid fields and values rejected without adding tickets?",
-        "Do configured directories retain independent stores and key sequences?",
-        "Do persisted tickets survive a runtime restart?",
-        "Do corrupt and duplicate stores fail closed without replacing stored bytes?",
-    ],
-    &[
-        "Is loading visible without fabricated zero counts?",
-        "Does an empty store show zero totals and empty columns?",
-        "Do read failures show recoverable errors without fabricated counts?",
-        "Does retry recover the board after a failed read?",
-        "Does the board summary show the total ticket count?",
-        "Do five columns show the correct cards and lane counts?",
-        "Do cards show their readable key, priority, and assignee?",
-        "Does refresh fetch current tickets?",
-        "Does returning from settings reload the selected store?",
-        "Does user markup render as literal text?",
-        "Do desktop and mobile layouts avoid document-wide horizontal overflow?",
-    ],
-    &[
-        "Do cards open same-tab details by keyboard and pointer with working browser history?",
-        "Does the creation modal have labelled controls and focus its title field?",
-        "Does failed creation show an accessible error and preserve its draft?",
-        "Does successful creation close the modal and open same-tab non-modal details?",
-        "Do HTTP and iii lookup accept both UUID and readable key?",
-        "Do details show persisted editable fields?",
-        "Do direct detail reload and the mobile layout work?",
-        "Does failed deletion keep the detail view and show an accessible error?",
-        "Does deletion completing after navigation remove the board card?",
-        "Does soft deletion survive restart and retire the readable key?",
-        "Is non-JSON creation rejected?",
-        "Do UTF-8 characters split across request chunks remain intact?",
-    ],
-    &[
-        "Does a partial update preserve omitted editable fields?",
-        "Does cancel restore persisted fields without writes?",
-        "Does a failed save preserve the edit draft and report an error?",
-        "Does retry save supported fields while preserving immutable metadata?",
-        "Does a save completing after navigation refresh the relevant board?",
-        "Do invalid, empty, immutable, and deleted-ticket updates fail without writes?",
-        "Does a failed pointer move leave the card in its original column?",
-        "Does pointer drag persist only status and update counts?",
-        "Does a move completing after navigation refresh the board?",
-        "Does the mobile status selector persist an edit?",
-        "Do edited fields survive a runtime restart?",
-    ],
-    &[
-        "Is a browser-posted comment stored and rendered as literal text?",
-        "Do comments and same-ticket nested replies persist in posting order with valid identities?",
-        "Do timeline entries render text safely with author and time?",
-        "Does keyboard activation reach the referenced parent comment?",
-        "Do invalid inputs and malformed stored discussions fail without writes?",
-        "Do editing and failed posts preserve comment drafts?",
-        "Can a late post avoid erasing another ticket draft or newer activity?",
-        "Do edits and soft deletion preserve stored discussions?",
-        "Do discussions survive restart while existing records remain usable?",
-    ],
-    &[
-        "Does an SSE connection receive an initial named change event with the effective store?",
-        "Does successful persistence publish an SSE change event?",
-        "Does failed persistence avoid publishing an SSE event?",
-        "Do three sessions observe direct iii creation without reloading?",
-        "Do ordinary updates preserve focused board cards?",
-        "Does saving dirty edits preserve untouched remote fields?",
-        "Do ordinary updates preserve the comment draft and focus?",
-        "Do browser comments and iii replies reach other sessions without erasing reply drafts?",
-        "Does restart reconnect sessions and preserve same-store drafts?",
-        "Does a remote move update board and detail status?",
-        "Do ordinary updates preserve active pointer dragging?",
-        "Do store switches during dragging load the new store and clear old-store drafts?",
-        "Does remote deletion remove cards and disable stale actions?",
-        "Are late GET responses prevented from replacing newer state?",
-        "Are late mutation responses prevented from replacing newer state?",
-        "Do disconnected SSE clients release retained server responses?",
-        "Does shutdown complete with a connected client and does restart restore streaming?",
-    ],
-];
 
 #[derive(Deserialize)]
 struct Catalog {
@@ -315,12 +222,11 @@ fn rubric(index: usize) -> &'static [RubricCriterion] {
 fn criteria(index: usize) -> Vec<CriterionSpec> {
     rubric(index)
         .iter()
-        .enumerate()
-        .map(|(criterion_index, criterion)| {
+        .map(|criterion| {
             CriterionSpec::scored(
                 criterion.id.as_str(),
                 criterion.weight,
-                QUESTIONS[index][criterion_index],
+                criterion.description.as_str(),
                 EvaluationDimension::Deliverable,
             )
             .with_gate(criterion.gate)

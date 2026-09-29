@@ -1471,9 +1471,9 @@ impl E2eScenarioReport {
 
     pub fn refresh_aggregate(&mut self) -> Result<()> {
         let planned_runs = self.aggregate.planned_runs;
-        let title = self.title.clone();
-        let summary = self.summary.clone();
         self.validate_deferral()?;
+        let title = self.title.take();
+        let summary = self.summary.take();
         let case = self.case.take();
         let runs = std::mem::take(&mut self.runs);
         let deferral_reason = self.deferral_reason.take();

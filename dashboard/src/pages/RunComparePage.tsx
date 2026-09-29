@@ -273,8 +273,8 @@ export function criteriaChanges(a: Side, b: Side) {
       a: pointsA,
       b: pointsB,
       descriptions: {
-        a: one.description || null,
-        b: two.description || null,
+        a: one.description ?? null,
+        b: two.description ?? null,
       },
       reasons: { a: one.reason || null, b: two.reason || null },
     })
@@ -532,17 +532,15 @@ export function RunComparison({
                       'Description not recorded in this result.'}
                   </p>
                 ))}
-                {(['a', 'b'] as const).flatMap((which) =>
-                  change.reasons[which]
-                    ? [
-                        <div className="cmp-reason" key={which}>
-                          <span className="cmp-letter-sm">
-                            {which.toUpperCase()}
-                          </span>
-                          <code>{change.reasons[which]}</code>
-                        </div>,
-                      ]
-                    : [],
+                {(['a', 'b'] as const).map((which) =>
+                  change.reasons[which] ? (
+                    <div className="cmp-reason" key={which}>
+                      <span className="cmp-letter-sm">
+                        {which.toUpperCase()}
+                      </span>
+                      <code>{change.reasons[which]}</code>
+                    </div>
+                  ) : null,
                 )}
               </div>
             ))}

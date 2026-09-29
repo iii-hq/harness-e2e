@@ -303,6 +303,15 @@ export function sortCompareRows(rows: TestCatalogRow[]) {
   )
 }
 
+function matchesQuery(row: TestCatalogRow, query: string) {
+  return (
+    !query ||
+    [row.test_id, row.spec?.title ?? '', row.spec?.summary ?? ''].some(
+      (value) => value.toLowerCase().includes(query),
+    )
+  )
+}
+
 function compatibilityLabel(result: TestVersionResult | null) {
   if (!result) return 'no comparison'
   return {
@@ -1262,14 +1271,7 @@ export function TestsPage({
       sortCompareRows(
         rows.filter(
           (row) =>
-            (!normalizedQuery ||
-              [
-                row.test_id,
-                row.spec?.title ?? '',
-                row.spec?.summary ?? '',
-              ].some((value) =>
-                value.toLowerCase().includes(normalizedQuery),
-              )) &&
+            matchesQuery(row, normalizedQuery) &&
             matchesCompareFilter(states.get(row.test_id) ?? 'none', filter),
         ),
       ),
@@ -1278,10 +1280,7 @@ export function TestsPage({
   const hiddenRows = rows.filter(
     (row) =>
       (states.get(row.test_id) ?? 'none') === 'none' &&
-      (!normalizedQuery ||
-        [row.test_id, row.spec?.title ?? '', row.spec?.summary ?? ''].some(
-          (value) => value.toLowerCase().includes(normalizedQuery),
-        )),
+      matchesQuery(row, normalizedQuery),
   )
 
   const updateCohort = (nextCohort: string) => {
